@@ -5,21 +5,15 @@ from typing import Tuple
 import pandas as pd
 
 
-CSV_COLUMNS = [
-    "Timestamp",
-    "Bid",
-    "Ask",
-    "BidVolume",
-    "AskVolume",
-]
-
 def load_history(path: Path) -> pd.DataFrame:
+    """Load historical tick data from CSV."""
     df = pd.read_csv(path)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
     return df
 
 
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add common technical features used by the ML model."""
     mid = (df["Bid"] + df["Ask"]) / 2
     df = df.assign(mid=mid)
     df["return"] = df["mid"].pct_change()
@@ -31,6 +25,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_rsi(series: pd.Series, period: int) -> pd.Series:
+    """Relative Strength Index calculation."""
     delta = series.diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
@@ -41,6 +36,7 @@ def compute_rsi(series: pd.Series, period: int) -> pd.Series:
 
 
 def train_test_split(df: pd.DataFrame, n_train: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Simple ordered train/test split."""
     train = df.iloc[:n_train].copy()
     test = df.iloc[n_train:].copy()
     return train, test
