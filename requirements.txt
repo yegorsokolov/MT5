@@ -2,6 +2,5 @@ pandas
 scikit-learn
 numpy
 pyyaml
-matplotlib
 MetaTrader5
 GitPython
