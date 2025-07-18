@@ -4,3 +4,4 @@ numpy
 pyyaml
 MetaTrader5
 GitPython
+gdown
