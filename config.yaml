@@ -1,0 +1,8 @@
+# Configuration for Adaptive MT5 Bot
+symbol: EURUSD
+train_rows: 50000       # number of rows from CSV to use for training
+threshold: 0.55        # probability threshold for taking a trade
+trailing_stop_pips: 20
+risk_per_trade: 0.01   # percentage of equity
+max_daily_loss: -3.0   # percent
+max_drawdown: -10.0    # percent
