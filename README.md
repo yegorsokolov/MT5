@@ -27,7 +27,7 @@ parameters and retraining the model on the corresponding historical data.
    pip install -r requirements.txt
    ```
 
-2. Place historical CSV files under `data/`.
+2. Place historical CSV files under `data/` **or** specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`.
 3. Adjust settings in `config.yaml` if needed.
 4. Train the model and run a backtest:
 
@@ -35,6 +35,8 @@ parameters and retraining the model on the corresponding historical data.
    python train.py
    python backtest.py
    ```
+
+   If `data_urls` are provided, `train.py` will download the file(s) for the configured symbol via `gdown` before training.
 
 The resulting model file (`model.joblib`) can be loaded by the EA.
 

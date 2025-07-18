@@ -9,16 +9,31 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
 from utils import load_config
-from dataset import load_history, make_features, train_test_split
+from dataset import load_history, load_history_from_urls, make_features, train_test_split
 
 
 def main():
     cfg = load_config()
     data_path = Path(__file__).resolve().parent / "data" / "history.csv"
-    if not data_path.exists():
-        raise FileNotFoundError("Historical CSV not found under data/history.csv")
+    data_path.parent.mkdir(exist_ok=True)
+    if data_path.exists():
+        df = load_history(data_path)
+    elif cfg.get("data_urls"):
+        urls_cfg = cfg["data_urls"]
+        if isinstance(urls_cfg, dict):
+            symbol = cfg.get("symbol")
+            urls = urls_cfg.get(symbol)
+            if not urls:
+                raise ValueError(f"No data URLs configured for symbol {symbol}")
+        else:
+            urls = urls_cfg
+        df = load_history_from_urls(urls)
+        df.to_csv(data_path, index=False)
+    else:
+        raise FileNotFoundError(
+            "Historical CSV not found and no data_urls provided in config"
+        )
 
-    df = load_history(data_path)
     df = make_features(df)
 
     train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
