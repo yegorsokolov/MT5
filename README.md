@@ -11,7 +11,8 @@ The solution is split into two components:
    learning and backtesting using the provided CSV history files.
 2. **MQL5 Expert Advisor** — a lightweight EA that loads model signals and
    executes trades with a dynamic trailing stop while respecting FTMO style risk
-   limits.
+   limits.  Risk controls enforce maximum daily loss and overall drawdown in the
+   EA itself and are configurable via `config.yaml`.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
 
@@ -51,6 +52,11 @@ The EA script `AdaptiveEA.mq5` demonstrates how to load predictions
 produced by the Python model and place trades with a context aware trailing
 stop.  `RealtimeEA.mq5` extends this idea by automatically running `git pull`
 on initialisation so the latest model from GitHub is used.
+
+`generate_signals.py` now merges ML probabilities with a moving average
+crossover and RSI filter so trades are only taken when multiple conditions
+confirm the direction.  Configuration values for these filters live in
+`config.yaml`.
 
 ## Performance Reports
 

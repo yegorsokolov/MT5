@@ -21,6 +21,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ma_30"] = df["mid"].rolling(30).mean()
     df["rsi_14"] = compute_rsi(df["mid"], 14)
     df = df.dropna().reset_index(drop=True)
+    df["ma_cross"] = ma_cross_signal(df)
     return df
 
 
@@ -33,6 +34,16 @@ def compute_rsi(series: pd.Series, period: int) -> pd.Series:
     ma_down = down.rolling(period).mean()
     rs = ma_up / ma_down
     return 100 - (100 / (1 + rs))
+
+
+def ma_cross_signal(df: pd.DataFrame, short: str = "ma_10", long: str = "ma_30") -> pd.Series:
+    """Return 1 when the short MA crosses above the long MA, -1 on cross below."""
+    cross_up = (df[short] > df[long]) & (df[short].shift(1) <= df[long].shift(1))
+    cross_down = (df[short] < df[long]) & (df[short].shift(1) >= df[long].shift(1))
+    signal = pd.Series(0, index=df.index)
+    signal[cross_up] = 1
+    signal[cross_down] = -1
+    return signal
 
 
 def train_test_split(df: pd.DataFrame, n_train: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
