@@ -1,8 +1,26 @@
 """Data loading and preprocessing utilities."""
 
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, List
 import pandas as pd
+
+
+def load_history_from_urls(urls: List[str]) -> pd.DataFrame:
+    """Download multiple CSV files and return a combined DataFrame."""
+    import gdown
+    from tempfile import TemporaryDirectory
+
+    dfs = []
+    with TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        for i, url in enumerate(urls):
+            dest = tmp_dir / f"part_{i}.csv"
+            gdown.download(url, str(dest), quiet=False)
+            dfs.append(pd.read_csv(dest))
+
+    df = pd.concat(dfs, ignore_index=True)
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
+    return df
 
 
 def load_history(path: Path) -> pd.DataFrame:
