@@ -18,6 +18,8 @@ The solution is split into two components:
 
 The project can be adapted to any symbol by changing the configuration
 parameters and retraining the model on the corresponding historical data.
+`train.py` now supports training on multiple symbols at once.  By default both
+`XAUUSD` and `GBPUSD` history files will be downloaded and combined.
 
 ## Installation
 
@@ -28,7 +30,7 @@ parameters and retraining the model on the corresponding historical data.
    ```
 
 2. Place historical CSV files under `data/` **or** specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`.
-3. Adjust settings in `config.yaml` if needed.
+3. Adjust settings in `config.yaml` if needed. The `symbols` list controls which instruments are used for training.
 4. Train the model and run a backtest:
 
    ```bash
@@ -36,7 +38,7 @@ parameters and retraining the model on the corresponding historical data.
    python backtest.py
    ```
 
-   If `data_urls` are provided, `train.py` will download the file(s) for the configured symbol via `gdown` before training.
+   If `data_urls` are provided, `train.py` will download the file(s) for the configured symbols via `gdown` before training.
 
 The resulting model file (`model.joblib`) can be loaded by the EA.
 
@@ -47,6 +49,42 @@ python realtime_train.py
 ```
 This script continuously pulls ticks from the terminal, retrains the model and
 pushes the updated dataset and model back to the repository.
+
+## Deployment Guide
+
+Follow these steps to run the EA and the realtime trainer on a Windows VPS:
+
+1. **Provision a VPS** – Create a Windows VPS with at least 2 GB of RAM.
+2. **Install MetaTrader 5** –
+   1. Open your browser on the VPS and download MetaTrader 5 from your broker or the official website.
+   2. Run the installer and click **Next** until the installation completes.
+3. **Install Git and Python** –
+   1. Download Git from [git-scm.com](https://git-scm.com/) and install using the default options (click **Next** on each screen).
+   2. Download Python 3.10 or newer from [python.org](https://www.python.org/downloads/).
+      During installation tick the **Add Python to PATH** checkbox and click **Install Now**.
+4. **Clone this repository** –
+   1. Launch **Git Bash** from the Start menu.
+   2. Run `git clone <repo-url>` and press **Enter**.
+5. **Install dependencies** –
+   1. Open **Command Prompt** and `cd` into the cloned folder.
+   2. Run `pip install -r requirements.txt`.
+6. **Initial training** –
+   1. Still inside the command prompt run `python train.py`.
+      The script downloads the XAUUSD and GBPUSD history files and trains a LightGBM model.
+   2. After it finishes you will see `model.joblib` under the project folder.
+7. **Copy the EA** –
+   1. Open MetaTrader 5 and click **File → Open Data Folder**.
+   2. Navigate to `MQL5/Experts` and copy `AdaptiveEA.mq5` (or `RealtimeEA.mq5`) into this directory.
+   3. Restart MetaTrader 5 and compile the EA inside the MetaEditor by pressing **F7**.
+8. **Attach the EA** –
+   1. In MetaTrader 5 open the **Navigator** panel (Ctrl+N).
+   2. Drag the EA onto a chart of either XAUUSD or GBPUSD and click **OK**.
+9. **Run realtime training** –
+   1. Back in the command prompt run `python realtime_train.py`.
+   2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
+
+With the EA running on your VPS and the training script collecting realtime data,
+the bot will continually adapt to market conditions.
 
 ## MetaTrader 5 EA
 
