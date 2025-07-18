@@ -5,3 +5,4 @@ pyyaml
 MetaTrader5
 GitPython
 gdown
+lightgbm
