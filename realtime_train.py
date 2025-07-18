@@ -35,30 +35,46 @@ def train_realtime():
     if not mt5.initialize():
         raise RuntimeError("Failed to initialize MT5")
 
+    symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
+
     while True:
-        new_ticks = fetch_ticks(cfg.get("symbol", "EURUSD"), 500)
-        if new_ticks.empty:
+        tick_frames = []
+        for sym in symbols:
+            ticks = fetch_ticks(sym, 500)
+            if not ticks.empty:
+                ticks["Symbol"] = sym
+                tick_frames.append(ticks)
+
+        if not tick_frames:
             time.sleep(60)
             continue
+
+        new_ticks = pd.concat(tick_frames, ignore_index=True)
+
         if data_path.exists():
             history = pd.read_csv(data_path)
-            history = pd.concat([history, new_ticks]).drop_duplicates(subset="Timestamp")
+            history = pd.concat([history, new_ticks]).drop_duplicates(subset=["Timestamp", "Symbol"])
         else:
             history = new_ticks
         history.to_csv(data_path, index=False)
 
         df = make_features(history)
+        if "Symbol" in df.columns:
+            df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+
         features = ["return", "ma_10", "ma_30", "rsi_14"]
+        if "SymbolCode" in df.columns:
+            features.append("SymbolCode")
         X = df[features]
         y = (df["return"].shift(-1) > 0).astype(int)
 
-        from sklearn.ensemble import RandomForestClassifier
         from sklearn.preprocessing import StandardScaler
         from sklearn.pipeline import Pipeline
+        from lightgbm import LGBMClassifier
 
         pipe = Pipeline([
             ("scaler", StandardScaler()),
-            ("clf", RandomForestClassifier(n_estimators=100, random_state=42)),
+            ("clf", LGBMClassifier(n_estimators=200, random_state=42)),
         ])
 
         pipe.fit(X, y)

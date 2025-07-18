@@ -1,7 +1,7 @@
 """Data loading and preprocessing utilities."""
 
 from pathlib import Path
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import pandas as pd
 
 
@@ -30,16 +30,34 @@ def load_history(path: Path) -> pd.DataFrame:
     return df
 
 
+def load_multiple_histories(paths: Dict[str, Path]) -> pd.DataFrame:
+    """Load and concatenate history files for multiple symbols."""
+    dfs = []
+    for symbol, p in paths.items():
+        df = load_history(p)
+        df["Symbol"] = symbol
+        dfs.append(df)
+    return pd.concat(dfs, ignore_index=True)
+
+
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add common technical features used by the ML model."""
-    mid = (df["Bid"] + df["Ask"]) / 2
-    df = df.assign(mid=mid)
-    df["return"] = df["mid"].pct_change()
-    df["ma_10"] = df["mid"].rolling(10).mean()
-    df["ma_30"] = df["mid"].rolling(30).mean()
-    df["rsi_14"] = compute_rsi(df["mid"], 14)
-    df = df.dropna().reset_index(drop=True)
-    df["ma_cross"] = ma_cross_signal(df)
+
+    def _feat(group: pd.DataFrame) -> pd.DataFrame:
+        mid = (group["Bid"] + group["Ask"]) / 2
+        group = group.assign(mid=mid)
+        group["return"] = group["mid"].pct_change()
+        group["ma_10"] = group["mid"].rolling(10).mean()
+        group["ma_30"] = group["mid"].rolling(30).mean()
+        group["rsi_14"] = compute_rsi(group["mid"], 14)
+        group = group.dropna().reset_index(drop=True)
+        group["ma_cross"] = ma_cross_signal(group)
+        return group
+
+    if "Symbol" in df.columns:
+        df = df.groupby("Symbol", group_keys=False).apply(_feat)
+    else:
+        df = _feat(df)
     return df
 
 
@@ -65,7 +83,18 @@ def ma_cross_signal(df: pd.DataFrame, short: str = "ma_10", long: str = "ma_30")
 
 
 def train_test_split(df: pd.DataFrame, n_train: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Simple ordered train/test split."""
-    train = df.iloc[:n_train].copy()
-    test = df.iloc[n_train:].copy()
-    return train, test
+    """Simple ordered train/test split. When multiple symbols are present
+    the split is applied per symbol."""
+    if "Symbol" in df.columns:
+        trains = []
+        tests = []
+        for _, group in df.groupby("Symbol"):
+            trains.append(group.iloc[:n_train].copy())
+            tests.append(group.iloc[n_train:].copy())
+        train = pd.concat(trains, ignore_index=True)
+        test = pd.concat(tests, ignore_index=True)
+        return train, test
+    else:
+        train = df.iloc[:n_train].copy()
+        test = df.iloc[n_train:].copy()
+        return train, test

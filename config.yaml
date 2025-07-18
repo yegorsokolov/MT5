@@ -1,5 +1,8 @@
 # Configuration for Adaptive MT5 Bot
 symbol: XAUUSD
+symbols:
+  - XAUUSD
+  - GBPUSD
 train_rows: 50000       # number of rows from CSV to use for training
 threshold: 0.55        # probability threshold for taking a trade
 trailing_stop_pips: 20

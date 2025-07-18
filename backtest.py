@@ -37,8 +37,14 @@ def main():
 
     model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
-    df = make_features(load_history(data_path))
+    df = load_history(data_path)
+    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+    df = make_features(df)
+    if "Symbol" in df.columns:
+        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
     features = ["return", "ma_10", "ma_30", "rsi_14"]
+    if "SymbolCode" in df.columns:
+        features.append("SymbolCode")
     X = df[features]
     probs = model.predict_proba(X)[:, 1]
 
