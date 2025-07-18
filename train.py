@@ -3,10 +3,10 @@
 from pathlib import Path
 import joblib
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+from lightgbm import LGBMClassifier
 
 from utils import load_config
 from dataset import load_history, load_history_from_urls, make_features, train_test_split
@@ -14,31 +14,37 @@ from dataset import load_history, load_history_from_urls, make_features, train_t
 
 def main():
     cfg = load_config()
-    data_path = Path(__file__).resolve().parent / "data" / "history.csv"
-    data_path.parent.mkdir(exist_ok=True)
-    if data_path.exists():
-        df = load_history(data_path)
-    elif cfg.get("data_urls"):
-        urls_cfg = cfg["data_urls"]
-        if isinstance(urls_cfg, dict):
-            symbol = cfg.get("symbol")
-            urls = urls_cfg.get(symbol)
-            if not urls:
-                raise ValueError(f"No data URLs configured for symbol {symbol}")
+    root = Path(__file__).resolve().parent
+    root.joinpath("data").mkdir(exist_ok=True)
+
+    symbols = cfg.get("symbols") or [cfg.get("symbol")]
+    all_dfs = []
+    for sym in symbols:
+        sym_path = root / "data" / f"{sym}_history.csv"
+        if sym_path.exists():
+            df_sym = load_history(sym_path)
         else:
-            urls = urls_cfg
-        df = load_history_from_urls(urls)
-        df.to_csv(data_path, index=False)
-    else:
-        raise FileNotFoundError(
-            "Historical CSV not found and no data_urls provided in config"
-        )
+            urls = cfg.get("data_urls", {}).get(sym)
+            if not urls:
+                raise FileNotFoundError(f"No history found for {sym} and no URL configured")
+            df_sym = load_history_from_urls(urls)
+            df_sym.to_csv(sym_path, index=False)
+        df_sym["Symbol"] = sym
+        all_dfs.append(df_sym)
+
+    df = pd.concat(all_dfs, ignore_index=True)
+    # also store combined history
+    df.to_csv(root / "data" / "history.csv", index=False)
 
     df = make_features(df)
+    if "Symbol" in df.columns:
+        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
     train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
 
     features = ["return", "ma_10", "ma_30", "rsi_14"]
+    if "SymbolCode" in df.columns:
+        features.append("SymbolCode")
     X_train = train_df[features]
     y_train = (train_df["return"].shift(-1) > 0).astype(int)
 
@@ -47,7 +53,7 @@ def main():
 
     pipe = Pipeline([
         ("scaler", StandardScaler()),
-        ("clf", RandomForestClassifier(n_estimators=100, random_state=42)),
+        ("clf", LGBMClassifier(n_estimators=200, random_state=42)),
     ])
 
     pipe.fit(X_train, y_train)

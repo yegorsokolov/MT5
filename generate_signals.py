@@ -14,9 +14,15 @@ def main():
     cfg = load_config()
 
     model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
-    df = make_features(load_history(Path(__file__).resolve().parent / "data" / "history.csv"))
+    df = load_history(Path(__file__).resolve().parent / "data" / "history.csv")
+    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+    df = make_features(df)
+    if "Symbol" in df.columns:
+        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
     features = ["return", "ma_10", "ma_30", "rsi_14"]
+    if "SymbolCode" in df.columns:
+        features.append("SymbolCode")
     probs = model.predict_proba(df[features])[:, 1]
 
     ma_ok = df["ma_cross"] == 1
