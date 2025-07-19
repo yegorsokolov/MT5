@@ -62,7 +62,18 @@ def train_realtime():
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
-        features = ["return", "ma_10", "ma_30", "rsi_14"]
+        features = [
+            "return",
+            "ma_5",
+            "ma_10",
+            "ma_30",
+            "ma_60",
+            "volatility_30",
+            "spread",
+            "rsi_14",
+        ]
+        if "volume_ratio" in df.columns:
+            features.extend(["volume_ratio", "volume_imbalance"])
         if "SymbolCode" in df.columns:
             features.append("SymbolCode")
         X = df[features]

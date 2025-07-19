@@ -16,6 +16,11 @@ The solution is split into two components:
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
 
+The feature engineering step now includes additional indicators such as
+lower/higher timeframe moving averages, a volatility measure and basic
+order-book statistics (spread and volume imbalance). These richer features help
+the model capture more market behaviour than simple MAs and RSI alone.
+
 The project can be adapted to any symbol by changing the configuration
 parameters and retraining the model on the corresponding historical data.
 `train.py` now supports training on multiple symbols at once.  By default both
