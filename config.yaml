@@ -14,6 +14,8 @@ use_sharpe_sizing: true
 min_risk_factor: 0.5
 max_risk_factor: 2.0
 rsi_buy: 55            # RSI threshold for confirming entries
+enable_news_trading: true
+avoid_news_minutes: 5
 data_urls:
   XAUUSD:
     - https://drive.google.com/uc?id=1FJ6NAcjMsGVFSKsCdvujL__rNin7bHcI
