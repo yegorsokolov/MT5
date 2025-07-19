@@ -42,7 +42,18 @@ def main():
 
     train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
 
-    features = ["return", "ma_10", "ma_30", "rsi_14"]
+    features = [
+        "return",
+        "ma_5",
+        "ma_10",
+        "ma_30",
+        "ma_60",
+        "volatility_30",
+        "spread",
+        "rsi_14",
+    ]
+    if "volume_ratio" in df.columns:
+        features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
     X_train = train_df[features]

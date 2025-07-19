@@ -46,10 +46,25 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     def _feat(group: pd.DataFrame) -> pd.DataFrame:
         mid = (group["Bid"] + group["Ask"]) / 2
         group = group.assign(mid=mid)
+
+        # base return and moving averages
         group["return"] = group["mid"].pct_change()
+        group["ma_5"] = group["mid"].rolling(5).mean()
         group["ma_10"] = group["mid"].rolling(10).mean()
         group["ma_30"] = group["mid"].rolling(30).mean()
+        group["ma_60"] = group["mid"].rolling(60).mean()
+
+        # volatility measure and RSI
+        group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
+
+        # order book related features if volumes are present
+        if {"BidVolume", "AskVolume"}.issubset(group.columns):
+            spread = group["Ask"] - group["Bid"]
+            group["spread"] = spread
+            group["volume_ratio"] = group["BidVolume"] / group["AskVolume"].replace(0, pd.NA)
+            group["volume_imbalance"] = group["BidVolume"] - group["AskVolume"]
+
         group = group.dropna().reset_index(drop=True)
         group["ma_cross"] = ma_cross_signal(group)
         return group
