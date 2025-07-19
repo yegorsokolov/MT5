@@ -151,11 +151,21 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         "volatility_30",
         "spread",
         "rsi_14",
+        "cross_corr",
+        "cross_momentum",
+        "news_sentiment",
     ]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
 
-    env = TradingEnv(df, features)
+    env = TradingEnv(
+        df,
+        features,
+        max_position=cfg.get("rl_max_position", 1.0),
+        transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+        risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+        var_window=cfg.get("rl_var_window", 30),
+    )
     model = PPO("MlpPolicy", env, verbose=0)
     model.learn(total_timesteps=cfg.get("rl_steps", 5000))
     model.save(root / "model_rl")
