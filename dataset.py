@@ -235,7 +235,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         group["ma_5"] = group["mid"].rolling(5).mean()
         group["ma_10"] = group["mid"].rolling(10).mean()
         group["ma_30"] = group["mid"].rolling(30).mean()
-        group["ma_h1"] = group["mid"].rolling(60).mean()
+        group["ma_60"] = group["mid"].rolling(60).mean()
 
         # Bollinger bands (20 period) and breakout signal
         group["ma_h4"] = group["mid"].rolling(240).mean()
