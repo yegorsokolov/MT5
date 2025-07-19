@@ -40,6 +40,8 @@ def main():
         "hour_sin",
         "hour_cos",
         "cross_corr",
+        "cross_momentum",
+        "news_sentiment",
     ]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
@@ -68,7 +70,19 @@ def main():
         if "nearest_news_minutes" in df.columns:
             news_ok = df["nearest_news_minutes"] > window
 
-    combined = np.where(ma_ok & rsi_ok & boll_ok & vol_ok & macro_ok & news_ok, probs, 0.0)
+    sent_ok = True
+    if "news_sentiment" in df.columns:
+        sent_ok = df["news_sentiment"] > 0
+
+    mom_ok = True
+    if "cross_momentum" in df.columns:
+        mom_ok = df["cross_momentum"] > 0
+
+    combined = np.where(
+        ma_ok & rsi_ok & boll_ok & vol_ok & macro_ok & news_ok & sent_ok & mom_ok,
+        probs,
+        0.0,
+    )
 
     out = pd.DataFrame({"Timestamp": df["Timestamp"], "prob": combined})
     out.to_csv(Path(__file__).resolve().parent / "signals.csv", index=False)
