@@ -24,3 +24,5 @@ data_urls:
     - https://drive.google.com/uc?id=1FJ6NAcjMsGVFSKsCdvujL__rNin7bHcI
   GBPUSD:
     - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ
+backtest_window_months: 6  # size of the training and test windows
+backtest_step_months: 6    # months to advance for the next split

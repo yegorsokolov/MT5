@@ -5,8 +5,36 @@ import joblib
 import pandas as pd
 import numpy as np
 
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from lightgbm import LGBMClassifier
+
 from utils import load_config
 from dataset import load_history, make_features
+
+
+BASE_FEATURES = [
+    "return",
+    "ma_5",
+    "ma_10",
+    "ma_30",
+    "ma_60",
+    "volatility_30",
+    "spread",
+    "rsi_14",
+    "cross_corr",
+    "cross_momentum",
+    "news_sentiment",
+]
+
+
+def feature_columns(df: pd.DataFrame) -> list:
+    cols = [c for c in BASE_FEATURES if c in df.columns]
+    if "volume_ratio" in df.columns:
+        cols.extend(["volume_ratio", "volume_imbalance"])
+    if "SymbolCode" in df.columns:
+        cols.append("SymbolCode")
+    return cols
 
 
 def trailing_stop(entry_price: float, current_price: float, stop: float, distance: float) -> float:
@@ -29,34 +57,23 @@ def compute_metrics(returns: pd.Series) -> dict:
     }
 
 
-def run_backtest(cfg: dict) -> dict:
-    data_path = Path(__file__).resolve().parent / "data" / "history.csv"
-    if not data_path.exists():
-        raise FileNotFoundError("Historical CSV not found under data/history.csv")
+def fit_model(train_df: pd.DataFrame) -> Pipeline:
+    """Train a LightGBM model on the given dataframe."""
+    feats = feature_columns(train_df)
+    X = train_df[feats]
+    y = (train_df["return"].shift(-1) > 0).astype(int)
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LGBMClassifier(n_estimators=200, random_state=42)),
+    ])
+    pipe.fit(X, y)
+    return pipe
 
-    model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
-    df = load_history(data_path)
-    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
-    df = make_features(df)
-    if "Symbol" in df.columns:
-        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
-    features = [
-        "return",
-        "ma_5",
-        "ma_10",
-        "ma_30",
-        "ma_60",
-        "volatility_30",
-        "spread",
-        "rsi_14",
-    ]
-    if "volume_ratio" in df.columns:
-        features.extend(["volume_ratio", "volume_imbalance"])
-    if "SymbolCode" in df.columns:
-        features.append("SymbolCode")
-    X = df[features]
-    probs = model.predict_proba(X)[:, 1]
+def backtest_on_df(df: pd.DataFrame, model, cfg: dict) -> dict:
+    """Run the trading simulation on a dataframe using the given model."""
+    feats = feature_columns(df)
+    probs = model.predict_proba(df[feats])[:, 1]
 
     threshold = cfg.get("threshold", 0.55)
     distance = cfg.get("trailing_stop_pips", 20) * 1e-4
@@ -77,19 +94,96 @@ def run_backtest(cfg: dict) -> dict:
             if price <= stop:
                 returns.append((price - entry) / entry)
                 in_position = False
-        
+
     metrics = compute_metrics(pd.Series(returns))
     return metrics
+
+
+def run_backtest(cfg: dict) -> dict:
+    data_path = Path(__file__).resolve().parent / "data" / "history.csv"
+    if not data_path.exists():
+        raise FileNotFoundError("Historical CSV not found under data/history.csv")
+
+    model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
+
+    df = load_history(data_path)
+    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+    df = make_features(df)
+    if "Symbol" in df.columns:
+        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+
+    return backtest_on_df(df, model, cfg)
+
+
+def run_rolling_backtest(cfg: dict) -> dict:
+    """Perform rolling train/test backtests and aggregate metrics."""
+    data_path = Path(__file__).resolve().parent / "data" / "history.csv"
+    if not data_path.exists():
+        raise FileNotFoundError("Historical CSV not found under data/history.csv")
+
+    df = load_history(data_path)
+    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+    df = make_features(df)
+    if "Symbol" in df.columns:
+        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+    df = df.sort_values("Timestamp").reset_index(drop=True)
+
+    window = int(cfg.get("backtest_window_months", 6))
+    step = int(cfg.get("backtest_step_months", window))
+
+    start = df["Timestamp"].min()
+    end = df["Timestamp"].max()
+
+    period_metrics = []
+    while start + pd.DateOffset(months=window * 2) <= end:
+        train_end = start + pd.DateOffset(months=window)
+        test_end = train_end + pd.DateOffset(months=window)
+
+        train_df = df[(df["Timestamp"] >= start) & (df["Timestamp"] < train_end)]
+        test_df = df[(df["Timestamp"] >= train_end) & (df["Timestamp"] < test_end)]
+        if train_df.empty or test_df.empty:
+            start += pd.DateOffset(months=step)
+            continue
+
+        model = fit_model(train_df)
+        metrics = backtest_on_df(test_df, model, cfg)
+        metrics["period_start"] = train_end.date().isoformat()
+        metrics["period_end"] = test_end.date().isoformat()
+        print(
+            f"{metrics['period_start']} to {metrics['period_end']} - "
+            f"Sharpe {metrics['sharpe']:.4f}, MaxDD {metrics['max_drawdown']:.2f}%"
+        )
+        period_metrics.append(metrics)
+
+        start += pd.DateOffset(months=step)
+
+    if not period_metrics:
+        print("No valid windows for rolling backtest")
+        return {}
+
+    avg_sharpe = float(np.mean([m["sharpe"] for m in period_metrics]))
+    worst_dd = float(np.min([m["max_drawdown"] for m in period_metrics]))
+    print(f"Overall average Sharpe {avg_sharpe:.4f} | Worst drawdown {worst_dd:.2f}%")
+
+    return {
+        "periods": period_metrics,
+        "avg_sharpe": avg_sharpe,
+        "worst_drawdown": worst_dd,
+    }
 
 
 def main():
     cfg = load_config()
     metrics = run_backtest(cfg)
+    print("Single period backtest:")
     for k, v in metrics.items():
         if k in {"max_drawdown", "win_rate"}:
             print(f"{k}: {v:.2f}%")
         else:
             print(f"{k}: {v:.4f}")
+
+    print("\nRolling backtest:")
+    run_rolling_backtest(cfg)
 
 
 if __name__ == "__main__":
