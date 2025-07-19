@@ -143,6 +143,23 @@ all three calendars.
 `backtest.py` outputs statistics including win rate, Sharpe ratio and maximum
 drawdown. These metrics can be used to iteratively optimise the strategy.
 
+## Streamlined Deployment
+
+The repository now includes a `Dockerfile` and GitHub Actions workflow which
+mirror the manual Windows VPS steps. Building the container installs MetaTrader
+5 under Wine, all Python dependencies and copies the EA so an identical
+environment can be launched under WSL or Docker Desktop. Running
+`docker-compose up` spins up the terminal with the latest code making rollbacks
+trivial.
+
+The workflow `.github/workflows/train.yml` retrains both `train.py` and
+`train_nn.py` whenever new data is pushed or on a daily schedule. Generated
+models are committed back to the repository ensuring the EA always uses the
+most recent versions.
+
+**Note:** Keep this section updated whenever deployment scripts or automation
+change to avoid configuration drift.
+
 ---
 
 This is a simplified template intended for further extension and tuning.  It is
