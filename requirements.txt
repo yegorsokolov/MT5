@@ -8,3 +8,5 @@ gdown
 lightgbm
 torch
 tqdm
+stable-baselines3
+gym

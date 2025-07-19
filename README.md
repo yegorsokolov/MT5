@@ -30,6 +30,7 @@ windows of these features for those wanting to explore deep learning models.
 `train_meta.py` demonstrates a simple meta-learning approach where a global
 model is fitted on all symbols and lightweight adapters are fine-tuned for each
 instrument.  The per-symbol models are saved under the `models/` folder.
+Another option `train_rl.py` trains a reinforcement learning agent that optimises risk-adjusted profit.
 
 ## Installation
 
@@ -49,6 +50,7 @@ instrument.  The per-symbol models are saved under the `models/` folder.
    python train_nn.py
    # train symbol-specific adapters
    python train_meta.py
+   python train_rl.py
    python backtest.py
    ```
 
