@@ -27,6 +27,9 @@ parameters and retraining the model on the corresponding historical data.
 `XAUUSD` and `GBPUSD` history files will be downloaded and combined.
 An alternative script `train_nn.py` trains a small LSTM network on sliding
 windows of these features for those wanting to explore deep learning models.
+`train_meta.py` demonstrates a simple meta-learning approach where a global
+model is fitted on all symbols and lightweight adapters are fine-tuned for each
+instrument.  The per-symbol models are saved under the `models/` folder.
 
 ## Installation
 
@@ -44,6 +47,8 @@ windows of these features for those wanting to explore deep learning models.
    python train.py
    # or use the experimental neural network
    python train_nn.py
+   # train symbol-specific adapters
+   python train_meta.py
    python backtest.py
    ```
 
