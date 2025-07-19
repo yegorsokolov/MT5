@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List
+
 import numpy as np
 import pandas as pd
 import gym
@@ -11,7 +12,7 @@ from dataset import load_history, load_history_from_urls, make_features
 
 
 class TradingEnv(gym.Env):
-    """Trading environment with long/short positions and transaction costs."""
+    """Trading environment supporting multiple symbols."""
 
     def __init__(
         self,
@@ -19,17 +20,45 @@ class TradingEnv(gym.Env):
         features: List[str],
         max_position: float = 1.0,
         transaction_cost: float = 0.0001,
+        risk_penalty: float = 0.1,
+        var_window: int = 30,
     ) -> None:
         super().__init__()
-        self.df = df.reset_index(drop=True)
+
+        if "Symbol" not in df.columns:
+            raise ValueError("DataFrame must contain a 'Symbol' column")
+        self.symbols = sorted(df["Symbol"].unique())
+        wide = (
+            df.set_index(["Timestamp", "Symbol"])[features + ["mid"]]
+            .unstack("Symbol")
+        )
+        wide.columns = [f"{sym}_{feat}" for feat, sym in wide.columns]
+        wide = wide.dropna().reset_index(drop=True)
+
+        self.df = wide
         self.features = features
         self.max_position = max_position
         self.transaction_cost = transaction_cost
+        self.risk_penalty = risk_penalty
+        self.var_window = var_window
+
+        self.price_cols = [f"{sym}_mid" for sym in self.symbols]
+        self.feature_cols = []
+        for feat in features:
+            self.feature_cols.extend([f"{sym}_{feat}" for sym in self.symbols])
+
+        self.n_symbols = len(self.symbols)
         self.action_space = spaces.Box(
-            low=-max_position, high=max_position, shape=(1,), dtype=np.float32
+            low=-max_position,
+            high=max_position,
+            shape=(self.n_symbols,),
+            dtype=np.float32,
         )
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(len(features),), dtype=np.float32
+            low=-np.inf,
+            high=np.inf,
+            shape=(len(self.feature_cols),),
+            dtype=np.float32,
         )
         self.start_equity = 1.0
         self.reset()
@@ -38,39 +67,57 @@ class TradingEnv(gym.Env):
         self.i = 0
         self.equity = self.start_equity
         self.peak_equity = self.start_equity
-        self.position = 0.0
-        obs = self.df.loc[self.i, self.features].values.astype(np.float32)
+        self.positions = np.zeros(self.n_symbols, dtype=np.float32)
+        self.portfolio_returns: list[float] = []
+        obs = self.df.loc[self.i, self.feature_cols].values.astype(np.float32)
         return obs
 
     def step(self, action):
         done = False
-        reward = 0.0
 
-        action = float(np.clip(action, -self.max_position, self.max_position))
-        price = self.df.loc[self.i, "mid"]
+        action = np.clip(np.asarray(action, dtype=np.float32), -self.max_position, self.max_position)
+        prices = self.df.loc[self.i, self.price_cols].values
 
+        portfolio_ret = 0.0
+        per_symbol_ret = np.zeros(self.n_symbols, dtype=np.float32)
         if self.i > 0:
-            prev_price = self.df.loc[self.i - 1, "mid"]
-            price_change = (price - prev_price) / prev_price
-            reward += self.position * price_change
-            self.equity *= 1 + self.position * price_change
+            prev_prices = self.df.loc[self.i - 1, self.price_cols].values
+            price_change = (prices - prev_prices) / prev_prices
+            per_symbol_ret = self.positions * price_change
+            portfolio_ret = per_symbol_ret.sum()
+            self.equity *= 1 + portfolio_ret
 
-        cost = abs(action - self.position) * self.transaction_cost
-        reward -= cost
-        self.equity *= 1 - cost
-        self.position = action
+        costs = np.abs(action - self.positions) * self.transaction_cost
+        cost_total = costs.sum()
+        self.equity *= 1 - cost_total
+
+        reward = portfolio_ret - cost_total
+        self.positions = action
 
         self.i += 1
         if self.i >= len(self.df) - 1:
             done = True
-        next_obs = self.df.loc[self.i, self.features].values.astype(np.float32)
+        next_obs = self.df.loc[self.i, self.feature_cols].values.astype(np.float32)
 
-        # risk penalty based on drawdown
+        # risk penalty based on drawdown and variance
         self.peak_equity = max(self.peak_equity, self.equity)
         drawdown = (self.equity - self.peak_equity) / self.peak_equity
-        reward += -abs(drawdown) * 0.1
 
-        return next_obs, reward, done, {}
+        self.portfolio_returns.append(portfolio_ret)
+        risk = -abs(drawdown) * 0.1
+        if len(self.portfolio_returns) >= self.var_window:
+            var = np.var(self.portfolio_returns[-self.var_window:])
+            risk -= self.risk_penalty * var
+
+        reward += risk
+
+        info = {
+            "portfolio_return": float(portfolio_ret),
+            "per_symbol_returns": per_symbol_ret,
+            "transaction_costs": costs,
+        }
+
+        return next_obs, reward, done, info
 
 
 def main():
@@ -110,7 +157,14 @@ def main():
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
 
-    env = TradingEnv(df, features)
+    env = TradingEnv(
+        df,
+        features,
+        max_position=cfg.get("rl_max_position", 1.0),
+        transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+        risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+        var_window=cfg.get("rl_var_window", 30),
+    )
     model = PPO("MlpPolicy", env, verbose=0)
     model.learn(total_timesteps=cfg.get("rl_steps", 5000))
     model.save(root / "model_rl")
