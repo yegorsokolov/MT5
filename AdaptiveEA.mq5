@@ -14,6 +14,10 @@ input double RiskPerTrade = 0.01;
 input int TrailingStopPips = 20;
 input double MaxDailyLoss = 3.0;   // percent
 input double MaxDrawdown = 10.0;   // percent
+input int    RiskLookbackBars = 50;      // bars used to estimate risk
+input bool   UseSharpeSizing   = true;   // scale position size by Sharpe ratio
+input double MinRiskFactor     = 0.5;    // lower bound for position multiplier
+input double MaxRiskFactor     = 2.0;    // upper bound for position multiplier
 
 double peak_equity = 0.0;
 double day_start_equity = 0.0;
@@ -37,6 +41,45 @@ bool LoadSignal(datetime time, double &prob)
    }
    FileClose(fh);
    return(false);
+}
+
+double CalculateRiskFactor()
+{
+   int count=MathMin(RiskLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   if(count<=1)
+      return(1.0);
+
+   double mean=0.0;
+   for(int i=0;i<count;i++)
+      mean+=(Close[i]-Close[i+1])/Close[i+1];
+   mean/=count;
+
+   double var=0.0;
+   for(int i=0;i<count;i++)
+   {
+      double ret=(Close[i]-Close[i+1])/Close[i+1];
+      var+=MathPow(ret-mean,2);
+   }
+   double sd=MathSqrt(var/count);
+   if(sd==0.0)
+      return(1.0);
+
+   double factor;
+   if(UseSharpeSizing)
+   {
+      double sharpe=mean/sd;
+      factor=1.0+sharpe;
+   }
+   else
+   {
+      factor=1.0/(1.0+sd*100.0);
+   }
+
+   if(factor<MinRiskFactor)
+      factor=MinRiskFactor;
+   if(factor>MaxRiskFactor)
+      factor=MaxRiskFactor;
+   return(factor);
 }
 
 void CloseAllPositions()
@@ -88,7 +131,8 @@ void OnTick()
 
    if(PositionSelect(Symbol())==false && prob>0.55)
    {
-      double volume=NormalizeDouble(AccountBalance()*RiskPerTrade/1000,2);
+      double risk_factor=CalculateRiskFactor();
+      double volume=NormalizeDouble(AccountBalance()*RiskPerTrade*risk_factor/1000,2);
       trade.Buy(volume,NULL,Ask,0,0);
    }
 
