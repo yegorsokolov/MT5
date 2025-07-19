@@ -6,3 +6,5 @@ MetaTrader5
 GitPython
 gdown
 lightgbm
+torch
+tqdm

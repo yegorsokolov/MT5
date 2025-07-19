@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Tuple, List, Dict
+import numpy as np
 import pandas as pd
 
 
@@ -113,3 +114,24 @@ def train_test_split(df: pd.DataFrame, n_train: int) -> Tuple[pd.DataFrame, pd.D
         train = df.iloc[:n_train].copy()
         test = df.iloc[n_train:].copy()
         return train, test
+
+
+def make_sequence_arrays(df: pd.DataFrame, features: List[str], seq_len: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Convert a dataframe to sequences suitable for neural network models."""
+    X_list = []
+    y_list = []
+
+    groups = [df]
+    if "Symbol" in df.columns:
+        groups = [g for _, g in df.groupby("Symbol")]
+
+    for g in groups:
+        values = g[features].values
+        targets = (g["return"].shift(-1) > 0).astype(int).values
+        for i in range(seq_len, len(g) - 1):
+            X_list.append(values[i - seq_len:i])
+            y_list.append(targets[i])
+
+    X = np.stack(X_list)
+    y = np.array(y_list)
+    return X, y
