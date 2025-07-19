@@ -25,6 +25,8 @@ The project can be adapted to any symbol by changing the configuration
 parameters and retraining the model on the corresponding historical data.
 `train.py` now supports training on multiple symbols at once.  By default both
 `XAUUSD` and `GBPUSD` history files will be downloaded and combined.
+An alternative script `train_nn.py` trains a small LSTM network on sliding
+windows of these features for those wanting to explore deep learning models.
 
 ## Installation
 
@@ -40,6 +42,8 @@ parameters and retraining the model on the corresponding historical data.
 
    ```bash
    python train.py
+   # or use the experimental neural network
+   python train_nn.py
    python backtest.py
    ```
 
@@ -76,7 +80,9 @@ Follow these steps to run the EA and the realtime trainer on a Windows VPS:
 6. **Initial training** –
    1. Still inside the command prompt run `python train.py`.
       The script downloads the XAUUSD and GBPUSD history files and trains a LightGBM model.
-   2. After it finishes you will see `model.joblib` under the project folder.
+   2. To experiment with a recurrent neural network instead run `python train_nn.py`.
+      This trains a small LSTM on sequences of the same features and saves `model_lstm.pt`.
+   3. After either script finishes you will see the resulting model file under the project folder.
 7. **Copy the EA** –
    1. Open MetaTrader 5 and click **File → Open Data Folder**.
    2. Navigate to `MQL5/Experts` and copy `AdaptiveEA.mq5` (or `RealtimeEA.mq5`) into this directory.
