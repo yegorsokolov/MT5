@@ -20,8 +20,11 @@ The solution is split into two components:
 
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages, a volatility measure and basic
-order-book statistics (spread and volume imbalance). These richer features help
-the model capture more market behaviour than simple MAs and RSI alone.
+ order-book statistics (spread and volume imbalance). The dataset also merges
+ high impact events from several economic calendars (ForexFactory, the built-in
+ MetaTrader calendar via Tradays and the MQL5 feed) so the bot can avoid trading
+ immediately around red news releases. These richer features help the model
+capture more market behaviour than simple MAs and RSI alone.
 
 The project can be adapted to any symbol by changing the configuration
 parameters and retraining the model on the corresponding historical data.
@@ -117,7 +120,9 @@ on initialisation so the latest model from GitHub is used.
 crossover and RSI filter so trades are only taken when multiple conditions
 confirm the direction.  Additional optional filters check for Bollinger band
 breakouts, volume spikes and even macro indicators when a `macro.csv` file is
-present. Configuration values for these filters live in `config.yaml`.
+present. Configuration values for these filters live in `config.yaml`. Set
+`enable_news_trading` to `false` to automatically block trades within a few
+minutes of scheduled high impact events pulled from all three calendars.
 
 ## Performance Reports
 
