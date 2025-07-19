@@ -1,0 +1,7 @@
+# Ignore generated data and model files
+model.joblib
+model_lstm.pt
+signals.csv
+data/
+models/
+__pycache__/
