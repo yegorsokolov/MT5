@@ -19,6 +19,9 @@ The solution is split into two components:
     when tail risk grows beyond the configured thresholds.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
+4. **Auto optimiser** — experiments with different signal thresholds and
+   trailing stop distances via backtests and writes any configuration changes
+   along with the reason to `logs/config_changes.csv`.
 
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages, a volatility measure and basic
@@ -110,6 +113,10 @@ Follow these steps to run the EA and the realtime trainer on a Windows VPS:
 9. **Run realtime training** –
    1. Back in the command prompt run `python realtime_train.py`.
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
+10. **Optimise parameters** –
+   1. Periodically execute `python auto_optimize.py` to backtest a grid of
+      thresholds and trailing stop settings.  Any improvements are written back
+      to `config.yaml` and logged under `logs/config_changes.csv`.
 
 With the EA running on your VPS and the training script collecting realtime data,
 the bot will continually adapt to market conditions.

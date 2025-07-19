@@ -29,8 +29,7 @@ def compute_metrics(returns: pd.Series) -> dict:
     }
 
 
-def main():
-    cfg = load_config()
+def run_backtest(cfg: dict) -> dict:
     data_path = Path(__file__).resolve().parent / "data" / "history.csv"
     if not data_path.exists():
         raise FileNotFoundError("Historical CSV not found under data/history.csv")
@@ -80,8 +79,14 @@ def main():
                 in_position = False
         
     metrics = compute_metrics(pd.Series(returns))
+    return metrics
+
+
+def main():
+    cfg = load_config()
+    metrics = run_backtest(cfg)
     for k, v in metrics.items():
-        if k == "max_drawdown" or k == "win_rate":
+        if k in {"max_drawdown", "win_rate"}:
             print(f"{k}: {v:.2f}%")
         else:
             print(f"{k}: {v:.4f}")
