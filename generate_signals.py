@@ -32,10 +32,14 @@ def main():
         "ma_5",
         "ma_10",
         "ma_30",
-        "ma_60",
+        "ma_h1",
+        "ma_h4",
         "volatility_30",
         "spread",
         "rsi_14",
+        "hour_sin",
+        "hour_cos",
+        "cross_corr",
     ]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
@@ -58,7 +62,13 @@ def main():
     if "macro_indicator" in df.columns:
         macro_ok = df["macro_indicator"] > cfg.get("macro_threshold", 0.0)
 
-    combined = np.where(ma_ok & rsi_ok & boll_ok & vol_ok & macro_ok, probs, 0.0)
+    news_ok = True
+    if not cfg.get("enable_news_trading", True):
+        window = cfg.get("avoid_news_minutes", 5)
+        if "nearest_news_minutes" in df.columns:
+            news_ok = df["nearest_news_minutes"] > window
+
+    combined = np.where(ma_ok & rsi_ok & boll_ok & vol_ok & macro_ok & news_ok, probs, 0.0)
 
     out = pd.DataFrame({"Timestamp": df["Timestamp"], "prob": combined})
     out.to_csv(Path(__file__).resolve().parent / "signals.csv", index=False)
