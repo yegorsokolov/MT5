@@ -24,7 +24,7 @@ The solution is split into two components:
    along with the reason to `logs/config_changes.csv`.
 
 The feature engineering step now includes additional indicators such as
-lower/higher timeframe moving averages, a volatility measure and basic
+lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
  order-book statistics (spread and volume imbalance). The dataset also merges
  high impact events from several economic calendars (ForexFactory, the built-in
  MetaTrader calendar via Tradays and the MQL5 feed) so the bot can avoid trading
