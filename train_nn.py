@@ -1,8 +1,9 @@
-"""Train an LSTM model on tick data features."""
+"""Train a Transformer model on tick data sequences."""
 
 from pathlib import Path
 
 import joblib
+import math
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -19,15 +20,65 @@ from dataset import (
 )
 
 
-class LSTMModel(nn.Module):
-    def __init__(self, input_size: int, hidden_size: int = 64, num_layers: int = 2):
-        super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, 1)
+class PositionalEncoding(nn.Module):
+    """Sinusoidal positional encoding for transformer inputs."""
 
-    def forward(self, x):
-        out, _ = self.lstm(x)
-        out = self.fc(out[:, -1, :])
+    def __init__(self, d_model: int, max_len: int = 500):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.pe[:, : x.size(1)]
+
+
+class TransformerModel(nn.Module):
+    """Sequence model using transformer encoder layers."""
+
+    def __init__(
+        self,
+        input_size: int,
+        d_model: int = 64,
+        nhead: int = 4,
+        num_layers: int = 2,
+        num_symbols: int | None = None,
+        emb_dim: int = 8,
+    ) -> None:
+        super().__init__()
+        self.symbol_emb = None
+        self.symbol_idx = None
+        if num_symbols is not None:
+            self.symbol_emb = nn.Embedding(num_symbols, emb_dim)
+            self.symbol_idx = input_size - 1  # assume last feature is SymbolCode
+            input_size -= 1
+
+        self.input_linear = nn.Linear(input_size + (emb_dim if self.symbol_emb else 0), d_model)
+        self.pos_encoder = PositionalEncoding(d_model)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.fc = nn.Linear(d_model, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x shape: batch x seq x features
+        if self.symbol_emb is not None:
+            sym = x[:, :, self.symbol_idx].long()
+            x = torch.cat([
+                x[:, :, : self.symbol_idx],
+                x[:, :, self.symbol_idx + 1 :],
+                self.symbol_emb(sym),
+            ], dim=-1)
+
+        x = self.input_linear(x)
+        x = self.pos_encoder(x)
+        x = self.transformer(x)
+        out = self.fc(x[:, -1])
         return torch.sigmoid(out).squeeze(1)
 
 
@@ -77,7 +128,14 @@ def main():
     X_test, y_test = make_sequence_arrays(test_df, features, seq_len)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LSTMModel(len(features)).to(device)
+    num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
+    model = TransformerModel(
+        len(features),
+        d_model=cfg.get("d_model", 64),
+        nhead=cfg.get("nhead", 4),
+        num_layers=cfg.get("num_layers", 2),
+        num_symbols=num_symbols,
+    ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.BCELoss()
 
@@ -112,8 +170,8 @@ def main():
             total += yb.size(0)
     print("Test accuracy:", correct / total)
 
-    joblib.dump(model.state_dict(), root / "model_lstm.pt")
-    print("Model saved to", root / "model_lstm.pt")
+    joblib.dump(model.state_dict(), root / "model_transformer.pt")
+    print("Model saved to", root / "model_transformer.pt")
 
 
 if __name__ == "__main__":
