@@ -201,6 +201,28 @@ def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
         (df["minutes_to_event"] >= 0) & (df["minutes_to_event"] <= 60)
     ).astype(int)
     return df
+
+
+def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Merge precomputed news sentiment scores if available."""
+    path = Path(__file__).resolve().parent / "data" / "news_sentiment.csv"
+    if not path.exists():
+        df["news_sentiment"] = 0.0
+        return df
+
+    news = pd.read_csv(path)
+    if "Timestamp" not in news.columns or "sentiment" not in news.columns:
+        df["news_sentiment"] = 0.0
+        return df
+
+    news["Timestamp"] = pd.to_datetime(news["Timestamp"])  # ensure datetime
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+    news = news.sort_values("Timestamp")
+    df = df.sort_values("Timestamp")
+    df = pd.merge_asof(df, news, on="Timestamp", direction="backward")
+    df["news_sentiment"] = df["sentiment"].fillna(0.0)
+    df = df.drop(columns=["sentiment"], errors="ignore")
+    return df
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add common technical features used by the ML model."""
 
@@ -257,22 +279,37 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         if df['Symbol'].nunique() > 1:
             pivot = df.pivot_table(index='Timestamp', columns='Symbol', values='return')
             corr_features = {}
+            mom_features = {}
             for sym in pivot.columns:
                 others = pivot.drop(columns=sym).mean(axis=1)
                 corr_features[sym] = pivot[sym].rolling(30).corr(others)
-            corr_df = (pd.DataFrame(corr_features)
-                        .stack()
-                        .rename('cross_corr')
-                        .reset_index()
-                        .rename(columns={'level_0':'Timestamp','level_1':'Symbol'}))
+                mom_features[sym] = others.rolling(30).mean()
+            corr_df = (
+                pd.DataFrame(corr_features)
+                .stack()
+                .rename('cross_corr')
+                .reset_index()
+                .rename(columns={'level_0':'Timestamp','level_1':'Symbol'})
+            )
+            mom_df = (
+                pd.DataFrame(mom_features)
+                .stack()
+                .rename('cross_momentum')
+                .reset_index()
+                .rename(columns={'level_0':'Timestamp','level_1':'Symbol'})
+            )
             df = df.merge(corr_df, on=['Timestamp','Symbol'], how='left')
+            df = df.merge(mom_df, on=['Timestamp','Symbol'], how='left')
         else:
             df['cross_corr'] = np.nan
+            df['cross_momentum'] = np.nan
     else:
         df = _feat(df)
         df['cross_corr'] = np.nan
+        df['cross_momentum'] = np.nan
 
     df = add_economic_calendar_features(df)
+    df = add_news_sentiment_features(df)
     return df
 
 

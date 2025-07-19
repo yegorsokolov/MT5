@@ -23,6 +23,9 @@ input int    RiskLookbackBars = 50;      // bars used to estimate risk
 input bool   UseSharpeSizing   = true;   // scale position size by Sharpe ratio
 input double MinRiskFactor     = 0.5;    // lower bound for position multiplier
 input double MaxRiskFactor     = 2.0;    // upper bound for position multiplier
+input int    VarLookbackBars   = 50;     // bars used for VaR/stress calc
+input double MaxVaR            = 5.0;    // max allowed 99% VaR in percent
+input double MaxStressLoss     = 15.0;   // max allowed stress loss percent
 
 double peak_equity = 0.0;
 double day_start_equity = 0.0;
@@ -94,6 +97,40 @@ double CalculateRiskFactor()
    return(factor);
 }
 
+double CalculateVaR()
+{
+   int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   if(count<=1)
+      return(0.0);
+   double arr[];
+   ArrayResize(arr,count);
+   for(int i=0;i<count;i++)
+      arr[i]=(Close[i]-Close[i+1])/Close[i+1];
+   ArraySort(arr,WHOLE_ARRAY,0,MODE_ASCEND);
+   int idx=(int)MathFloor(0.01*count);
+   double var=-arr[idx]*100.0;
+   return(var);
+}
+
+double CalculateStressLoss()
+{
+   int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   if(count<=1)
+      return(0.0);
+   double mean=0.0;
+   for(int i=0;i<count;i++)
+      mean+=(Close[i]-Close[i+1])/Close[i+1];
+   mean/=count;
+   double variance=0.0;
+   for(int i=0;i<count;i++)
+   {
+      double r=(Close[i]-Close[i+1])/Close[i+1];
+      variance+=MathPow(r-mean,2);
+   }
+   double sd=MathSqrt(variance/count);
+   return(3.0*sd*100.0);
+}
+
 void CloseAllPositions()
 {
    while(PositionSelect(Symbol()))
@@ -119,7 +156,14 @@ void UpdateRisk()
 
    double day_loss_pct=(equity-day_start_equity)/day_start_equity*100.0;
    double drawdown_pct=(equity-peak_equity)/peak_equity*100.0;
+   double var_pct=CalculateVaR();
+   double stress_pct=CalculateStressLoss();
    if(day_loss_pct<=-MaxDailyLoss || drawdown_pct<=-MaxDrawdown)
+   {
+      CloseAllPositions();
+      trading_allowed=false;
+   }
+   if(var_pct>MaxVaR || stress_pct>MaxStressLoss)
    {
       CloseAllPositions();
       trading_allowed=false;

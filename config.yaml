@@ -13,6 +13,9 @@ risk_lookback_bars: 50
 use_sharpe_sizing: true
 min_risk_factor: 0.5
 max_risk_factor: 2.0
+risk_var_lookback: 50
+max_var: 5.0
+max_stress_loss: 15.0
 rsi_buy: 55            # RSI threshold for confirming entries
 enable_news_trading: true
 avoid_news_minutes: 5

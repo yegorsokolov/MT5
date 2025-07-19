@@ -51,6 +51,9 @@ def main():
         "volatility_30",
         "spread",
         "rsi_14",
+        "cross_corr",
+        "cross_momentum",
+        "news_sentiment",
     ]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
