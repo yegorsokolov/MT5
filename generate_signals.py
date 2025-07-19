@@ -32,7 +32,7 @@ def main():
         "ma_5",
         "ma_10",
         "ma_30",
-        "ma_h1",
+        "ma_60",
         "ma_h4",
         "volatility_30",
         "spread",
