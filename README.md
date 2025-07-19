@@ -12,7 +12,9 @@ The solution is split into two components:
 2. **MQL5 Expert Advisor** — a lightweight EA that loads model signals and
    executes trades with a dynamic trailing stop while respecting FTMO style risk
    limits.  Risk controls enforce maximum daily loss and overall drawdown in the
-   EA itself and are configurable via `config.yaml`.
+   EA itself and are configurable via `config.yaml`. Position sizing can
+   automatically adjust based on recent volatility or the realised Sharpe ratio
+   to better match current market conditions.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
 
