@@ -1,12 +1,16 @@
-"""Meta-learning style training with symbol-specific adapters."""
+"""Meta-learning training with neural adapters."""
 
 from pathlib import Path
 from typing import List
+
 import joblib
 import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
 from lightgbm import LGBMClassifier
 
 from utils import load_config
@@ -15,6 +19,24 @@ from dataset import (
     load_history_from_urls,
     make_features,
 )
+
+
+class MetaAdapterNet(nn.Module):
+    """Small neural network that adapts base model outputs per symbol."""
+
+    def __init__(self, num_features: int, num_symbols: int, emb_dim: int = 8):
+        super().__init__()
+        self.embed = nn.Embedding(num_symbols, emb_dim)
+        self.fc1 = nn.Linear(num_features + emb_dim, 32)
+        self.act = nn.ReLU()
+        self.fc2 = nn.Linear(32, 1)
+
+    def forward(self, x: torch.Tensor, sym_idx: torch.Tensor) -> torch.Tensor:
+        emb = self.embed(sym_idx)
+        x = torch.cat([x, emb], dim=1)
+        x = self.act(self.fc1(x))
+        x = self.fc2(x)
+        return torch.sigmoid(x).squeeze(1)
 
 
 def load_symbol_data(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
@@ -44,21 +66,41 @@ def train_base_model(df: pd.DataFrame, features: List[str]):
     return pipe
 
 
-def train_symbol_adapters(
-    df: pd.DataFrame, features: List[str], base_model, out_dir: Path, symbols: List[str]
+def train_meta_network(
+    df: pd.DataFrame, features: List[str], base_model, out_path: Path
 ):
-    """Train lightweight adapters per symbol using base model probabilities."""
-    out_dir.mkdir(exist_ok=True)
-    for sym in symbols:
-        df_sym = df[df["Symbol"] == sym].copy()
-        X_sym = df_sym[features]
-        y_sym = (df_sym["return"].shift(-1) > 0).astype(int)
-        base_probs = base_model.predict_proba(X_sym)[:, 1]
-        X_meta = X_sym.copy()
-        X_meta["base_prob"] = base_probs
-        adapter = LogisticRegression(max_iter=200)
-        adapter.fit(X_meta, y_sym)
-        joblib.dump(adapter, out_dir / f"model_{sym}.joblib")
+    """Train a neural adapter model jointly across symbols."""
+    out_path.parent.mkdir(exist_ok=True)
+
+    # target and base probabilities
+    y = (df["return"].shift(-1) > 0).astype(int).iloc[:-1].values
+    base_probs = base_model.predict_proba(df[features])[:, 1]
+    X = df.iloc[:-1][[f for f in features if f != "SymbolCode"]].values
+    sym_idx = df.iloc[:-1]["SymbolCode"].values.astype(int)
+    base_probs = base_probs[:-1]
+
+    X_tensor = torch.tensor(
+        np.hstack([X, base_probs.reshape(-1, 1)]), dtype=torch.float32
+    )
+    sym_tensor = torch.tensor(sym_idx, dtype=torch.long)
+    y_tensor = torch.tensor(y, dtype=torch.float32)
+
+    dataset = TensorDataset(X_tensor, sym_tensor, y_tensor)
+    loader = DataLoader(dataset, batch_size=256, shuffle=True)
+
+    model = MetaAdapterNet(X_tensor.shape[1], df["Symbol"].nunique())
+    optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+    loss_fn = nn.BCELoss()
+
+    for _ in range(5):
+        for xb, sb, yb in loader:
+            optim.zero_grad()
+            preds = model(xb, sb)
+            loss = loss_fn(preds, yb)
+            loss.backward()
+            optim.step()
+
+    torch.save(model.state_dict(), out_path)
 
 
 def main():
@@ -88,8 +130,8 @@ def main():
     base_model = train_base_model(df, features)
     joblib.dump(base_model, root / "models" / "base_model.joblib")
 
-    train_symbol_adapters(df, features, base_model, root / "models", symbols)
-    print("Models saved to", root / "models")
+    train_meta_network(df, features, base_model, root / "models" / "meta_adapter.pt")
+    print("Meta-learning model saved to", root / "models" / "meta_adapter.pt")
 
 
 if __name__ == "__main__":

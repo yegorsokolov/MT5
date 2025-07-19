@@ -11,13 +11,23 @@ from dataset import load_history, load_history_from_urls, make_features
 
 
 class TradingEnv(gym.Env):
-    """Simple trading environment for RL."""
+    """Trading environment with long/short positions and transaction costs."""
 
-    def __init__(self, df: pd.DataFrame, features: List[str]):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        features: List[str],
+        max_position: float = 1.0,
+        transaction_cost: float = 0.0001,
+    ) -> None:
         super().__init__()
         self.df = df.reset_index(drop=True)
         self.features = features
-        self.action_space = spaces.Discrete(2)  # 0 = flat, 1 = long
+        self.max_position = max_position
+        self.transaction_cost = transaction_cost
+        self.action_space = spaces.Box(
+            low=-max_position, high=max_position, shape=(1,), dtype=np.float32
+        )
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(len(features),), dtype=np.float32
         )
@@ -28,8 +38,7 @@ class TradingEnv(gym.Env):
         self.i = 0
         self.equity = self.start_equity
         self.peak_equity = self.start_equity
-        self.position = 0
-        self.entry_price = 0.0
+        self.position = 0.0
         obs = self.df.loc[self.i, self.features].values.astype(np.float32)
         return obs
 
@@ -37,15 +46,19 @@ class TradingEnv(gym.Env):
         done = False
         reward = 0.0
 
+        action = float(np.clip(action, -self.max_position, self.max_position))
         price = self.df.loc[self.i, "mid"]
-        if action == 1 and self.position == 0:
-            self.position = 1
-            self.entry_price = price
-        elif action == 0 and self.position == 1:
-            profit = (price - self.entry_price) / self.entry_price
-            self.equity *= 1 + profit
-            reward += profit
-            self.position = 0
+
+        if self.i > 0:
+            prev_price = self.df.loc[self.i - 1, "mid"]
+            price_change = (price - prev_price) / prev_price
+            reward += self.position * price_change
+            self.equity *= 1 + self.position * price_change
+
+        cost = abs(action - self.position) * self.transaction_cost
+        reward -= cost
+        self.equity *= 1 - cost
+        self.position = action
 
         self.i += 1
         if self.i >= len(self.df) - 1:
