@@ -17,6 +17,13 @@ def main():
     df = load_history(Path(__file__).resolve().parent / "data" / "history.csv")
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     df = make_features(df)
+
+    # optional macro indicators merged on timestamp
+    macro_path = Path(__file__).resolve().parent / "data" / "macro.csv"
+    if macro_path.exists():
+        macro = pd.read_csv(macro_path)
+        macro["Timestamp"] = pd.to_datetime(macro["Timestamp"])
+        df = df.merge(macro, on="Timestamp", how="left")
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
@@ -38,7 +45,20 @@ def main():
 
     ma_ok = df["ma_cross"] == 1
     rsi_ok = df["rsi_14"] > cfg.get("rsi_buy", 55)
-    combined = np.where(ma_ok & rsi_ok, probs, 0.0)
+
+    boll_ok = True
+    if "boll_break" in df.columns:
+        boll_ok = df["boll_break"] == 1
+
+    vol_ok = True
+    if "volume_spike" in df.columns:
+        vol_ok = df["volume_spike"] == 1
+
+    macro_ok = True
+    if "macro_indicator" in df.columns:
+        macro_ok = df["macro_indicator"] > cfg.get("macro_threshold", 0.0)
+
+    combined = np.where(ma_ok & rsi_ok & boll_ok & vol_ok & macro_ok, probs, 0.0)
 
     out = pd.DataFrame({"Timestamp": df["Timestamp"], "prob": combined})
     out.to_csv(Path(__file__).resolve().parent / "signals.csv", index=False)
