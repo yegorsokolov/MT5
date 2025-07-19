@@ -26,3 +26,8 @@ data_urls:
     - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ
 backtest_window_months: 6  # size of the training and test windows
 backtest_step_months: 6    # months to advance for the next split
+rl_steps: 5000            # PPO training steps
+rl_max_position: 1.0      # max absolute position per symbol
+rl_transaction_cost: 0.0001
+rl_risk_penalty: 0.1      # weight for portfolio variance penalty
+rl_var_window: 30         # lookback window for variance calculation
