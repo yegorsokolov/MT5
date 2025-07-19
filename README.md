@@ -113,10 +113,11 @@ produced by the Python model and place trades with a context aware trailing
 stop.  `RealtimeEA.mq5` extends this idea by automatically running `git pull`
 on initialisation so the latest model from GitHub is used.
 
-`generate_signals.py` now merges ML probabilities with a moving average
+`generate_signals.py` merges ML probabilities with a moving average
 crossover and RSI filter so trades are only taken when multiple conditions
-confirm the direction.  Configuration values for these filters live in
-`config.yaml`.
+confirm the direction.  Additional optional filters check for Bollinger band
+breakouts, volume spikes and even macro indicators when a `macro.csv` file is
+present. Configuration values for these filters live in `config.yaml`.
 
 ## Performance Reports
 

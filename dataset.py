@@ -55,6 +55,21 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         group["ma_30"] = group["mid"].rolling(30).mean()
         group["ma_60"] = group["mid"].rolling(60).mean()
 
+        # Bollinger bands (20 period) and breakout signal
+        boll_ma = group["mid"].rolling(20).mean()
+        boll_std = group["mid"].rolling(20).std()
+        group["boll_upper"] = boll_ma + 2 * boll_std
+        group["boll_lower"] = boll_ma - 2 * boll_std
+        break_up = (group["mid"] > group["boll_upper"]) & (
+            group["mid"].shift(1) <= group["boll_upper"].shift(1)
+        )
+        break_down = (group["mid"] < group["boll_lower"]) & (
+            group["mid"].shift(1) >= group["boll_lower"].shift(1)
+        )
+        group["boll_break"] = 0
+        group.loc[break_up, "boll_break"] = 1
+        group.loc[break_down, "boll_break"] = -1
+
         # volatility measure and RSI
         group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
@@ -65,6 +80,9 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
             group["spread"] = spread
             group["volume_ratio"] = group["BidVolume"] / group["AskVolume"].replace(0, pd.NA)
             group["volume_imbalance"] = group["BidVolume"] - group["AskVolume"]
+            total_volume = group["BidVolume"] + group["AskVolume"]
+            avg_volume = total_volume.rolling(20).mean()
+            group["volume_spike"] = (total_volume > avg_volume * 1.5).astype(int)
 
         group = group.dropna().reset_index(drop=True)
         group["ma_cross"] = ma_cross_signal(group)
