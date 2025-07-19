@@ -30,12 +30,13 @@ The project can be adapted to any symbol by changing the configuration
 parameters and retraining the model on the corresponding historical data.
 `train.py` now supports training on multiple symbols at once.  By default both
 `XAUUSD` and `GBPUSD` history files will be downloaded and combined.
-An alternative script `train_nn.py` trains a small LSTM network on sliding
-windows of these features for those wanting to explore deep learning models.
+The script `train_nn.py` now uses a lightweight Transformer network on sliding
+windows of features for those wanting to explore deep learning models.
 `train_meta.py` demonstrates a simple meta-learning approach where a global
 model is fitted on all symbols and lightweight adapters are fine-tuned for each
 instrument.  The per-symbol models are saved under the `models/` folder.
 Another option `train_rl.py` trains a reinforcement learning agent that optimises risk-adjusted profit.
+For a full pipeline combining all of these approaches run `train_combined.py`.
 
 ## Installation
 
@@ -51,11 +52,13 @@ Another option `train_rl.py` trains a reinforcement learning agent that optimise
 
    ```bash
    python train.py
-   # or use the experimental neural network
+   # run the transformer-based neural network
    python train_nn.py
    # train symbol-specific adapters
    python train_meta.py
    python train_rl.py
+   # end-to-end training of all components
+   python train_combined.py
    python backtest.py
    ```
 
@@ -92,8 +95,8 @@ Follow these steps to run the EA and the realtime trainer on a Windows VPS:
 6. **Initial training** –
    1. Still inside the command prompt run `python train.py`.
       The script downloads the XAUUSD and GBPUSD history files and trains a LightGBM model.
-   2. To experiment with a recurrent neural network instead run `python train_nn.py`.
-      This trains a small LSTM on sequences of the same features and saves `model_lstm.pt`.
+   2. To experiment with the transformer-based neural network instead run `python train_nn.py`.
+      This trains a small transformer on sequences of the same features and saves `model_transformer.pt`.
    3. After either script finishes you will see the resulting model file under the project folder.
 7. **Copy the EA** –
    1. Open MetaTrader 5 and click **File → Open Data Folder**.
