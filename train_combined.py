@@ -20,7 +20,7 @@ from dataset import (
     train_test_split,
     make_sequence_arrays,
 )
-from train_meta import load_symbol_data, train_base_model, train_symbol_adapters
+from train_meta import load_symbol_data, train_base_model, train_meta_network
 from train_rl import TradingEnv
 from train_nn import TransformerModel
 
@@ -118,7 +118,7 @@ def train_transformer(df: pd.DataFrame, cfg: dict, root: Path) -> None:
 
 
 def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
-    """Train base model and symbol adapters."""
+    """Train base model and neural meta adapter."""
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     features = [
         "return",
@@ -136,8 +136,8 @@ def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
 
     base_model = train_base_model(df, features)
     joblib.dump(base_model, root / "models" / "base_model.joblib")
-    train_symbol_adapters(df, features, base_model, root / "models", symbols)
-    print("Meta-learning models saved to", root / "models")
+    train_meta_network(df, features, base_model, root / "models" / "meta_adapter.pt")
+    print("Meta-learning model saved to", root / "models" / "meta_adapter.pt")
 
 
 def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
