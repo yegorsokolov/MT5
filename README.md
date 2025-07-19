@@ -11,10 +11,12 @@ The solution is split into two components:
    learning and backtesting using the provided CSV history files.
 2. **MQL5 Expert Advisor** — a lightweight EA that loads model signals and
    executes trades with a dynamic trailing stop while respecting FTMO style risk
-   limits.  Risk controls enforce maximum daily loss and overall drawdown in the
-   EA itself and are configurable via `config.yaml`. Position sizing can
-   automatically adjust based on recent volatility or the realised Sharpe ratio
-   to better match current market conditions.
+    limits.  Risk controls enforce maximum daily loss and overall drawdown in the
+    EA itself and are configurable via `config.yaml`. Position sizing can
+    automatically adjust based on recent volatility or the realised Sharpe ratio
+    to better match current market conditions. Additional checks compute a
+    99% value-at-risk and a simple stress-loss estimate so trading is paused
+    when tail risk grows beyond the configured thresholds.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
 
@@ -123,9 +125,11 @@ on initialisation so the latest model from GitHub is used.
 crossover and RSI filter so trades are only taken when multiple conditions
 confirm the direction.  Additional optional filters check for Bollinger band
 breakouts, volume spikes and even macro indicators when a `macro.csv` file is
-present. Configuration values for these filters live in `config.yaml`. Set
-`enable_news_trading` to `false` to automatically block trades within a few
-minutes of scheduled high impact events pulled from all three calendars.
+present. Configuration values for these filters live in `config.yaml`.  The
+pipeline now also considers news sentiment scores and cross-asset momentum
+to further refine entries. Set `enable_news_trading` to `false` to automatically
+block trades within a few minutes of scheduled high impact events pulled from
+all three calendars.
 
 ## Performance Reports
 
