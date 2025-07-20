@@ -17,7 +17,8 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 RUN mkdir -p /opt/mt5 && \
     wget -O /tmp/mt5setup.exe https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe && \
     wine /tmp/mt5setup.exe /silent /dir=/opt/mt5 || true && \
-    rm /tmp/mt5setup.exe
+    rm /tmp/mt5setup.exe && \
+    python3 scripts/setup_terminal.py /opt/mt5
 
 ENV DISPLAY=:0
 CMD ["bash"]
