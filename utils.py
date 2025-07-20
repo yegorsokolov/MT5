@@ -22,10 +22,13 @@ _LOG_PATH = Path(__file__).resolve().parent / 'logs' / 'config_changes.csv'
 _LOG_PATH.parent.mkdir(exist_ok=True)
 
 _RISK_KEYS = {
+    'risk_per_trade',
     'max_daily_loss',
     'max_drawdown',
     'max_var',
     'max_stress_loss',
+    'max_cvar',
+    'rl_max_position',
 }
 
 
