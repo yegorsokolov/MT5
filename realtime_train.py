@@ -28,7 +28,11 @@ def train_realtime():
     cfg = load_config()
     repo_path = Path(__file__).resolve().parent
     data_path = repo_path / "data" / "history.csv"
+    feat_path = repo_path / "data" / "features.csv"
     model_path = repo_path / "model.joblib"
+
+    window = cfg.get("realtime_window", 10000)
+    context_rows = 300  # number of rows to keep for feature context
 
     repo = Repo(repo_path)
 
@@ -36,6 +40,22 @@ def train_realtime():
         raise RuntimeError("Failed to initialize MT5")
 
     symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
+
+    if data_path.exists():
+        history = pd.read_csv(data_path)
+        history["Timestamp"] = pd.to_datetime(history["Timestamp"])
+        history = history.sort_values("Timestamp")
+        history = history.groupby("Symbol", as_index=False, group_keys=False).tail(window)
+    else:
+        history = pd.DataFrame(columns=["Timestamp", "Bid", "Ask", "BidVolume", "AskVolume", "Symbol"])
+
+    if feat_path.exists():
+        feature_df = pd.read_csv(feat_path)
+        feature_df["Timestamp"] = pd.to_datetime(feature_df["Timestamp"])
+        feature_df = feature_df.sort_values("Timestamp")
+        feature_df = feature_df.groupby("Symbol", as_index=False, group_keys=False).tail(window)
+    else:
+        feature_df = make_features(history) if not history.empty else pd.DataFrame()
 
     while True:
         tick_frames = []
@@ -50,18 +70,37 @@ def train_realtime():
             continue
 
         new_ticks = pd.concat(tick_frames, ignore_index=True)
+        new_ticks["Timestamp"] = pd.to_datetime(new_ticks["Timestamp"])
 
-        if data_path.exists():
-            history = pd.read_csv(data_path)
-            history = pd.concat([history, new_ticks]).drop_duplicates(subset=["Timestamp", "Symbol"])
-        else:
-            history = new_ticks
+        history = (
+            pd.concat([history, new_ticks])
+            .drop_duplicates(subset=["Timestamp", "Symbol"], keep="last")
+            .sort_values("Timestamp")
+        )
+        history = history.groupby("Symbol", as_index=False, group_keys=False).tail(window)
         history.to_csv(data_path, index=False)
 
-        # compute features on the full history across all symbols so
-        # cross symbol relationships like correlation or momentum can
-        # be derived when available
-        df = make_features(history)
+        context = pd.concat(
+            [history.groupby("Symbol").tail(context_rows), new_ticks]
+        ).drop_duplicates(subset=["Timestamp", "Symbol"], keep="last")
+
+        df = make_features(context)
+        new_features = df.merge(
+            new_ticks[["Timestamp", "Symbol"]], on=["Timestamp", "Symbol"], how="inner"
+        )
+        feature_df = (
+            pd.concat([feature_df, new_features])
+            .drop_duplicates(subset=["Timestamp", "Symbol"], keep="last")
+            .sort_values("Timestamp")
+        )
+        feature_df = feature_df.groupby("Symbol", as_index=False, group_keys=False).tail(window)
+        feature_df.to_csv(feat_path, index=False)
+
+        if feature_df.empty:
+            time.sleep(60)
+            continue
+
+        df = feature_df.copy()
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
@@ -101,6 +140,7 @@ def train_realtime():
 
         # commit updates
         repo.git.add(data_path.as_posix())
+        repo.git.add(feat_path.as_posix())
         repo.git.add(model_path.as_posix())
         repo.index.commit("Update model with realtime data")
         try:
