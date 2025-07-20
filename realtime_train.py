@@ -58,10 +58,14 @@ def train_realtime():
             history = new_ticks
         history.to_csv(data_path, index=False)
 
+        # compute features on the full history across all symbols so
+        # cross symbol relationships like correlation or momentum can
+        # be derived when available
         df = make_features(history)
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
+        # base set of features used for model training
         features = [
             "return",
             "ma_5",
@@ -72,6 +76,10 @@ def train_realtime():
             "spread",
             "rsi_14",
         ]
+        # include optional features when present
+        for col in ["cross_corr", "cross_momentum", "news_sentiment"]:
+            if col in df.columns:
+                features.append(col)
         if "volume_ratio" in df.columns:
             features.extend(["volume_ratio", "volume_imbalance"])
         if "SymbolCode" in df.columns:
