@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mt5-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mt5-bot
+  template:
+    metadata:
+      labels:
+        app: mt5-bot
+    spec:
+      containers:
+        - name: bot
+          image: ghcr.io/youruser/mt5-bot:latest
+          args: ["bash", "-c", "python train.py && python realtime_train.py"]
+          volumeMounts:
+            - mountPath: /opt/mt5
+              name: mt5-data
+      volumes:
+        - name: mt5-data
+          persistentVolumeClaim:
+            claimName: mt5-pvc
