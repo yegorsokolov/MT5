@@ -25,7 +25,8 @@ The solution is split into two components:
 
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
- order-book statistics (spread and volume imbalance). The dataset also merges
+ order-book statistics (spread and volume imbalance) and microstructure cues
+ like depth imbalance, trade rate and quote revisions. The dataset also merges
  high impact events from several economic calendars (ForexFactory, the built-in
  MetaTrader calendar via Tradays and the MQL5 feed) so the bot can avoid trading
  immediately around red news releases. These richer features help the model
