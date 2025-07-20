@@ -35,8 +35,9 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df)//2))
     features = [c for c in [
         "return","ma_5","ma_10","ma_30","ma_60","volatility_30",
-        "spread","rsi_14","cross_corr","cross_momentum","news_sentiment",
+        "spread","rsi_14","news_sentiment",
     ] if c in df.columns]
+    features += [c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio","volume_imbalance"])
     if "SymbolCode" in df.columns:
