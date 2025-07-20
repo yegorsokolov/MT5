@@ -58,10 +58,12 @@ def train_base_model(df: pd.DataFrame, features: List[str]):
     """Train a global base model on all symbols."""
     X = df[features]
     y = (df["return"].shift(-1) > 0).astype(int)
-    pipe = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LGBMClassifier(n_estimators=200, random_state=42)),
-    ])
+    cfg = load_config()
+    steps = []
+    if cfg.get("use_scaler", True):
+        steps.append(("scaler", StandardScaler()))
+    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+    pipe = Pipeline(steps)
     pipe.fit(X, y)
     return pipe
 

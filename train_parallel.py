@@ -43,10 +43,11 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
 
-    pipe = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LGBMClassifier(n_estimators=200, random_state=42)),
-    ])
+    steps = []
+    if cfg.get("use_scaler", True):
+        steps.append(("scaler", StandardScaler()))
+    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+    pipe = Pipeline(steps)
     pipe.fit(train_df[features], (train_df["return"].shift(-1) > 0).astype(int))
     preds = pipe.predict(test_df[features])
     report = classification_report(

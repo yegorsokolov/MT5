@@ -64,10 +64,11 @@ def main():
     X_test = test_df[features]
     y_test = (test_df["return"].shift(-1) > 0).astype(int)
 
-    pipe = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LGBMClassifier(n_estimators=200, random_state=42)),
-    ])
+    steps = []
+    if cfg.get("use_scaler", True):
+        steps.append(("scaler", StandardScaler()))
+    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+    pipe = Pipeline(steps)
 
     pipe.fit(X_train, y_train)
     preds = pipe.predict(X_test)

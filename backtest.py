@@ -56,15 +56,16 @@ def compute_metrics(returns: pd.Series) -> dict:
     }
 
 
-def fit_model(train_df: pd.DataFrame) -> Pipeline:
+def fit_model(train_df: pd.DataFrame, cfg: dict) -> Pipeline:
     """Train a LightGBM model on the given dataframe."""
     feats = feature_columns(train_df)
     X = train_df[feats]
     y = (train_df["return"].shift(-1) > 0).astype(int)
-    pipe = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LGBMClassifier(n_estimators=200, random_state=42)),
-    ])
+    steps = []
+    if cfg.get("use_scaler", True):
+        steps.append(("scaler", StandardScaler()))
+    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+    pipe = Pipeline(steps)
     pipe.fit(X, y)
     return pipe
 
@@ -106,10 +107,10 @@ def run_backtest(cfg: dict) -> dict:
     model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
     df = load_history(data_path)
-    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     df = make_features(df)
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
 
     return backtest_on_df(df, model, cfg)
 
@@ -144,7 +145,7 @@ def run_rolling_backtest(cfg: dict) -> dict:
             start += pd.DateOffset(months=step)
             continue
 
-        model = fit_model(train_df)
+        model = fit_model(train_df, cfg)
         metrics = backtest_on_df(test_df, model, cfg)
         metrics["period_start"] = train_end.date().isoformat()
         metrics["period_end"] = test_end.date().isoformat()
