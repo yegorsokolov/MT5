@@ -116,9 +116,9 @@ def train_realtime():
             "rsi_14",
         ]
         # include optional features when present
-        for col in ["cross_corr", "cross_momentum", "news_sentiment"]:
-            if col in df.columns:
-                features.append(col)
+        if "news_sentiment" in df.columns:
+            features.append("news_sentiment")
+        features.extend([c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")])
         if "volume_ratio" in df.columns:
             features.extend(["volume_ratio", "volume_imbalance"])
         if "SymbolCode" in df.columns:

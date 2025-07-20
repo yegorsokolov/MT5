@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import datetime as dt
 import functools
+from sklearn.decomposition import PCA
 from dateutil import parser as date_parser
 import requests
 
@@ -284,38 +285,32 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         return group
 
     if "Symbol" in df.columns:
-        df = df.groupby('Symbol', group_keys=False).apply(_feat)
-        if df['Symbol'].nunique() > 1:
-            pivot = df.pivot_table(index='Timestamp', columns='Symbol', values='return')
-            corr_features = {}
-            mom_features = {}
-            for sym in pivot.columns:
-                others = pivot.drop(columns=sym).mean(axis=1)
-                corr_features[sym] = pivot[sym].rolling(30).corr(others)
-                mom_features[sym] = others.rolling(30).mean()
-            corr_df = (
-                pd.DataFrame(corr_features)
-                .stack()
-                .rename('cross_corr')
-                .reset_index()
-                .rename(columns={'level_0':'Timestamp','level_1':'Symbol'})
-            )
-            mom_df = (
-                pd.DataFrame(mom_features)
-                .stack()
-                .rename('cross_momentum')
-                .reset_index()
-                .rename(columns={'level_0':'Timestamp','level_1':'Symbol'})
-            )
-            df = df.merge(corr_df, on=['Timestamp','Symbol'], how='left')
-            df = df.merge(mom_df, on=['Timestamp','Symbol'], how='left')
-        else:
-            df['cross_corr'] = np.nan
-            df['cross_momentum'] = np.nan
+        df = df.groupby("Symbol", group_keys=False).apply(_feat)
+        pivot = df.pivot_table(index="Timestamp", columns="Symbol", values="return")
+
+        if df["Symbol"].nunique() > 1:
+            pair_data = {}
+            for sym1 in pivot.columns:
+                for sym2 in pivot.columns:
+                    if sym1 == sym2:
+                        continue
+                    pair_data[(sym1, sym2)] = pivot[sym1].rolling(30).corr(pivot[sym2])
+
+            pair_df = pd.concat(pair_data, axis=1)
+            pair_df.columns = pd.MultiIndex.from_tuples(pair_df.columns, names=["Symbol", "Other"])
+            pair_df = pair_df.stack(["Symbol", "Other"]).rename("pair_corr").reset_index()
+            pair_wide = pair_df.pivot_table(index=["Timestamp", "Symbol"], columns="Other", values="pair_corr")
+            pair_wide = pair_wide.add_prefix("cross_corr_").reset_index()
+            df = df.merge(pair_wide, on=["Timestamp", "Symbol"], how="left")
+
+        pivot_filled = pivot.fillna(0)
+        n_comp = min(3, len(pivot.columns))
+        pca = PCA(n_components=n_comp)
+        factors = pca.fit_transform(pivot_filled)
+        factor_df = pd.DataFrame(factors, index=pivot.index, columns=[f"factor_{i+1}" for i in range(n_comp)]).reset_index()
+        df = df.merge(factor_df, on="Timestamp", how="left")
     else:
         df = _feat(df)
-        df['cross_corr'] = np.nan
-        df['cross_momentum'] = np.nan
 
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
