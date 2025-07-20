@@ -208,3 +208,17 @@ change to avoid configuration drift.
 This is a simplified template intended for further extension and tuning.  It is
 up to the user to verify performance using additional backtests and forward
 testing within MetaTrader 5 before deploying to a live environment.
+
+## Effect of Feature Scaling
+
+The configuration file now includes a `use_scaler` flag to toggle a
+`StandardScaler` step during model training. On the synthetic sample data
+included with the tests the impact of scaling was minor:
+
+| use_scaler | Sharpe | Max Drawdown | Total Return | Win Rate |
+|-----------|-------|--------------|--------------|---------|
+| True | 8.43 | -2.94% | 0.34 | 72% |
+| False | 8.77 | -2.94% | 0.34 | 75% |
+
+In practice the benefit of scaling will depend on the underlying market data
+and features.

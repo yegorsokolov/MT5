@@ -1,46 +1,41 @@
-# Configuration for Adaptive MT5 Bot
+avoid_news_minutes: 5
+backtest_step_months: 6
+backtest_window_months: 6
+data_urls:
+  GBPUSD:
+  - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ
+  XAUUSD:
+  - https://drive.google.com/uc?id=1FJ6NAcjMsGVFSKsCdvujL__rNin7bHcI
+enable_news_trading: true
+ensemble_method: bayesian
+ensemble_models:
+- model.joblib
+long_vol_period: 50
+max_cvar: 7.5
+max_daily_loss: 3.0
+max_drawdown: 10.0
+max_risk_factor: 2.0
+max_stress_loss: 15.0
+max_var: 5.0
+min_risk_factor: 0.5
+ray_num_cpus: 4
+risk_lookback_bars: 50
+risk_per_trade: 0.01
+risk_var_lookback: 50
+rl_max_position: 1.0
+rl_risk_penalty: 0.1
+rl_steps: 5000
+rl_transaction_cost: 0.0001
+rl_var_window: 30
+rsi_buy: 55
+short_vol_period: 10
 symbol: XAUUSD
 symbols:
-  - XAUUSD
-  - GBPUSD
-train_rows: 50000       # number of rows from CSV to use for training
-threshold: 0.55        # probability threshold for taking a trade
+- XAUUSD
+- GBPUSD
+threshold: 0.55
 trailing_stop_pips: 20
-risk_per_trade: 0.01   # percentage of equity
-max_daily_loss: 3.0    # percent
-max_drawdown: 10.0     # percent
-risk_lookback_bars: 50
+train_rows: 50000
+use_ray: false
+use_scaler: true
 use_sharpe_sizing: true
-min_risk_factor: 0.5
-max_risk_factor: 2.0
-risk_var_lookback: 50
-max_var: 5.0
-max_stress_loss: 15.0
-rsi_buy: 55            # RSI threshold for confirming entries
-enable_news_trading: true
-avoid_news_minutes: 5
-data_urls:
-  XAUUSD:
-    - https://drive.google.com/uc?id=1FJ6NAcjMsGVFSKsCdvujL__rNin7bHcI
-  GBPUSD:
-    - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ
-backtest_window_months: 6  # size of the training and test windows
-backtest_step_months: 6    # months to advance for the next split
-rl_steps: 5000            # PPO training steps
-rl_max_position: 1.0      # max absolute position per symbol
-rl_transaction_cost: 0.0001
-rl_risk_penalty: 0.1      # weight for portfolio variance penalty
-rl_var_window: 30         # lookback window for variance calculation
-
-# Parallel/distributed training
-use_ray: false            # enable Ray for multi-symbol training
-ray_num_cpus: 4           # number of CPUs Ray can use
-
-# Risk model enhancements
-max_cvar: 7.5             # max allowed expected shortfall in percent
-short_vol_period: 10      # bars for short-term volatility regime
-long_vol_period: 50       # bars for long-term volatility regime
-
-ensemble_models:
-  - model.joblib
-ensemble_method: bayesian

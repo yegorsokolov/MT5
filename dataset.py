@@ -156,6 +156,12 @@ def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
         df["nearest_news_minutes"] = np.nan
         df["upcoming_red_news"] = 0
         return df
+    if not events:
+        df["minutes_to_event"] = np.nan
+        df["minutes_from_event"] = np.nan
+        df["nearest_news_minutes"] = np.nan
+        df["upcoming_red_news"] = 0
+        return df
     events_df = pd.DataFrame(events)
     events_df = events_df[events_df["impact"].isin(["High", "Medium"])]
     if events_df.empty:
