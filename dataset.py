@@ -257,12 +257,21 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
 
+        # microstructure features
+        spread = group["Ask"] - group["Bid"]
+        group["spread"] = spread
+        group["mid_change"] = group["mid"].diff()
+        group["spread_change"] = spread.diff()
+        delta_sec = group["Timestamp"].diff().dt.total_seconds().replace(0, np.nan)
+        group["trade_rate"] = 1 / delta_sec
+        group["quote_revision"] = ((group["Bid"].diff() != 0) | (group["Ask"].diff() != 0)).astype(int)
+
         # order book related features if volumes are present
         if {"BidVolume", "AskVolume"}.issubset(group.columns):
-            spread = group["Ask"] - group["Bid"]
-            group["spread"] = spread
             group["volume_ratio"] = group["BidVolume"] / group["AskVolume"].replace(0, pd.NA)
             group["volume_imbalance"] = group["BidVolume"] - group["AskVolume"]
+            group["depth_imbalance"] = group["volume_imbalance"] / (group["BidVolume"] + group["AskVolume"])
+            group["depth_imbalance"] = group["depth_imbalance"].replace([np.inf, -np.inf], np.nan)
             total_volume = group["BidVolume"] + group["AskVolume"]
             avg_volume = total_volume.rolling(20).mean()
             group["volume_spike"] = (total_volume > avg_volume * 1.5).astype(int)
