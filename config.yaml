@@ -31,3 +31,7 @@ rl_max_position: 1.0      # max absolute position per symbol
 rl_transaction_cost: 0.0001
 rl_risk_penalty: 0.1      # weight for portfolio variance penalty
 rl_var_window: 30         # lookback window for variance calculation
+
+ensemble_models:
+  - model.joblib
+ensemble_method: bayesian

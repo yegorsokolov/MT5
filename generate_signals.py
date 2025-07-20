@@ -10,10 +10,30 @@ from utils import load_config
 from dataset import load_history, make_features
 
 
+def load_models(paths):
+    """Load multiple joblib models from relative paths."""
+    models = []
+    for p in paths:
+        mp = Path(__file__).resolve().parent / p
+        if mp.exists():
+            models.append(joblib.load(mp))
+    return models
+
+
+def bayesian_average(prob_arrays):
+    """Combine probabilities using a simple Bayesian model averaging."""
+    logits = [np.log(p / (1 - p + 1e-12)) for p in prob_arrays]
+    avg_logit = np.mean(logits, axis=0)
+    return 1 / (1 + np.exp(-avg_logit))
+
+
 def main():
     cfg = load_config()
 
-    model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
+    model_paths = cfg.get("ensemble_models", ["model.joblib"])
+    models = load_models(model_paths)
+    if not models:
+        models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
     df = load_history(Path(__file__).resolve().parent / "data" / "history.csv")
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     df = make_features(df)
@@ -47,7 +67,16 @@ def main():
         features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
-    probs = model.predict_proba(df[features])[:, 1]
+
+    prob_list = [m.predict_proba(df[features])[:, 1] for m in models]
+    if len(prob_list) == 1:
+        probs = prob_list[0]
+    else:
+        method = cfg.get("ensemble_method", "average")
+        if method == "bayesian":
+            probs = bayesian_average(prob_list)
+        else:
+            probs = np.mean(prob_list, axis=0)
 
     ma_ok = df["ma_cross"] == 1
     rsi_ok = df["rsi_14"] > cfg.get("rsi_buy", 55)
