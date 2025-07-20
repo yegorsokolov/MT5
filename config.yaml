@@ -32,6 +32,15 @@ rl_transaction_cost: 0.0001
 rl_risk_penalty: 0.1      # weight for portfolio variance penalty
 rl_var_window: 30         # lookback window for variance calculation
 
+# Parallel/distributed training
+use_ray: false            # enable Ray for multi-symbol training
+ray_num_cpus: 4           # number of CPUs Ray can use
+
+# Risk model enhancements
+max_cvar: 7.5             # max allowed expected shortfall in percent
+short_vol_period: 10      # bars for short-term volatility regime
+long_vol_period: 50       # bars for long-term volatility regime
+
 ensemble_models:
   - model.joblib
 ensemble_method: bayesian

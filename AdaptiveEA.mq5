@@ -21,6 +21,9 @@ input double MaxRiskFactor     = 2.0;    // upper bound for position multiplier
 input int    VarLookbackBars   = 50;     // bars used for VaR/stress calc
 input double MaxVaR            = 5.0;    // max allowed 99% VaR in percent
 input double MaxStressLoss     = 15.0;   // max allowed stress loss percent
+input double MaxCVaR           = 7.5;    // max allowed expected shortfall
+input int    ShortVolPeriod    = 10;     // short-term volatility bars
+input int    LongVolPeriod     = 50;     // long-term volatility bars
 
 double peak_equity = 0.0;
 double day_start_equity = 0.0;
@@ -78,11 +81,52 @@ double CalculateRiskFactor()
       factor=1.0/(1.0+sd*100.0);
    }
 
+   double regime = RegimeMultiplier();
+
    if(factor<MinRiskFactor)
       factor=MinRiskFactor;
    if(factor>MaxRiskFactor)
       factor=MaxRiskFactor;
-   return(factor);
+
+   return(factor*regime);
+}
+
+double RegimeMultiplier()
+{
+   int short_n=MathMin(ShortVolPeriod,Bars(Symbol(),PERIOD_CURRENT)-1);
+   int long_n=MathMin(LongVolPeriod,Bars(Symbol(),PERIOD_CURRENT)-1);
+   if(long_n<=1 || short_n<=1)
+      return(1.0);
+
+   double mean_s=0.0, mean_l=0.0;
+   for(int i=0;i<short_n;i++)
+      mean_s+=(Close[i]-Close[i+1])/Close[i+1];
+   mean_s/=short_n;
+   for(int i=0;i<long_n;i++)
+      mean_l+=(Close[i]-Close[i+1])/Close[i+1];
+   mean_l/=long_n;
+
+   double var_s=0.0, var_l=0.0;
+   for(int i=0;i<short_n;i++)
+   {
+      double r=(Close[i]-Close[i+1])/Close[i+1];
+      var_s+=MathPow(r-mean_s,2);
+   }
+   for(int i=0;i<long_n;i++)
+   {
+      double r=(Close[i]-Close[i+1])/Close[i+1];
+      var_l+=MathPow(r-mean_l,2);
+   }
+   double sd_s=MathSqrt(var_s/short_n);
+   double sd_l=MathSqrt(var_l/long_n);
+   if(sd_l==0.0)
+      return(1.0);
+   double ratio=sd_s/sd_l;
+   if(ratio>1.5)
+      return(0.5);
+   if(ratio<0.7)
+      return(1.2);
+   return(1.0);
 }
 
 double CalculateVaR()
@@ -98,6 +142,24 @@ double CalculateVaR()
    int idx=(int)MathFloor(0.01*count);
    double var=-arr[idx]*100.0;
    return(var);
+}
+
+double CalculateCVaR()
+{
+   int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   if(count<=1)
+      return(0.0);
+   double arr[];
+   ArrayResize(arr,count);
+   for(int i=0;i<count;i++)
+      arr[i]=(Close[i]-Close[i+1])/Close[i+1];
+   ArraySort(arr,WHOLE_ARRAY,0,MODE_ASCEND);
+   int idx=(int)MathFloor(0.01*count);
+   double sum=0.0;
+   for(int i=0;i<=idx;i++)
+      sum+=arr[i];
+   double cvar=-(sum/(idx+1))*100.0;
+   return(cvar);
 }
 
 double CalculateStressLoss()
@@ -145,13 +207,14 @@ void UpdateRisk()
    double day_loss_pct=(equity-day_start_equity)/day_start_equity*100.0;
    double drawdown_pct=(equity-peak_equity)/peak_equity*100.0;
    double var_pct=CalculateVaR();
+   double cvar_pct=CalculateCVaR();
    double stress_pct=CalculateStressLoss();
    if(day_loss_pct<=-MaxDailyLoss || drawdown_pct<=-MaxDrawdown)
    {
       CloseAllPositions();
       trading_allowed=false;
    }
-   if(var_pct>MaxVaR || stress_pct>MaxStressLoss)
+   if(var_pct>MaxVaR || stress_pct>MaxStressLoss || cvar_pct>MaxCVaR)
    {
       CloseAllPositions();
       trading_allowed=false;

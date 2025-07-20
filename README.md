@@ -16,7 +16,10 @@ The solution is split into two components:
     automatically adjust based on recent volatility or the realised Sharpe ratio
     to better match current market conditions. Additional checks compute a
     99% value-at-risk and a simple stress-loss estimate so trading is paused
-    when tail risk grows beyond the configured thresholds.
+    when tail risk grows beyond the configured thresholds. The latest version
+    also monitors conditional value-at-risk (expected shortfall) and applies a
+    regime-switching volatility model so position sizes adapt when markets
+    transition between calm and turbulent periods.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
 4. **Auto optimiser** — experiments with different signal thresholds and
@@ -156,6 +159,15 @@ transformer outputs for more robust entries.
 
 `backtest.py` outputs statistics including win rate, Sharpe ratio and maximum
 drawdown. These metrics can be used to iteratively optimise the strategy.
+
+## Parallelized Training / HPC
+
+For multiple symbols and large tick datasets, fitting models sequentially can
+be slow. The script `train_parallel.py` uses Ray to distribute training and
+backtests across available CPU cores or even a cluster. Enable this by setting
+`use_ray: true` in `config.yaml` and optionally adjust `ray_num_cpus` to limit
+resource usage. The Docker setup remains unchanged so experiments stay
+reproducible.
 
 ## Streamlined Deployment
 
