@@ -111,7 +111,7 @@ Follow these steps to run the EA and the realtime trainer on a Windows VPS:
    3. After either script finishes you will see the resulting model file under the project folder.
 7. **Copy the EA** –
    1. Open MetaTrader 5 and click **File → Open Data Folder**.
-   2. Navigate to `MQL5/Experts` and copy `AdaptiveEA.mq5` (or `RealtimeEA.mq5`) into this directory.
+   2. Run `python scripts/setup_terminal.py "<path-to-terminal>"` to automatically place `AdaptiveEA.mq5` and `RealtimeEA.mq5` inside `MQL5/Experts`.
    3. Restart MetaTrader 5 and compile the EA inside the MetaEditor by pressing **F7**.
 8. **Attach the EA** –
    1. In MetaTrader 5 open the **Navigator** panel (Ctrl+N).
@@ -162,6 +162,23 @@ The workflow `.github/workflows/train.yml` retrains both `train.py` and
 `train_nn.py` whenever new data is pushed or on a daily schedule. Generated
 models are committed back to the repository ensuring the EA always uses the
 most recent versions.
+
+## Kubernetes Deployment
+
+For larger scale or multi‑VPS setups the bot can be run inside a Kubernetes
+cluster. Example manifests are provided under `k8s/`. Deploy the persistent
+volume claim and the deployment:
+
+```bash
+kubectl apply -f k8s/pvc.yaml
+kubectl apply -f k8s/deployment.yaml
+```
+
+The container image should be pushed to a registry accessible by your cluster
+(`ghcr.io/youruser/mt5-bot:latest` by default). The deployment mounts a
+persistent volume at `/opt/mt5` so the MetaTrader terminal and models survive
+pod restarts. Adjust the manifest to scale replicas or to integrate with your
+cluster's ingress.
 
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.
