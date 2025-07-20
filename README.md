@@ -144,6 +144,13 @@ to further refine entries. Set `enable_news_trading` to `false` to automatically
 block trades within a few minutes of scheduled high impact events pulled from
 all three calendars.
 
+An optional **advanced signal combination** stage can ensemble multiple models
+stored under the `models/` folder. When `ensemble_models` is defined in
+`config.yaml` the script loads each model and either averages the probabilities
+or performs a simple Bayesian model averaging based on the `ensemble_method`
+setting. This allows blending a baseline LightGBM model with meta-learning or
+transformer outputs for more robust entries.
+
 ## Performance Reports
 
 `backtest.py` outputs statistics including win rate, Sharpe ratio and maximum
