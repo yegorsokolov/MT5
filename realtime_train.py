@@ -130,10 +130,11 @@ def train_realtime():
         from sklearn.pipeline import Pipeline
         from lightgbm import LGBMClassifier
 
-        pipe = Pipeline([
-            ("scaler", StandardScaler()),
-            ("clf", LGBMClassifier(n_estimators=200, random_state=42)),
-        ])
+        steps = []
+        if cfg.get("use_scaler", True):
+            steps.append(("scaler", StandardScaler()))
+        steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+        pipe = Pipeline(steps)
 
         pipe.fit(X, y)
         joblib.dump(pipe, model_path)
