@@ -61,6 +61,7 @@ def train_transformer(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         "spread",
         "rsi_14",
     ]
+    features += [c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
@@ -130,6 +131,7 @@ def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         "spread",
         "rsi_14",
     ]
+    features += [c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
     features.append("SymbolCode")
@@ -151,10 +153,9 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         "volatility_30",
         "spread",
         "rsi_14",
-        "cross_corr",
-        "cross_momentum",
         "news_sentiment",
     ]
+    features += [c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
 

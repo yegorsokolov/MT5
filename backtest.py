@@ -22,14 +22,13 @@ BASE_FEATURES = [
     "volatility_30",
     "spread",
     "rsi_14",
-    "cross_corr",
-    "cross_momentum",
     "news_sentiment",
 ]
 
 
 def feature_columns(df: pd.DataFrame) -> list:
     cols = [c for c in BASE_FEATURES if c in df.columns]
+    cols.extend([c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")])
     if "volume_ratio" in df.columns:
         cols.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:

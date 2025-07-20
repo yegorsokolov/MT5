@@ -59,10 +59,9 @@ def main():
         "rsi_14",
         "hour_sin",
         "hour_cos",
-        "cross_corr",
-        "cross_momentum",
         "news_sentiment",
     ]
+    features += [c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
@@ -104,8 +103,9 @@ def main():
         sent_ok = df["news_sentiment"] > 0
 
     mom_ok = True
-    if "cross_momentum" in df.columns:
-        mom_ok = df["cross_momentum"] > 0
+    factor_cols = [c for c in df.columns if c.startswith("factor_")]
+    if factor_cols:
+        mom_ok = df[factor_cols[0]] > 0
 
     combined = np.where(
         ma_ok & rsi_ok & boll_ok & vol_ok & macro_ok & news_ok & sent_ok & mom_ok,
