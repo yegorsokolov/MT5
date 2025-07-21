@@ -19,6 +19,9 @@ from dataset import (
     load_history_from_urls,
     make_features,
 )
+from log_utils import setup_logging, log_exceptions
+
+logger = setup_logging()
 
 
 class MetaAdapterNet(nn.Module):
@@ -105,6 +108,7 @@ def train_meta_network(
     torch.save(model.state_dict(), out_path)
 
 
+@log_exceptions
 def main():
     cfg = load_config()
     root = Path(__file__).resolve().parent
