@@ -12,6 +12,9 @@ from lightgbm import LGBMClassifier
 from utils import load_config
 from dataset import load_history, make_features
 
+logger = setup_logging()
+from log_utils import setup_logging, log_exceptions
+
 
 BASE_FEATURES = [
     "return",
@@ -190,6 +193,7 @@ def run_rolling_backtest(cfg: dict) -> dict:
     }
 
 
+@log_exceptions
 def main():
     cfg = load_config()
     metrics = run_backtest(cfg)

@@ -8,6 +8,9 @@ from git import Repo
 from utils import load_config
 from dataset import make_features
 
+logger = setup_logging()
+from log_utils import setup_logging, log_exceptions
+
 
 def fetch_ticks(symbol: str, n: int = 1000) -> pd.DataFrame:
     """Fetch recent tick data from MetaTrader5."""
@@ -24,6 +27,7 @@ def fetch_ticks(symbol: str, n: int = 1000) -> pd.DataFrame:
     return df
 
 
+@log_exceptions
 def train_realtime():
     cfg = load_config()
     repo_path = Path(__file__).resolve().parent

@@ -11,11 +11,16 @@ from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 import ray
 
+from log_utils import setup_logging, log_exceptions
+
 from utils import load_config
 from dataset import load_history, load_history_from_urls, make_features, train_test_split
 
+logger = setup_logging()
+
 
 @ray.remote
+@log_exceptions
 def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     """Load data for one symbol, train model and save it."""
     path = root / "data" / f"{sym}_history.csv"
@@ -59,6 +64,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     return f"{sym} saved to {out_path}\n{report}"
 
 
+@log_exceptions
 def main() -> None:
     cfg = load_config()
     root = Path(__file__).resolve().parent

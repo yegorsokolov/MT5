@@ -20,6 +20,9 @@ from dataset import (
     train_test_split,
     make_sequence_arrays,
 )
+from log_utils import setup_logging, log_exceptions
+
+logger = setup_logging()
 from train_meta import load_symbol_data, train_base_model, train_meta_network
 from train_rl import TradingEnv
 from train_nn import TransformerModel
@@ -210,6 +213,7 @@ def evaluate_filters(df: pd.DataFrame, cfg: dict, root: Path) -> List[str]:
     return keep
 
 
+@log_exceptions
 def main() -> None:
     cfg = load_config()
     root = Path(__file__).resolve().parent
