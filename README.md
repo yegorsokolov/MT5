@@ -138,6 +138,10 @@ produced by the Python model and place trades with a context aware trailing
 stop.  `RealtimeEA.mq5` extends this idea by automatically running `git pull`
 on initialisation so the latest model from GitHub is used.
 
+Both EAs try to match the current chart time with rows in `signals.csv`.  If a
+perfect timestamp isn't found the loader now searches for the nearest entry
+within `signal_time_tolerance` seconds (default 60).
+
 `generate_signals.py` merges ML probabilities with a moving average
 crossover and RSI filter so trades are only taken when multiple conditions
 confirm the direction.  Additional optional filters check for Bollinger band
