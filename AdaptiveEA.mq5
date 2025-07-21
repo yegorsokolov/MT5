@@ -24,6 +24,7 @@ input double MaxStressLoss     = 15.0;   // max allowed stress loss percent
 input double MaxCVaR           = 7.5;    // max allowed expected shortfall
 input int    ShortVolPeriod    = 10;     // short-term volatility bars
 input int    LongVolPeriod     = 50;     // long-term volatility bars
+input int    SignalTimeTolerance = 60;   // seconds tolerance for matching signals
 
 double peak_equity = 0.0;
 double day_start_equity = 0.0;
@@ -35,17 +36,30 @@ bool LoadSignal(datetime time, double &prob)
    int fh = FileOpen(ModelSignalFile, FILE_READ|FILE_CSV|FILE_ANSI);
    if(fh == INVALID_HANDLE)
       return(false);
+   datetime closest_time = 0;
+   double   closest_prob = 0;
+   bool     found = false;
    while(!FileIsEnding(fh))
    {
       datetime t = (datetime)FileReadString(fh);
-      prob = FileReadNumber(fh);
-      if(t == time)
+      double p = FileReadNumber(fh);
+      int diff = (int)MathAbs(time - t);
+      if(diff <= SignalTimeTolerance)
       {
-         FileClose(fh);
-         return(true);
+         if(!found || diff < MathAbs(time - closest_time))
+         {
+            closest_time = t;
+            closest_prob = p;
+            found = true;
+         }
       }
    }
    FileClose(fh);
+   if(found)
+   {
+      prob = closest_prob;
+      return(true);
+   }
    return(false);
 }
 
