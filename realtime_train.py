@@ -122,7 +122,15 @@ def train_realtime():
         # include optional features when present
         if "news_sentiment" in df.columns:
             features.append("news_sentiment")
-        features.extend([c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")])
+        features.extend(
+            [
+                c
+                for c in df.columns
+                if c.startswith("cross_corr_")
+                or c.startswith("factor_")
+                or c.startswith("cross_mom_")
+            ]
+        )
         if "volume_ratio" in df.columns:
             features.extend(["volume_ratio", "volume_imbalance"])
         if "SymbolCode" in df.columns:

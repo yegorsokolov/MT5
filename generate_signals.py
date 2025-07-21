@@ -65,7 +65,13 @@ def main():
         "hour_cos",
         "news_sentiment",
     ]
-    features += [c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")]
+    features += [
+        c
+        for c in df.columns
+        if c.startswith("cross_corr_")
+        or c.startswith("factor_")
+        or c.startswith("cross_mom_")
+    ]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
