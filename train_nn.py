@@ -18,6 +18,10 @@ from dataset import (
     train_test_split,
     make_sequence_arrays,
 )
+from log_utils import setup_logging, log_exceptions
+
+logger = setup_logging()
+from log_utils import setup_logging, log_exceptions
 
 
 class PositionalEncoding(nn.Module):
@@ -82,6 +86,7 @@ class TransformerModel(nn.Module):
         return torch.sigmoid(out).squeeze(1)
 
 
+@log_exceptions
 def main():
     cfg = load_config()
     root = Path(__file__).resolve().parent

@@ -9,6 +9,9 @@ import numpy as np
 from utils import load_config
 from dataset import load_history, make_features
 
+logger = setup_logging()
+from log_utils import setup_logging, log_exceptions
+
 
 def load_models(paths):
     """Load multiple joblib models from relative paths."""
@@ -27,6 +30,7 @@ def bayesian_average(prob_arrays):
     return 1 / (1 + np.exp(-avg_logit))
 
 
+@log_exceptions
 def main():
     cfg = load_config()
 

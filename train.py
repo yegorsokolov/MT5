@@ -8,10 +8,15 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from lightgbm import LGBMClassifier
 
+from log_utils import setup_logging, log_exceptions
+
 from utils import load_config
 from dataset import load_history, load_history_from_urls, make_features, train_test_split
 
+logger = setup_logging()
 
+
+@log_exceptions
 def main():
     cfg = load_config()
     root = Path(__file__).resolve().parent
