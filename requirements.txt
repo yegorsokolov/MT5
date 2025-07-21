@@ -11,3 +11,5 @@ tqdm
 stable-baselines3
 gym
 ray
+scikit-optimize
+scipy
