@@ -131,9 +131,15 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
       Any improvements are written back to `config.yaml` and logged under
       `logs/config_changes.csv`.
 11. **Upload logs** –
-   1. Occasionally execute `python scripts/upload_logs.py` to commit and push
-      `logs/` files back to your repository. This keeps a history of app and
-      trade logs without manual git commands.
+   1. Start `python scripts/hourly_log_push.py` in a separate window. This
+      script commits and pushes the `logs/` folder every hour so log history is
+      archived automatically. Use Windows Task Scheduler to launch it at logon
+      for unattended operation.
+
+12. **Keep it running** –
+   1. Create scheduled tasks that start both `python realtime_train.py` and the
+      hourly log uploader whenever the VPS boots or a user logs in. With these
+      tasks enabled the bot and log push service run indefinitely.
 
 With the EA running on your VPS and the training script collecting realtime data,
 the bot will continually adapt to market conditions.
