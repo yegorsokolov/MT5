@@ -70,8 +70,23 @@ def fit_model(train_df: pd.DataFrame, cfg: dict) -> Pipeline:
     return pipe
 
 
-def backtest_on_df(df: pd.DataFrame, model, cfg: dict) -> dict:
-    """Run the trading simulation on a dataframe using the given model."""
+def backtest_on_df(
+    df: pd.DataFrame, model, cfg: dict, *, return_returns: bool = False
+) -> dict | tuple[dict, pd.Series]:
+    """Run the trading simulation on a dataframe using the given model.
+
+    Parameters
+    ----------
+    df: pd.DataFrame
+        Price history with engineered features.
+    model: Any
+        Trained sklearn-compatible model used to generate probabilities.
+    cfg: dict
+        Configuration with threshold and trailing stop settings.
+    return_returns: bool, optional
+        When ``True`` the list of trade returns is also returned for
+        statistical testing.
+    """
     feats = feature_columns(df)
     probs = model.predict_proba(df[feats])[:, 1]
 
@@ -95,11 +110,14 @@ def backtest_on_df(df: pd.DataFrame, model, cfg: dict) -> dict:
                 returns.append((price - entry) / entry)
                 in_position = False
 
-    metrics = compute_metrics(pd.Series(returns))
+    series = pd.Series(returns)
+    metrics = compute_metrics(series)
+    if return_returns:
+        return metrics, series
     return metrics
 
 
-def run_backtest(cfg: dict) -> dict:
+def run_backtest(cfg: dict, *, return_returns: bool = False) -> dict | tuple[dict, pd.Series]:
     data_path = Path(__file__).resolve().parent / "data" / "history.csv"
     if not data_path.exists():
         raise FileNotFoundError("Historical CSV not found under data/history.csv")
@@ -112,7 +130,7 @@ def run_backtest(cfg: dict) -> dict:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
 
-    return backtest_on_df(df, model, cfg)
+    return backtest_on_df(df, model, cfg, return_returns=return_returns)
 
 
 def run_rolling_backtest(cfg: dict) -> dict:
