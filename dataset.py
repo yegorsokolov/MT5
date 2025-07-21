@@ -294,6 +294,15 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         df = df.groupby("Symbol", group_keys=False).apply(_feat)
         pivot = df.pivot_table(index="Timestamp", columns="Symbol", values="return")
 
+        # rolling momentum of each symbol's returns shifted by 1-2 periods
+        mom_features = {}
+        for sym in pivot.columns:
+            for lag in [1, 2]:
+                mom = pivot[sym].shift(lag).rolling(10).mean()
+                mom_features[f"cross_mom_{sym}_{lag}"] = mom
+        mom_df = pd.DataFrame(mom_features, index=pivot.index).reset_index()
+        df = df.merge(mom_df, on="Timestamp", how="left")
+
         if df["Symbol"].nunique() > 1:
             pair_data = {}
             for sym1 in pivot.columns:
