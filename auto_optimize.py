@@ -10,6 +10,9 @@ from skopt.space import Real, Integer
 from train import main as train_model
 from utils import load_config, update_config
 from backtest import run_backtest
+from log_utils import setup_logging, log_exceptions
+
+logger = setup_logging()
 
 
 _LOG_PATH = Path(__file__).resolve().parent / "logs" / "hyperopt_history.csv"
@@ -33,6 +36,7 @@ def objective(params: List[float], base_cfg: dict, results: List[dict]):
     return -metrics.get("sharpe", -1e9)
 
 
+@log_exceptions
 def main():
     train_model()
 

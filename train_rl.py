@@ -10,6 +10,10 @@ from stable_baselines3 import PPO
 from utils import load_config
 from dataset import load_history, load_history_from_urls, make_features
 
+logger = setup_logging()
+
+from log_utils import setup_logging, log_exceptions
+
 
 class TradingEnv(gym.Env):
     """Trading environment supporting multiple symbols."""
@@ -120,6 +124,7 @@ class TradingEnv(gym.Env):
         return next_obs, reward, done, info
 
 
+@log_exceptions
 def main():
     cfg = load_config()
     root = Path(__file__).resolve().parent
