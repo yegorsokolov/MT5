@@ -31,7 +31,15 @@ BASE_FEATURES = [
 
 def feature_columns(df: pd.DataFrame) -> list:
     cols = [c for c in BASE_FEATURES if c in df.columns]
-    cols.extend([c for c in df.columns if c.startswith("cross_corr_") or c.startswith("factor_")])
+    cols.extend(
+        [
+            c
+            for c in df.columns
+            if c.startswith("cross_corr_")
+            or c.startswith("factor_")
+            or c.startswith("cross_mom_")
+        ]
+    )
     if "volume_ratio" in df.columns:
         cols.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
