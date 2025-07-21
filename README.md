@@ -22,9 +22,9 @@ The solution is split into two components:
     transition between calm and turbulent periods.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
-4. **Auto optimiser** — experiments with different signal thresholds and
-   trailing stop distances via backtests and writes any configuration changes
-   along with the reason to `logs/config_changes.csv`.
+4. **Auto optimiser** — uses **scikit-optimize** to search signal thresholds,
+   trailing stop distances and RSI levels. Any improved settings are written
+   back to `config.yaml` along with the reason in `logs/config_changes.csv`.
 
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
@@ -90,9 +90,10 @@ pushes the updated dataset and model back to the repository.
 
 ## Deployment Guide
 
-Follow these steps to run the EA and the realtime trainer on a Windows VPS:
+Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS:
 
-1. **Provision a VPS** – Create a Windows VPS with at least 2 GB of RAM.
+1. **Provision a system** – If running remotely, create a Windows VPS with at
+   least 2 GB of RAM. On a local Windows desktop you can skip this step.
 2. **Install MetaTrader 5** –
    1. Open your browser on the VPS and download MetaTrader 5 from your broker or the official website.
    2. Run the installer and click **Next** until the installation completes.
@@ -124,9 +125,15 @@ Follow these steps to run the EA and the realtime trainer on a Windows VPS:
    1. Back in the command prompt run `python realtime_train.py`.
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
 10. **Optimise parameters** –
-   1. Periodically execute `python auto_optimize.py` to backtest a grid of
-      thresholds and trailing stop settings.  Any improvements are written back
-      to `config.yaml` and logged under `logs/config_changes.csv`.
+   1. Periodically run `python auto_optimize.py`.
+      This now uses **scikit-optimize** to perform a Bayesian search over
+      threshold, trailing stop and RSI values.
+      Any improvements are written back to `config.yaml` and logged under
+      `logs/config_changes.csv`.
+11. **Upload logs** –
+   1. Occasionally execute `python scripts/upload_logs.py` to commit and push
+      `logs/` files back to your repository. This keeps a history of app and
+      trade logs without manual git commands.
 
 With the EA running on your VPS and the training script collecting realtime data,
 the bot will continually adapt to market conditions.
@@ -172,6 +179,16 @@ backtests across available CPU cores or even a cluster. Enable this by setting
 `use_ray: true` in `config.yaml` and optionally adjust `ray_num_cpus` to limit
 resource usage. The Docker setup remains unchanged so experiments stay
 reproducible.
+
+## Detailed Logging
+
+All scripts now log to `logs/app.log` with rotation to prevent the file from
+growing indefinitely. The `log_utils` module also patches `print` so anything
+printed to the console is captured in the log file. Key functions are wrapped
+with a decorator to record start/end markers and any exceptions.
+
+The helper script `scripts/upload_logs.py` can be run to automatically commit
+and push the log directory to your repository for later analysis.
 
 ## Streamlined Deployment
 
