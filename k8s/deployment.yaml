@@ -15,7 +15,7 @@ spec:
       containers:
         - name: bot
           image: ghcr.io/youruser/mt5-bot:latest
-          args: ["bash", "-c", "python train.py && python realtime_train.py"]
+          args: ["bash", "scripts/run_bot.sh"]
           volumeMounts:
             - mountPath: /opt/mt5
               name: mt5-data

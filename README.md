@@ -203,7 +203,9 @@ mirror the manual Windows VPS steps. Building the container installs MetaTrader
 5 under Wine, all Python dependencies and copies the EA so an identical
 environment can be launched under WSL or Docker Desktop. Running
 `docker-compose up` spins up the terminal with the latest code making rollbacks
-trivial.
+trivial.  Containers start via `scripts/run_bot.sh` which performs an initial
+training pass when no `model.joblib` is present, launches the terminal and then
+enters the realtime training loop while uploading logs in the background.
 
 The workflow `.github/workflows/train.yml` retrains both `train.py` and
 `train_nn.py` whenever new data is pushed or on a daily schedule. Generated
@@ -220,6 +222,9 @@ volume claim and the deployment:
 kubectl apply -f k8s/pvc.yaml
 kubectl apply -f k8s/deployment.yaml
 ```
+
+The deployment image also invokes `scripts/run_bot.sh` so pods automatically
+train on first start and then switch to the realtime loop.
 
 The container image should be pushed to a registry accessible by your cluster
 (`ghcr.io/youruser/mt5-bot:latest` by default). The deployment mounts a
