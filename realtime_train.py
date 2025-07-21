@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+from collections import deque
 import pandas as pd
 import joblib
 import MetaTrader5 as mt5
@@ -45,6 +46,9 @@ def train_realtime():
 
     symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
+    # rolling buffers holding recent tick data for feature calculations
+    tick_buffers = {sym: deque(maxlen=context_rows) for sym in symbols}
+
     if data_path.exists():
         history = pd.read_csv(data_path)
         history["Timestamp"] = pd.to_datetime(history["Timestamp"])
@@ -61,6 +65,13 @@ def train_realtime():
     else:
         feature_df = make_features(history) if not history.empty else pd.DataFrame()
 
+    # seed buffers with existing history
+    if not history.empty:
+        for sym in symbols:
+            sym_hist = history[history["Symbol"] == sym].tail(context_rows)
+            for rec in sym_hist.to_dict("records"):
+                tick_buffers[sym].append(rec)
+
     while True:
         tick_frames = []
         for sym in symbols:
@@ -68,6 +79,11 @@ def train_realtime():
             if not ticks.empty:
                 ticks["Symbol"] = sym
                 tick_frames.append(ticks)
+                # update rolling buffer for this symbol
+                for rec in ticks.to_dict("records"):
+                    # avoid duplicate timestamps in the buffer
+                    if not tick_buffers[sym] or tick_buffers[sym][-1]["Timestamp"] != rec["Timestamp"]:
+                        tick_buffers[sym].append(rec)
 
         if not tick_frames:
             time.sleep(60)
@@ -84,9 +100,10 @@ def train_realtime():
         history = history.groupby("Symbol", as_index=False, group_keys=False).tail(window)
         history.to_csv(data_path, index=False)
 
-        context = pd.concat(
-            [history.groupby("Symbol").tail(context_rows), new_ticks]
-        ).drop_duplicates(subset=["Timestamp", "Symbol"], keep="last")
+        # build context from rolling buffers for all symbols
+        context_frames = [pd.DataFrame(list(buf)) for buf in tick_buffers.values()]
+        context = pd.concat(context_frames, ignore_index=True)
+        context = context.drop_duplicates(subset=["Timestamp", "Symbol"], keep="last")
 
         df = make_features(context)
         new_features = df.merge(
