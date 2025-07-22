@@ -11,7 +11,14 @@ from lightgbm import LGBMClassifier
 from log_utils import setup_logging, log_exceptions
 
 from utils import load_config
-from dataset import load_history, load_history_from_urls, make_features, train_test_split
+from dataset import (
+    load_history,
+    load_history_from_urls,
+    load_history_parquet,
+    save_history_parquet,
+    make_features,
+    train_test_split,
+)
 
 logger = setup_logging()
 
@@ -25,21 +32,24 @@ def main():
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     all_dfs = []
     for sym in symbols:
-        sym_path = root / "data" / f"{sym}_history.csv"
-        if sym_path.exists():
-            df_sym = load_history(sym_path)
+        csv_path = root / "data" / f"{sym}_history.csv"
+        pq_path = root / "data" / f"{sym}_history.parquet"
+        if pq_path.exists():
+            df_sym = load_history_parquet(pq_path)
+        elif csv_path.exists():
+            df_sym = load_history(csv_path)
         else:
             urls = cfg.get("data_urls", {}).get(sym)
             if not urls:
                 raise FileNotFoundError(f"No history found for {sym} and no URL configured")
             df_sym = load_history_from_urls(urls)
-            df_sym.to_csv(sym_path, index=False)
+            save_history_parquet(df_sym, pq_path)
         df_sym["Symbol"] = sym
         all_dfs.append(df_sym)
 
     df = pd.concat(all_dfs, ignore_index=True)
     # also store combined history
-    df.to_csv(root / "data" / "history.csv", index=False)
+    save_history_parquet(df, root / "data" / "history.parquet")
 
     df = make_features(df)
     if "Symbol" in df.columns:
