@@ -28,6 +28,7 @@ rl_risk_penalty: 0.1
 rl_steps: 5000
 rl_transaction_cost: 0.0001
 rl_var_window: 30
+rl_algorithm: PPO
 rsi_buy: 55
 short_vol_period: 10
 symbol: XAUUSD
