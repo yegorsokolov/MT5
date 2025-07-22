@@ -24,6 +24,7 @@ input int    VarLookbackBars   = 50;     // bars used for VaR/stress calc
 input double MaxVaR            = 5.0;    // max allowed 99% VaR in percent
 input double MaxStressLoss     = 15.0;   // max allowed stress loss percent
 input double MaxCVaR           = 7.5;    // max allowed expected shortfall
+input double VarDecay          = 0.94;   // decay factor for EWMA VaR
 input int    ShortVolPeriod    = 10;     // short-term volatility bars
 input int    LongVolPeriod     = 50;     // long-term volatility bars
 input int    SignalTimeTolerance = 60;   // seconds tolerance for matching signals
@@ -193,6 +194,40 @@ double CalculateCVaR()
    return(cvar);
 }
 
+double CalculateFilteredVaR()
+{
+   int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   if(count<=1)
+      return(0.0);
+   double decay=VarDecay;
+   double weight=1.0;
+   double sum_w=0.0;
+   double mean=0.0;
+   for(int i=0;i<count;i++)
+   {
+      double r=(Close[i]-Close[i+1])/Close[i+1];
+      mean+=weight*r;
+      sum_w+=weight;
+      weight*=decay;
+   }
+   mean/=sum_w;
+
+   weight=1.0;
+   sum_w=0.0;
+   double var=0.0;
+   for(int i=0;i<count;i++)
+   {
+      double r=(Close[i]-Close[i+1])/Close[i+1];
+      var+=weight*MathPow(r-mean,2);
+      sum_w+=weight;
+      weight*=decay;
+   }
+   var/=sum_w;
+   double sd=MathSqrt(var);
+   double var_pct=2.33*sd*100.0;
+   return(var_pct);
+}
+
 double CalculateStressLoss()
 {
    int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
@@ -238,7 +273,7 @@ void UpdateRisk()
 
    double day_loss_pct=(equity-day_start_equity)/day_start_equity*100.0;
    double drawdown_pct=(equity-peak_equity)/peak_equity*100.0;
-   double var_pct=CalculateVaR();
+   double var_pct=CalculateFilteredVaR();
    double cvar_pct=CalculateCVaR();
    double stress_pct=CalculateStressLoss();
   if(day_loss_pct<=-MaxDailyLoss || drawdown_pct<=-MaxDrawdown)
