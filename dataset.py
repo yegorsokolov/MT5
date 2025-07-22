@@ -318,6 +318,24 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
             pair_wide = pair_wide.add_prefix("cross_corr_").reset_index()
             df = df.merge(pair_wide, on=["Timestamp", "Symbol"], how="left")
 
+            lag_corr_data = {}
+            for sym1 in pivot.columns:
+                for sym2 in pivot.columns:
+                    if sym1 == sym2:
+                        continue
+                    for lag in [3, 4, 5]:
+                        key = (sym1, sym2, lag)
+                        lag_corr_data[key] = pivot[sym1].rolling(30).corr(pivot[sym2].shift(lag))
+
+            if lag_corr_data:
+                lag_df = pd.concat(lag_corr_data, axis=1)
+                lag_df.columns = pd.MultiIndex.from_tuples(lag_df.columns, names=["Sym1", "Sym2", "Lag"])
+                lag_df = lag_df.stack(["Sym1", "Sym2", "Lag"]).rename("lag_corr").reset_index()
+                lag_wide = lag_df.pivot_table(index="Timestamp", columns=["Sym1", "Sym2", "Lag"], values="lag_corr")
+                lag_wide.columns = [f"cross_corr_{c[0]}_{c[1]}_lag{int(c[2])}" for c in lag_wide.columns]
+                lag_wide = lag_wide.reset_index()
+                df = df.merge(lag_wide, on="Timestamp", how="left")
+
         pivot_filled = pivot.fillna(0)
         n_comp = min(3, len(pivot.columns))
         pca = PCA(n_components=n_comp)
