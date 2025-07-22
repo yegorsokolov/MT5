@@ -15,11 +15,13 @@ The solution is split into two components:
     EA itself and are configurable via `config.yaml`. Position sizing can
     automatically adjust based on recent volatility or the realised Sharpe ratio
     to better match current market conditions. Additional checks compute a
-    99% value-at-risk and a simple stress-loss estimate so trading is paused
-    when tail risk grows beyond the configured thresholds. The latest version
-    also monitors conditional value-at-risk (expected shortfall) and applies a
-    regime-switching volatility model so position sizes adapt when markets
-    transition between calm and turbulent periods.
+     99% value-at-risk and a simple stress-loss estimate so trading is paused
+     when tail risk grows beyond the configured thresholds. The latest version
+     also monitors conditional value-at-risk (expected shortfall) and applies a
+     regime-switching volatility model so position sizes adapt when markets
+     transition between calm and turbulent periods. A filtered VaR calculation
+     now uses an exponentially weighted variance controlled by the `var_decay`
+     parameter.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
 4. **Auto optimiser** — uses **scikit-optimize** to search signal thresholds,
