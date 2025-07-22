@@ -17,6 +17,8 @@ from utils import load_config
 from dataset import (
     load_history,
     load_history_from_urls,
+    load_history_parquet,
+    save_history_parquet,
     make_features,
 )
 from log_utils import setup_logging, log_exceptions
@@ -44,15 +46,18 @@ class MetaAdapterNet(nn.Module):
 
 def load_symbol_data(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
     """Load history for a single symbol, downloading if needed."""
-    path = root / "data" / f"{sym}_history.csv"
-    if path.exists():
-        df = load_history(path)
+    csv_path = root / "data" / f"{sym}_history.csv"
+    pq_path = root / "data" / f"{sym}_history.parquet"
+    if pq_path.exists():
+        df = load_history_parquet(pq_path)
+    elif csv_path.exists():
+        df = load_history(csv_path)
     else:
         urls = cfg.get("data_urls", {}).get(sym)
         if not urls:
             raise FileNotFoundError(f"No history found for {sym} and no URL configured")
         df = load_history_from_urls(urls)
-        df.to_csv(path, index=False)
+        save_history_parquet(df, pq_path)
     df["Symbol"] = sym
     return df
 

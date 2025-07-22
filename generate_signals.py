@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 
 from utils import load_config
-from dataset import load_history, make_features
+from dataset import load_history, load_history_parquet, make_features
 
 logger = setup_logging()
 from log_utils import setup_logging, log_exceptions
@@ -38,7 +38,12 @@ def main():
     models = load_models(model_paths)
     if not models:
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
-    df = load_history(Path(__file__).resolve().parent / "data" / "history.csv")
+    hist_path_csv = Path(__file__).resolve().parent / "data" / "history.csv"
+    hist_path_pq = Path(__file__).resolve().parent / "data" / "history.parquet"
+    if hist_path_pq.exists():
+        df = load_history_parquet(hist_path_pq)
+    else:
+        df = load_history(hist_path_csv)
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     df = make_features(df)
 

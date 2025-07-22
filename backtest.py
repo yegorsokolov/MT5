@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 from utils import load_config
-from dataset import load_history, make_features
+from dataset import load_history, load_history_parquet, make_features
 
 logger = setup_logging()
 from log_utils import setup_logging, log_exceptions
@@ -129,13 +129,13 @@ def backtest_on_df(
 
 
 def run_backtest(cfg: dict, *, return_returns: bool = False) -> dict | tuple[dict, pd.Series]:
-    data_path = Path(__file__).resolve().parent / "data" / "history.csv"
+    data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
     if not data_path.exists():
-        raise FileNotFoundError("Historical CSV not found under data/history.csv")
+        raise FileNotFoundError("Historical history.parquet not found under data/")
 
     model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
-    df = load_history(data_path)
+    df = load_history_parquet(data_path)
     df = make_features(df)
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
@@ -146,11 +146,11 @@ def run_backtest(cfg: dict, *, return_returns: bool = False) -> dict | tuple[dic
 
 def run_rolling_backtest(cfg: dict) -> dict:
     """Perform rolling train/test backtests and aggregate metrics."""
-    data_path = Path(__file__).resolve().parent / "data" / "history.csv"
+    data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
     if not data_path.exists():
-        raise FileNotFoundError("Historical CSV not found under data/history.csv")
+        raise FileNotFoundError("Historical history.parquet not found under data/")
 
-    df = load_history(data_path)
+    df = load_history_parquet(data_path)
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     df = make_features(df)
     if "Symbol" in df.columns:

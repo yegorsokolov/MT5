@@ -7,7 +7,11 @@ import MetaTrader5 as mt5
 from git import Repo
 
 from utils import load_config
-from dataset import make_features
+from dataset import (
+    make_features,
+    load_history_parquet,
+    save_history_parquet,
+)
 
 logger = setup_logging()
 from log_utils import setup_logging, log_exceptions
@@ -32,8 +36,8 @@ def fetch_ticks(symbol: str, n: int = 1000) -> pd.DataFrame:
 def train_realtime():
     cfg = load_config()
     repo_path = Path(__file__).resolve().parent
-    data_path = repo_path / "data" / "history.csv"
-    feat_path = repo_path / "data" / "features.csv"
+    data_path = repo_path / "data" / "history.parquet"
+    feat_path = repo_path / "data" / "features.parquet"
     model_path = repo_path / "model.joblib"
 
     window = cfg.get("realtime_window", 10000)
@@ -50,7 +54,7 @@ def train_realtime():
     tick_buffers = {sym: deque(maxlen=context_rows) for sym in symbols}
 
     if data_path.exists():
-        history = pd.read_csv(data_path)
+        history = load_history_parquet(data_path)
         history["Timestamp"] = pd.to_datetime(history["Timestamp"])
         history = history.sort_values("Timestamp")
         history = history.groupby("Symbol", as_index=False, group_keys=False).tail(window)
@@ -58,7 +62,7 @@ def train_realtime():
         history = pd.DataFrame(columns=["Timestamp", "Bid", "Ask", "BidVolume", "AskVolume", "Symbol"])
 
     if feat_path.exists():
-        feature_df = pd.read_csv(feat_path)
+        feature_df = load_history_parquet(feat_path)
         feature_df["Timestamp"] = pd.to_datetime(feature_df["Timestamp"])
         feature_df = feature_df.sort_values("Timestamp")
         feature_df = feature_df.groupby("Symbol", as_index=False, group_keys=False).tail(window)
@@ -98,7 +102,7 @@ def train_realtime():
             .sort_values("Timestamp")
         )
         history = history.groupby("Symbol", as_index=False, group_keys=False).tail(window)
-        history.to_csv(data_path, index=False)
+        save_history_parquet(history, data_path)
 
         # build context from rolling buffers for all symbols
         context_frames = [pd.DataFrame(list(buf)) for buf in tick_buffers.values()]
@@ -115,7 +119,7 @@ def train_realtime():
             .sort_values("Timestamp")
         )
         feature_df = feature_df.groupby("Symbol", as_index=False, group_keys=False).tail(window)
-        feature_df.to_csv(feat_path, index=False)
+        save_history_parquet(feature_df, feat_path)
 
         if feature_df.empty:
             time.sleep(60)
