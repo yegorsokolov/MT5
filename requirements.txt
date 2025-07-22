@@ -10,6 +10,7 @@ lightgbm
 torch
 tqdm
 stable-baselines3
+sb3-contrib
 gym
 ray
 scikit-optimize

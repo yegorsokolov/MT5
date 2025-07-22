@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from stable_baselines3 import PPO
+from sb3_contrib.qrdqn import QRDQN
 
 from utils import load_config
 from dataset import (
@@ -26,7 +27,7 @@ from log_utils import setup_logging, log_exceptions
 
 logger = setup_logging()
 from train_meta import load_symbol_data, train_base_model, train_meta_network
-from train_rl import TradingEnv
+from train_rl import TradingEnv, DiscreteTradingEnv
 from train_nn import TransformerModel
 
 
@@ -163,7 +164,7 @@ def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
 
 
 def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
-    """Train a PPO agent using the trading environment."""
+    """Train an RL agent using the trading environment."""
     features = [
         "return",
         "ma_5",
@@ -185,15 +186,29 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
 
-    env = TradingEnv(
-        df,
-        features,
-        max_position=cfg.get("rl_max_position", 1.0),
-        transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-        risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-        var_window=cfg.get("rl_var_window", 30),
-    )
-    model = PPO("MlpPolicy", env, verbose=0)
+    algo = cfg.get("rl_algorithm", "PPO").upper()
+    if algo == "PPO":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = PPO("MlpPolicy", env, verbose=0)
+    elif algo == "QRDQN":
+        env = DiscreteTradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = QRDQN("MlpPolicy", env, verbose=0)
+    else:
+        raise ValueError(f"Unknown rl_algorithm {algo}")
     model.learn(total_timesteps=cfg.get("rl_steps", 5000))
     model.save(root / "model_rl")
     print("RL model saved to", root / "model_rl.zip")
