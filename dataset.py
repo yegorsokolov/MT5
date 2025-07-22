@@ -135,11 +135,27 @@ def load_history(path: Path) -> pd.DataFrame:
     return df
 
 
+def load_history_parquet(path: Path) -> pd.DataFrame:
+    """Load historical tick data stored in a Parquet file."""
+    df = pd.read_parquet(path)
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+    return df
+
+
+def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
+    """Save tick history to a Parquet file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False)
+
+
 def load_multiple_histories(paths: Dict[str, Path]) -> pd.DataFrame:
     """Load and concatenate history files for multiple symbols."""
     dfs = []
     for symbol, p in paths.items():
-        df = load_history(p)
+        if p.suffix == ".parquet":
+            df = load_history_parquet(p)
+        else:
+            df = load_history(p)
         df["Symbol"] = symbol
         dfs.append(df)
     return pd.concat(dfs, ignore_index=True)

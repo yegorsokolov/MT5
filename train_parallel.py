@@ -14,7 +14,14 @@ import ray
 from log_utils import setup_logging, log_exceptions
 
 from utils import load_config
-from dataset import load_history, load_history_from_urls, make_features, train_test_split
+from dataset import (
+    load_history,
+    load_history_from_urls,
+    load_history_parquet,
+    save_history_parquet,
+    make_features,
+    train_test_split,
+)
 
 logger = setup_logging()
 
@@ -23,16 +30,19 @@ logger = setup_logging()
 @log_exceptions
 def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     """Load data for one symbol, train model and save it."""
-    path = root / "data" / f"{sym}_history.csv"
-    if path.exists():
-        df = load_history(path)
+    csv_path = root / "data" / f"{sym}_history.csv"
+    pq_path = root / "data" / f"{sym}_history.parquet"
+    if pq_path.exists():
+        df = load_history_parquet(pq_path)
+    elif csv_path.exists():
+        df = load_history(csv_path)
     else:
         urls = cfg.get("data_urls", {}).get(sym)
         if not urls:
             raise FileNotFoundError(f"No history for {sym} and no URL configured")
         df = load_history_from_urls(urls)
-        path.parent.mkdir(exist_ok=True)
-        df.to_csv(path, index=False)
+        pq_path.parent.mkdir(exist_ok=True)
+        save_history_parquet(df, pq_path)
     df["Symbol"] = sym
     df = make_features(df)
     if "Symbol" in df.columns:
