@@ -6,6 +6,7 @@ from typing import List
 import numpy as np
 import pandas as pd
 from stable_baselines3 import PPO
+from sb3_contrib.qrdqn import QRDQN
 
 from utils import load_config
 from dataset import (
@@ -15,7 +16,7 @@ from dataset import (
     save_history_parquet,
     make_features,
 )
-from train_rl import TradingEnv
+from train_rl import TradingEnv, DiscreteTradingEnv
 from log_utils import setup_logging, log_exceptions
 
 logger = setup_logging()
@@ -89,18 +90,34 @@ def main() -> None:
     df = load_dataset(cfg, root)
     features = feature_list(df)
 
-    env = TradingEnv(
-        df,
-        features,
-        max_position=cfg.get("rl_max_position", 1.0),
-        transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-        risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-        var_window=cfg.get("rl_var_window", 30),
-    )
+    algo = cfg.get("rl_algorithm", "PPO").upper()
+    if algo == "PPO":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model_cls = PPO
+    elif algo == "QRDQN":
+        env = DiscreteTradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model_cls = QRDQN
+    else:
+        raise ValueError(f"Unknown rl_algorithm {algo}")
+
     model_path = root / "model_rl.zip"
     if not model_path.exists():
         raise FileNotFoundError("model_rl.zip not found, please train the agent first")
-    model = PPO.load(model_path, env=env)
+    model = model_cls.load(model_path, env=env)
 
     obs = env.reset()
     done = False
