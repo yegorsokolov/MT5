@@ -184,6 +184,7 @@ def main():
         "spread",
         "rsi_14",
         "news_sentiment",
+        "market_regime",
     ]
     features += [
         c

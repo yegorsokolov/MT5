@@ -363,6 +363,12 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
+
+    try:
+        from regime import label_regimes
+        df = label_regimes(df)
+    except Exception:
+        df["market_regime"] = 0
     return df
 
 
