@@ -50,7 +50,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df)//2))
     features = [c for c in [
         "return","ma_5","ma_10","ma_30","ma_60","volatility_30",
-        "spread","rsi_14","news_sentiment",
+        "spread","rsi_14","news_sentiment","market_regime",
     ] if c in df.columns]
     features += [
         c

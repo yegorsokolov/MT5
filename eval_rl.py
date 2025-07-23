@@ -70,6 +70,7 @@ def feature_list(df: pd.DataFrame) -> List[str]:
         "spread",
         "rsi_14",
         "news_sentiment",
+        "market_regime",
     ]
     feats += [
         c
