@@ -69,6 +69,7 @@ def train_transformer(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         "volatility_30",
         "spread",
         "rsi_14",
+        "market_regime",
     ]
     features += [
         c
@@ -89,12 +90,14 @@ def train_transformer(df: pd.DataFrame, cfg: dict, root: Path) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
+    num_regimes = int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
     model = TransformerModel(
         len(features),
         d_model=cfg.get("d_model", 64),
         nhead=cfg.get("nhead", 4),
         num_layers=cfg.get("num_layers", 2),
         num_symbols=num_symbols,
+        num_regimes=num_regimes,
     ).to(device)
 
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -145,6 +148,7 @@ def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         "volatility_30",
         "spread",
         "rsi_14",
+        "market_regime",
     ]
     features += [
         c
@@ -175,6 +179,7 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         "spread",
         "rsi_14",
         "news_sentiment",
+        "market_regime",
     ]
     features += [
         c
