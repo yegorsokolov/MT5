@@ -138,14 +138,19 @@ def load_history(path: Path) -> pd.DataFrame:
 def load_history_parquet(path: Path) -> pd.DataFrame:
     """Load historical tick data stored in a Parquet file."""
     df = pd.read_parquet(path)
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+    if "Timestamp" in df.columns:
+        # ensure the Timestamp column is parsed as datetime
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
     return df
 
 
 def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
     """Save tick history to a Parquet file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(path, index=False)
+    data = df.copy()
+    if "Timestamp" in data.columns:
+        data["Timestamp"] = pd.to_datetime(data["Timestamp"], utc=True).dt.tz_localize(None)
+    data.to_parquet(path, index=False)
 
 
 def load_multiple_histories(paths: Dict[str, Path]) -> pd.DataFrame:
