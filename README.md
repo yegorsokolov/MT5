@@ -27,6 +27,9 @@ The solution is split into two components:
 4. **Auto optimiser** — uses **scikit-optimize** to search signal thresholds,
    trailing stop distances and RSI levels. Any improved settings are written
    back to `config.yaml` along with the reason in `logs/config_changes.csv`.
+### Risk management
+
+Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `max_var`, `max_stress_loss`, `max_cvar` and `var_decay`, which controls the exponential weighting for the filtered VaR calculation.
 
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
