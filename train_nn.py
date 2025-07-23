@@ -55,17 +55,36 @@ class TransformerModel(nn.Module):
         nhead: int = 4,
         num_layers: int = 2,
         num_symbols: int | None = None,
+        num_regimes: int | None = None,
         emb_dim: int = 8,
     ) -> None:
         super().__init__()
         self.symbol_emb = None
         self.symbol_idx = None
+        self.regime_emb = None
+        self.regime_idx = None
+
+        if num_symbols is not None and num_regimes is not None:
+            self.symbol_idx = input_size - 2
+            self.regime_idx = input_size - 1
+        elif num_symbols is not None:
+            self.symbol_idx = input_size - 1
+        elif num_regimes is not None:
+            self.regime_idx = input_size - 1
+
         if num_symbols is not None:
             self.symbol_emb = nn.Embedding(num_symbols, emb_dim)
-            self.symbol_idx = input_size - 1  # assume last feature is SymbolCode
+            input_size -= 1
+        if num_regimes is not None:
+            self.regime_emb = nn.Embedding(num_regimes, emb_dim)
             input_size -= 1
 
-        self.input_linear = nn.Linear(input_size + (emb_dim if self.symbol_emb else 0), d_model)
+        emb_total = 0
+        if self.symbol_emb is not None:
+            emb_total += emb_dim
+        if self.regime_emb is not None:
+            emb_total += emb_dim
+        self.input_linear = nn.Linear(input_size + emb_total, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
@@ -73,13 +92,19 @@ class TransformerModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x shape: batch x seq x features
-        if self.symbol_emb is not None:
+        if self.symbol_emb is not None and self.regime_emb is not None:
             sym = x[:, :, self.symbol_idx].long()
-            x = torch.cat([
-                x[:, :, : self.symbol_idx],
-                x[:, :, self.symbol_idx + 1 :],
-                self.symbol_emb(sym),
-            ], dim=-1)
+            reg = x[:, :, self.regime_idx].long()
+            base = x[:, :, : self.symbol_idx]
+            x = torch.cat([base, self.symbol_emb(sym), self.regime_emb(reg)], dim=-1)
+        elif self.symbol_emb is not None:
+            sym = x[:, :, self.symbol_idx].long()
+            base = x[:, :, : self.symbol_idx]
+            x = torch.cat([base, self.symbol_emb(sym)], dim=-1)
+        elif self.regime_emb is not None:
+            reg = x[:, :, self.regime_idx].long()
+            base = x[:, :, : self.regime_idx]
+            x = torch.cat([base, self.regime_emb(reg)], dim=-1)
 
         x = self.input_linear(x)
         x = self.pos_encoder(x)
@@ -128,6 +153,7 @@ def main():
         "spread",
         "rsi_14",
         "news_sentiment",
+        "market_regime",
     ]
     features += [
         c
@@ -147,12 +173,14 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
+    num_regimes = int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
     model = TransformerModel(
         len(features),
         d_model=cfg.get("d_model", 64),
         nhead=cfg.get("nhead", 4),
         num_layers=cfg.get("num_layers", 2),
         num_symbols=num_symbols,
+        num_regimes=num_regimes,
     ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.BCELoss()
