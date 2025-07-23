@@ -139,6 +139,7 @@ def train_realtime():
             "volatility_30",
             "spread",
             "rsi_14",
+            "market_regime",
         ]
         # include optional features when present
         if "news_sentiment" in df.columns:
