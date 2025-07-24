@@ -11,6 +11,7 @@ from lightgbm import LGBMClassifier
 
 from utils import load_config
 from dataset import load_history, load_history_parquet, make_features
+import ray
 
 logger = setup_logging()
 from log_utils import setup_logging, log_exceptions
@@ -144,6 +145,16 @@ def run_backtest(cfg: dict, *, return_returns: bool = False) -> dict | tuple[dic
     return backtest_on_df(df, model, cfg, return_returns=return_returns)
 
 
+@ray.remote
+def _backtest_window(train_df: pd.DataFrame, test_df: pd.DataFrame, cfg: dict, start: str, end: str) -> dict:
+    """Train a model on ``train_df`` and backtest on ``test_df``."""
+    model = fit_model(train_df, cfg)
+    metrics = backtest_on_df(test_df, model, cfg)
+    metrics["period_start"] = start
+    metrics["period_end"] = end
+    return metrics
+
+
 def run_rolling_backtest(cfg: dict) -> dict:
     """Perform rolling train/test backtests and aggregate metrics."""
     data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
@@ -163,6 +174,10 @@ def run_rolling_backtest(cfg: dict) -> dict:
     start = df["Timestamp"].min()
     end = df["Timestamp"].max()
 
+    parallel = cfg.get("parallel_backtest", False)
+    if parallel:
+        ray.init(num_cpus=cfg.get("ray_num_cpus"))
+        futures = []
     period_metrics = []
     while start + pd.DateOffset(months=window * 2) <= end:
         train_end = start + pd.DateOffset(months=window)
@@ -174,17 +189,31 @@ def run_rolling_backtest(cfg: dict) -> dict:
             start += pd.DateOffset(months=step)
             continue
 
-        model = fit_model(train_df, cfg)
-        metrics = backtest_on_df(test_df, model, cfg)
-        metrics["period_start"] = train_end.date().isoformat()
-        metrics["period_end"] = test_end.date().isoformat()
-        print(
-            f"{metrics['period_start']} to {metrics['period_end']} - "
-            f"Sharpe {metrics['sharpe']:.4f}, MaxDD {metrics['max_drawdown']:.2f}%"
-        )
-        period_metrics.append(metrics)
+        start_iso = train_end.date().isoformat()
+        end_iso = test_end.date().isoformat()
+        if parallel:
+            futures.append(_backtest_window.remote(train_df, test_df, cfg, start_iso, end_iso))
+        else:
+            model = fit_model(train_df, cfg)
+            metrics = backtest_on_df(test_df, model, cfg)
+            metrics["period_start"] = start_iso
+            metrics["period_end"] = end_iso
+            print(
+                f"{metrics['period_start']} to {metrics['period_end']} - "
+                f"Sharpe {metrics['sharpe']:.4f}, MaxDD {metrics['max_drawdown']:.2f}%"
+            )
+            period_metrics.append(metrics)
 
         start += pd.DateOffset(months=step)
+
+    if parallel:
+        for metrics in ray.get(futures):
+            print(
+                f"{metrics['period_start']} to {metrics['period_end']} - "
+                f"Sharpe {metrics['sharpe']:.4f}, MaxDD {metrics['max_drawdown']:.2f}%"
+            )
+            period_metrics.append(metrics)
+        ray.shutdown()
 
     if not period_metrics:
         print("No valid windows for rolling backtest")
