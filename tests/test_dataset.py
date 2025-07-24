@@ -11,6 +11,16 @@ import dataset
 def test_make_features_columns(monkeypatch):
     monkeypatch.setattr(dataset, "get_events", lambda past_events=False: [])
     monkeypatch.setattr(dataset, "add_news_sentiment_features", lambda df: df.assign(news_sentiment=0.0))
+    monkeypatch.setattr(
+        dataset,
+        "add_index_features",
+        lambda df: df.assign(
+            sp500_ret=0.0,
+            sp500_vol=0.0,
+            vix_ret=0.0,
+            vix_vol=0.0,
+        ),
+    )
 
     n = 300
     df = pd.DataFrame({
@@ -46,6 +56,10 @@ def test_make_features_columns(monkeypatch):
         "nearest_news_minutes",
         "upcoming_red_news",
         "news_sentiment",
+        "sp500_ret",
+        "sp500_vol",
+        "vix_ret",
+        "vix_vol",
         "market_regime",
     }
     assert expected.issubset(result.columns)
