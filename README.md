@@ -63,8 +63,9 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    ```
 
 2. Place historical CSV files under `data/` **or** specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`. Existing CSV files can be converted to Parquet using `python scripts/migrate_to_parquet.py`.
-3. Adjust settings in `config.yaml` if needed. The `symbols` list controls which instruments are used for training.
-4. Train the model and run a backtest:
+3. The realtime trainer stores ticks in a DuckDB database located at `data/realtime.duckdb`. The database is created automatically the first time you run the script and old rows beyond the `realtime_window` setting are pruned on each update.
+4. Adjust settings in `config.yaml` if needed. The `symbols` list controls which instruments are used for training.
+5. Train the model and run a backtest:
 
    ```bash
    python train.py
