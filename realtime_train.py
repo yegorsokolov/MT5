@@ -7,14 +7,11 @@ import MetaTrader5 as mt5
 from git import Repo
 
 from utils import load_config
-from dataset import (
-    make_features,
-    load_history_parquet,
-    save_history_parquet,
-)
+from dataset import make_features
+import duckdb
+from log_utils import setup_logging, log_exceptions
 
 logger = setup_logging()
-from log_utils import setup_logging, log_exceptions
 
 
 def fetch_ticks(symbol: str, n: int = 1000) -> pd.DataFrame:
@@ -36,8 +33,7 @@ def fetch_ticks(symbol: str, n: int = 1000) -> pd.DataFrame:
 def train_realtime():
     cfg = load_config()
     repo_path = Path(__file__).resolve().parent
-    data_path = repo_path / "data" / "history.parquet"
-    feat_path = repo_path / "data" / "features.parquet"
+    db_path = repo_path / "data" / "realtime.duckdb"
     model_path = repo_path / "model.joblib"
 
     window = cfg.get("realtime_window", 10000)
@@ -50,22 +46,34 @@ def train_realtime():
 
     symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
+    conn = duckdb.connect(db_path.as_posix())
+
     # rolling buffers holding recent tick data for feature calculations
     tick_buffers = {sym: deque(maxlen=context_rows) for sym in symbols}
 
-    if data_path.exists():
-        history = load_history_parquet(data_path)
-        history["Timestamp"] = pd.to_datetime(history["Timestamp"])
-        history = history.sort_values("Timestamp")
-        history = history.groupby("Symbol", as_index=False, group_keys=False).tail(window)
+    if conn.execute("SELECT table_name FROM information_schema.tables WHERE table_name='history'").fetchone():
+        history = conn.execute(
+            f"""
+            SELECT * FROM (
+                SELECT *, row_number() OVER (PARTITION BY Symbol ORDER BY Timestamp DESC) AS rn
+                FROM history
+            ) WHERE rn <= {window}
+            ORDER BY Timestamp
+            """
+        ).fetch_df()
     else:
         history = pd.DataFrame(columns=["Timestamp", "Bid", "Ask", "BidVolume", "AskVolume", "Symbol"])
 
-    if feat_path.exists():
-        feature_df = load_history_parquet(feat_path)
-        feature_df["Timestamp"] = pd.to_datetime(feature_df["Timestamp"])
-        feature_df = feature_df.sort_values("Timestamp")
-        feature_df = feature_df.groupby("Symbol", as_index=False, group_keys=False).tail(window)
+    if conn.execute("SELECT table_name FROM information_schema.tables WHERE table_name='features'").fetchone():
+        feature_df = conn.execute(
+            f"""
+            SELECT * FROM (
+                SELECT *, row_number() OVER (PARTITION BY Symbol ORDER BY Timestamp DESC) AS rn
+                FROM features
+            ) WHERE rn <= {window}
+            ORDER BY Timestamp
+            """
+        ).fetch_df()
     else:
         feature_df = make_features(history) if not history.empty else pd.DataFrame()
 
@@ -102,7 +110,22 @@ def train_realtime():
             .sort_values("Timestamp")
         )
         history = history.groupby("Symbol", as_index=False, group_keys=False).tail(window)
-        save_history_parquet(history, data_path)
+
+        conn.register("new_ticks", new_ticks)
+        conn.execute("CREATE TABLE IF NOT EXISTS history AS SELECT * FROM new_ticks LIMIT 0")
+        conn.execute("INSERT INTO history SELECT * FROM new_ticks")
+        conn.execute(
+            f"""
+            DELETE FROM history
+            WHERE rowid IN (
+                SELECT rowid FROM (
+                    SELECT rowid,
+                           row_number() OVER (PARTITION BY Symbol ORDER BY Timestamp DESC) AS rn
+                    FROM history
+                ) t WHERE rn > {window}
+            )
+            """
+        )
 
         # build context from rolling buffers for all symbols
         context_frames = [pd.DataFrame(list(buf)) for buf in tick_buffers.values()]
@@ -119,7 +142,22 @@ def train_realtime():
             .sort_values("Timestamp")
         )
         feature_df = feature_df.groupby("Symbol", as_index=False, group_keys=False).tail(window)
-        save_history_parquet(feature_df, feat_path)
+
+        conn.register("new_feat", new_features)
+        conn.execute("CREATE TABLE IF NOT EXISTS features AS SELECT * FROM new_feat LIMIT 0")
+        conn.execute("INSERT INTO features SELECT * FROM new_feat")
+        conn.execute(
+            f"""
+            DELETE FROM features
+            WHERE rowid IN (
+                SELECT rowid FROM (
+                    SELECT rowid,
+                           row_number() OVER (PARTITION BY Symbol ORDER BY Timestamp DESC) AS rn
+                    FROM features
+                ) t WHERE rn > {window}
+            )
+            """
+        )
 
         if feature_df.empty:
             time.sleep(60)
@@ -174,8 +212,8 @@ def train_realtime():
         joblib.dump(pipe, model_path)
 
         # commit updates
-        repo.git.add(data_path.as_posix())
-        repo.git.add(feat_path.as_posix())
+        conn.execute("checkpoint")
+        repo.git.add(db_path.as_posix())
         repo.git.add(model_path.as_posix())
         repo.index.commit("Update model with realtime data")
         try:
