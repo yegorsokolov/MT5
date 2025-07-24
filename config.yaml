@@ -3,9 +3,12 @@ backtest_step_months: 6
 backtest_window_months: 6
 data_urls:
   GBPUSD:
-  - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ
+    - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ
   XAUUSD:
-  - https://drive.google.com/uc?id=1FJ6NAcjMsGVFSKsCdvujL__rNin7bHcI
+    - https://drive.google.com/uc?id=1FJ6NAcjMsGVFSKsCdvujL__rNin7bHcI
+index_data:
+  sp500: data/sp500.csv
+  vix: data/vix.csv
 enable_news_trading: true
 ensemble_method: bayesian
 ensemble_models:
