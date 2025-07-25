@@ -5,3 +5,4 @@ signals.csv
 data/
 models/
 __pycache__/
+logs/
