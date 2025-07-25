@@ -13,8 +13,8 @@ from utils import load_config
 from dataset import load_history, load_history_parquet, make_features
 import ray
 
-logger = setup_logging()
 from log_utils import setup_logging, log_exceptions
+logger = setup_logging()
 
 
 BASE_FEATURES = [
