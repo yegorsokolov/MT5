@@ -6,6 +6,15 @@ data_urls:
     - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ
   XAUUSD:
     - https://drive.google.com/uc?id=1FJ6NAcjMsGVFSKsCdvujL__rNin7bHcI
+api_history:
+  GBPUSD:
+    provider: mt5
+    start: 2023-01-01
+    end: 2025-01-01
+  XAUUSD:
+    provider: mt5
+    start: 2023-01-01
+    end: 2025-01-01
 index_data:
   sp500: data/sp500.csv
   vix: data/vix.csv

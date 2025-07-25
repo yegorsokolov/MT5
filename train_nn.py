@@ -12,13 +12,12 @@ from tqdm import tqdm
 
 from utils import load_config
 from dataset import (
-    load_history,
-    load_history_from_urls,
     load_history_parquet,
     save_history_parquet,
     make_features,
     train_test_split,
     make_sequence_arrays,
+    load_history_config,
 )
 from log_utils import setup_logging, log_exceptions
 
@@ -85,7 +84,9 @@ class TransformerModel(nn.Module):
             emb_total += emb_dim
         self.input_linear = nn.Linear(input_size + emb_total, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, batch_first=True
+        )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.fc = nn.Linear(d_model, 1)
 
@@ -121,18 +122,7 @@ def main():
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
     for sym in symbols:
-        csv_path = root / "data" / f"{sym}_history.csv"
-        pq_path = root / "data" / f"{sym}_history.parquet"
-        if pq_path.exists():
-            df_sym = load_history_parquet(pq_path)
-        elif csv_path.exists():
-            df_sym = load_history(csv_path)
-        else:
-            urls = cfg.get("data_urls", {}).get(sym)
-            if not urls:
-                raise FileNotFoundError(f"No history found for {sym} and no URL configured")
-            df_sym = load_history_from_urls(urls)
-            save_history_parquet(df_sym, pq_path)
+        df_sym = load_history_config(sym, cfg, root)
         df_sym["Symbol"] = sym
         dfs.append(df_sym)
 
@@ -172,7 +162,9 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
-    num_regimes = int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
+    num_regimes = (
+        int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
+    )
     model = TransformerModel(
         len(features),
         d_model=cfg.get("d_model", 64),
@@ -184,8 +176,14 @@ def main():
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.BCELoss()
 
-    train_ds = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
-    test_ds = TensorDataset(torch.tensor(X_test, dtype=torch.float32), torch.tensor(y_test, dtype=torch.float32))
+    train_ds = TensorDataset(
+        torch.tensor(X_train, dtype=torch.float32),
+        torch.tensor(y_train, dtype=torch.float32),
+    )
+    test_ds = TensorDataset(
+        torch.tensor(X_test, dtype=torch.float32),
+        torch.tensor(y_test, dtype=torch.float32),
+    )
     train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=256)
 
@@ -221,4 +219,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
