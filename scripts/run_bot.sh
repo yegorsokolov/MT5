@@ -7,6 +7,7 @@ REPO_ROOT="$SCRIPT_DIR/.."
 cd "$REPO_ROOT"
 
 MODEL_PATH="model.joblib"
+export CONFIG_FILE="${CONFIG_FILE:-$REPO_ROOT/config.yaml}"
 
 # train if model missing or TRAIN_ALWAYS=1
 if [ ! -f "$MODEL_PATH" ] || [ "${TRAIN_ALWAYS}" = "1" ]; then
