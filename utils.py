@@ -2,18 +2,28 @@
 
 from pathlib import Path
 from datetime import datetime
+import os
 import yaml
 
 
 def load_config() -> dict:
-    """Load YAML configuration from the project root."""
-    with open(Path(__file__).resolve().parent / 'config.yaml', 'r') as f:
+    """Load YAML configuration from the project root or path in CONFIG_FILE."""
+    cfg_path = os.getenv('CONFIG_FILE')
+    if cfg_path:
+        path = Path(cfg_path)
+    else:
+        path = Path(__file__).resolve().parent / 'config.yaml'
+    with open(path, 'r') as f:
         return yaml.safe_load(f)
 
 
 def save_config(cfg: dict) -> None:
     """Persist configuration back to the YAML file."""
-    path = Path(__file__).resolve().parent / 'config.yaml'
+    cfg_path = os.getenv('CONFIG_FILE')
+    if cfg_path:
+        path = Path(cfg_path)
+    else:
+        path = Path(__file__).resolve().parent / 'config.yaml'
     with open(path, 'w') as f:
         yaml.safe_dump(cfg, f)
 
