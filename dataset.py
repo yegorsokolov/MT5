@@ -9,6 +9,7 @@ import functools
 from sklearn.decomposition import PCA
 from dateutil import parser as date_parser
 import requests
+import logging
 
 try:
     from plugins import FEATURE_PLUGINS
@@ -20,22 +21,29 @@ NEWS_SOURCES = [
     "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
 ]
 
+logger = logging.getLogger(__name__)
+
 
 def _get_ff_events() -> List[dict]:
     events = []
     for url in NEWS_SOURCES:
         try:
+            logger.debug("Fetching events from %s", url)
             events.extend(requests.get(url, timeout=10).json())
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to fetch events from %s: %s", url, e)
             continue
+    logger.debug("Fetched %d events from FF", len(events))
     return events
 
 
 def _get_tradays_events() -> List[dict]:
     url = "https://www.tradays.com/en/economic-calendar.ics"
     try:
+        logger.debug("Fetching events from %s", url)
         text = requests.get(url, timeout=10).text
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to fetch events from %s: %s", url, e)
         return []
     events = []
     cur: Dict[str, str] = {}
@@ -56,6 +64,7 @@ def _get_tradays_events() -> List[dict]:
         elif ":" in line:
             key, val = line.split(":", 1)
             cur[key] = val
+    logger.debug("Fetched %d events from Tradays", len(events))
     return events
 
 
@@ -65,10 +74,12 @@ def _get_mql5_events() -> List[dict]:
     except Exception:
         return []
     if not mt5.initialize():
+        logger.warning("Failed to initialize MetaTrader5 for events")
         return []
     now = dt.datetime.now(tz=dt.timezone.utc)
     start = now - dt.timedelta(days=1)
     end = now + dt.timedelta(days=7)
+    logger.debug("Fetching events from MetaTrader5")
     values = mt5.calendar_value_history(from_date=start, to_date=end)
     mt5.shutdown()
     if values is None:
@@ -89,12 +100,14 @@ def _get_mql5_events() -> List[dict]:
                 "event": getattr(v, "event", ""),
             }
         )
+    logger.debug("Fetched %d events from MetaTrader5", len(events))
     return events
 
 
 @functools.lru_cache
 def get_events(past_events: bool = False) -> List[dict]:
     """Download economic calendar events from multiple sources."""
+    logger.info("Fetching economic events")
     events = []
     events.extend(_get_ff_events())
     events.extend(_get_tradays_events())
@@ -113,6 +126,7 @@ def get_events(past_events: bool = False) -> List[dict]:
             continue
         if past_events or date >= now:
             filtered.append(e)
+    logger.info("Total events returned: %d", len(filtered))
     return filtered
 
 
@@ -126,11 +140,13 @@ def load_history_from_urls(urls: List[str]) -> pd.DataFrame:
         tmp_dir = Path(tmp)
         for i, url in enumerate(urls):
             dest = tmp_dir / f"part_{i}.csv"
+            logger.info("Downloading history from %s", url)
             gdown.download(url, str(dest), quiet=False)
             dfs.append(pd.read_csv(dest))
 
     df = pd.concat(dfs, ignore_index=True)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
+    logger.info("Loaded %d rows from URLs", len(df))
     return df
 
 
@@ -158,6 +174,7 @@ def load_history_mt5(symbol: str, start: dt.datetime, end: dt.datetime) -> pd.Da
         raise ImportError("MetaTrader5 package is required") from e
 
     if not mt5.initialize():
+        logger.error("Failed to initialize MetaTrader5")
         raise RuntimeError("Failed to initialize MetaTrader5")
 
     real_sym = _find_mt5_symbol(symbol)
@@ -175,6 +192,7 @@ def load_history_mt5(symbol: str, start: dt.datetime, end: dt.datetime) -> pd.Da
     cur = start_ts
     while cur < end_ts:
         to = min(cur + chunk, end_ts)
+        logger.debug("Requesting ticks %s - %s", cur, to)
         arr = mt5.copy_ticks_range(real_sym, cur, to, mt5.COPY_TICKS_ALL)
         if arr is not None and len(arr) > 0:
             ticks.extend(arr)
@@ -192,6 +210,7 @@ def load_history_mt5(symbol: str, start: dt.datetime, end: dt.datetime) -> pd.Da
     df["BidVolume"] = df["Volume"]
     df["AskVolume"] = df["Volume"]
     df.drop(columns=["Volume"], inplace=True)
+    logger.info("Loaded %d ticks from MetaTrader5", len(df))
     return df
 
 
@@ -200,8 +219,10 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
     csv_path = root / "data" / f"{sym}_history.csv"
     pq_path = root / "data" / f"{sym}_history.parquet"
     if pq_path.exists():
+        logger.info("Loading history for %s from %s", sym, pq_path)
         return load_history_parquet(pq_path)
     if csv_path.exists():
+        logger.info("Loading history for %s from %s", sym, csv_path)
         return load_history(csv_path)
 
     api_cfg = (cfg.get("api_history") or {}).get(sym)
@@ -210,6 +231,7 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
         start = pd.to_datetime(api_cfg.get("start"))
         end = pd.to_datetime(api_cfg.get("end"))
         if provider == "mt5":
+            logger.info("Downloading history for %s from MetaTrader5", sym)
             df = load_history_mt5(sym, start, end)
         else:
             raise ValueError(f"Unknown history provider {provider}")
@@ -218,6 +240,7 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
 
     urls = cfg.get("data_urls", {}).get(sym)
     if urls:
+        logger.info("Downloading history for %s from URLs", sym)
         df = load_history_from_urls(urls)
         save_history_parquet(df, pq_path)
         return df
@@ -227,17 +250,21 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
 
 def load_history(path: Path) -> pd.DataFrame:
     """Load historical tick data from CSV."""
+    logger.info("Loading CSV history from %s", path)
     df = pd.read_csv(path)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
+    logger.debug("Loaded %d rows from CSV", len(df))
     return df
 
 
 def load_history_parquet(path: Path) -> pd.DataFrame:
     """Load historical tick data stored in a Parquet file."""
+    logger.info("Loading Parquet history from %s", path)
     df = pd.read_parquet(path)
     if "Timestamp" in df.columns:
         # ensure the Timestamp column is parsed as datetime
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
+    logger.debug("Loaded %d rows from Parquet", len(df))
     return df
 
 
@@ -249,6 +276,7 @@ def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
         data["Timestamp"] = pd.to_datetime(data["Timestamp"], utc=True).dt.tz_localize(
             None
         )
+    logger.info("Saving history to %s", path)
     data.to_parquet(path, index=False)
 
 
@@ -256,13 +284,16 @@ def load_multiple_histories(paths: Dict[str, Path]) -> pd.DataFrame:
     """Load and concatenate history files for multiple symbols."""
     dfs = []
     for symbol, p in paths.items():
+        logger.info("Loading history for %s from %s", symbol, p)
         if p.suffix == ".parquet":
             df = load_history_parquet(p)
         else:
             df = load_history(p)
         df["Symbol"] = symbol
         dfs.append(df)
-    return pd.concat(dfs, ignore_index=True)
+    combined = pd.concat(dfs, ignore_index=True)
+    logger.info("Loaded %d total rows", len(combined))
+    return combined
 
 
 def load_index_ohlc(source: str) -> pd.DataFrame:
@@ -288,6 +319,8 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
         index_sources = cfg.get("index_data", {})
     except Exception:
         index_sources = {}
+
+    logger.debug("Adding index features: %s", list(index_sources.keys()))
 
     df = df.sort_values("Timestamp")
 
@@ -326,6 +359,7 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
+    logger.debug("Adding economic calendar features")
     try:
         events = get_events(past_events=True)
     except Exception:
@@ -385,6 +419,7 @@ def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
     df["upcoming_red_news"] = (
         (df["minutes_to_event"] >= 0) & (df["minutes_to_event"] <= 60)
     ).astype(int)
+    logger.debug("Added calendar features for %d rows", len(df))
     return df
 
 
@@ -407,11 +442,13 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     df = pd.merge_asof(df, news, on="Timestamp", direction="backward")
     df["news_sentiment"] = df["sentiment"].fillna(0.0)
     df = df.drop(columns=["sentiment"], errors="ignore")
+    logger.debug("Added news sentiment for %d rows", len(df))
     return df
 
 
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add common technical features used by the ML model."""
+    logger.info("Creating features for dataframe with %d rows", len(df))
 
     try:
         from utils import load_config
@@ -580,6 +617,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         df = label_regimes(df)
     except Exception:
         df["market_regime"] = 0
+    logger.info("Finished feature engineering")
     return df
 
 
