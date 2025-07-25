@@ -288,8 +288,11 @@ starting and stopping multiple bots. Launch the server with:
 uvicorn remote_api:app --host 0.0.0.0 --port 8000
 ```
 
-Use `GET /bots` to list running instances and `POST /bots/<id>/start` or
-`POST /bots/<id>/stop` to control them remotely.
+Set `API_KEY` before launching and include the header `X-API-Key` in each
+request. Use `GET /bots` to list running instances, `POST /bots/<id>/start`
+and `POST /bots/<id>/stop` to control them. `GET /logs` returns the last few
+lines from `logs/app.log` while `POST /config` accepts JSON fields
+`key`, `value` and `reason` to update `config.yaml`.
 
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.
