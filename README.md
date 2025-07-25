@@ -130,23 +130,27 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
 8. **Attach the EA** –
    1. In MetaTrader 5 open the **Navigator** panel (Ctrl+N).
    2. Drag the EA onto a chart of either XAUUSD or GBPUSD and click **OK**.
-9. **Run realtime training** –
+9. **Publish signals** –
+   1. In the command prompt run `python generate_signals.py`.
+      This publishes prediction messages to `tcp://localhost:5555` which the EA subscribes to.
+   2. Set the environment variable `SIGNAL_QUEUE_BIND` or `SIGNAL_QUEUE_URL` to change the port if needed.
+10. **Run realtime training** –
    1. Back in the command prompt run `python realtime_train.py`.
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
-10. **Optimise parameters** –
+11. **Optimise parameters** –
    1. Periodically run `python auto_optimize.py`.
       The optimiser performs a Bayesian search across thresholds, walk‑forward
       window sizes and reinforcement‑learning parameters. Results are
       cross‑validated over multiple market regimes and both the metrics and
       chosen hyperparameters are tracked with MLflow. Any improvements are
       written back to `config.yaml` and logged under `logs/config_changes.csv`.
-11. **Upload logs** –
+12. **Upload logs** –
    1. Start `python scripts/hourly_log_push.py` in a separate window. This
       script commits and pushes the `logs/` folder every hour so log history is
       archived automatically. Use Windows Task Scheduler to launch it at logon
       for unattended operation.
 
-12. **Keep it running** –
+13. **Keep it running** –
    1. Create scheduled tasks that start both `python realtime_train.py` and the
       hourly log uploader whenever the VPS boots or a user logs in. With these
       tasks enabled the bot and log push service run indefinitely.
@@ -160,6 +164,10 @@ The EA script `AdaptiveEA.mq5` demonstrates how to load predictions
 produced by the Python model and place trades with a context aware trailing
 stop.  `RealtimeEA.mq5` extends this idea by automatically running `git pull`
 on initialisation so the latest model from GitHub is used.
+
+Both experts expose a `ZmqAddress` input allowing you to change the
+subscriber endpoint. By default this is `tcp://localhost:5555` and matches the
+address used by `generate_signals.py`.
 
 Both EAs subscribe to a ZeroMQ topic to receive probability signals from the
 Python models. This decouples the EA from the file system so predictions arrive
