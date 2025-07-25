@@ -45,3 +45,7 @@ use_ray: false
 parallel_backtest: true
 use_scaler: true
 use_sharpe_sizing: true
+
+use_atr: true
+use_donchian: true
+blend_with_rl: false
