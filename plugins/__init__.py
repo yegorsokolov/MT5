@@ -16,3 +16,7 @@ def register_model(obj):
 def register_risk_check(func):
     RISK_CHECKS.append(func)
     return func
+
+# Import built-in plugins so registration side effects occur
+from . import atr  # noqa: F401
+from . import donchian  # noqa: F401

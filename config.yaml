@@ -46,6 +46,8 @@ parallel_backtest: true
 use_scaler: true
 use_sharpe_sizing: true
 
+# enable or disable the ATR stop plugin
 use_atr: true
+# enable or disable the Donchian channel plugin
 use_donchian: true
 blend_with_rl: false
