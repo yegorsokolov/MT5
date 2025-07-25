@@ -34,7 +34,9 @@ Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
  order-book statistics (spread and volume imbalance) and microstructure cues
- like depth imbalance, trade rate and quote revisions. The dataset also merges
+ like depth imbalance, trade rate and quote revisions. Optional ATR and Donchian
+ channel calculations can be toggled via `use_atr` and `use_donchian` in `config.yaml`.
+The dataset also merges
  high impact events from several economic calendars (ForexFactory, the built-in
  MetaTrader calendar via Tradays and the MQL5 feed) so the bot can avoid trading
  immediately around red news releases. These richer features help the model
@@ -178,8 +180,11 @@ An optional **advanced signal combination** stage can ensemble multiple models
 stored under the `models/` folder. When `ensemble_models` is defined in
 `config.yaml` the script loads each model and either averages the probabilities
 or performs a simple Bayesian model averaging based on the `ensemble_method`
-setting. This allows blending a baseline LightGBM model with meta-learning or
-transformer outputs for more robust entries.
+setting. When `blend_with_rl` is enabled the probabilities are stacked with
+signals from the RL agent and a logistic regression is fit on the fly to
+produce a combined forecast. This allows blending a baseline LightGBM model with
+meta-learning, transformer outputs and reinforcement learning for more robust
+entries.
 
 ## Performance Reports
 
@@ -201,6 +206,13 @@ Feature engineering functions, models and risk checks can now be extended via
 plugins under the `plugins/` package. Register new components with the helper
 decorators exposed in `plugins.__init__` and they will automatically be applied
 when `dataset.make_features` or training scripts run.
+
+## Strategy Templates
+
+Example strategies adapted from the open source Freqtrade and Backtrader
+frameworks are included under `strategies/`. They demonstrate how the feature
+pipeline can feed different trading styles ranging from simple MA crossovers to
+Donchian breakouts with ATR based stops.
 
 ## Detailed Logging
 

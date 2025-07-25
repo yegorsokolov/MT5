@@ -21,6 +21,8 @@ def test_make_features_columns(monkeypatch):
             vix_vol=0.0,
         ),
     )
+    import utils
+    monkeypatch.setattr(utils, "load_config", lambda: {"use_atr": True, "use_donchian": True})
 
     n = 300
     df = pd.DataFrame({
@@ -40,6 +42,12 @@ def test_make_features_columns(monkeypatch):
         "boll_upper",
         "boll_lower",
         "boll_break",
+        "atr_14",
+        "atr_stop_long",
+        "atr_stop_short",
+        "donchian_high",
+        "donchian_low",
+        "donchian_break",
         "volatility_30",
         "rsi_14",
         "spread",
