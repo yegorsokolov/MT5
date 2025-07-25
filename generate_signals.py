@@ -8,6 +8,10 @@ import numpy as np
 
 from utils import load_config
 from dataset import load_history, load_history_parquet, make_features
+from train_rl import TradingEnv, DiscreteTradingEnv
+from stable_baselines3 import PPO
+from sb3_contrib.qrdqn import QRDQN
+from sklearn.linear_model import LogisticRegression
 import asyncio
 from signal_queue import (
     get_async_publisher,
@@ -33,6 +37,49 @@ def bayesian_average(prob_arrays):
     logits = [np.log(p / (1 - p + 1e-12)) for p in prob_arrays]
     avg_logit = np.mean(logits, axis=0)
     return 1 / (1 + np.exp(-avg_logit))
+
+
+def rl_signals(df, features, cfg):
+    """Return probability-like signals from a trained RL agent."""
+    model_path = Path(__file__).resolve().parent / "model_rl.zip"
+    if not model_path.exists():
+        return np.zeros(len(df))
+
+    algo = cfg.get("rl_algorithm", "PPO").upper()
+    if algo == "PPO":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = PPO.load(model_path, env=env)
+    else:
+        env = DiscreteTradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = QRDQN.load(model_path, env=env)
+
+    obs = env.reset()
+    done = False
+    actions = []
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        a = float(action[0]) if not np.isscalar(action) else float(action)
+        actions.append(a)
+        obs, _, done, _ = env.step(action)
+
+    probs = (np.array(actions) > 0).astype(float)
+    if len(probs) < len(df):
+        probs = np.pad(probs, (0, len(df) - len(probs)), "edge")
+    return probs
 
 
 @log_exceptions
@@ -75,6 +122,16 @@ def main():
         "hour_cos",
         "news_sentiment",
     ]
+    for col in [
+        "atr_14",
+        "atr_stop_long",
+        "atr_stop_short",
+        "donchian_high",
+        "donchian_low",
+        "donchian_break",
+    ]:
+        if col in df.columns:
+            features.append(col)
     features += [
         c
         for c in df.columns
@@ -96,6 +153,15 @@ def main():
             probs = bayesian_average(prob_list)
         else:
             probs = np.mean(prob_list, axis=0)
+
+    if cfg.get("blend_with_rl", False):
+        rl_probs = rl_signals(df, features, cfg)
+        X = np.column_stack([probs, rl_probs])
+        y = (df["return"].shift(-1) > 0).astype(int)
+        train_n = int(len(X) * 0.7)
+        lr = LogisticRegression()
+        lr.fit(X[:train_n], y[:train_n])
+        probs = lr.predict_proba(X)[:, 1]
 
     ma_ok = df["ma_cross"] == 1
     rsi_ok = df["rsi_14"] > cfg.get("rsi_buy", 55)
