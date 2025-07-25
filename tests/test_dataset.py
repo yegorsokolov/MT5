@@ -71,3 +71,52 @@ def test_make_features_columns(monkeypatch):
         "market_regime",
     }
     assert expected.issubset(result.columns)
+
+
+def test_train_test_split_multi_symbol():
+    ts = pd.date_range("2020-01-01", periods=5, freq="min")
+    df_a = pd.DataFrame({"Timestamp": ts, "Symbol": "A", "return": range(5)})
+    df_b = pd.DataFrame({"Timestamp": ts, "Symbol": "B", "return": range(5)})
+    df = pd.concat([df_a, df_b], ignore_index=True)
+
+    train, test = dataset.train_test_split(df, n_train=3)
+    assert len(train) == 6
+    assert len(test) == 4
+    assert list(train[train.Symbol == "A"]["return"]) == [0, 1, 2]
+    assert list(test[test.Symbol == "B"]["return"]) == [3, 4]
+
+
+def test_add_economic_calendar_features(monkeypatch):
+    df = pd.DataFrame({"Timestamp": pd.date_range("2020-01-01", periods=3, freq="H")})
+    events = [
+        {"date": "2020-01-01T01:00:00Z", "impact": "High", "currency": "USD", "event": "news"}
+    ]
+    monkeypatch.setattr(dataset, "get_events", lambda past_events=True: events)
+    out = dataset.add_economic_calendar_features(df.copy())
+    assert "minutes_to_event" in out.columns
+    assert out.loc[0, "minutes_to_event"] == 60
+    assert out.loc[1, "minutes_to_event"] == 0
+
+
+def test_save_load_history_parquet(tmp_path):
+    df = pd.DataFrame({
+        "Timestamp": pd.date_range("2020-01-01", periods=3, freq="min"),
+        "Bid": [1.0, 1.1, 1.2],
+        "Ask": [1.0001, 1.1001, 1.2001],
+    })
+    path = tmp_path / "hist.parquet"
+    dataset.save_history_parquet(df, path)
+    loaded = dataset.load_history_parquet(path)
+    pd.testing.assert_frame_equal(loaded, df)
+
+
+def test_make_sequence_arrays():
+    df = pd.DataFrame({
+        "Timestamp": pd.date_range("2020-01-01", periods=6, freq="min"),
+        "Symbol": "A",
+        "return": [0, 0.1, -0.1, 0.2, -0.2, 0.3],
+        "f1": [1, 2, 3, 4, 5, 6],
+    })
+    X, y = dataset.make_sequence_arrays(df, ["f1"], seq_len=2)
+    assert X.shape == (3, 2, 1)
+    assert y.tolist() == [1, 0, 1]
