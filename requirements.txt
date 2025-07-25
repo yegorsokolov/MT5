@@ -3,7 +3,6 @@ pyarrow
 scikit-learn
 numpy
 pyyaml
-MetaTrader5
 GitPython
 gdown
 duckdb
@@ -17,3 +16,5 @@ ray
 scikit-optimize
 scipy
 pyzmq
+fastapi
+uvicorn
