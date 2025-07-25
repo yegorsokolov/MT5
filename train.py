@@ -7,6 +7,7 @@ from sklearn.metrics import classification_report
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from lightgbm import LGBMClassifier
+import mlflow
 
 from log_utils import setup_logging, log_exceptions
 
@@ -29,33 +30,37 @@ def main():
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
 
-    symbols = cfg.get("symbols") or [cfg.get("symbol")]
-    all_dfs = []
-    for sym in symbols:
-        csv_path = root / "data" / f"{sym}_history.csv"
-        pq_path = root / "data" / f"{sym}_history.parquet"
-        if pq_path.exists():
-            df_sym = load_history_parquet(pq_path)
-        elif csv_path.exists():
-            df_sym = load_history(csv_path)
-        else:
-            urls = cfg.get("data_urls", {}).get(sym)
-            if not urls:
-                raise FileNotFoundError(f"No history found for {sym} and no URL configured")
-            df_sym = load_history_from_urls(urls)
-            save_history_parquet(df_sym, pq_path)
-        df_sym["Symbol"] = sym
-        all_dfs.append(df_sym)
+    mlflow.set_experiment("training")
+    with mlflow.start_run():
+        symbols = cfg.get("symbols") or [cfg.get("symbol")]
+        all_dfs = []
+        for sym in symbols:
+            csv_path = root / "data" / f"{sym}_history.csv"
+            pq_path = root / "data" / f"{sym}_history.parquet"
+            if pq_path.exists():
+                df_sym = load_history_parquet(pq_path)
+            elif csv_path.exists():
+                df_sym = load_history(csv_path)
+            else:
+                urls = cfg.get("data_urls", {}).get(sym)
+                if not urls:
+                    raise FileNotFoundError(
+                        f"No history found for {sym} and no URL configured"
+                    )
+                df_sym = load_history_from_urls(urls)
+                save_history_parquet(df_sym, pq_path)
+            df_sym["Symbol"] = sym
+            all_dfs.append(df_sym)
 
-    df = pd.concat(all_dfs, ignore_index=True)
-    # also store combined history
-    save_history_parquet(df, root / "data" / "history.parquet")
+        df = pd.concat(all_dfs, ignore_index=True)
+        # also store combined history
+        save_history_parquet(df, root / "data" / "history.parquet")
 
-    df = make_features(df)
-    if "Symbol" in df.columns:
-        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+        df = make_features(df)
+        if "Symbol" in df.columns:
+            df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
-    train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
+        train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
 
     features = [
         "return",
@@ -80,24 +85,28 @@ def main():
         features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
-    X_train = train_df[features]
-    y_train = (train_df["return"].shift(-1) > 0).astype(int)
+        X_train = train_df[features]
+        y_train = (train_df["return"].shift(-1) > 0).astype(int)
 
-    X_test = test_df[features]
-    y_test = (test_df["return"].shift(-1) > 0).astype(int)
+        X_test = test_df[features]
+        y_test = (test_df["return"].shift(-1) > 0).astype(int)
 
-    steps = []
-    if cfg.get("use_scaler", True):
-        steps.append(("scaler", StandardScaler()))
-    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
-    pipe = Pipeline(steps)
+        steps = []
+        if cfg.get("use_scaler", True):
+            steps.append(("scaler", StandardScaler()))
+        steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+        pipe = Pipeline(steps)
 
-    pipe.fit(X_train, y_train)
-    preds = pipe.predict(X_test)
-    print(classification_report(y_test, preds))
+        pipe.fit(X_train, y_train)
+        preds = pipe.predict(X_test)
+        report = classification_report(y_test, preds, output_dict=True)
+        print(classification_report(y_test, preds))
 
-    joblib.dump(pipe, Path(__file__).resolve().parent / "model.joblib")
-    print("Model saved to", Path(__file__).resolve().parent / "model.joblib")
+        joblib.dump(pipe, root / "model.joblib")
+        print("Model saved to", root / "model.joblib")
+        mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
+        mlflow.log_metric("f1_weighted", report["weighted avg"]["f1-score"])
+        mlflow.log_artifact(str(root / "model.joblib"))
 
 
 if __name__ == "__main__":
