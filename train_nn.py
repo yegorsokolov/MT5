@@ -23,7 +23,6 @@ from dataset import (
 from log_utils import setup_logging, log_exceptions
 
 logger = setup_logging()
-from log_utils import setup_logging, log_exceptions
 
 
 class PositionalEncoding(nn.Module):

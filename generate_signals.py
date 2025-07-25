@@ -9,8 +9,8 @@ import numpy as np
 from utils import load_config
 from dataset import load_history, load_history_parquet, make_features
 
-logger = setup_logging()
 from log_utils import setup_logging, log_exceptions
+logger = setup_logging()
 
 
 def load_models(paths):

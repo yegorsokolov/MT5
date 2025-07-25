@@ -17,9 +17,8 @@ from dataset import (
     make_features,
 )
 
-logger = setup_logging()
-
 from log_utils import setup_logging, log_exceptions
+logger = setup_logging()
 
 
 class TradingEnv(gym.Env):
