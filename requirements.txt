@@ -12,6 +12,7 @@ tqdm
 stable-baselines3
 sb3-contrib
 gym
+MetaTrader5
 ray
 scikit-optimize
 scipy

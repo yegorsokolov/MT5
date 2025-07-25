@@ -105,14 +105,15 @@ def get_events(past_events: bool = False) -> List[dict]:
     for e in events:
         try:
             date = e["date"] = (
-                date_parser.parse(e["date"]) if isinstance(e["date"], str) else e["date"]
+                date_parser.parse(e["date"])
+                if isinstance(e["date"], str)
+                else e["date"]
             )
         except Exception:
             continue
         if past_events or date >= now:
             filtered.append(e)
     return filtered
-
 
 
 def load_history_from_urls(urls: List[str]) -> pd.DataFrame:
@@ -131,6 +132,97 @@ def load_history_from_urls(urls: List[str]) -> pd.DataFrame:
     df = pd.concat(dfs, ignore_index=True)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
     return df
+
+
+def _find_mt5_symbol(symbol: str):
+    """Return the matching MetaTrader 5 symbol name, trying common prefixes and suffixes."""
+    import MetaTrader5 as mt5
+
+    info = mt5.symbol_info(symbol)
+    if info:
+        return symbol
+
+    all_symbols = mt5.symbols_get()
+    for s in all_symbols:
+        name = s.name
+        if name.endswith(symbol) or name.startswith(symbol):
+            return name
+    return None
+
+
+def load_history_mt5(symbol: str, start: dt.datetime, end: dt.datetime) -> pd.DataFrame:
+    """Download tick history from the MetaTrader 5 terminal history center."""
+    try:
+        import MetaTrader5 as mt5
+    except Exception as e:
+        raise ImportError("MetaTrader5 package is required") from e
+
+    if not mt5.initialize():
+        raise RuntimeError("Failed to initialize MetaTrader5")
+
+    real_sym = _find_mt5_symbol(symbol)
+    if not real_sym:
+        mt5.shutdown()
+        raise ValueError(f"Symbol {symbol} not found in MetaTrader5")
+
+    mt5.symbol_select(real_sym, True)
+
+    start_ts = int(start.timestamp())
+    end_ts = int(end.timestamp())
+    chunk = 86400 * 7  # request one week at a time to avoid server limits
+
+    ticks = []
+    cur = start_ts
+    while cur < end_ts:
+        to = min(cur + chunk, end_ts)
+        arr = mt5.copy_ticks_range(real_sym, cur, to, mt5.COPY_TICKS_ALL)
+        if arr is not None and len(arr) > 0:
+            ticks.extend(arr)
+        cur = to
+
+    mt5.shutdown()
+
+    if not ticks:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(ticks)
+    df["Timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_localize(None)
+    df.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
+    df = df[["Timestamp", "Bid", "Ask", "Volume"]]
+    df["BidVolume"] = df["Volume"]
+    df["AskVolume"] = df["Volume"]
+    df.drop(columns=["Volume"], inplace=True)
+    return df
+
+
+def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
+    """Load history for ``sym`` using local files, URLs or APIs."""
+    csv_path = root / "data" / f"{sym}_history.csv"
+    pq_path = root / "data" / f"{sym}_history.parquet"
+    if pq_path.exists():
+        return load_history_parquet(pq_path)
+    if csv_path.exists():
+        return load_history(csv_path)
+
+    api_cfg = (cfg.get("api_history") or {}).get(sym)
+    if api_cfg:
+        provider = api_cfg.get("provider", "mt5")
+        start = pd.to_datetime(api_cfg.get("start"))
+        end = pd.to_datetime(api_cfg.get("end"))
+        if provider == "mt5":
+            df = load_history_mt5(sym, start, end)
+        else:
+            raise ValueError(f"Unknown history provider {provider}")
+        save_history_parquet(df, pq_path)
+        return df
+
+    urls = cfg.get("data_urls", {}).get(sym)
+    if urls:
+        df = load_history_from_urls(urls)
+        save_history_parquet(df, pq_path)
+        return df
+
+    raise FileNotFoundError(f"No history found for {sym} and no data source configured")
 
 
 def load_history(path: Path) -> pd.DataFrame:
@@ -154,7 +246,9 @@ def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = df.copy()
     if "Timestamp" in data.columns:
-        data["Timestamp"] = pd.to_datetime(data["Timestamp"], utc=True).dt.tz_localize(None)
+        data["Timestamp"] = pd.to_datetime(data["Timestamp"], utc=True).dt.tz_localize(
+            None
+        )
     data.to_parquet(path, index=False)
 
 
@@ -189,6 +283,7 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
     """Merge daily index returns/volatility features using forward fill."""
     try:
         from utils import load_config
+
         cfg = load_config()
         index_sources = cfg.get("index_data", {})
     except Exception:
@@ -228,8 +323,6 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
             if col not in df.columns:
                 df[col] = 0.0
     return df
-
-
 
 
 def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -315,11 +408,14 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     df["news_sentiment"] = df["sentiment"].fillna(0.0)
     df = df.drop(columns=["sentiment"], errors="ignore")
     return df
+
+
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add common technical features used by the ML model."""
 
     try:
         from utils import load_config
+
         cfg = load_config()
     except Exception:
         cfg = {}
@@ -381,14 +477,22 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         group["spread_change"] = spread.diff()
         delta_sec = group["Timestamp"].diff().dt.total_seconds().replace(0, np.nan)
         group["trade_rate"] = 1 / delta_sec
-        group["quote_revision"] = ((group["Bid"].diff() != 0) | (group["Ask"].diff() != 0)).astype(int)
+        group["quote_revision"] = (
+            (group["Bid"].diff() != 0) | (group["Ask"].diff() != 0)
+        ).astype(int)
 
         # order book related features if volumes are present
         if {"BidVolume", "AskVolume"}.issubset(group.columns):
-            group["volume_ratio"] = group["BidVolume"] / group["AskVolume"].replace(0, pd.NA)
+            group["volume_ratio"] = group["BidVolume"] / group["AskVolume"].replace(
+                0, pd.NA
+            )
             group["volume_imbalance"] = group["BidVolume"] - group["AskVolume"]
-            group["depth_imbalance"] = group["volume_imbalance"] / (group["BidVolume"] + group["AskVolume"])
-            group["depth_imbalance"] = group["depth_imbalance"].replace([np.inf, -np.inf], np.nan)
+            group["depth_imbalance"] = group["volume_imbalance"] / (
+                group["BidVolume"] + group["AskVolume"]
+            )
+            group["depth_imbalance"] = group["depth_imbalance"].replace(
+                [np.inf, -np.inf], np.nan
+            )
             total_volume = group["BidVolume"] + group["AskVolume"]
             avg_volume = total_volume.rolling(20).mean()
             group["volume_spike"] = (total_volume > avg_volume * 1.5).astype(int)
@@ -422,9 +526,15 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
                     pair_data[(sym1, sym2)] = pivot[sym1].rolling(30).corr(pivot[sym2])
 
             pair_df = pd.concat(pair_data, axis=1)
-            pair_df.columns = pd.MultiIndex.from_tuples(pair_df.columns, names=["Symbol", "Other"])
-            pair_df = pair_df.stack(["Symbol", "Other"]).rename("pair_corr").reset_index()
-            pair_wide = pair_df.pivot_table(index=["Timestamp", "Symbol"], columns="Other", values="pair_corr")
+            pair_df.columns = pd.MultiIndex.from_tuples(
+                pair_df.columns, names=["Symbol", "Other"]
+            )
+            pair_df = (
+                pair_df.stack(["Symbol", "Other"]).rename("pair_corr").reset_index()
+            )
+            pair_wide = pair_df.pivot_table(
+                index=["Timestamp", "Symbol"], columns="Other", values="pair_corr"
+            )
             pair_wide = pair_wide.add_prefix("cross_corr_").reset_index()
             df = df.merge(pair_wide, on=["Timestamp", "Symbol"], how="left")
 
@@ -435,7 +545,9 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
                         continue
                     for lag in [3, 4, 5]:
                         col = f"cross_corr_{sym1}_{sym2}_lag{lag}"
-                        lag_corr_df[col] = pivot[sym1].rolling(30).corr(pivot[sym2].shift(lag))
+                        lag_corr_df[col] = (
+                            pivot[sym1].rolling(30).corr(pivot[sym2].shift(lag))
+                        )
 
             if not lag_corr_df.empty:
                 lag_corr_df = lag_corr_df.reset_index()
@@ -445,7 +557,9 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         n_comp = min(3, len(pivot.columns))
         pca = PCA(n_components=n_comp)
         factors = pca.fit_transform(pivot_filled)
-        factor_df = pd.DataFrame(factors, index=pivot.index, columns=[f"factor_{i+1}" for i in range(n_comp)]).reset_index()
+        factor_df = pd.DataFrame(
+            factors, index=pivot.index, columns=[f"factor_{i+1}" for i in range(n_comp)]
+        ).reset_index()
         df = df.merge(factor_df, on="Timestamp", how="left")
     else:
         df = _feat(df)
@@ -462,6 +576,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
 
     try:
         from regime import label_regimes
+
         df = label_regimes(df)
     except Exception:
         df["market_regime"] = 0
@@ -479,7 +594,9 @@ def compute_rsi(series: pd.Series, period: int) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def ma_cross_signal(df: pd.DataFrame, short: str = "ma_10", long: str = "ma_30") -> pd.Series:
+def ma_cross_signal(
+    df: pd.DataFrame, short: str = "ma_10", long: str = "ma_30"
+) -> pd.Series:
     """Return 1 when the short MA crosses above the long MA, -1 on cross below."""
     cross_up = (df[short] > df[long]) & (df[short].shift(1) <= df[long].shift(1))
     cross_down = (df[short] < df[long]) & (df[short].shift(1) >= df[long].shift(1))
@@ -489,7 +606,9 @@ def ma_cross_signal(df: pd.DataFrame, short: str = "ma_10", long: str = "ma_30")
     return signal
 
 
-def train_test_split(df: pd.DataFrame, n_train: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def train_test_split(
+    df: pd.DataFrame, n_train: int
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Simple ordered train/test split. When multiple symbols are present
     the split is applied per symbol."""
     if "Symbol" in df.columns:
@@ -507,7 +626,9 @@ def train_test_split(df: pd.DataFrame, n_train: int) -> Tuple[pd.DataFrame, pd.D
         return train, test
 
 
-def make_sequence_arrays(df: pd.DataFrame, features: List[str], seq_len: int) -> Tuple[np.ndarray, np.ndarray]:
+def make_sequence_arrays(
+    df: pd.DataFrame, features: List[str], seq_len: int
+) -> Tuple[np.ndarray, np.ndarray]:
     """Convert a dataframe to sequences suitable for neural network models."""
     X_list = []
     y_list = []
@@ -520,7 +641,7 @@ def make_sequence_arrays(df: pd.DataFrame, features: List[str], seq_len: int) ->
         values = g[features].values
         targets = (g["return"].shift(-1) > 0).astype(int).values
         for i in range(seq_len, len(g) - 1):
-            X_list.append(values[i - seq_len:i])
+            X_list.append(values[i - seq_len : i])
             y_list.append(targets[i])
 
     X = np.stack(X_list)

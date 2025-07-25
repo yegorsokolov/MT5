@@ -15,12 +15,11 @@ from log_utils import setup_logging, log_exceptions
 
 from utils import load_config
 from dataset import (
-    load_history,
-    load_history_from_urls,
     load_history_parquet,
     save_history_parquet,
     make_features,
     train_test_split,
+    load_history_config,
 )
 
 logger = setup_logging()
@@ -30,28 +29,28 @@ logger = setup_logging()
 @log_exceptions
 def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     """Load data for one symbol, train model and save it."""
-    csv_path = root / "data" / f"{sym}_history.csv"
-    pq_path = root / "data" / f"{sym}_history.parquet"
-    if pq_path.exists():
-        df = load_history_parquet(pq_path)
-    elif csv_path.exists():
-        df = load_history(csv_path)
-    else:
-        urls = cfg.get("data_urls", {}).get(sym)
-        if not urls:
-            raise FileNotFoundError(f"No history for {sym} and no URL configured")
-        df = load_history_from_urls(urls)
-        pq_path.parent.mkdir(exist_ok=True)
-        save_history_parquet(df, pq_path)
+    df = load_history_config(sym, cfg, root)
     df["Symbol"] = sym
     df = make_features(df)
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
-    train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df)//2))
-    features = [c for c in [
-        "return","ma_5","ma_10","ma_30","ma_60","volatility_30",
-        "spread","rsi_14","news_sentiment","market_regime",
-    ] if c in df.columns]
+    train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
+    features = [
+        c
+        for c in [
+            "return",
+            "ma_5",
+            "ma_10",
+            "ma_30",
+            "ma_60",
+            "volatility_30",
+            "spread",
+            "rsi_14",
+            "news_sentiment",
+            "market_regime",
+        ]
+        if c in df.columns
+    ]
     features += [
         c
         for c in df.columns
@@ -60,7 +59,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
         or c.startswith("cross_mom_")
     ]
     if "volume_ratio" in df.columns:
-        features.extend(["volume_ratio","volume_imbalance"])
+        features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
 
@@ -71,9 +70,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     pipe = Pipeline(steps)
     pipe.fit(train_df[features], (train_df["return"].shift(-1) > 0).astype(int))
     preds = pipe.predict(test_df[features])
-    report = classification_report(
-        (test_df["return"].shift(-1) > 0).astype(int), preds
-    )
+    report = classification_report((test_df["return"].shift(-1) > 0).astype(int), preds)
     out_path = root / "models" / f"{sym}_model.joblib"
     out_path.parent.mkdir(exist_ok=True)
     joblib.dump(pipe, out_path)
@@ -94,4 +91,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
