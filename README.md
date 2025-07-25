@@ -25,8 +25,9 @@ The solution is split into two components:
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
 4. **Auto optimiser** — uses **scikit-optimize** to search signal thresholds,
-   trailing stop distances and RSI levels. Any improved settings are written
-   back to `config.yaml` along with the reason in `logs/config_changes.csv`.
+   window sizes and key RL parameters with cross‑validated walk‑forward
+   backtests. Any improved settings are written back to `config.yaml` along with
+   the reason in `logs/config_changes.csv` and logged to MLflow.
 ### Risk management
 
 Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `max_var`, `max_stress_loss`, `max_cvar` and `var_decay`, which controls the exponential weighting for the filtered VaR calculation.
@@ -134,10 +135,11 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
 10. **Optimise parameters** –
    1. Periodically run `python auto_optimize.py`.
-      This now uses **scikit-optimize** to perform a Bayesian search over
-      threshold, trailing stop and RSI values.
-      Any improvements are written back to `config.yaml` and logged under
-      `logs/config_changes.csv`.
+      The optimiser performs a Bayesian search across thresholds, walk‑forward
+      window sizes and reinforcement‑learning parameters. Results are
+      cross‑validated over multiple market regimes and both the metrics and
+      chosen hyperparameters are tracked with MLflow. Any improvements are
+      written back to `config.yaml` and logged under `logs/config_changes.csv`.
 11. **Upload logs** –
    1. Start `python scripts/hourly_log_push.py` in a separate window. This
       script commits and pushes the `logs/` folder every hour so log history is
