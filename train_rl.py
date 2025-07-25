@@ -10,14 +10,14 @@ from sb3_contrib.qrdqn import QRDQN
 
 from utils import load_config
 from dataset import (
-    load_history,
-    load_history_from_urls,
     load_history_parquet,
     save_history_parquet,
     make_features,
+    load_history_config,
 )
 
 from log_utils import setup_logging, log_exceptions
+
 logger = setup_logging()
 
 
@@ -38,9 +38,8 @@ class TradingEnv(gym.Env):
         if "Symbol" not in df.columns:
             raise ValueError("DataFrame must contain a 'Symbol' column")
         self.symbols = sorted(df["Symbol"].unique())
-        wide = (
-            df.set_index(["Timestamp", "Symbol"])[features + ["mid"]]
-            .unstack("Symbol")
+        wide = df.set_index(["Timestamp", "Symbol"])[features + ["mid"]].unstack(
+            "Symbol"
         )
         wide.columns = [f"{sym}_{feat}" for feat, sym in wide.columns]
         wide = wide.dropna().reset_index(drop=True)
@@ -85,7 +84,9 @@ class TradingEnv(gym.Env):
     def step(self, action):
         done = False
 
-        action = np.clip(np.asarray(action, dtype=np.float32), -self.max_position, self.max_position)
+        action = np.clip(
+            np.asarray(action, dtype=np.float32), -self.max_position, self.max_position
+        )
         prices = self.df.loc[self.i, self.price_cols].values
 
         portfolio_ret = 0.0
@@ -116,7 +117,7 @@ class TradingEnv(gym.Env):
         self.portfolio_returns.append(portfolio_ret)
         risk = -abs(drawdown) * 0.1
         if len(self.portfolio_returns) >= self.var_window:
-            var = np.var(self.portfolio_returns[-self.var_window:])
+            var = np.var(self.portfolio_returns[-self.var_window :])
             risk -= self.risk_penalty * var
 
         reward += risk
@@ -157,18 +158,7 @@ def main():
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
     for sym in symbols:
-        csv_path = root / "data" / f"{sym}_history.csv"
-        pq_path = root / "data" / f"{sym}_history.parquet"
-        if pq_path.exists():
-            df_sym = load_history_parquet(pq_path)
-        elif csv_path.exists():
-            df_sym = load_history(csv_path)
-        else:
-            urls = cfg.get("data_urls", {}).get(sym)
-            if not urls:
-                raise FileNotFoundError(f"No history found for {sym} and no URL configured")
-            df_sym = load_history_from_urls(urls)
-            save_history_parquet(df_sym, pq_path)
+        df_sym = load_history_config(sym, cfg, root)
         df_sym["Symbol"] = sym
         dfs.append(df_sym)
 

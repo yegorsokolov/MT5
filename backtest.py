@@ -10,10 +10,11 @@ from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 from utils import load_config
-from dataset import load_history, load_history_parquet, make_features
+from dataset import load_history_parquet, make_features, load_history_config
 import ray
 
 from log_utils import setup_logging, log_exceptions
+
 logger = setup_logging()
 
 
@@ -48,7 +49,9 @@ def feature_columns(df: pd.DataFrame) -> list:
     return cols
 
 
-def trailing_stop(entry_price: float, current_price: float, stop: float, distance: float) -> float:
+def trailing_stop(
+    entry_price: float, current_price: float, stop: float, distance: float
+) -> float:
     """Update trailing stop based on price movement."""
     if current_price - distance > stop:
         return current_price - distance
@@ -129,10 +132,23 @@ def backtest_on_df(
     return metrics
 
 
-def run_backtest(cfg: dict, *, return_returns: bool = False) -> dict | tuple[dict, pd.Series]:
+def run_backtest(
+    cfg: dict, *, return_returns: bool = False
+) -> dict | tuple[dict, pd.Series]:
     data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
     if not data_path.exists():
-        raise FileNotFoundError("Historical history.parquet not found under data/")
+        cfg_root = Path(__file__).resolve().parent
+        symbols = cfg.get("symbols") or [cfg.get("symbol")]
+        dfs = []
+        for sym in symbols:
+            df_sym = load_history_config(sym, cfg, cfg_root)
+            df_sym["Symbol"] = sym
+            dfs.append(df_sym)
+        df_all = pd.concat(dfs, ignore_index=True)
+        save_path = data_path
+        save_path.parent.mkdir(exist_ok=True)
+        save_path.unlink(missing_ok=True)
+        df_all.to_parquet(save_path, index=False)
 
     model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
@@ -146,7 +162,9 @@ def run_backtest(cfg: dict, *, return_returns: bool = False) -> dict | tuple[dic
 
 
 @ray.remote
-def _backtest_window(train_df: pd.DataFrame, test_df: pd.DataFrame, cfg: dict, start: str, end: str) -> dict:
+def _backtest_window(
+    train_df: pd.DataFrame, test_df: pd.DataFrame, cfg: dict, start: str, end: str
+) -> dict:
     """Train a model on ``train_df`` and backtest on ``test_df``."""
     model = fit_model(train_df, cfg)
     metrics = backtest_on_df(test_df, model, cfg)
@@ -159,7 +177,16 @@ def run_rolling_backtest(cfg: dict) -> dict:
     """Perform rolling train/test backtests and aggregate metrics."""
     data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
     if not data_path.exists():
-        raise FileNotFoundError("Historical history.parquet not found under data/")
+        cfg_root = Path(__file__).resolve().parent
+        symbols = cfg.get("symbols") or [cfg.get("symbol")]
+        dfs = []
+        for sym in symbols:
+            df_sym = load_history_config(sym, cfg, cfg_root)
+            df_sym["Symbol"] = sym
+            dfs.append(df_sym)
+        df_all = pd.concat(dfs, ignore_index=True)
+        data_path.parent.mkdir(exist_ok=True)
+        df_all.to_parquet(data_path, index=False)
 
     df = load_history_parquet(data_path)
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
@@ -192,7 +219,9 @@ def run_rolling_backtest(cfg: dict) -> dict:
         start_iso = train_end.date().isoformat()
         end_iso = test_end.date().isoformat()
         if parallel:
-            futures.append(_backtest_window.remote(train_df, test_df, cfg, start_iso, end_iso))
+            futures.append(
+                _backtest_window.remote(train_df, test_df, cfg, start_iso, end_iso)
+            )
         else:
             model = fit_model(train_df, cfg)
             metrics = backtest_on_df(test_df, model, cfg)
