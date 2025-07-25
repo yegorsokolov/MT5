@@ -10,6 +10,11 @@ from sklearn.decomposition import PCA
 from dateutil import parser as date_parser
 import requests
 
+try:
+    from plugins import FEATURE_PLUGINS
+except Exception:
+    FEATURE_PLUGINS = []
+
 NEWS_SOURCES = [
     "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json",
     "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
@@ -423,6 +428,12 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
     df = add_index_features(df)
+
+    for plugin in FEATURE_PLUGINS:
+        try:
+            df = plugin(df)
+        except Exception:
+            pass
 
     try:
         from regime import label_regimes

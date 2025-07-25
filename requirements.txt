@@ -16,3 +16,4 @@ gym
 ray
 scikit-optimize
 scipy
+pyzmq

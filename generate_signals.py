@@ -8,6 +8,7 @@ import numpy as np
 
 from utils import load_config
 from dataset import load_history, load_history_parquet, make_features
+from signal_queue import get_publisher, publish_dataframe
 
 from log_utils import setup_logging, log_exceptions
 logger = setup_logging()
@@ -129,8 +130,9 @@ def main():
     )
 
     out = pd.DataFrame({"Timestamp": df["Timestamp"], "prob": combined})
-    out.to_csv(Path(__file__).resolve().parent / "signals.csv", index=False)
-    print("Signals written to", Path(__file__).resolve().parent / "signals.csv")
+    pub = get_publisher()
+    publish_dataframe(pub, out)
+    print("Signals published via ZeroMQ")
 
 
 if __name__ == "__main__":

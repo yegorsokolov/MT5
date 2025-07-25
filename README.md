@@ -157,9 +157,10 @@ produced by the Python model and place trades with a context aware trailing
 stop.  `RealtimeEA.mq5` extends this idea by automatically running `git pull`
 on initialisation so the latest model from GitHub is used.
 
-Both EAs try to match the current chart time with rows in `signals.csv`.  If a
-perfect timestamp isn't found the loader now searches for the nearest entry
-within `signal_time_tolerance` seconds (default 60).
+Both EAs subscribe to a ZeroMQ topic to receive probability signals from the
+Python models. This decouples the EA from the file system so predictions arrive
+in realtime without relying on `signals.csv` on disk. If the EA misses a
+timestamp it simply uses the next received message.
 
 `generate_signals.py` merges ML probabilities with a moving average
 crossover and RSI filter so trades are only taken when multiple conditions
@@ -191,6 +192,13 @@ backtests across available CPU cores or even a cluster. Enable this by setting
 `use_ray: true` in `config.yaml` and optionally adjust `ray_num_cpus` to limit
 resource usage. The Docker setup remains unchanged so experiments stay
 reproducible.
+
+## Plugin Architecture
+
+Feature engineering functions, models and risk checks can now be extended via
+plugins under the `plugins/` package. Register new components with the helper
+decorators exposed in `plugins.__init__` and they will automatically be applied
+when `dataset.make_features` or training scripts run.
 
 ## Detailed Logging
 
@@ -237,6 +245,11 @@ The container image should be pushed to a registry accessible by your cluster
 persistent volume at `/opt/mt5` so the MetaTrader terminal and models survive
 pod restarts. Adjust the manifest to scale replicas or to integrate with your
 cluster's ingress.
+
+Liveness and readiness probes now call `scripts/healthcheck.py` so Kubernetes can
+restart unhealthy pods. Configuration values such as the path to `config.yaml`
+or the ZeroMQ address can be overridden via environment variables defined in the
+deployment manifest.
 
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.

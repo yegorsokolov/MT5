@@ -21,4 +21,5 @@ RUN mkdir -p /opt/mt5 && \
     python3 scripts/setup_terminal.py /opt/mt5
 
 ENV DISPLAY=:0
+HEALTHCHECK CMD ["python3", "scripts/healthcheck.py"]
 CMD ["bash", "scripts/run_bot.sh"]
