@@ -318,6 +318,15 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
 def make_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add common technical features used by the ML model."""
 
+    try:
+        from utils import load_config
+        cfg = load_config()
+    except Exception:
+        cfg = {}
+
+    use_atr = cfg.get("use_atr", True)
+    use_donchian = cfg.get("use_donchian", True)
+
     def _feat(group: pd.DataFrame) -> pd.DataFrame:
         mid = (group["Bid"] + group["Ask"]) / 2
         group = group.assign(mid=mid)
@@ -328,6 +337,22 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         group["ma_10"] = group["mid"].rolling(10).mean()
         group["ma_30"] = group["mid"].rolling(30).mean()
         group["ma_60"] = group["mid"].rolling(60).mean()
+
+        if use_atr:
+            tr = group["mid"].diff().abs()
+            group["atr_14"] = tr.rolling(14).mean()
+            group["atr_stop_long"] = group["mid"] - group["atr_14"] * 3
+            group["atr_stop_short"] = group["mid"] + group["atr_14"] * 3
+
+        if use_donchian:
+            period = cfg.get("donchian_period", 20)
+            group["donchian_high"] = group["mid"].rolling(period).max()
+            group["donchian_low"] = group["mid"].rolling(period).min()
+            dc_up = group["mid"] > group["donchian_high"].shift(1)
+            dc_down = group["mid"] < group["donchian_low"].shift(1)
+            group["donchian_break"] = 0
+            group.loc[dc_up, "donchian_break"] = 1
+            group.loc[dc_down, "donchian_break"] = -1
 
         # Bollinger bands (20 period) and breakout signal
         group["ma_h4"] = group["mid"].rolling(240).mean()
