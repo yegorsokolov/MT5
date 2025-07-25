@@ -16,6 +16,21 @@ spec:
         - name: bot
           image: ghcr.io/youruser/mt5-bot:latest
           args: ["bash", "scripts/run_bot.sh"]
+          env:
+            - name: CONFIG_FILE
+              value: "/opt/bot/config.yaml"
+            - name: SIGNAL_QUEUE_URL
+              value: "tcp://localhost:5555"
+          livenessProbe:
+            exec:
+              command: ["python3", "scripts/healthcheck.py"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+          readinessProbe:
+            exec:
+              command: ["python3", "scripts/healthcheck.py"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
           volumeMounts:
             - mountPath: /opt/mt5
               name: mt5-data
