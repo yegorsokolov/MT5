@@ -8,7 +8,11 @@ import numpy as np
 
 from utils import load_config
 from dataset import load_history, load_history_parquet, make_features
-from signal_queue import get_publisher, publish_dataframe
+import asyncio
+from signal_queue import (
+    get_async_publisher,
+    publish_dataframe_async,
+)
 
 from log_utils import setup_logging, log_exceptions
 logger = setup_logging()
@@ -130,9 +134,9 @@ def main():
     )
 
     out = pd.DataFrame({"Timestamp": df["Timestamp"], "prob": combined})
-    pub = get_publisher()
-    publish_dataframe(pub, out)
-    print("Signals published via ZeroMQ")
+    pub = get_async_publisher()
+    asyncio.run(publish_dataframe_async(pub, out))
+    print("Signals published via ZeroMQ (async)")
 
 
 if __name__ == "__main__":
