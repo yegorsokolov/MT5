@@ -10,11 +10,10 @@ from sb3_contrib.qrdqn import QRDQN
 
 from utils import load_config
 from dataset import (
-    load_history,
-    load_history_from_urls,
     load_history_parquet,
     save_history_parquet,
     make_features,
+    load_history_config,
 )
 from train_rl import TradingEnv, DiscreteTradingEnv
 from log_utils import setup_logging, log_exceptions
@@ -40,20 +39,7 @@ def load_dataset(cfg: dict, root: Path) -> pd.DataFrame:
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs: List[pd.DataFrame] = []
     for sym in symbols:
-        csv_path = root / "data" / f"{sym}_history.csv"
-        pq_path = root / "data" / f"{sym}_history.parquet"
-        if pq_path.exists():
-            df_sym = load_history_parquet(pq_path)
-        elif csv_path.exists():
-            df_sym = load_history(csv_path)
-        else:
-            urls = cfg.get("data_urls", {}).get(sym)
-            if not urls:
-                raise FileNotFoundError(
-                    f"No history found for {sym} and no URL configured"
-                )
-            df_sym = load_history_from_urls(urls)
-            save_history_parquet(df_sym, pq_path)
+        df_sym = load_history_config(sym, cfg, root)
         df_sym["Symbol"] = sym
         dfs.append(df_sym)
     return make_features(pd.concat(dfs, ignore_index=True))

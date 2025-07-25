@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 
 from utils import load_config
-from dataset import load_history, load_history_parquet, make_features
+from dataset import load_history_parquet, make_features, load_history_config
 from train_rl import TradingEnv, DiscreteTradingEnv
 from stable_baselines3 import PPO
 from sb3_contrib.qrdqn import QRDQN
@@ -19,6 +19,7 @@ from signal_queue import (
 )
 
 from log_utils import setup_logging, log_exceptions
+
 logger = setup_logging()
 
 
@@ -90,12 +91,14 @@ def main():
     models = load_models(model_paths)
     if not models:
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
-    hist_path_csv = Path(__file__).resolve().parent / "data" / "history.csv"
     hist_path_pq = Path(__file__).resolve().parent / "data" / "history.parquet"
     if hist_path_pq.exists():
         df = load_history_parquet(hist_path_pq)
     else:
-        df = load_history(hist_path_csv)
+        cfg_root = Path(__file__).resolve().parent
+        sym = cfg.get("symbol")
+        df = load_history_config(sym, cfg, cfg_root)
+        df.to_parquet(hist_path_pq, index=False)
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     df = make_features(df)
 
