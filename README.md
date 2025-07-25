@@ -161,6 +161,8 @@ Both EAs subscribe to a ZeroMQ topic to receive probability signals from the
 Python models. This decouples the EA from the file system so predictions arrive
 in realtime without relying on `signals.csv` on disk. If the EA misses a
 timestamp it simply uses the next received message.
+The queue implementation now uses asynchronous sockets which further reduces
+latency and eliminates file polling entirely.
 
 `generate_signals.py` merges ML probabilities with a moving average
 crossover and RSI filter so trades are only taken when multiple conditions
@@ -250,6 +252,18 @@ Liveness and readiness probes now call `scripts/healthcheck.py` so Kubernetes ca
 restart unhealthy pods. Configuration values such as the path to `config.yaml`
 or the ZeroMQ address can be overridden via environment variables defined in the
 deployment manifest.
+
+## Remote Management API
+
+A small FastAPI application defined in `remote_api.py` exposes REST endpoints for
+starting and stopping multiple bots. Launch the server with:
+
+```bash
+uvicorn remote_api:app --host 0.0.0.0 --port 8000
+```
+
+Use `GET /bots` to list running instances and `POST /bots/<id>/start` or
+`POST /bots/<id>/stop` to control them remotely.
 
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.
