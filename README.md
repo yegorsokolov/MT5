@@ -36,7 +36,9 @@ The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
  order-book statistics (spread and volume imbalance) and microstructure cues
  like depth imbalance, trade rate and quote revisions. Optional ATR and Donchian
- channel calculations can be toggled via `use_atr` and `use_donchian` in `config.yaml`.
+ channel calculations are provided via the `atr` and `donchian` plugins. These
+ plugins can be enabled or disabled with the `use_atr` and `use_donchian`
+ flags in `config.yaml`.
 The dataset also merges
  high impact events from several economic calendars (ForexFactory, the built-in
  MetaTrader calendar via Tradays and the MQL5 feed) so the bot can avoid trading
@@ -216,6 +218,8 @@ Feature engineering functions, models and risk checks can now be extended via
 plugins under the `plugins/` package. Register new components with the helper
 decorators exposed in `plugins.__init__` and they will automatically be applied
 when `dataset.make_features` or training scripts run.
+Built-in examples include the `atr` and `donchian` plugins which add ATR based
+stops and Donchian channel signals.
 
 ## Strategy Templates
 
