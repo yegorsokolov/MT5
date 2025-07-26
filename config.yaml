@@ -60,3 +60,8 @@ use_atr: true
 # enable or disable the Donchian channel plugin
 use_donchian: true
 blend_with_rl: false
+# risk check settings
+use_spread_check: true
+max_spread: 0.0005
+use_slippage_check: true
+max_slippage: 0.0005

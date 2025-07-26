@@ -37,8 +37,11 @@ lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a 
  order-book statistics (spread and volume imbalance) and microstructure cues
  like depth imbalance, trade rate and quote revisions. Optional ATR and Donchian
  channel calculations are provided via the `atr` and `donchian` plugins. These
- plugins can be enabled or disabled with the `use_atr` and `use_donchian`
- flags in `config.yaml`.
+plugins can be enabled or disabled with the `use_atr` and `use_donchian`
+flags in `config.yaml`.
+Spread and slippage protections are provided via the `spread` and `slippage`
+plugins. Enable them with the `use_spread_check` and `use_slippage_check`
+flags and configure thresholds through `max_spread` and `max_slippage`.
 The dataset also merges
  high impact events from several economic calendars (ForexFactory, the built-in
  MetaTrader calendar via Tradays and the MQL5 feed) so the bot can avoid trading
@@ -222,6 +225,8 @@ decorators exposed in `plugins.__init__` and they will automatically be applied
 when `dataset.make_features` or training scripts run.
 Built-in examples include the `atr` and `donchian` plugins which add ATR based
 stops and Donchian channel signals.
+Risk checks for spread limits and slippage detection are provided by the
+`spread` and `slippage` modules.
 
 ## Strategy Templates
 

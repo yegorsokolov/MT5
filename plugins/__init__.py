@@ -20,3 +20,5 @@ def register_risk_check(func):
 # Import built-in plugins so registration side effects occur
 from . import atr  # noqa: F401
 from . import donchian  # noqa: F401
+from . import spread  # noqa: F401
+from . import slippage  # noqa: F401
