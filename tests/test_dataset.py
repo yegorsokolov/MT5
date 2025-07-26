@@ -120,3 +120,43 @@ def test_make_sequence_arrays():
     X, y = dataset.make_sequence_arrays(df, ["f1"], seq_len=2)
     assert X.shape == (3, 2, 1)
     assert y.tolist() == [1, 0, 1]
+
+
+def test_keltner_and_regime_plugins(monkeypatch):
+    monkeypatch.setattr(dataset, "get_events", lambda past_events=False: [])
+    monkeypatch.setattr(dataset, "add_news_sentiment_features", lambda df: df.assign(news_sentiment=0.0))
+    monkeypatch.setattr(
+        dataset,
+        "add_index_features",
+        lambda df: df.assign(
+            sp500_ret=0.0,
+            sp500_vol=0.0,
+            vix_ret=0.0,
+            vix_vol=0.0,
+        ),
+    )
+    import utils
+    monkeypatch.setattr(
+        utils,
+        "load_config",
+        lambda: {"use_keltner": True, "use_regime_classifier": True},
+    )
+    import plugins.keltner as keltner
+    import plugins.regime_plugin as regime_plugin
+    monkeypatch.setattr(keltner, "load_config", lambda: {"use_keltner": True})
+    monkeypatch.setattr(
+        regime_plugin,
+        "load_config",
+        lambda: {"use_regime_classifier": True, "regime_states": 3},
+    )
+
+    n = 100
+    df = pd.DataFrame({
+        "Timestamp": pd.date_range("2020-01-01", periods=n, freq="min"),
+        "Bid": np.linspace(1, 2, n),
+        "Ask": np.linspace(1.0001, 2.0001, n),
+    })
+
+    result = dataset.make_features(df)
+    assert {"keltner_high", "keltner_low", "keltner_break"}.issubset(result.columns)
+    assert "regime_hmm" in result.columns
