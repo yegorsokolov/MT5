@@ -59,6 +59,10 @@ use_sharpe_sizing: true
 use_atr: true
 # enable or disable the Donchian channel plugin
 use_donchian: true
+# enable or disable the Keltner channel plugin
+use_keltner: false
+# enable or disable the HMM regime classifier plugin
+use_regime_classifier: false
 blend_with_rl: false
 # risk check settings
 use_spread_check: true

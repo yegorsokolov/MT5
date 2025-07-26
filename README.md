@@ -35,10 +35,19 @@ Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
  order-book statistics (spread and volume imbalance) and microstructure cues
- like depth imbalance, trade rate and quote revisions. Optional ATR and Donchian
- channel calculations are provided via the `atr` and `donchian` plugins. These
-plugins can be enabled or disabled with the `use_atr` and `use_donchian`
-flags in `config.yaml`.
+ like depth imbalance, trade rate and quote revisions. Optional ATR, Donchian
+ and Keltner channel calculations are provided via the `atr`, `donchian` and
+`keltner` plugins. These plugins can be toggled with the `use_atr`,
+`use_donchian` and `use_keltner` flags in `config.yaml`.
+To enable the hidden Markov model based regime classifier set
+`use_regime_classifier: true`.
+
+```yaml
+use_atr: true
+use_donchian: true
+use_keltner: true
+use_regime_classifier: true
+```
 Spread and slippage protections are provided via the `spread` and `slippage`
 plugins. Enable them with the `use_spread_check` and `use_slippage_check`
 flags and configure thresholds through `max_spread` and `max_slippage`.
@@ -223,8 +232,9 @@ Feature engineering functions, models and risk checks can now be extended via
 plugins under the `plugins/` package. Register new components with the helper
 decorators exposed in `plugins.__init__` and they will automatically be applied
 when `dataset.make_features` or training scripts run.
-Built-in examples include the `atr` and `donchian` plugins which add ATR based
-stops and Donchian channel signals.
+Built-in examples include the `atr`, `donchian` and `keltner` plugins which add
+ATR, Donchian and Keltner channel signals. A regime classification plugin can
+also be enabled to label each row using a hidden Markov model.
 Risk checks for spread limits and slippage detection are provided by the
 `spread` and `slippage` modules.
 
