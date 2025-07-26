@@ -65,3 +65,31 @@ async def update_configuration(change: ConfigUpdate, _: None = Depends(authorize
     """Update a configuration variable."""
     update_config(change.key, change.value, change.reason)
     return {"status": "updated", change.key: change.value}
+
+
+@app.get("/health")
+async def health(lines: int = 20, _: None = Depends(authorize)):
+    """Return service status and recent log lines."""
+    logs = ""
+    if LOG_FILE.exists():
+        with open(LOG_FILE, "r") as f:
+            logs = "".join(f.readlines()[-lines:])
+    return {
+        "running": True,
+        "bots": {bid: proc.poll() is None for bid, proc in bots.items()},
+        "logs": logs,
+    }
+
+
+@app.get("/bots/{bot_id}/status")
+async def bot_status(bot_id: str, lines: int = 20, _: None = Depends(authorize)):
+    """Return bot state and recent log lines."""
+    proc = bots.get(bot_id)
+    if not proc:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    running = proc.poll() is None
+    logs = ""
+    if LOG_FILE.exists():
+        with open(LOG_FILE, "r") as f:
+            logs = "".join(f.readlines()[-lines:])
+    return {"bot": bot_id, "running": running, "logs": logs}
