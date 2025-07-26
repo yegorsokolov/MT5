@@ -25,6 +25,14 @@ async def authorize(key: str = Security(api_key_header)) -> None:
 
 bots: Dict[str, Popen] = {}
 
+
+def _log_tail(lines: int) -> str:
+    """Return the last `lines` from the shared log file."""
+    if not LOG_FILE.exists():
+        return ""
+    with open(LOG_FILE, "r") as f:
+        return "".join(f.readlines()[-lines:])
+
 @app.get("/bots")
 async def list_bots(_: None = Depends(authorize)):
     """Return running bot IDs and their status."""
@@ -70,14 +78,17 @@ async def update_configuration(change: ConfigUpdate, _: None = Depends(authorize
 @app.get("/health")
 async def health(lines: int = 20, _: None = Depends(authorize)):
     """Return service status and recent log lines."""
-    logs = ""
-    if LOG_FILE.exists():
-        with open(LOG_FILE, "r") as f:
-            logs = "".join(f.readlines()[-lines:])
     return {
         "running": True,
-        "bots": {bid: proc.poll() is None for bid, proc in bots.items()},
-        "logs": logs,
+        "bots": {
+            bid: {
+                "running": proc.poll() is None,
+                "pid": proc.pid,
+                "returncode": proc.returncode,
+            }
+            for bid, proc in bots.items()
+        },
+        "logs": _log_tail(lines),
     }
 
 
@@ -87,9 +98,10 @@ async def bot_status(bot_id: str, lines: int = 20, _: None = Depends(authorize))
     proc = bots.get(bot_id)
     if not proc:
         raise HTTPException(status_code=404, detail="Bot not found")
-    running = proc.poll() is None
-    logs = ""
-    if LOG_FILE.exists():
-        with open(LOG_FILE, "r") as f:
-            logs = "".join(f.readlines()[-lines:])
-    return {"bot": bot_id, "running": running, "logs": logs}
+    return {
+        "bot": bot_id,
+        "running": proc.poll() is None,
+        "pid": proc.pid,
+        "returncode": proc.returncode,
+        "logs": _log_tail(lines),
+    }
