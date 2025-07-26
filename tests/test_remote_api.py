@@ -19,6 +19,8 @@ def load_api(tmp_log):
 class DummyProc:
     def __init__(self):
         self.terminated = False
+        self.pid = 123
+        self.returncode = None
     def poll(self):
         return None if not self.terminated else 0
     def terminate(self):
@@ -40,12 +42,15 @@ def test_health_auth(tmp_path):
     data = resp.json()
     assert data["running"] is True
     assert "line2" in data["logs"]
+    assert isinstance(data["bots"], dict)
 
 def test_bot_status(tmp_path):
     api, client = setup_client(tmp_path)
     api.bots["bot1"] = DummyProc()
     resp = client.get("/bots/bot1/status", headers={"x-api-key": "token"})
     assert resp.status_code == 200
-    assert resp.json()["running"] is True
+    data = resp.json()
+    assert data["running"] is True
+    assert "pid" in data and "returncode" in data
     resp = client.get("/bots/none/status", headers={"x-api-key": "token"})
     assert resp.status_code == 404
