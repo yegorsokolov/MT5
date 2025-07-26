@@ -297,9 +297,10 @@ uvicorn remote_api:app --host 0.0.0.0 --port 8000
 
 Set `API_KEY` before launching and include the header `X-API-Key` in each
 request. Use `GET /bots` to list running instances, `POST /bots/<id>/start`
-and `POST /bots/<id>/stop` to control them. `GET /logs` returns the last few
-lines from `logs/app.log` while `POST /config` accepts JSON fields
-`key`, `value` and `reason` to update `config.yaml`.
+and `POST /bots/<id>/stop` to control them. `GET /bots/<id>/status` checks a
+single bot while `GET /logs` returns the last few lines from `logs/app.log`.
+`GET /health` exposes overall service status and recent logs. `POST /config`
+accepts JSON fields `key`, `value` and `reason` to update `config.yaml`.
 
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.
