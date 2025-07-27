@@ -1,7 +1,16 @@
-from fastapi import FastAPI, HTTPException, Depends, Security
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Depends,
+    Security,
+    WebSocket,
+    WebSocketDisconnect,
+    Query,
+)
 from fastapi.security.api_key import APIKeyHeader
 from subprocess import Popen
-from typing import Dict, Any
+from typing import Dict, Any, Set
+import asyncio
 from pydantic import BaseModel
 import os
 from utils import update_config
@@ -24,6 +33,18 @@ async def authorize(key: str = Security(api_key_header)) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 bots: Dict[str, Popen] = {}
+metrics_clients: Set[WebSocket] = set()
+
+async def broadcast_update(data: Dict[str, Any]) -> None:
+    """Send ``data`` to all connected WebSocket clients."""
+    dead: Set[WebSocket] = set()
+    for ws in metrics_clients:
+        try:
+            await ws.send_json(data)
+        except Exception:
+            dead.add(ws)
+    for ws in dead:
+        metrics_clients.discard(ws)
 
 
 def _log_tail(lines: int) -> str:
@@ -56,6 +77,30 @@ async def stop_bot(bot_id: str, _: None = Depends(authorize)):
     proc.terminate()
     bots.pop(bot_id)
     return {"bot": bot_id, "status": "stopped"}
+
+
+@app.post("/metrics")
+async def push_metrics(data: Dict[str, Any], _: None = Depends(authorize)):
+    """Receive metrics data and broadcast to clients."""
+    await broadcast_update(data)
+    return {"status": "ok"}
+
+
+@app.websocket("/ws/metrics")
+async def metrics_ws(websocket: WebSocket, api_key: str = Query("")):
+    """WebSocket endpoint for streaming metrics."""
+    if API_KEY and api_key != API_KEY:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    metrics_clients.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        metrics_clients.discard(websocket)
 
 
 @app.get("/logs")
