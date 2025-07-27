@@ -9,7 +9,12 @@ from sklearn.pipeline import Pipeline
 from lightgbm import LGBMClassifier
 import mlflow
 
-from log_utils import setup_logging, log_exceptions
+from log_utils import setup_logging, log_exceptions, LOG_DIR
+import numpy as np
+try:
+    import shap
+except Exception:  # noqa: E722
+    shap = None
 
 from utils import load_config
 from dataset import (
@@ -95,6 +100,29 @@ def main():
         mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
         mlflow.log_metric("f1_weighted", report["weighted avg"]["f1-score"])
         mlflow.log_artifact(str(root / "model.joblib"))
+
+        if shap is not None:
+            try:
+                X_used = X_train
+                if "scaler" in pipe.named_steps:
+                    X_used = pipe.named_steps["scaler"].transform(X_used)
+                explainer = shap.TreeExplainer(pipe.named_steps["clf"])
+                shap_values = explainer.shap_values(X_used)
+                if isinstance(shap_values, list):
+                    shap_values = shap_values[1]
+                imp = np.abs(shap_values).mean(axis=0)
+                fi = pd.DataFrame({"feature": features, "importance": imp})
+                fi.sort_values("importance", ascending=False).to_csv(
+                    LOG_DIR / "feature_importance.csv", index=False
+                )
+                logger.info(
+                    "Logged feature importance to %s",
+                    LOG_DIR / "feature_importance.csv",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to compute SHAP values: %s", e)
+        else:
+            logger.info("shap not installed, skipping feature importance")
 
 
 if __name__ == "__main__":
