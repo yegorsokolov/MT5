@@ -156,6 +156,7 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    1. Open **Command Prompt** and `cd` into the cloned folder.
    2. Run `pip install -r requirements.txt`.
    3. To use the optional Qlib factors install `pyqlib` via `pip install pyqlib[all]`.
+   4. For SHAP-based feature importance install `shap` with `pip install shap`.
 6. **Initial training** –
    1. Still inside the command prompt run `python train.py`.
       The script downloads the backtesting files `XAUUSD.csv` and `GBPUSD.csv`
