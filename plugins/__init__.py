@@ -24,3 +24,4 @@ from . import keltner  # noqa: F401
 from . import spread  # noqa: F401
 from . import slippage  # noqa: F401
 from . import regime_plugin  # noqa: F401
+from . import finbert_sentiment  # noqa: F401
