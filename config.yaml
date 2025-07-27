@@ -69,6 +69,11 @@ use_fingpt_sentiment: false
 use_keltner: false
 # enable Qlib technical factors
 use_qlib_features: false
+# pair trading settings
+use_pair_trading: false
+pair_z_window: 20
+pair_long_threshold: -2.0
+pair_short_threshold: 2.0
 # enable or disable the HMM regime classifier plugin
 use_regime_classifier: false
 blend_with_rl: false
@@ -80,3 +85,4 @@ max_slippage: 0.0005
 # anomaly detection settings
 use_anomaly_check: false
 anomaly_threshold: 0.5
+
