@@ -27,6 +27,7 @@ for _mod in [
     'regime_plugin',
     'finbert_sentiment',
     'fingpt_sentiment',
+    'anomaly',
     'qlib_features',
 ]:
     try:
