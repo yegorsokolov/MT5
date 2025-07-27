@@ -261,7 +261,11 @@ def main():
         0.0,
     )
 
-    out = pd.DataFrame({"Timestamp": df["Timestamp"], "prob": combined})
+    out = pd.DataFrame({
+        "Timestamp": df["Timestamp"],
+        "Symbol": cfg.get("symbol"),
+        "prob": combined,
+    })
     pub = get_async_publisher()
     asyncio.run(publish_dataframe_async(pub, out))
     print("Signals published via ZeroMQ (async)")
