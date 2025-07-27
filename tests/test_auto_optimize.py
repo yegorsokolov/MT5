@@ -72,11 +72,29 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr(auto_optimize, "run_rolling_backtest", fake_cv)
 
-    def fake_minimize(func, space, n_calls, random_state):
-        assert len(space) == 7
-        func([0.6, 15, 60, 1.5, 0.15, 0.0002, 6])
+    class DummyTrial:
+        params = {
+            "threshold": 0.6,
+            "trailing_stop_pips": 15,
+            "rsi_buy": 60,
+            "rl_max_position": 1.5,
+            "rl_risk_penalty": 0.15,
+            "rl_transaction_cost": 0.0002,
+            "backtest_window_months": 6,
+        }
 
-    monkeypatch.setattr(auto_optimize, "gp_minimize", fake_minimize)
+        def suggest_float(self, name, low, high):
+            return self.params[name]
+
+        def suggest_int(self, name, low, high):
+            return self.params[name]
+
+    class DummyStudy:
+        def optimize(self, func, n_trials, **kwargs):
+            for _ in range(n_trials):
+                func(DummyTrial())
+
+    monkeypatch.setattr(auto_optimize.optuna, "create_study", lambda **_: DummyStudy())
 
     class DummyRun:
         def __enter__(self):
