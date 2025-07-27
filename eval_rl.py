@@ -5,7 +5,7 @@ from typing import List
 
 import numpy as np
 import pandas as pd
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
 from sb3_contrib.qrdqn import QRDQN
 
 from utils import load_config
@@ -88,6 +88,16 @@ def main() -> None:
             var_window=cfg.get("rl_var_window", 30),
         )
         model_cls = PPO
+    elif algo == "SAC":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model_cls = SAC
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,

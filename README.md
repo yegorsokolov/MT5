@@ -85,7 +85,16 @@ excess risk.  Key parameters such as `rl_max_position`, `rl_transaction_cost`,
 `rl_algorithm: RLlib` together with `rllib_algorithm: PPO` or `DDPG` to train
 using RLlib instead of Stable-Baselines.  The resulting checkpoint is stored
 under `model_rllib/` and is automatically used by `generate_signals.py` when
-`rl_algorithm` is set to `RLlib`.
+`rl_algorithm` is set to `RLlib`.  Alternatively set `rl_algorithm: SAC` to
+train a Soft Actor-Critic agent with Stable-Baselines3:
+
+```yaml
+rl_algorithm: SAC
+rl_max_position: 1.0
+rl_transaction_cost: 0.0001
+rl_risk_penalty: 0.1
+rl_var_window: 30
+```
 For a full pipeline combining all of these approaches run `train_combined.py`.
 
 ## Installation
