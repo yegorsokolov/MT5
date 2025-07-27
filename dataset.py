@@ -661,6 +661,13 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             pass
 
+    thresh = cfg.get("anomaly_threshold")
+    if "anomaly_score" in df.columns:
+        if thresh is not None:
+            df["skip_trade"] = df["anomaly_score"] > thresh
+        else:
+            df["skip_trade"] = False
+
     try:
         from regime import label_regimes
 
