@@ -157,41 +157,45 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Run `pip install -r requirements.txt`.
    3. To use the optional Qlib factors install `pyqlib` via `pip install pyqlib[all]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
-6. **Initial training** –
+6. **Build Protobuf classes** –
+   1. Make sure the `protoc` compiler is installed and on your `PATH`.
+   2. Run `protoc --python_out=. proto/signals.proto` from the repository root.
+      This generates `proto/signals_pb2.py` which is imported by `signal_queue.py`.
+7. **Initial training** –
    1. Still inside the command prompt run `python train.py`.
       The script downloads the backtesting files `XAUUSD.csv` and `GBPUSD.csv`
       from Google Drive and trains a LightGBM model.
    2. To experiment with the transformer-based neural network instead run `python train_nn.py`.
       This trains a small transformer on sequences of the same features and saves `model_transformer.pt`.
    3. After either script finishes you will see the resulting model file under the project folder.
-7. **Copy the EA** –
+8. **Copy the EA** –
    1. Open MetaTrader 5 and click **File → Open Data Folder**.
    2. Run `python scripts/setup_terminal.py "<path-to-terminal>"` to automatically place `AdaptiveEA.mq5` and `RealtimeEA.mq5` inside `MQL5/Experts`.
    3. Restart MetaTrader 5 and compile the EA inside the MetaEditor by pressing **F7**.
-8. **Attach the EA** –
+9. **Attach the EA** –
    1. In MetaTrader 5 open the **Navigator** panel (Ctrl+N).
    2. Drag the EA onto a chart of either XAUUSD or GBPUSD and click **OK**.
-9. **Publish signals** –
+10. **Publish signals** –
    1. In the command prompt run `python generate_signals.py`.
       This publishes prediction messages to `tcp://localhost:5555` which the EA subscribes to.
    2. Set the environment variable `SIGNAL_QUEUE_BIND` or `SIGNAL_QUEUE_URL` to change the port if needed.
-10. **Run realtime training** –
+11. **Run realtime training** –
    1. Back in the command prompt run `python realtime_train.py`.
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
-11. **Optimise parameters** –
+12. **Optimise parameters** –
    1. Periodically run `python auto_optimize.py`.
       The optimiser performs a Bayesian search across thresholds, walk‑forward
       window sizes and reinforcement‑learning parameters. Results are
       cross‑validated over multiple market regimes and both the metrics and
       chosen hyperparameters are tracked with MLflow. Any improvements are
       written back to `config.yaml` and logged under `logs/config_changes.csv`.
-12. **Upload logs** –
+13. **Upload logs** –
    1. Start `python scripts/hourly_log_push.py` in a separate window. This
       script commits and pushes the `logs/` folder every hour so log history is
       archived automatically. Use Windows Task Scheduler to launch it at logon
       for unattended operation.
 
-13. **Keep it running** –
+14. **Keep it running** –
    1. Create scheduled tasks that start both `python realtime_train.py` and the
       hourly log uploader whenever the VPS boots or a user logs in. With these
       tasks enabled the bot and log push service run indefinitely.
