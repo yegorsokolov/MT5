@@ -1,0 +1,8 @@
+syntax = "proto3";
+package signals;
+
+message Signal {
+  string timestamp = 1;
+  string symbol = 2;
+  string probability = 3;
+}
