@@ -21,11 +21,12 @@ _LOG_PATH.parent.mkdir(exist_ok=True)
 
 
 def objective(params: List[float], base_cfg: dict, results: List[dict]):
-    th, stop, rsi, risk_pen, tx_cost, window = params
+    th, stop, rsi, max_pos, risk_pen, tx_cost, window = params
     test_cfg = copy.deepcopy(base_cfg)
     test_cfg["threshold"] = th
     test_cfg["trailing_stop_pips"] = int(stop)
     test_cfg["rsi_buy"] = int(rsi)
+    test_cfg["rl_max_position"] = float(max_pos)
     test_cfg["rl_risk_penalty"] = float(risk_pen)
     test_cfg["rl_transaction_cost"] = float(tx_cost)
     test_cfg["backtest_window_months"] = int(window)
@@ -35,9 +36,10 @@ def objective(params: List[float], base_cfg: dict, results: List[dict]):
         "threshold": th,
         "trailing_stop_pips": int(stop),
         "rsi_buy": int(rsi),
+        "rl_max_position": max_pos,
         "rl_risk_penalty": risk_pen,
         "rl_transaction_cost": tx_cost,
-        "window": int(window),
+        "backtest_window_months": int(window),
         "avg_sharpe": metrics.get("avg_sharpe", float("nan")),
     })
     return -metrics.get("avg_sharpe", -1e9)
@@ -57,6 +59,7 @@ def main():
         Real(0.5, 0.7, name="threshold"),
         Integer(10, 30, name="trailing_stop_pips"),
         Integer(50, 70, name="rsi_buy"),
+        Real(0.5, 2.0, name="rl_max_position"),
         Real(0.05, 0.2, name="rl_risk_penalty"),
         Real(5e-5, 3e-4, name="rl_transaction_cost"),
         Integer(3, 12, name="backtest_window_months"),
@@ -80,6 +83,7 @@ def main():
         best_cfg["threshold"] = float(best_params["threshold"])
         best_cfg["trailing_stop_pips"] = int(best_params["trailing_stop_pips"])
         best_cfg["rsi_buy"] = int(best_params["rsi_buy"])
+        best_cfg["rl_max_position"] = float(best_params["rl_max_position"])
         best_cfg["rl_risk_penalty"] = float(best_params["rl_risk_penalty"])
         best_cfg["rl_transaction_cost"] = float(best_params["rl_transaction_cost"])
         best_cfg["backtest_window_months"] = int(best_params["backtest_window_months"])
@@ -106,6 +110,11 @@ def main():
                 update_config("rsi_buy", best_cfg["rsi_buy"], reason)
             if best_cfg["rl_risk_penalty"] != cfg.get("rl_risk_penalty"):
                 update_config("rl_risk_penalty", best_cfg["rl_risk_penalty"], reason)
+            if best_cfg["rl_max_position"] != cfg.get("rl_max_position"):
+                try:
+                    update_config("rl_max_position", best_cfg["rl_max_position"], reason)
+                except ValueError:
+                    logger.warning("rl_max_position modification blocked by risk rules")
             if best_cfg["rl_transaction_cost"] != cfg.get("rl_transaction_cost"):
                 update_config("rl_transaction_cost", best_cfg["rl_transaction_cost"], reason)
             if best_cfg["backtest_window_months"] != cfg.get("backtest_window_months"):
@@ -116,6 +125,7 @@ def main():
                 "threshold": best_cfg["threshold"],
                 "trailing_stop_pips": best_cfg["trailing_stop_pips"],
                 "rsi_buy": best_cfg["rsi_buy"],
+                "rl_max_position": best_cfg["rl_max_position"],
                 "rl_risk_penalty": best_cfg["rl_risk_penalty"],
                 "rl_transaction_cost": best_cfg["rl_transaction_cost"],
                 "backtest_window_months": best_cfg["backtest_window_months"],
