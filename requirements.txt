@@ -6,6 +6,7 @@ pyyaml
 GitPython
 gdown
 duckdb
+dask[distributed]
 lightgbm
 torch
 tqdm
