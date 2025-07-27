@@ -63,6 +63,8 @@ use_donchian: true
 use_finbert_sentiment: false
 # enable or disable the Keltner channel plugin
 use_keltner: false
+# enable Qlib technical factors
+use_qlib_features: false
 # enable or disable the HMM regime classifier plugin
 use_regime_classifier: false
 blend_with_rl: false
