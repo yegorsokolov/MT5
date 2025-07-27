@@ -59,6 +59,8 @@ use_sharpe_sizing: true
 use_atr: true
 # enable or disable the Donchian channel plugin
 use_donchian: true
+# enable FinBERT sentiment scoring
+use_finbert_sentiment: false
 # enable or disable the Keltner channel plugin
 use_keltner: false
 # enable or disable the HMM regime classifier plugin

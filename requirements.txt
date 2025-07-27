@@ -20,3 +20,4 @@ pyzmq
 fastapi
 uvicorn
 mlflow
+transformers
