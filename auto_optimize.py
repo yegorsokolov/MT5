@@ -1,11 +1,10 @@
 import copy
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 import pandas as pd
 from scipy.stats import ttest_ind
-from skopt import gp_minimize
-from skopt.space import Real, Integer
+import optuna
 import mlflow
 
 from train import main as train_model
@@ -16,33 +15,8 @@ from log_utils import setup_logging, log_exceptions
 logger = setup_logging()
 
 
-_LOG_PATH = Path(__file__).resolve().parent / "logs" / "hyperopt_history.csv"
+_LOG_PATH = Path(__file__).resolve().parent / "logs" / "optuna_history.csv"
 _LOG_PATH.parent.mkdir(exist_ok=True)
-
-
-def objective(params: List[float], base_cfg: dict, results: List[dict]):
-    th, stop, rsi, max_pos, risk_pen, tx_cost, window = params
-    test_cfg = copy.deepcopy(base_cfg)
-    test_cfg["threshold"] = th
-    test_cfg["trailing_stop_pips"] = int(stop)
-    test_cfg["rsi_buy"] = int(rsi)
-    test_cfg["rl_max_position"] = float(max_pos)
-    test_cfg["rl_risk_penalty"] = float(risk_pen)
-    test_cfg["rl_transaction_cost"] = float(tx_cost)
-    test_cfg["backtest_window_months"] = int(window)
-
-    metrics = run_rolling_backtest(test_cfg)
-    results.append({
-        "threshold": th,
-        "trailing_stop_pips": int(stop),
-        "rsi_buy": int(rsi),
-        "rl_max_position": max_pos,
-        "rl_risk_penalty": risk_pen,
-        "rl_transaction_cost": tx_cost,
-        "backtest_window_months": int(window),
-        "avg_sharpe": metrics.get("avg_sharpe", float("nan")),
-    })
-    return -metrics.get("avg_sharpe", -1e9)
 
 
 @log_exceptions
@@ -55,21 +29,56 @@ def main():
         base_metrics, base_returns = run_backtest(cfg, return_returns=True)
         base_cv = run_rolling_backtest(cfg)
 
-        space = [
-        Real(0.5, 0.7, name="threshold"),
-        Integer(10, 30, name="trailing_stop_pips"),
-        Integer(50, 70, name="rsi_buy"),
-        Real(0.5, 2.0, name="rl_max_position"),
-        Real(0.05, 0.2, name="rl_risk_penalty"),
-        Real(5e-5, 3e-4, name="rl_transaction_cost"),
-        Integer(3, 12, name="backtest_window_months"),
-    ]
+        results: List[Dict[str, float]] = []
 
-        results: List[dict] = []
-        def obj(params):
-            return objective(params, cfg, results)
+        def sample_params(trial: optuna.trial.Trial) -> Dict[str, float]:
+            return {
+                "threshold": trial.suggest_float("threshold", 0.5, 0.7),
+                "trailing_stop_pips": trial.suggest_int("trailing_stop_pips", 10, 30),
+                "rsi_buy": trial.suggest_int("rsi_buy", 50, 70),
+                "rl_max_position": trial.suggest_float("rl_max_position", 0.5, 2.0),
+                "rl_risk_penalty": trial.suggest_float("rl_risk_penalty", 0.05, 0.2),
+                "rl_transaction_cost": trial.suggest_float(
+                    "rl_transaction_cost", 5e-5, 3e-4
+                ),
+                "backtest_window_months": trial.suggest_int(
+                    "backtest_window_months", 3, 12
+                ),
+            }
 
-        gp_minimize(obj, space, n_calls=15, random_state=0)
+        def objective(trial: optuna.trial.Trial) -> float:
+            params = sample_params(trial)
+            test_cfg = copy.deepcopy(cfg)
+            test_cfg.update(params)
+            metrics = run_rolling_backtest(test_cfg)
+            val = metrics.get("avg_sharpe", float("nan"))
+            results.append({**params, "avg_sharpe": val})
+            return val
+
+        study = optuna.create_study(direction="maximize")
+
+        use_ray = False
+        try:
+            import ray  # type: ignore
+
+            if cfg.get("ray_num_cpus", 1) > 1:
+                ray.init(num_cpus=cfg.get("ray_num_cpus"))
+                use_ray = True
+        except Exception:
+            ray = None  # type: ignore
+
+        if use_ray:
+            remote_obj = ray.remote(objective)
+            tasks = []
+            for _ in range(15):
+                trial = study.ask()
+                tasks.append((trial, remote_obj.remote(trial)))
+            for trial, task in tasks:
+                val = ray.get(task)
+                study.tell(trial, val)
+            ray.shutdown()
+        else:
+            study.optimize(objective, n_trials=15)
 
         df = pd.DataFrame(results)
         if not _LOG_PATH.exists():
