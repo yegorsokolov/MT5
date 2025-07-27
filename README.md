@@ -71,7 +71,11 @@ optimises risk-adjusted profit.  The PPO environment now supports trading
 multiple symbols at once using a vector of position sizes.  Per-symbol returns
 and transaction costs are tracked while a portfolio variance penalty discourages
 excess risk.  Key parameters such as `rl_max_position`, `rl_transaction_cost`,
-`rl_risk_penalty` and `rl_var_window` can be adjusted in `config.yaml`.
+`rl_risk_penalty` and `rl_var_window` can be adjusted in `config.yaml`.  Set
+`rl_algorithm: RLlib` together with `rllib_algorithm: PPO` or `DDPG` to train
+using RLlib instead of Stable-Baselines.  The resulting checkpoint is stored
+under `model_rllib/` and is automatically used by `generate_signals.py` when
+`rl_algorithm` is set to `RLlib`.
 For a full pipeline combining all of these approaches run `train_combined.py`.
 
 ## Installation
