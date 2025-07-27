@@ -5,6 +5,7 @@ import zmq.asyncio
 from typing import AsyncGenerator
 
 import asyncio
+from proto import signals_pb2
 
 _CTX = zmq.Context.instance()
 _ASYNC_CTX = zmq.asyncio.Context.instance()
@@ -45,19 +46,31 @@ def get_async_subscriber(connect_address: str | None = None, topic: str = "") ->
 
 
 def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame) -> None:
-    """Publish rows of a dataframe as JSON messages."""
+    """Publish rows of a dataframe as Protobuf messages."""
     for _, row in df.iterrows():
-        sock.send_json(row.to_dict())
+        msg = signals_pb2.Signal(
+            timestamp=str(row["Timestamp"]),
+            symbol=str(row.get("Symbol", "")),
+            probability=str(row["prob"]),
+        )
+        sock.send(msg.SerializeToString())
 
 
 async def publish_dataframe_async(sock: zmq.asyncio.Socket, df: pd.DataFrame) -> None:
-    """Asynchronously publish rows of a dataframe as JSON messages."""
+    """Asynchronously publish rows of a dataframe as Protobuf messages."""
     for _, row in df.iterrows():
-        await sock.send_json(row.to_dict())
+        msg = signals_pb2.Signal(
+            timestamp=str(row["Timestamp"]),
+            symbol=str(row.get("Symbol", "")),
+            probability=str(row["prob"]),
+        )
+        await sock.send(msg.SerializeToString())
 
 
 async def iter_messages(sock: zmq.asyncio.Socket) -> AsyncGenerator[dict, None]:
-    """Yield messages from a subscriber socket as they arrive."""
+    """Yield decoded messages from a subscriber socket as they arrive."""
     while True:
-        msg = await sock.recv_json()
-        yield msg
+        raw = await sock.recv()
+        sig = signals_pb2.Signal()
+        sig.ParseFromString(raw)
+        yield {"Timestamp": sig.timestamp, "Symbol": sig.symbol, "prob": float(sig.probability)}

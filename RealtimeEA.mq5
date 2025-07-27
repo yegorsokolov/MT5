@@ -97,22 +97,42 @@ bool UpdateSignal()
    int len=zmq_recv(zmq_sock,buf,ArraySize(buf),ZMQ_DONTWAIT);
    if(len<=0)
       return(false);
-   string msg=CharArrayToString(buf,0,len);
-   int tp=StringFind(msg,"Timestamp");
-   int pp=StringFind(msg,"prob");
-   if(tp<0||pp<0)
-      return(false);
-   int s=StringFind(msg,"\"",tp+9);
-   int e=StringFind(msg,"\"",s+1);
-   if(s<0||e<0)
-      return(false);
-   string ts=StringSubstr(msg,s+1,e-s-1);
-   last_sig_time=StringToTime(ts);
-   string rest=StringSubstr(msg,pp+5);
-   int end=StringFind(rest,"}");
-   if(end>0)
-      rest=StringSubstr(rest,0,end);
-   last_prob=StrToDouble(rest);
+   int pos=0;
+   while(pos < len)
+   {
+      int key=buf[pos++];
+      int field=key>>3;
+      int wire=key & 7;
+      if(field==1 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do{ b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7;}while(b & 0x80);
+         string ts=CharArrayToString(buf,pos,l);
+         pos+=l;
+         last_sig_time=StringToTime(ts);
+      }
+      else if(field==3 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do{ b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7;}while(b & 0x80);
+         string pr=CharArrayToString(buf,pos,l);
+         pos+=l;
+         last_prob=StrToDouble(pr);
+      }
+      else if(wire==2)
+      {
+         int l=0,shift=0,b; do{ b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7;}while(b & 0x80);
+         pos+=l;
+      }
+      else if(wire==0)
+      {
+         while(buf[pos++] & 0x80 && pos<len){}
+      }
+      else if(wire==1)
+         pos+=8;
+      else if(wire==5)
+         pos+=4;
+   }
    return(true);
 }
 
