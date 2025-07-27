@@ -657,6 +657,33 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
                 lag_corr_df = lag_corr_df.reset_index()
                 df = df.merge(lag_corr_df, on="Timestamp", how="left")
 
+            if cfg.get("use_pair_trading", False):
+                from statsmodels.tsa.stattools import coint  # type: ignore
+                window = cfg.get("pair_z_window", 20)
+                pivot_mid = df.pivot_table(index="Timestamp", columns="Symbol", values="mid")
+                pair_feat = pd.DataFrame(index=pivot_mid.index)
+                for s1 in pivot_mid.columns:
+                    for s2 in pivot_mid.columns:
+                        if s1 >= s2:
+                            continue
+                        pair_name = f"{s1}_{s2}"
+                        aligned = pivot_mid[[s1, s2]].dropna()
+                        if len(aligned) < window + 5:
+                            continue
+                        beta, alpha = np.polyfit(aligned[s2], aligned[s1], 1)
+                        spread = pivot_mid[s1] - (beta * pivot_mid[s2] + alpha)
+                        z = (spread - spread.rolling(window).mean()) / spread.rolling(window).std()
+                        pair_feat[f"pair_z_{pair_name}"] = z
+                        try:
+                            _, pval, _ = coint(aligned[s1], aligned[s2])
+                        except Exception:
+                            pval = np.nan
+                        pair_feat[f"pair_coint_p_{pair_name}"] = pval
+
+                if not pair_feat.empty:
+                    pair_feat = pair_feat.reset_index()
+                    df = df.merge(pair_feat, on="Timestamp", how="left")
+
         pivot_filled = pivot.fillna(0)
         n_comp = min(3, len(pivot.columns))
         pca = PCA(n_components=n_comp)

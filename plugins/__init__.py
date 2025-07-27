@@ -29,6 +29,7 @@ for _mod in [
     'fingpt_sentiment',
     'anomaly',
     'qlib_features',
+    'pair_trading',
 ]:
     try:
         __import__(f'{__name__}.{_mod}')
