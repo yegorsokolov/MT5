@@ -5,6 +5,7 @@ import types
 import importlib
 import pytest
 from fastapi.testclient import TestClient
+import asyncio
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -54,3 +55,19 @@ def test_bot_status(tmp_path):
     assert "pid" in data and "returncode" in data
     resp = client.get("/bots/none/status", headers={"x-api-key": "token"})
     assert resp.status_code == 404
+
+
+def test_metrics_websocket(tmp_path):
+    api, client = setup_client(tmp_path)
+
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws/metrics") as ws:
+            ws.receive_text()
+
+    with client.websocket_connect("/ws/metrics?api_key=token") as ws:
+        asyncio.get_event_loop().run_until_complete(
+            api.broadcast_update({"equity": [1, 2, 3], "metrics": {"sharpe": 1.0}})
+        )
+        data = ws.receive_json()
+        assert data["equity"] == [1, 2, 3]
+        assert data["metrics"]["sharpe"] == 1.0

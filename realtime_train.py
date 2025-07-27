@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+import os
 from collections import deque
 import pandas as pd
 import joblib
@@ -210,6 +211,18 @@ def train_realtime():
 
         pipe.fit(X, y)
         joblib.dump(pipe, model_path)
+
+        returns = df["return"].dropna()
+        from backtest import compute_metrics
+        metrics = compute_metrics(returns)
+        equity = (1 + returns).cumprod().tolist()
+        try:
+            import requests
+            api_url = os.getenv("API_URL", "http://localhost:8000/metrics")
+            headers = {"x-api-key": os.getenv("API_KEY", "")}
+            requests.post(api_url, json={"equity_curve": equity, "metrics": metrics}, headers=headers, timeout=5)
+        except Exception as exc:
+            logger.error("Failed to broadcast metrics: %s", exc)
 
         # commit updates
         conn.execute("checkpoint")
