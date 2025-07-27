@@ -8,6 +8,11 @@ from gym import spaces
 from stable_baselines3 import PPO
 from sb3_contrib.qrdqn import QRDQN
 
+try:
+    import gymnasium as gymn
+except Exception:  # pragma: no cover - optional dependency
+    gymn = None
+
 from utils import load_config
 from dataset import (
     load_history_parquet,
@@ -149,6 +154,18 @@ class DiscreteTradingEnv(TradingEnv):
         return super().step(continuous)
 
 
+class RLLibTradingEnv(TradingEnv):
+    """Wrapper returning gymnasium-style tuples for RLlib."""
+
+    def reset(self, *, seed=None, options=None):  # type: ignore[override]
+        obs = super().reset()
+        return obs, {}
+
+    def step(self, action):  # type: ignore[override]
+        obs, reward, done, info = super().step(action)
+        return obs, reward, done, False, info
+
+
 @log_exceptions
 def main():
     cfg = load_config()
@@ -206,12 +223,59 @@ def main():
             var_window=cfg.get("rl_var_window", 30),
         )
         model = QRDQN("MlpPolicy", env, verbose=0)
+    elif algo == "RLLIB":
+        if gymn is None:
+            raise RuntimeError("gymnasium is required for RLlib")
+        try:
+            import ray
+            from ray.rllib.algorithms.ppo import PPOConfig
+            from ray.rllib.algorithms.ddpg import DDPGConfig
+        except Exception as e:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "RLlib not installed. Run `pip install \"ray[rllib]\"`"
+            ) from e
+
+        rllib_algo = cfg.get("rllib_algorithm", "PPO").upper()
+
+        def env_creator(env_config=None):
+            return RLLibTradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+            )
+
+        ray.init(ignore_reinit_error=True, include_dashboard=False)
+        if rllib_algo == "DDPG":
+            config = (
+                DDPGConfig()
+                .environment(env_creator, disable_env_checking=True)
+                .rollouts(num_rollout_workers=0)
+            )
+        else:
+            config = (
+                PPOConfig()
+                .environment(env_creator, disable_env_checking=True)
+                .rollouts(num_rollout_workers=0)
+            )
+
+        model = config.build()
     else:
         raise ValueError(f"Unknown rl_algorithm {algo}")
 
-    model.learn(total_timesteps=cfg.get("rl_steps", 5000))
-    model.save(root / "model_rl")
-    print("RL model saved to", root / "model_rl.zip")
+    if algo == "RLLIB":
+        iters = max(1, int(cfg.get("rl_steps", 5)))
+        for _ in range(iters):
+            model.train()
+        checkpoint = model.save(str(root / "model_rllib"))
+        print("RLlib model saved to", checkpoint)
+        ray.shutdown()
+    else:
+        model.learn(total_timesteps=cfg.get("rl_steps", 5000))
+        model.save(root / "model_rl")
+        print("RL model saved to", root / "model_rl.zip")
 
 
 if __name__ == "__main__":

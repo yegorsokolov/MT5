@@ -8,7 +8,7 @@ import numpy as np
 
 from utils import load_config
 from dataset import load_history_parquet, make_features, load_history_config
-from train_rl import TradingEnv, DiscreteTradingEnv
+from train_rl import TradingEnv, DiscreteTradingEnv, RLLibTradingEnv
 from stable_baselines3 import PPO
 from sb3_contrib.qrdqn import QRDQN
 from sklearn.linear_model import LogisticRegression
@@ -43,10 +43,16 @@ def bayesian_average(prob_arrays):
 def rl_signals(df, features, cfg):
     """Return probability-like signals from a trained RL agent."""
     model_path = Path(__file__).resolve().parent / "model_rl.zip"
-    if not model_path.exists():
-        return np.zeros(len(df))
-
+    model_rllib = Path(__file__).resolve().parent / "model_rllib"
     algo = cfg.get("rl_algorithm", "PPO").upper()
+    if algo == "RLLIB":
+        if not model_rllib.exists():
+            return np.zeros(len(df))
+    else:
+        if not model_path.exists():
+            return np.zeros(len(df))
+
+    rllib_algo = cfg.get("rllib_algorithm", "PPO").upper()
     if algo == "PPO":
         env = TradingEnv(
             df,
@@ -57,6 +63,37 @@ def rl_signals(df, features, cfg):
             var_window=cfg.get("rl_var_window", 30),
         )
         model = PPO.load(model_path, env=env)
+    elif algo == "QRDQN":
+        env = DiscreteTradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = QRDQN.load(model_path, env=env)
+    elif algo == "RLLIB":
+        try:
+            import ray
+            from ray.rllib.algorithms.ppo import PPO as RLlibPPO
+            from ray.rllib.algorithms.ddpg import DDPG
+        except Exception:
+            return np.zeros(len(df))
+
+        ray.init(ignore_reinit_error=True, include_dashboard=False)
+        env = RLLibTradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        if rllib_algo == "DDPG":
+            model = DDPG.from_checkpoint(model_rllib)
+        else:
+            model = RLlibPPO.from_checkpoint(model_rllib)
     else:
         env = DiscreteTradingEnv(
             df,
@@ -68,18 +105,30 @@ def rl_signals(df, features, cfg):
         )
         model = QRDQN.load(model_path, env=env)
 
-    obs = env.reset()
+    if algo == "RLLIB":
+        obs, _ = env.reset()
+    else:
+        obs = env.reset()
     done = False
     actions = []
     while not done:
-        action, _ = model.predict(obs, deterministic=True)
+        if algo == "RLLIB":
+            action = model.compute_single_action(obs)
+        else:
+            action, _ = model.predict(obs, deterministic=True)
         a = float(action[0]) if not np.isscalar(action) else float(action)
         actions.append(a)
-        obs, _, done, _ = env.step(action)
+        if algo == "RLLIB":
+            obs, _, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+        else:
+            obs, _, done, _ = env.step(action)
 
     probs = (np.array(actions) > 0).astype(float)
     if len(probs) < len(df):
         probs = np.pad(probs, (0, len(df) - len(probs)), "edge")
+    if algo == "RLLIB":
+        ray.shutdown()
     return probs
 
 
