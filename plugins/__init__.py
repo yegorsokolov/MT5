@@ -18,10 +18,17 @@ def register_risk_check(func):
     return func
 
 # Import built-in plugins so registration side effects occur
-from . import atr  # noqa: F401
-from . import donchian  # noqa: F401
-from . import keltner  # noqa: F401
-from . import spread  # noqa: F401
-from . import slippage  # noqa: F401
-from . import regime_plugin  # noqa: F401
-from . import finbert_sentiment  # noqa: F401
+for _mod in [
+    'atr',
+    'donchian',
+    'keltner',
+    'spread',
+    'slippage',
+    'regime_plugin',
+    'finbert_sentiment',
+    'qlib_features',
+]:
+    try:
+        __import__(f'{__name__}.{_mod}')
+    except Exception:
+        pass

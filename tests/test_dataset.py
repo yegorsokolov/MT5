@@ -141,6 +141,10 @@ def test_keltner_and_regime_plugins(monkeypatch):
         "load_config",
         lambda: {"use_keltner": True, "use_regime_classifier": True},
     )
+    import types, sys
+    sys.modules['regime'] = types.SimpleNamespace(
+        label_regimes=lambda df, n_states=3, column='regime_hmm': df.assign(**{column: 0})
+    )
     import plugins.keltner as keltner
     import plugins.regime_plugin as regime_plugin
     monkeypatch.setattr(keltner, "load_config", lambda: {"use_keltner": True})
@@ -160,3 +164,47 @@ def test_keltner_and_regime_plugins(monkeypatch):
     result = dataset.make_features(df)
     assert {"keltner_high", "keltner_low", "keltner_break"}.issubset(result.columns)
     assert "regime_hmm" in result.columns
+
+def test_qlib_features_plugin(monkeypatch):
+    monkeypatch.setattr(dataset, "get_events", lambda past_events=False: [])
+    monkeypatch.setattr(dataset, "add_news_sentiment_features", lambda df: df.assign(news_sentiment=0.0))
+    monkeypatch.setattr(
+        dataset,
+        "add_index_features",
+        lambda df: df.assign(
+            sp500_ret=0.0,
+            sp500_vol=0.0,
+            vix_ret=0.0,
+            vix_vol=0.0,
+        ),
+    )
+    import utils
+    monkeypatch.setattr(utils, "load_config", lambda: {"use_qlib_features": True})
+
+    import importlib
+    import types, sys
+    sys.modules['regime'] = types.SimpleNamespace(
+        label_regimes=lambda df, n_states=3, column='regime_hmm': df.assign(**{column: 0})
+    )
+    import dataset as ds
+    importlib.reload(ds)
+    globals()['dataset'] = ds
+    import plugins.qlib_features as qf
+    monkeypatch.setattr(qf, "load_config", lambda: {"use_qlib_features": True})
+
+    dummy_ta = types.SimpleNamespace(
+        MA=lambda s, window=10: s.rolling(window).mean(),
+        RSI=lambda s, window=14: s.rolling(window).mean(),
+    )
+    sys.modules.setdefault("qlib", types.SimpleNamespace())
+    sys.modules["qlib.contrib"] = types.SimpleNamespace(ta=dummy_ta)
+
+    n = 300
+    df = pd.DataFrame({
+        "Timestamp": pd.date_range("2020-01-01", periods=n, freq="min"),
+        "Bid": np.linspace(1, 2, n),
+        "Ask": np.linspace(1.0001, 2.0001, n),
+    })
+
+    result = ds.make_features(df)
+    assert {"qlib_ma10", "qlib_ma30", "qlib_rsi14"}.issubset(result.columns)
