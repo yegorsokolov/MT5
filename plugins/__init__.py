@@ -26,6 +26,7 @@ for _mod in [
     'slippage',
     'regime_plugin',
     'finbert_sentiment',
+    'fingpt_sentiment',
     'qlib_features',
 ]:
     try:

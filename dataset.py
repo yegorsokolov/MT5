@@ -424,7 +424,7 @@ def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Merge precomputed news sentiment scores or compute using FinBERT."""
+    """Merge precomputed news sentiment scores or compute using FinBERT/FinGPT."""
 
     try:
         from utils import load_config
@@ -432,6 +432,27 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
         cfg = load_config()
     except Exception:  # pragma: no cover - config issues shouldn't fail
         cfg = {}
+
+    if cfg.get("use_fingpt_sentiment", False):
+        try:
+            from plugins.fingpt_sentiment import score_events
+
+            events = get_events(past_events=True)
+            news_df = pd.DataFrame(events)
+            if not news_df.empty:
+                news_df = score_events(news_df)
+                news_df = news_df.rename(columns={"date": "Timestamp"})
+                news_df["Timestamp"] = pd.to_datetime(news_df["Timestamp"])
+                news_df = news_df.sort_values("Timestamp")[["Timestamp", "sentiment"]]
+                df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+                df = df.sort_values("Timestamp")
+                df = pd.merge_asof(df, news_df, on="Timestamp", direction="backward")
+                df["news_sentiment"] = df["sentiment"].fillna(0.0)
+                df = df.drop(columns=["sentiment"], errors="ignore")
+                logger.debug("Added FinGPT sentiment for %d rows", len(df))
+                return df
+        except Exception as e:  # pragma: no cover - heavy dependency
+            logger.warning("Failed to compute FinGPT sentiment: %s", e)
 
     if cfg.get("use_finbert_sentiment", False):
         try:
