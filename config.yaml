@@ -75,3 +75,6 @@ use_spread_check: true
 max_spread: 0.0005
 use_slippage_check: true
 max_slippage: 0.0005
+# anomaly detection settings
+use_anomaly_check: false
+anomaly_threshold: 0.5
