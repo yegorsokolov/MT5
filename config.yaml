@@ -51,6 +51,8 @@ threshold: 0.55
 trailing_stop_pips: 20
 train_rows: 50000
 use_ray: false
+use_dask: false
+dask_cluster_url:
 parallel_backtest: true
 use_scaler: true
 use_sharpe_sizing: true

@@ -241,6 +241,17 @@ backtests across available CPU cores or even a cluster. Enable this by setting
 resource usage. The Docker setup remains unchanged so experiments stay
 reproducible.
 
+Feature engineering in `dataset.make_features` can also leverage Dask for
+out-of-core processing. Set `use_dask: true` and optionally provide
+`dask_cluster_url` pointing to a running scheduler. Without a URL a local
+cluster is launched automatically. Install `dask[distributed]` and start workers
+with:
+
+```bash
+dask-scheduler
+dask-worker tcp://<scheduler-ip>:8786
+```
+
 ## Plugin Architecture
 
 Feature engineering functions, models and risk checks can now be extended via

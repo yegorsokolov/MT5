@@ -509,6 +509,17 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
 
     use_atr = cfg.get("use_atr", True)
     use_donchian = cfg.get("use_donchian", True)
+    use_dask = cfg.get("use_dask", False)
+    dask_url = cfg.get("dask_cluster_url")
+
+    if use_dask:
+        import dask.dataframe as dd
+        from dask.distributed import Client
+
+        try:
+            Client(dask_url) if dask_url else Client()
+        except Exception:
+            pass
 
     def _feat(group: pd.DataFrame) -> pd.DataFrame:
         mid = (group["Bid"] + group["Ask"]) / 2
@@ -592,7 +603,13 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         return group
 
     if "Symbol" in df.columns:
-        df = df.groupby("Symbol", group_keys=False).apply(_feat)
+        if use_dask:
+            meta = _feat(df.head(2).copy())
+            ddf = dd.from_pandas(df, npartitions=cfg.get("dask_partitions", 4))
+            ddf = ddf.groupby("Symbol", group_keys=False).apply(lambda x: _feat(x), meta=meta)
+            df = ddf.compute()
+        else:
+            df = df.groupby("Symbol", group_keys=False).apply(_feat)
         pivot = df.pivot_table(index="Timestamp", columns="Symbol", values="return")
 
         # rolling momentum of each symbol's returns shifted by 1-2 periods
@@ -649,7 +666,11 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         ).reset_index()
         df = df.merge(factor_df, on="Timestamp", how="left")
     else:
-        df = _feat(df)
+        if use_dask:
+            ddf = dd.from_pandas(df, npartitions=cfg.get("dask_partitions", 4))
+            df = ddf.map_partitions(_feat).compute()
+        else:
+            df = _feat(df)
 
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
