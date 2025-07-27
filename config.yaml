@@ -61,6 +61,8 @@ use_atr: true
 use_donchian: true
 # enable FinBERT sentiment scoring
 use_finbert_sentiment: false
+# enable FinGPT sentiment scoring
+use_fingpt_sentiment: false
 # enable or disable the Keltner channel plugin
 use_keltner: false
 # enable Qlib technical factors
