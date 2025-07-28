@@ -301,6 +301,24 @@ frameworks are included under `strategies/`. They demonstrate how the feature
 pipeline can feed different trading styles ranging from simple MA crossovers to
 Donchian breakouts with ATR based stops.
 
+## External Strategy Integration
+
+The backtester can also execute strategies written for Freqtrade or Backtrader.
+Install the optional dependencies:
+
+```bash
+pip install backtrader freqtrade ta-lib
+```
+
+Run a strategy using the new CLI flag:
+
+```bash
+python backtest.py --external-strategy strategies/freqtrade_template.py
+```
+
+The adapter automatically detects the framework and feeds the existing feature
+dataframe to the strategy, recording the resulting trades.
+
 ## Detailed Logging
 
 All scripts now log to `logs/app.log` with rotation to prevent the file from
