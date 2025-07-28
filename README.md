@@ -158,6 +158,8 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Run `pip install -r requirements.txt`.
    3. To use the optional Qlib factors install `pyqlib` via `pip install pyqlib[all]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
+      When present `train.py` writes `logs/feature_importance.csv` which can be
+      visualised using `python scripts/plot_shap.py`.
 6. **Build Protobuf classes** –
    1. Make sure the `protoc` compiler is installed and on your `PATH`.
    2. Run `protoc --python_out=. proto/signals.proto` from the repository root.

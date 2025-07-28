@@ -23,7 +23,7 @@ uvicorn
 mlflow
 transformers
 FinGPT
-shap  # optional for feature importance
+shap  # optional, used to compute SHAP feature importance
 statsmodels
 ydata-synthetic
 
