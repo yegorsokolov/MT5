@@ -445,12 +445,17 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
                 news_df = score_events(news_df)
                 news_df = news_df.rename(columns={"date": "Timestamp"})
                 news_df["Timestamp"] = pd.to_datetime(news_df["Timestamp"])
-                news_df = news_df.sort_values("Timestamp")[["Timestamp", "sentiment"]]
+                keep_cols = ["Timestamp", "sentiment"]
+                if "summary" in news_df.columns:
+                    keep_cols.append("summary")
+                news_df = news_df.sort_values("Timestamp")[keep_cols]
                 df["Timestamp"] = pd.to_datetime(df["Timestamp"])
                 df = df.sort_values("Timestamp")
                 df = pd.merge_asof(df, news_df, on="Timestamp", direction="backward")
                 df["news_sentiment"] = df["sentiment"].fillna(0.0)
-                df = df.drop(columns=["sentiment"], errors="ignore")
+                if "summary" in news_df.columns:
+                    df["news_summary"] = df["summary"].fillna("")
+                df = df.drop(columns=["sentiment", "summary"], errors="ignore")
                 logger.debug("Added FinGPT sentiment for %d rows", len(df))
                 return df
         except Exception as e:  # pragma: no cover - heavy dependency
@@ -471,6 +476,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
                 df = df.sort_values("Timestamp")
                 df = pd.merge_asof(df, news_df, on="Timestamp", direction="backward")
                 df["news_sentiment"] = df["sentiment"].fillna(0.0)
+                df["news_summary"] = ""
                 df = df.drop(columns=["sentiment"], errors="ignore")
                 logger.debug("Added FinBERT sentiment for %d rows", len(df))
                 return df
@@ -480,11 +486,13 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     path = Path(__file__).resolve().parent / "data" / "news_sentiment.csv"
     if not path.exists():
         df["news_sentiment"] = 0.0
+        df["news_summary"] = ""
         return df
 
     news = pd.read_csv(path)
     if "Timestamp" not in news.columns or "sentiment" not in news.columns:
         df["news_sentiment"] = 0.0
+        df["news_summary"] = ""
         return df
 
     news["Timestamp"] = pd.to_datetime(news["Timestamp"])  # ensure datetime
@@ -493,7 +501,11 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("Timestamp")
     df = pd.merge_asof(df, news, on="Timestamp", direction="backward")
     df["news_sentiment"] = df["sentiment"].fillna(0.0)
-    df = df.drop(columns=["sentiment"], errors="ignore")
+    if "summary" in news.columns:
+        df["news_summary"] = df["summary"].fillna("")
+    else:
+        df["news_summary"] = ""
+    df = df.drop(columns=["sentiment", "summary"], errors="ignore")
     logger.debug("Added news sentiment for %d rows", len(df))
     return df
 
