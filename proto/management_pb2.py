@@ -22,29 +22,38 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10management.proto\x12\nmanagement\"\x1e\n\x0cStartRequest\x12\x0e\n\x06\x62ot_id\x18\x01 \x01(\t\"\x1e\n\x0c\x42otIdRequest\x12\x0e\n\x06\x62ot_id\x18\x01 \x01(\t\" \n\x0eStatusResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\"1\n\x10\x42otStatusRequest\x12\x0e\n\x06\x62ot_id\x18\x01 \x01(\t\x12\r\n\x05lines\x18\x02 \x01(\x05\"c\n\x11\x42otStatusResponse\x12\x0e\n\x06\x62ot_id\x18\x01 \x01(\t\x12\x0f\n\x07running\x18\x02 \x01(\x08\x12\x0b\n\x03pid\x18\x03 \x01(\x05\x12\x12\n\nreturncode\x18\x04 \x01(\x05\x12\x0c\n\x04logs\x18\x05 \x01(\t\"\x1b\n\nLogRequest\x12\r\n\x05lines\x18\x01 \x01(\x05\"\x1b\n\x0bLogResponse\x12\x0c\n\x04logs\x18\x01 \x01(\t2\x9c\x02\n\x11ManagementService\x12@\n\x08StartBot\x12\x18.management.StartRequest\x1a\x1a.management.StatusResponse\x12?\n\x07StopBot\x12\x18.management.BotIdRequest\x1a\x1a.management.StatusResponse\x12H\n\tBotStatus\x12\x1c.management.BotStatusRequest\x1a\x1d.management.BotStatusResponse\x12:\n\x07GetLogs\x12\x16.management.LogRequest\x1a\x17.management.LogResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10management.proto\x12\nmanagement\x1a\x1bgoogle/protobuf/empty.proto\"\x1e\n\x0cStartRequest\x12\x0e\n\x06\x62ot_id\x18\x01 \x01(\t\"\x1e\n\x0c\x42otIdRequest\x12\x0e\n\x06\x62ot_id\x18\x01 \x01(\t\" \n\x0eStatusResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\"1\n\x10\x42otStatusRequest\x12\x0e\n\x06\x62ot_id\x18\x01 \x01(\t\x12\r\n\x05lines\x18\x02 \x01(\x05\"c\n\x11\x42otStatusResponse\x12\x0e\n\x06\x62ot_id\x18\x01 \x01(\t\x12\x0f\n\x07running\x18\x02 \x01(\x08\x12\x0b\n\x03pid\x18\x03 \x01(\x05\x12\x12\n\nreturncode\x18\x04 \x01(\x05\x12\x0c\n\x04logs\x18\x05 \x01(\t\"\x1b\n\nLogRequest\x12\r\n\x05lines\x18\x01 \x01(\x05\"\x1b\n\x0bLogResponse\x12\x0c\n\x04logs\x18\x01 \x01(\t\"c\n\x07\x42otList\x12+\n\x04\x62ots\x18\x01 \x03(\x0b\x32\x1d.management.BotList.BotsEntry\x1a+\n\tBotsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x08:\x02\x38\x01\":\n\x0c\x43onfigChange\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t\x12\x0e\n\x06reason\x18\x03 \x01(\t2\x9b\x03\n\x11ManagementService\x12@\n\x08StartBot\x12\x18.management.StartRequest\x1a\x1a.management.StatusResponse\x12?\n\x07StopBot\x12\x18.management.BotIdRequest\x1a\x1a.management.StatusResponse\x12H\n\tBotStatus\x12\x1c.management.BotStatusRequest\x1a\x1d.management.BotStatusResponse\x12:\n\x07GetLogs\x12\x16.management.LogRequest\x1a\x17.management.LogResponse\x12\x37\n\x08ListBots\x12\x16.google.protobuf.Empty\x1a\x13.management.BotList\x12\x44\n\x0cUpdateConfig\x12\x18.management.ConfigChange\x1a\x1a.management.StatusResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'management_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_STARTREQUEST']._serialized_start=32
-  _globals['_STARTREQUEST']._serialized_end=62
-  _globals['_BOTIDREQUEST']._serialized_start=64
-  _globals['_BOTIDREQUEST']._serialized_end=94
-  _globals['_STATUSRESPONSE']._serialized_start=96
-  _globals['_STATUSRESPONSE']._serialized_end=128
-  _globals['_BOTSTATUSREQUEST']._serialized_start=130
-  _globals['_BOTSTATUSREQUEST']._serialized_end=179
-  _globals['_BOTSTATUSRESPONSE']._serialized_start=181
-  _globals['_BOTSTATUSRESPONSE']._serialized_end=280
-  _globals['_LOGREQUEST']._serialized_start=282
-  _globals['_LOGREQUEST']._serialized_end=309
-  _globals['_LOGRESPONSE']._serialized_start=311
-  _globals['_LOGRESPONSE']._serialized_end=338
-  _globals['_MANAGEMENTSERVICE']._serialized_start=341
-  _globals['_MANAGEMENTSERVICE']._serialized_end=625
+  _globals['_BOTLIST_BOTSENTRY']._loaded_options = None
+  _globals['_BOTLIST_BOTSENTRY']._serialized_options = b'8\001'
+  _globals['_STARTREQUEST']._serialized_start=61
+  _globals['_STARTREQUEST']._serialized_end=91
+  _globals['_BOTIDREQUEST']._serialized_start=93
+  _globals['_BOTIDREQUEST']._serialized_end=123
+  _globals['_STATUSRESPONSE']._serialized_start=125
+  _globals['_STATUSRESPONSE']._serialized_end=157
+  _globals['_BOTSTATUSREQUEST']._serialized_start=159
+  _globals['_BOTSTATUSREQUEST']._serialized_end=208
+  _globals['_BOTSTATUSRESPONSE']._serialized_start=210
+  _globals['_BOTSTATUSRESPONSE']._serialized_end=309
+  _globals['_LOGREQUEST']._serialized_start=311
+  _globals['_LOGREQUEST']._serialized_end=338
+  _globals['_LOGRESPONSE']._serialized_start=340
+  _globals['_LOGRESPONSE']._serialized_end=367
+  _globals['_BOTLIST']._serialized_start=369
+  _globals['_BOTLIST']._serialized_end=468
+  _globals['_BOTLIST_BOTSENTRY']._serialized_start=425
+  _globals['_BOTLIST_BOTSENTRY']._serialized_end=468
+  _globals['_CONFIGCHANGE']._serialized_start=470
+  _globals['_CONFIGCHANGE']._serialized_end=528
+  _globals['_MANAGEMENTSERVICE']._serialized_start=531
+  _globals['_MANAGEMENTSERVICE']._serialized_end=942
 # @@protoc_insertion_point(module_scope)

@@ -3,6 +3,7 @@
 import grpc
 import warnings
 
+from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 import management_pb2 as management__pb2
 
 GRPC_GENERATED_VERSION = '1.74.0'
@@ -54,6 +55,16 @@ class ManagementServiceStub(object):
                 request_serializer=management__pb2.LogRequest.SerializeToString,
                 response_deserializer=management__pb2.LogResponse.FromString,
                 _registered_method=True)
+        self.ListBots = channel.unary_unary(
+                '/management.ManagementService/ListBots',
+                request_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+                response_deserializer=management__pb2.BotList.FromString,
+                _registered_method=True)
+        self.UpdateConfig = channel.unary_unary(
+                '/management.ManagementService/UpdateConfig',
+                request_serializer=management__pb2.ConfigChange.SerializeToString,
+                response_deserializer=management__pb2.StatusResponse.FromString,
+                _registered_method=True)
 
 
 class ManagementServiceServicer(object):
@@ -83,6 +94,18 @@ class ManagementServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListBots(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateConfig(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ManagementServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -105,6 +128,16 @@ def add_ManagementServiceServicer_to_server(servicer, server):
                     servicer.GetLogs,
                     request_deserializer=management__pb2.LogRequest.FromString,
                     response_serializer=management__pb2.LogResponse.SerializeToString,
+            ),
+            'ListBots': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListBots,
+                    request_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+                    response_serializer=management__pb2.BotList.SerializeToString,
+            ),
+            'UpdateConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateConfig,
+                    request_deserializer=management__pb2.ConfigChange.FromString,
+                    response_serializer=management__pb2.StatusResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -215,6 +248,60 @@ class ManagementService(object):
             '/management.ManagementService/GetLogs',
             management__pb2.LogRequest.SerializeToString,
             management__pb2.LogResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListBots(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/management.ManagementService/ListBots',
+            google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+            management__pb2.BotList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdateConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/management.ManagementService/UpdateConfig',
+            management__pb2.ConfigChange.SerializeToString,
+            management__pb2.StatusResponse.FromString,
             options,
             channel_credentials,
             insecure,
