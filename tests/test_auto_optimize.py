@@ -30,6 +30,7 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
         "rl_max_position": 1.0,
         "rl_risk_penalty": 0.1,
         "rl_transaction_cost": 0.0001,
+        "rl_max_kl": 0.01,
         "backtest_window_months": 6,
         "symbol": "XAUUSD",
     }
@@ -80,6 +81,7 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
             "rl_max_position": 1.5,
             "rl_risk_penalty": 0.15,
             "rl_transaction_cost": 0.0002,
+            "rl_max_kl": 0.02,
             "backtest_window_months": 6,
         }
 
