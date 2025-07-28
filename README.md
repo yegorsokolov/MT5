@@ -184,9 +184,12 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
 12. **Optimise parameters** –
    1. Periodically run `python auto_optimize.py`.
-      The optimiser performs a Bayesian search across thresholds, walk‑forward
-      window sizes and reinforcement‑learning parameters. Results are
-      cross‑validated over multiple market regimes and both the metrics and
+      When `use_ray` is enabled the script leverages Ray Tune with
+      `OptunaSearch` to distribute trials. Configure resource limits under
+      `ray_resources` in `config.yaml`.
+      The optimiser performs a Bayesian search across thresholds,
+      walk‑forward window sizes and reinforcement‑learning parameters. Results
+      are cross‑validated over multiple market regimes and both the metrics and
       chosen hyperparameters are tracked with MLflow. Any improvements are
       written back to `config.yaml` and logged under `logs/config_changes.csv`.
 13. **Upload logs** –
@@ -249,11 +252,21 @@ drawdown. These metrics can be used to iteratively optimise the strategy.
 ## Parallelized Training / HPC
 
 For multiple symbols and large tick datasets, fitting models sequentially can
-be slow. The script `train_parallel.py` uses Ray to distribute training and
-backtests across available CPU cores or even a cluster. Enable this by setting
-`use_ray: true` in `config.yaml` and optionally adjust `ray_num_cpus` to limit
-resource usage. The Docker setup remains unchanged so experiments stay
-reproducible.
+be slow. The script `train_parallel.py` and the hyper‑parameter optimiser use
+Ray to distribute work across CPU cores or even a cluster. Enable this by
+setting `use_ray: true` in `config.yaml` and optionally adjust the new
+`ray_resources` section to control the CPUs and GPUs allocated per trial.
+Start a cluster with:
+
+```bash
+ray start --head
+# on each worker
+ray start --address='<head-ip>:6379'
+```
+
+Once running, any call to `python auto_optimize.py` or `train_parallel.py` will
+automatically utilise the cluster.
+The Docker setup remains unchanged so experiments stay reproducible.
 
 Feature engineering in `dataset.make_features` can also leverage Dask for
 out-of-core processing. Set `use_dask: true` and optionally provide
