@@ -1,0 +1,90 @@
+"""Train TimeGAN on historical features and save synthetic sequences."""
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+from ydata_synthetic.synthesizers.timeseries import TimeGAN
+from ydata_synthetic.preprocessing.timeseries import TimeSeriesScalerMinMax
+
+from utils import load_config
+from dataset import (
+    load_history_config,
+    make_features,
+    make_sequence_arrays,
+)
+from log_utils import setup_logging, log_exceptions
+
+logger = setup_logging()
+
+
+@log_exceptions
+def main() -> None:
+    cfg = load_config()
+    root = Path(__file__).resolve().parents[1]
+    aug_dir = root / "data" / "augmented"
+    aug_dir.mkdir(parents=True, exist_ok=True)
+
+    symbols = cfg.get("symbols") or [cfg.get("symbol")]
+    dfs = []
+    for sym in symbols:
+        df_sym = load_history_config(sym, cfg, root)
+        df_sym["Symbol"] = sym
+        dfs.append(df_sym)
+
+    df = make_features(pd.concat(dfs, ignore_index=True))
+    if "Symbol" in df.columns:
+        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+
+    seq_len = cfg.get("sequence_length", 50)
+    features = [
+        "return",
+        "ma_5",
+        "ma_10",
+        "ma_30",
+        "ma_60",
+        "volatility_30",
+        "spread",
+        "rsi_14",
+        "news_sentiment",
+        "market_regime",
+    ]
+    features += [
+        c
+        for c in df.columns
+        if c.startswith("cross_corr_")
+        or c.startswith("factor_")
+        or c.startswith("cross_mom_")
+    ]
+    if "volume_ratio" in df.columns:
+        features.extend(["volume_ratio", "volume_imbalance"])
+    if "SymbolCode" in df.columns:
+        features.append("SymbolCode")
+
+    X, _ = make_sequence_arrays(df, features, seq_len)
+
+    scaler = TimeSeriesScalerMinMax()
+    X_scaled = scaler.fit_transform(X)
+
+    model_params = {
+        "batch_size": cfg.get("gan_batch_size", 128),
+        "rnn_hidden_dim": 24,
+        "latent_dim": 8,
+        "learning_rate": 5e-4,
+    }
+    gan = TimeGAN(model_params, seq_len=seq_len, n_seq=len(features))
+    gan.train(X_scaled, cfg.get("gan_epochs", 5))
+
+    n_samples = cfg.get("gan_num_samples", len(X))
+    synthetic = gan.sample(n_samples)
+    synthetic = scaler.inverse_transform(synthetic)
+
+    return_idx = features.index("return")
+    y_syn = (synthetic[:, -1, return_idx] > 0).astype(int)
+
+    out_path = aug_dir / "synthetic_sequences.npz"
+    np.savez(out_path, X=synthetic, y=y_syn)
+    logger.info("Saved synthetic data to %s", out_path)
+
+
+if __name__ == "__main__":
+    main()
