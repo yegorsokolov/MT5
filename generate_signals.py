@@ -11,6 +11,7 @@ from dataset import load_history_parquet, make_features, load_history_config
 from train_rl import TradingEnv, DiscreteTradingEnv, RLLibTradingEnv
 from stable_baselines3 import PPO, SAC
 from sb3_contrib.qrdqn import QRDQN
+from sb3_contrib import TRPO
 from sklearn.linear_model import LogisticRegression
 import asyncio
 from signal_queue import (
@@ -73,6 +74,16 @@ def rl_signals(df, features, cfg):
             var_window=cfg.get("rl_var_window", 30),
         )
         model = SAC.load(model_path, env=env)
+    elif algo == "TRPO":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = TRPO.load(model_path, env=env)
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,
