@@ -68,6 +68,8 @@ use_donchian: true
 use_finbert_sentiment: false
 # enable FinGPT sentiment scoring
 use_fingpt_sentiment: false
+# enable FinGPT news summarization
+use_fingpt_summary: false
 # enable or disable the Keltner channel plugin
 use_keltner: false
 # enable Qlib technical factors
