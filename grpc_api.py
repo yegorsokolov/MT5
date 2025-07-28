@@ -2,6 +2,7 @@ import asyncio
 import grpc
 import remote_api as ra
 from proto import management_pb2, management_pb2_grpc
+from google.protobuf import empty_pb2
 from fastapi import HTTPException
 
 
@@ -13,14 +14,14 @@ class ManagementServicer(management_pb2_grpc.ManagementServiceServicer):
                 api_key = value
                 break
         if ra.API_KEY and api_key != ra.API_KEY:
-            context.abort(grpc.StatusCode.UNAUTHENTICATED, "Unauthorized")
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Unauthorized")
 
     async def StartBot(self, request: management_pb2.StartRequest, context):
         await self._authorize(context)
         try:
             data = await ra.start_bot(request.bot_id)
         except HTTPException as exc:
-            context.abort(grpc.StatusCode(exc.status_code), exc.detail)
+            await context.abort(grpc.StatusCode(exc.status_code), exc.detail)
         return management_pb2.StatusResponse(status=data["status"])
 
     async def StopBot(self, request: management_pb2.BotIdRequest, context):
@@ -29,7 +30,7 @@ class ManagementServicer(management_pb2_grpc.ManagementServiceServicer):
             data = await ra.stop_bot(request.bot_id)
         except HTTPException as exc:
             code = grpc.StatusCode.NOT_FOUND if exc.status_code == 404 else grpc.StatusCode(exc.status_code)
-            context.abort(code, exc.detail)
+            await context.abort(code, exc.detail)
         return management_pb2.StatusResponse(status=data["status"])
 
     async def BotStatus(self, request: management_pb2.BotStatusRequest, context):
@@ -38,7 +39,7 @@ class ManagementServicer(management_pb2_grpc.ManagementServiceServicer):
             data = await ra.bot_status(request.bot_id, lines=request.lines)
         except HTTPException as exc:
             code = grpc.StatusCode.NOT_FOUND if exc.status_code == 404 else grpc.StatusCode(exc.status_code)
-            context.abort(code, exc.detail)
+            await context.abort(code, exc.detail)
         return management_pb2.BotStatusResponse(
             bot_id=request.bot_id,
             running=data["running"],
@@ -53,8 +54,22 @@ class ManagementServicer(management_pb2_grpc.ManagementServiceServicer):
             data = await ra.get_logs(lines=request.lines)
         except HTTPException as exc:
             code = grpc.StatusCode.NOT_FOUND if exc.status_code == 404 else grpc.StatusCode(exc.status_code)
-            context.abort(code, exc.detail)
+            await context.abort(code, exc.detail)
         return management_pb2.LogResponse(logs=data["logs"])
+
+    async def ListBots(self, request: empty_pb2.Empty, context):
+        await self._authorize(context)
+        data = await ra.list_bots()
+        return management_pb2.BotList(bots=data)
+
+    async def UpdateConfig(self, request: management_pb2.ConfigChange, context):
+        await self._authorize(context)
+        change = ra.ConfigUpdate(key=request.key, value=request.value, reason=request.reason)
+        try:
+            data = await ra.update_configuration(change)
+        except HTTPException as exc:
+            await context.abort(grpc.StatusCode(exc.status_code), exc.detail)
+        return management_pb2.StatusResponse(status=data["status"])
 
 
 async def serve(address: str = "[::]:50051") -> None:
