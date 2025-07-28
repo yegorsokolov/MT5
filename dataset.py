@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import datetime as dt
 import functools
+import hashlib
+import duckdb
 from sklearn.decomposition import PCA
 from dateutil import parser as date_parser
 import requests
@@ -500,6 +502,11 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add common technical features used by the ML model."""
     logger.info("Creating features for dataframe with %d rows", len(df))
 
+    hist_hash = hashlib.md5(
+        pd.util.hash_pandas_object(df, index=True).values.tobytes()
+    ).hexdigest()
+    cache_path = Path(__file__).resolve().parent / "data" / "features.duckdb"
+
     try:
         from utils import load_config
 
@@ -510,7 +517,22 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     use_atr = cfg.get("use_atr", True)
     use_donchian = cfg.get("use_donchian", True)
     use_dask = cfg.get("use_dask", False)
+    use_cache = cfg.get("use_feature_cache", False)
     dask_url = cfg.get("dask_cluster_url")
+
+    if use_cache and cache_path.exists():
+        conn = duckdb.connect(cache_path.as_posix())
+        tables = {t[0] for t in conn.execute("PRAGMA show_tables").fetchall()}
+        if {"features", "metadata"}.issubset(tables):
+            cached = conn.execute(
+                "SELECT hist_hash FROM metadata LIMIT 1"
+            ).fetchone()
+            if cached and cached[0] == hist_hash:
+                logger.info("Loading features from cache %s", cache_path)
+                df_cached = conn.execute("SELECT * FROM features").fetch_df()
+                conn.close()
+                return df_cached
+        conn.close()
 
     if use_dask:
         import dask.dataframe as dd
@@ -723,6 +745,20 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         df["market_regime"] = 0
     logger.info("Finished feature engineering")
+
+    if use_cache:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(cache_path.as_posix())
+        conn.register("feat_df", df)
+        conn.execute("CREATE TABLE IF NOT EXISTS features AS SELECT * FROM feat_df LIMIT 0")
+        conn.execute("DELETE FROM features")
+        conn.execute("INSERT INTO features SELECT * FROM feat_df")
+        conn.execute("CREATE TABLE IF NOT EXISTS metadata(hist_hash VARCHAR)")
+        conn.execute("DELETE FROM metadata")
+        conn.execute("INSERT INTO metadata VALUES (?)", [hist_hash])
+        conn.close()
+        logger.info("Cached features written to %s", cache_path)
+
     return df
 
 
