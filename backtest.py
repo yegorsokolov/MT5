@@ -133,7 +133,10 @@ def backtest_on_df(
 
 
 def run_backtest(
-    cfg: dict, *, return_returns: bool = False
+    cfg: dict,
+    *,
+    return_returns: bool = False,
+    external_strategy: str | None = None,
 ) -> dict | tuple[dict, pd.Series]:
     data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
     if not data_path.exists():
@@ -150,13 +153,17 @@ def run_backtest(
         save_path.unlink(missing_ok=True)
         df_all.to_parquet(save_path, index=False)
 
-    model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
-
     df = load_history_parquet(data_path)
     df = make_features(df)
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+    if external_strategy:
+        from strategies.external_adapter import run_external_strategy
+
+        return run_external_strategy(df, external_strategy)
+
+    model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
     return backtest_on_df(df, model, cfg, return_returns=return_returns)
 
@@ -173,7 +180,7 @@ def _backtest_window(
     return metrics
 
 
-def run_rolling_backtest(cfg: dict) -> dict:
+def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dict:
     """Perform rolling train/test backtests and aggregate metrics."""
     data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
     if not data_path.exists():
@@ -201,7 +208,7 @@ def run_rolling_backtest(cfg: dict) -> dict:
     start = df["Timestamp"].min()
     end = df["Timestamp"].max()
 
-    parallel = cfg.get("parallel_backtest", False)
+    parallel = cfg.get("parallel_backtest", False) and not external_strategy
     if parallel:
         ray.init(num_cpus=cfg.get("ray_num_cpus"))
         futures = []
@@ -223,8 +230,13 @@ def run_rolling_backtest(cfg: dict) -> dict:
                 _backtest_window.remote(train_df, test_df, cfg, start_iso, end_iso)
             )
         else:
-            model = fit_model(train_df, cfg)
-            metrics = backtest_on_df(test_df, model, cfg)
+            if external_strategy:
+                from strategies.external_adapter import run_external_strategy
+
+                metrics = run_external_strategy(test_df, external_strategy)
+            else:
+                model = fit_model(train_df, cfg)
+                metrics = backtest_on_df(test_df, model, cfg)
             metrics["period_start"] = start_iso
             metrics["period_end"] = end_iso
             print(
@@ -261,8 +273,18 @@ def run_rolling_backtest(cfg: dict) -> dict:
 
 @log_exceptions
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run backtest")
+    parser.add_argument(
+        "--external-strategy",
+        dest="external_strategy",
+        help="Path to Freqtrade or Backtrader strategy",
+    )
+    args = parser.parse_args()
+
     cfg = load_config()
-    metrics = run_backtest(cfg)
+    metrics = run_backtest(cfg, external_strategy=args.external_strategy)
     print("Single period backtest:")
     for k, v in metrics.items():
         if k in {"max_drawdown", "win_rate"}:
@@ -271,7 +293,7 @@ def main():
             print(f"{k}: {v:.4f}")
 
     print("\nRolling backtest:")
-    run_rolling_backtest(cfg)
+    run_rolling_backtest(cfg, external_strategy=args.external_strategy)
 
 
 if __name__ == "__main__":
