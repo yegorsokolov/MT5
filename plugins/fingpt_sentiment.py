@@ -3,6 +3,11 @@ import pandas as pd
 import functools
 import logging
 
+try:
+    from utils import load_config
+except Exception:  # pragma: no cover - optional
+    load_config = lambda: {}
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -22,6 +27,17 @@ def _get_pipeline():
         return None
 
 
+@functools.lru_cache()
+def _get_summary_pipeline():
+    if pipeline is None:
+        return None
+    try:
+        return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+    except Exception as e:  # pragma: no cover - download/initialization may fail
+        logger.warning("Failed to load summarization model: %s", e)
+        return None
+
+
 @register_feature
 def score_events(df: pd.DataFrame) -> pd.DataFrame:
     """Add a FinGPT sentiment score for each row with a 'event' or 'text' column."""
@@ -32,21 +48,34 @@ def score_events(df: pd.DataFrame) -> pd.DataFrame:
     if text_col is None:
         return df
 
-    pipe = _get_pipeline()
-    if pipe is None:
-        return df.assign(sentiment=0.0)
+    cfg = load_config()
 
-    outputs = pipe(df[text_col].astype(str).tolist())
-    scores = []
-    for out in outputs:
-        label = str(out.get("label", "")).lower()
-        score = float(out.get("score", 0.0))
-        if label == "positive":
-            scores.append(score)
-        elif label == "negative":
-            scores.append(-score)
-        else:
-            scores.append(0.0)
-    df = df.copy()
-    df["sentiment"] = scores
-    return df
+    pipe = _get_pipeline()
+    summary_pipe = _get_summary_pipeline() if cfg.get("use_fingpt_summary", False) else None
+
+    out_df = df.copy()
+
+    if pipe is not None:
+        outputs = pipe(df[text_col].astype(str).tolist())
+        scores = []
+        for out in outputs:
+            label = str(out.get("label", "")).lower()
+            score = float(out.get("score", 0.0))
+            if label == "positive":
+                scores.append(score)
+            elif label == "negative":
+                scores.append(-score)
+            else:
+                scores.append(0.0)
+        out_df["sentiment"] = scores
+    else:
+        out_df["sentiment"] = 0.0
+
+    if summary_pipe is not None:
+        summaries = summary_pipe(df[text_col].astype(str).tolist())
+        out_df["summary"] = [s.get("summary_text", "") for s in summaries]
+    else:
+        out_df["summary"] = ""
+
+    return out_df
+
