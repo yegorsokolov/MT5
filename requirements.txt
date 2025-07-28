@@ -29,3 +29,5 @@ ydata-synthetic
 
 grpcio
 grpcio-tools
+backtrader
+freqtrade
