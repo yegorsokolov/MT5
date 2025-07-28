@@ -31,6 +31,9 @@ max_stress_loss: 15.0
 max_var: 5.0
 min_risk_factor: 0.5
 ray_num_cpus: 4
+ray_resources:
+  cpu: 1
+  gpu: 0
 risk_lookback_bars: 50
 risk_per_trade: 0.01
 risk_var_lookback: 50

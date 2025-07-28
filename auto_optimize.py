@@ -31,6 +31,14 @@ def main():
 
         results: List[Dict[str, float]] = []
 
+        def evaluate(params: Dict[str, float]) -> float:
+            test_cfg = copy.deepcopy(cfg)
+            test_cfg.update(params)
+            metrics = run_rolling_backtest(test_cfg)
+            val = metrics.get("avg_sharpe", float("nan"))
+            results.append({**params, "avg_sharpe": val})
+            return val
+
         def sample_params(trial: optuna.trial.Trial) -> Dict[str, float]:
             return {
                 "threshold": trial.suggest_float("threshold", 0.5, 0.7),
@@ -46,39 +54,48 @@ def main():
                 ),
             }
 
-        def objective(trial: optuna.trial.Trial) -> float:
+        def objective_optuna(trial: optuna.trial.Trial) -> float:
             params = sample_params(trial)
-            test_cfg = copy.deepcopy(cfg)
-            test_cfg.update(params)
-            metrics = run_rolling_backtest(test_cfg)
-            val = metrics.get("avg_sharpe", float("nan"))
-            results.append({**params, "avg_sharpe": val})
-            return val
+            return evaluate(params)
 
-        study = optuna.create_study(direction="maximize")
+        def objective_tune(config: Dict[str, float]):
+            val = evaluate(config)
+            tune.report(avg_sharpe=val)
 
         use_ray = False
         try:
             import ray  # type: ignore
+            from ray import tune  # type: ignore
+            from ray.tune.search.optuna import OptunaSearch  # type: ignore
 
-            if cfg.get("ray_num_cpus", 1) > 1:
-                ray.init(num_cpus=cfg.get("ray_num_cpus"))
+            if cfg.get("use_ray"):
+                ray.init(address="auto")
                 use_ray = True
         except Exception:
-            ray = None  # type: ignore
+            tune = None  # type: ignore
 
-        if use_ray:
-            remote_obj = ray.remote(objective)
-            tasks = []
-            for _ in range(15):
-                trial = study.ask()
-                tasks.append((trial, remote_obj.remote(trial)))
-            for trial, task in tasks:
-                val = ray.get(task)
-                study.tell(trial, val)
+        if use_ray and tune is not None:
+            search_alg = OptunaSearch(metric="avg_sharpe", mode="max")
+            search_space = {
+                "threshold": tune.uniform(0.5, 0.7),
+                "trailing_stop_pips": tune.randint(10, 30),
+                "rsi_buy": tune.randint(50, 70),
+                "rl_max_position": tune.uniform(0.5, 2.0),
+                "rl_risk_penalty": tune.uniform(0.05, 0.2),
+                "rl_transaction_cost": tune.uniform(5e-5, 3e-4),
+                "backtest_window_months": tune.randint(3, 12),
+            }
+            tune.run(
+                objective_tune,
+                search_alg=search_alg,
+                num_samples=15,
+                config=search_space,
+                resources_per_trial=cfg.get("ray_resources", {}),
+            )
             ray.shutdown()
         else:
-            study.optimize(objective, n_trials=15)
+            study = optuna.create_study(direction="maximize")
+            study.optimize(objective_optuna, n_trials=15)
 
         df = pd.DataFrame(results)
         if not _LOG_PATH.exists():
