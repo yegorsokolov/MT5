@@ -28,6 +28,30 @@ from dataset import (
 logger = setup_logging()
 
 
+def log_shap_importance(pipe: Pipeline, X_train: pd.DataFrame, features: list[str]) -> None:
+    """Compute SHAP values and save ranked features."""
+    if shap is None:
+        logger.info("shap not installed, skipping feature importance")
+        return
+    try:
+        X_used = X_train
+        if "scaler" in pipe.named_steps:
+            X_used = pipe.named_steps["scaler"].transform(X_used)
+        explainer = shap.TreeExplainer(pipe.named_steps["clf"])
+        shap_values = explainer.shap_values(X_used)
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]
+        fi = pd.DataFrame({
+            "feature": features,
+            "importance": np.abs(shap_values).mean(axis=0),
+        })
+        out = LOG_DIR / "feature_importance.csv"
+        fi.sort_values("importance", ascending=False).to_csv(out, index=False)
+        logger.info("Logged feature importance to %s", out)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to compute SHAP values: %s", e)
+
+
 @log_exceptions
 def main():
     cfg = load_config()
@@ -101,28 +125,7 @@ def main():
         mlflow.log_metric("f1_weighted", report["weighted avg"]["f1-score"])
         mlflow.log_artifact(str(root / "model.joblib"))
 
-        if shap is not None:
-            try:
-                X_used = X_train
-                if "scaler" in pipe.named_steps:
-                    X_used = pipe.named_steps["scaler"].transform(X_used)
-                explainer = shap.TreeExplainer(pipe.named_steps["clf"])
-                shap_values = explainer.shap_values(X_used)
-                if isinstance(shap_values, list):
-                    shap_values = shap_values[1]
-                imp = np.abs(shap_values).mean(axis=0)
-                fi = pd.DataFrame({"feature": features, "importance": imp})
-                fi.sort_values("importance", ascending=False).to_csv(
-                    LOG_DIR / "feature_importance.csv", index=False
-                )
-                logger.info(
-                    "Logged feature importance to %s",
-                    LOG_DIR / "feature_importance.csv",
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Failed to compute SHAP values: %s", e)
-        else:
-            logger.info("shap not installed, skipping feature importance")
+        log_shap_importance(pipe, X_train, features)
 
 
 if __name__ == "__main__":
