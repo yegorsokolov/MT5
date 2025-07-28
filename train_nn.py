@@ -4,6 +4,7 @@ from pathlib import Path
 
 import joblib
 import math
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -159,6 +160,15 @@ def main():
     seq_len = cfg.get("sequence_length", 50)
     X_train, y_train = make_sequence_arrays(train_df, features, seq_len)
     X_test, y_test = make_sequence_arrays(test_df, features, seq_len)
+
+    if cfg.get("use_data_augmentation", False):
+        aug_path = root / "data" / "augmented" / "synthetic_sequences.npz"
+        if aug_path.exists():
+            data = np.load(aug_path)
+            X_aug = data["X"]
+            y_aug = data["y"]
+            X_train = np.concatenate([X_train, X_aug])
+            y_train = np.concatenate([y_train, y_aug])
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
