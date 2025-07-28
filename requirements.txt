@@ -26,3 +26,6 @@ FinGPT
 shap  # optional for feature importance
 statsmodels
 ydata-synthetic
+
+grpcio
+grpcio-tools
