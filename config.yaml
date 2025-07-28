@@ -85,4 +85,5 @@ max_slippage: 0.0005
 # anomaly detection settings
 use_anomaly_check: false
 anomaly_threshold: 0.5
+use_data_augmentation: false
 
