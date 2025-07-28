@@ -49,6 +49,7 @@ def main():
                 "rl_transaction_cost": trial.suggest_float(
                     "rl_transaction_cost", 5e-5, 3e-4
                 ),
+                "rl_max_kl": trial.suggest_float("rl_max_kl", 0.005, 0.05),
                 "backtest_window_months": trial.suggest_int(
                     "backtest_window_months", 3, 12
                 ),
@@ -83,6 +84,7 @@ def main():
                 "rl_max_position": tune.uniform(0.5, 2.0),
                 "rl_risk_penalty": tune.uniform(0.05, 0.2),
                 "rl_transaction_cost": tune.uniform(5e-5, 3e-4),
+                "rl_max_kl": tune.uniform(0.005, 0.05),
                 "backtest_window_months": tune.randint(3, 12),
             }
             tune.run(
@@ -112,6 +114,7 @@ def main():
         best_cfg["rl_max_position"] = float(best_params["rl_max_position"])
         best_cfg["rl_risk_penalty"] = float(best_params["rl_risk_penalty"])
         best_cfg["rl_transaction_cost"] = float(best_params["rl_transaction_cost"])
+        best_cfg["rl_max_kl"] = float(best_params.get("rl_max_kl", cfg.get("rl_max_kl", 0.01)))
         best_cfg["backtest_window_months"] = int(best_params["backtest_window_months"])
 
         best_metrics, best_returns = run_backtest(best_cfg, return_returns=True)
@@ -143,6 +146,8 @@ def main():
                     logger.warning("rl_max_position modification blocked by risk rules")
             if best_cfg["rl_transaction_cost"] != cfg.get("rl_transaction_cost"):
                 update_config("rl_transaction_cost", best_cfg["rl_transaction_cost"], reason)
+            if best_cfg["rl_max_kl"] != cfg.get("rl_max_kl", 0.01):
+                update_config("rl_max_kl", best_cfg["rl_max_kl"], reason)
             if best_cfg["backtest_window_months"] != cfg.get("backtest_window_months"):
                 update_config("backtest_window_months", best_cfg["backtest_window_months"], reason)
 
@@ -154,6 +159,7 @@ def main():
                 "rl_max_position": best_cfg["rl_max_position"],
                 "rl_risk_penalty": best_cfg["rl_risk_penalty"],
                 "rl_transaction_cost": best_cfg["rl_transaction_cost"],
+                "rl_max_kl": best_cfg["rl_max_kl"],
                 "backtest_window_months": best_cfg["backtest_window_months"],
             }
         )

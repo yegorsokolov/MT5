@@ -95,6 +95,9 @@ rl_transaction_cost: 0.0001
 rl_risk_penalty: 0.1
 rl_var_window: 30
 ```
+You can also specify `rl_algorithm: TRPO` to use the Trust Region Policy
+Optimization implementation from `sb3-contrib`.  The trust region size is
+controlled by `rl_max_kl` (default `0.01`).
 For a full pipeline combining all of these approaches run `train_combined.py`.
 
 ## Installation
