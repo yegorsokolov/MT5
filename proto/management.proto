@@ -1,0 +1,42 @@
+syntax = "proto3";
+package management;
+
+message StartRequest {
+  string bot_id = 1;
+}
+
+message BotIdRequest {
+  string bot_id = 1;
+}
+
+message StatusResponse {
+  string status = 1;
+}
+
+message BotStatusRequest {
+  string bot_id = 1;
+  int32 lines = 2;
+}
+
+message BotStatusResponse {
+  string bot_id = 1;
+  bool running = 2;
+  int32 pid = 3;
+  int32 returncode = 4;
+  string logs = 5;
+}
+
+message LogRequest {
+  int32 lines = 1;
+}
+
+message LogResponse {
+  string logs = 1;
+}
+
+service ManagementService {
+  rpc StartBot(StartRequest) returns (StatusResponse);
+  rpc StopBot(BotIdRequest) returns (StatusResponse);
+  rpc BotStatus(BotStatusRequest) returns (BotStatusResponse);
+  rpc GetLogs(LogRequest) returns (LogResponse);
+}
