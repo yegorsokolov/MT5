@@ -276,7 +276,10 @@ Built-in examples include the `atr`, `donchian` and `keltner` plugins which add
 ATR, Donchian and Keltner channel signals. A regime classification plugin can
 also be enabled to label each row using a hidden Markov model.
 Risk checks for spread limits and slippage detection are provided by the
-`spread` and `slippage` modules.
+`spread` and `slippage` modules.  A reinforcement learning based sizing policy
+is implemented in `plugins/rl_risk.py`; it outputs a position size multiplier
+given recent returns and risk metrics.  The policy is trained by
+`train_rl.py` and saved under `models/` for use during live trading.
 
 ## Strategy Templates
 

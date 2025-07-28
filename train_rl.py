@@ -8,6 +8,8 @@ from gym import spaces
 from stable_baselines3 import PPO, SAC
 from sb3_contrib.qrdqn import QRDQN
 
+from plugins.rl_risk import RiskEnv
+
 try:
     import gymnasium as gymn
 except Exception:  # pragma: no cover - optional dependency
@@ -286,6 +288,20 @@ def main():
         model.learn(total_timesteps=cfg.get("rl_steps", 5000))
         model.save(root / "model_rl")
         print("RL model saved to", root / "model_rl.zip")
+
+    # train risk management policy
+    returns = df.sort_index()["return"].dropna()
+    risk_env = RiskEnv(
+        returns.values,
+        lookback=cfg.get("risk_lookback_bars", 50),
+        max_size=cfg.get("rl_max_position", 1.0),
+    )
+    risk_model = PPO("MlpPolicy", risk_env, verbose=0)
+    risk_model.learn(total_timesteps=cfg.get("rl_steps", 5000))
+    models_dir = root / "models"
+    models_dir.mkdir(exist_ok=True)
+    risk_model.save(models_dir / "rl_risk_policy")
+    print("Risk policy saved to", models_dir / "rl_risk_policy.zip")
 
 
 if __name__ == "__main__":
