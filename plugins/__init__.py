@@ -30,6 +30,7 @@ for _mod in [
     'anomaly',
     'qlib_features',
     'pair_trading',
+    'rl_risk',
 ]:
     try:
         __import__(f'{__name__}.{_mod}')
