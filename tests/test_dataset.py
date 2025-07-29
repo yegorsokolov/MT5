@@ -208,3 +208,41 @@ def test_qlib_features_plugin(monkeypatch):
 
     result = ds.make_features(df)
     assert {"qlib_ma10", "qlib_ma30", "qlib_rsi14"}.issubset(result.columns)
+
+
+def test_graph_plugin_receives_adjacency(monkeypatch):
+    monkeypatch.setattr(dataset, "get_events", lambda past_events=False: [])
+    monkeypatch.setattr(dataset, "add_news_sentiment_features", lambda df: df.assign(news_sentiment=0.0))
+    monkeypatch.setattr(
+        dataset,
+        "add_index_features",
+        lambda df: df.assign(
+            sp500_ret=0.0,
+            sp500_vol=0.0,
+            vix_ret=0.0,
+            vix_vol=0.0,
+        ),
+    )
+    import utils
+    monkeypatch.setattr(utils, "load_config", lambda: {"use_atr": False, "use_donchian": False})
+
+    captured = {}
+
+    def dummy_plugin(df, adjacency_matrices=None):
+        captured["count"] = len(adjacency_matrices) if adjacency_matrices else 0
+        return df.assign(graph_dummy=1)
+
+    monkeypatch.setattr(dataset, "FEATURE_PLUGINS", [dummy_plugin])
+
+    n = 60
+    ts = pd.date_range("2020-01-01", periods=n, freq="min")
+    df = pd.DataFrame({
+        "Timestamp": list(ts) * 2,
+        "Symbol": ["A"] * n + ["B"] * n,
+        "Bid": np.linspace(1, 2, 2 * n),
+        "Ask": np.linspace(1.0001, 2.0001, 2 * n),
+    })
+
+    result = dataset.make_features(df)
+    assert "graph_dummy" in result.columns
+    assert captured.get("count", 0) > 0

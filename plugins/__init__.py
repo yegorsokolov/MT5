@@ -31,6 +31,7 @@ for _mod in [
     'qlib_features',
     'pair_trading',
     'rl_risk',
+    'graph_features',
 ]:
     try:
         __import__(f'{__name__}.{_mod}')
