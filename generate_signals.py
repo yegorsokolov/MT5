@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 
 from utils import load_config
+from river import compose
 from dataset import load_history_parquet, make_features, load_history_config
 from train_rl import TradingEnv, DiscreteTradingEnv, RLLibTradingEnv
 from stable_baselines3 import PPO, SAC, A2C
@@ -172,6 +173,15 @@ def main():
     models = load_models(model_paths)
     if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
+
+    online_model = None
+    online_path = Path(__file__).resolve().parent / "models" / "online.joblib"
+    if cfg.get("use_online_model", False) and online_path.exists():
+        try:
+            online_model, _ = joblib.load(online_path)
+            logger.info("Loaded online model from %s", online_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load online model: %s", exc)
     hist_path_pq = Path(__file__).resolve().parent / "data" / "history.parquet"
     if hist_path_pq.exists():
         df = load_history_parquet(hist_path_pq)
@@ -236,7 +246,15 @@ def main():
         probs = predictor.predict_proba(df[features])[1].values
     else:
         prob_list = [m.predict_proba(df[features])[:, 1] for m in models]
-        if len(prob_list) == 1:
+        if online_model is not None:
+            river_probs = [
+                online_model.predict_proba_one(row).get(1, 0.0)
+                for row in df[features].to_dict("records")
+            ]
+            prob_list.append(np.array(river_probs))
+        if not prob_list:
+            probs = np.zeros(len(df))
+        elif len(prob_list) == 1:
             probs = prob_list[0]
         else:
             method = cfg.get("ensemble_method", "average")
