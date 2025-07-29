@@ -55,8 +55,8 @@ symbols:
 threshold: 0.55
 trailing_stop_pips: 20
 train_rows: 50000
-use_ray: false
-use_dask: false
+use_ray: true
+use_dask: true
 dask_cluster_url:
 parallel_backtest: true
 use_scaler: true
@@ -67,22 +67,22 @@ use_atr: true
 # enable or disable the Donchian channel plugin
 use_donchian: true
 # enable FinBERT sentiment scoring
-use_finbert_sentiment: false
+use_finbert_sentiment: true
 # enable FinGPT sentiment scoring
-use_fingpt_sentiment: false
+use_fingpt_sentiment: true
 # enable FinGPT news summarization
-use_fingpt_summary: false
+use_fingpt_summary: true
 # enable or disable the Keltner channel plugin
-use_keltner: false
+use_keltner: true
 # enable Qlib technical factors
-use_qlib_features: false
+use_qlib_features: true
 # pair trading settings
-use_pair_trading: false
+use_pair_trading: true
 pair_z_window: 20
 pair_long_threshold: -2.0
 pair_short_threshold: 2.0
 # enable or disable the HMM regime classifier plugin
-use_regime_classifier: false
+use_regime_classifier: true
 blend_with_rl: false
 # risk check settings
 use_spread_check: true
@@ -90,7 +90,7 @@ max_spread: 0.0005
 use_slippage_check: true
 max_slippage: 0.0005
 # anomaly detection settings
-use_anomaly_check: false
+use_anomaly_check: true
 anomaly_threshold: 0.5
-use_data_augmentation: false
+use_data_augmentation: true
 

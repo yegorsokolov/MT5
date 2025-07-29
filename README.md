@@ -28,6 +28,10 @@ The solution is split into two components:
    window sizes and key RL parameters with cross‑validated walk‑forward
    backtests. Any improved settings are written back to `config.yaml` along with
    the reason in `logs/config_changes.csv` and logged to MLflow.
+5. **Feature evaluator** — iteratively tests optional features across rolling
+   backtests and disables those that hurt performance. Run
+   `python scripts/evaluate_features.py` after collecting enough data to update
+   `config.yaml` automatically.
 ### Risk management
 
 Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `max_var`, `max_stress_loss`, `max_cvar` and `var_decay`, which controls the exponential weighting for the filtered VaR calculation.
