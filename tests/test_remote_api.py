@@ -14,7 +14,10 @@ def load_api(tmp_log):
         LOG_FILE=tmp_log,
         setup_logging=lambda: None,
         log_exceptions=lambda f: f,
+        TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
+        ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
     )
+    sys.modules['metrics'] = importlib.import_module('metrics')
     return importlib.reload(importlib.import_module('remote_api'))
 
 class DummyProc:
@@ -71,3 +74,10 @@ def test_metrics_websocket(tmp_path):
         data = ws.receive_json()
         assert data["equity"] == [1, 2, 3]
         assert data["metrics"]["sharpe"] == 1.0
+
+
+def test_metrics_endpoint(tmp_path):
+    api, client = setup_client(tmp_path)
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert "trade_count" in resp.text

@@ -10,6 +10,8 @@ from functools import wraps
 from pathlib import Path
 from datetime import datetime
 
+from metrics import ERROR_COUNT, TRADE_COUNT
+
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
@@ -60,6 +62,7 @@ def log_exceptions(func):
             return result
         except Exception:
             log.exception("Error in %s", func.__name__)
+            ERROR_COUNT.inc()
             raise
 
     return wrapper
@@ -76,3 +79,4 @@ def log_trade(event: str, **fields) -> None:
         row = {"timestamp": datetime.utcnow().isoformat(), "event": event}
         row.update(fields)
         writer.writerow(row)
+    TRADE_COUNT.inc()

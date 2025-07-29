@@ -15,6 +15,8 @@ from pydantic import BaseModel
 import os
 from utils import update_config
 from log_utils import LOG_FILE
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
 
 
 class ConfigUpdate(BaseModel):
@@ -84,6 +86,12 @@ async def push_metrics(data: Dict[str, Any], _: None = Depends(authorize)):
     """Receive metrics data and broadcast to clients."""
     await broadcast_update(data)
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+async def get_metrics() -> Response:
+    """Expose Prometheus metrics."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.websocket("/ws/metrics")
