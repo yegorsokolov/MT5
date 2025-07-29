@@ -100,6 +100,9 @@ rl_var_window: 30
 You can also specify `rl_algorithm: TRPO` to use the Trust Region Policy
 Optimization implementation from `sb3-contrib`.  The trust region size is
 controlled by `rl_max_kl` (default `0.01`).
+`rl_algorithm` can also be set to `A2C` or `A3C` to train Advantage Actor-Critic
+agents with Stable-Baselines3.  `A3C` launches multiple parallel environments
+with the number controlled by `rl_num_envs` (default `4`).
 For a full pipeline combining all of these approaches run `train_combined.py`.
 
 ## Installation

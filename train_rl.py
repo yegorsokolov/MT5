@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import gym
 from gym import spaces
-from stable_baselines3 import PPO, SAC
+from stable_baselines3 import PPO, SAC, A2C
+from stable_baselines3.common.vec_env import SubprocVecEnv
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO
 
@@ -216,6 +217,30 @@ def main():
             var_window=cfg.get("rl_var_window", 30),
         )
         model = PPO("MlpPolicy", env, verbose=0)
+    elif algo == "A2C":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = A2C("MlpPolicy", env, verbose=0)
+    elif algo == "A3C":
+        n_envs = int(cfg.get("rl_num_envs", 4))
+        def make_env():
+            return TradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+            )
+
+        env = SubprocVecEnv([make_env for _ in range(n_envs)])
+        model = A2C("MlpPolicy", env, verbose=0)
     elif algo == "SAC":
         env = TradingEnv(
             df,

@@ -9,7 +9,7 @@ import numpy as np
 from utils import load_config
 from dataset import load_history_parquet, make_features, load_history_config
 from train_rl import TradingEnv, DiscreteTradingEnv, RLLibTradingEnv
-from stable_baselines3 import PPO, SAC
+from stable_baselines3 import PPO, SAC, A2C
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO
 from sklearn.linear_model import LogisticRegression
@@ -64,6 +64,16 @@ def rl_signals(df, features, cfg):
             var_window=cfg.get("rl_var_window", 30),
         )
         model = PPO.load(model_path, env=env)
+    elif algo == "A2C" or algo == "A3C":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = A2C.load(model_path, env=env)
     elif algo == "SAC":
         env = TradingEnv(
             df,
