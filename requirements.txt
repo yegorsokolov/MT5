@@ -15,6 +15,7 @@ sb3-contrib
 gym
 MetaTrader5
 ray
+autogluon
 scikit-optimize
 scipy
 pyzmq

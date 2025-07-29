@@ -167,9 +167,10 @@ def rl_signals(df, features, cfg):
 def main():
     cfg = load_config()
 
+    model_type = cfg.get("model_type", "lgbm").lower()
     model_paths = cfg.get("ensemble_models", ["model.joblib"])
     models = load_models(model_paths)
-    if not models:
+    if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
     hist_path_pq = Path(__file__).resolve().parent / "data" / "history.parquet"
     if hist_path_pq.exists():
@@ -227,15 +228,22 @@ def main():
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
 
-    prob_list = [m.predict_proba(df[features])[:, 1] for m in models]
-    if len(prob_list) == 1:
-        probs = prob_list[0]
+    if model_type == "autogluon":
+        from autogluon.tabular import TabularPredictor
+
+        ag_path = Path(__file__).resolve().parent / "models" / "autogluon"
+        predictor = TabularPredictor.load(str(ag_path))
+        probs = predictor.predict_proba(df[features])[1].values
     else:
-        method = cfg.get("ensemble_method", "average")
-        if method == "bayesian":
-            probs = bayesian_average(prob_list)
+        prob_list = [m.predict_proba(df[features])[:, 1] for m in models]
+        if len(prob_list) == 1:
+            probs = prob_list[0]
         else:
-            probs = np.mean(prob_list, axis=0)
+            method = cfg.get("ensemble_method", "average")
+            if method == "bayesian":
+                probs = bayesian_average(prob_list)
+            else:
+                probs = np.mean(prob_list, axis=0)
 
     if cfg.get("blend_with_rl", False):
         rl_probs = rl_signals(df, features, cfg)
