@@ -154,6 +154,12 @@ python realtime_train.py
 This script continuously pulls ticks from the terminal, retrains the model and
 pushes the updated dataset and model back to the repository.
 
+```
+python train_online.py
+```
+This optional script reads the features produced by `realtime_train.py` and
+incrementally updates a lightweight river model stored under `models/online.joblib`.
+
 ## Deployment Guide
 
 Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS:
@@ -457,3 +463,8 @@ included with the tests the impact of scaling was minor:
 
 In practice the benefit of scaling will depend on the underlying market data
 and features.
+
+The live signal generator can also blend in predictions from an incremental
+model trained with `train_online.py`. Set `use_online_model: true` in
+`config.yaml` and run the trainer alongside `realtime_train.py` to enable this
+behaviour.
