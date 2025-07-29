@@ -4,6 +4,8 @@ import zmq
 import zmq.asyncio
 from typing import AsyncGenerator
 
+from metrics import QUEUE_DEPTH
+
 import asyncio
 from proto import signals_pb2
 
@@ -48,6 +50,7 @@ def get_async_subscriber(connect_address: str | None = None, topic: str = "") ->
 def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame) -> None:
     """Publish rows of a dataframe as Protobuf messages."""
     for _, row in df.iterrows():
+        QUEUE_DEPTH.inc()
         msg = signals_pb2.Signal(
             timestamp=str(row["Timestamp"]),
             symbol=str(row.get("Symbol", "")),
@@ -59,6 +62,7 @@ def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame) -> None:
 async def publish_dataframe_async(sock: zmq.asyncio.Socket, df: pd.DataFrame) -> None:
     """Asynchronously publish rows of a dataframe as Protobuf messages."""
     for _, row in df.iterrows():
+        QUEUE_DEPTH.inc()
         msg = signals_pb2.Signal(
             timestamp=str(row["Timestamp"]),
             symbol=str(row.get("Symbol", "")),
@@ -73,4 +77,5 @@ async def iter_messages(sock: zmq.asyncio.Socket) -> AsyncGenerator[dict, None]:
         raw = await sock.recv()
         sig = signals_pb2.Signal()
         sig.ParseFromString(raw)
+        QUEUE_DEPTH.dec()
         yield {"Timestamp": sig.timestamp, "Symbol": sig.symbol, "prob": float(sig.probability)}
