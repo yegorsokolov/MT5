@@ -533,6 +533,8 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     use_cache = cfg.get("use_feature_cache", False)
     dask_url = cfg.get("dask_cluster_url")
 
+    adjacency_matrices: dict | None = None
+
     if use_cache and cache_path.exists():
         conn = duckdb.connect(cache_path.as_posix())
         tables = {t[0] for t in conn.execute("PRAGMA show_tables").fetchall()}
@@ -584,7 +586,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
             group.loc[dc_down, "donchian_break"] = -1
 
         # Bollinger bands (20 period) and breakout signal
-        group["ma_h4"] = group["mid"].rolling(240).mean()
+        group["ma_h4"] = group["mid"].rolling(240, min_periods=1).mean()
         boll_ma = group["mid"].rolling(20).mean()
         boll_std = group["mid"].rolling(20).std()
         group["boll_upper"] = boll_ma + 2 * boll_std
@@ -733,13 +735,24 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
                     df = df.merge(pair_feat, on="Timestamp", how="left")
 
         pivot_filled = pivot.fillna(0)
-        n_comp = min(3, len(pivot.columns))
-        pca = PCA(n_components=n_comp)
-        factors = pca.fit_transform(pivot_filled)
-        factor_df = pd.DataFrame(
-            factors, index=pivot.index, columns=[f"factor_{i+1}" for i in range(n_comp)]
-        ).reset_index()
-        df = df.merge(factor_df, on="Timestamp", how="left")
+        if (
+            pivot_filled.empty
+            or pivot_filled.shape[1] == 0
+            or len(pivot_filled) < 2
+        ):
+            factor_df = pd.DataFrame(index=pivot.index)
+        else:
+            n_comp = min(3, len(pivot.columns))
+            pca = PCA(n_components=n_comp)
+            factors = pca.fit_transform(pivot_filled)
+            factor_df = pd.DataFrame(
+                factors,
+                index=pivot.index,
+                columns=[f"factor_{i+1}" for i in range(n_comp)],
+            )
+        if not factor_df.empty:
+            factor_df = factor_df.reset_index()
+            df = df.merge(factor_df, on="Timestamp", how="left")
     else:
         if use_dask:
             ddf = dd.from_pandas(df, npartitions=cfg.get("dask_partitions", 4))
@@ -750,6 +763,16 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
     df = add_index_features(df)
+
+    if adjacency_matrices is None:
+        if "Symbol" in df.columns:
+            syms = sorted(df["Symbol"].unique())
+            adjacency_matrices = {
+                ts: np.zeros((len(syms), len(syms)))
+                for ts in df["Timestamp"].unique()
+            }
+        else:
+            adjacency_matrices = {}
 
     for plugin in FEATURE_PLUGINS:
         try:
