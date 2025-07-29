@@ -11,11 +11,17 @@ spec:
     metadata:
       labels:
         app: mt5-bot
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
     spec:
       containers:
         - name: bot
           image: ghcr.io/youruser/mt5-bot:latest
           args: ["bash", "scripts/run_bot.sh"]
+          ports:
+            - containerPort: 8000
           env:
             - name: CONFIG_FILE
               value: "/opt/bot/config.yaml"

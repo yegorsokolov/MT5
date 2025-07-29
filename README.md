@@ -409,6 +409,23 @@ Example:
 curl -H "X-API-Key: <token>" http://localhost:8000/health
 ```
 
+### Monitoring and Dashboard
+
+The API now exposes Prometheus metrics at `/metrics`. Deploying Prometheus and
+Grafana lets you monitor queue depth, trade counts and error rates in real time.
+Add the following scrape annotations to the deployment so Prometheus discovers
+the service:
+
+```yaml
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/path: "/metrics"
+      prometheus.io/port: "8000"
+```
+
+Import the provided Grafana dashboard JSON in the `grafana/` folder to visualise
+these metrics.
+
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.
 
