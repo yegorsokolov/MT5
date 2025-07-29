@@ -49,6 +49,7 @@ rl_algorithm: PPO
 rsi_buy: 55
 short_vol_period: 10
 symbol: XAUUSD
+model_type: lgbm
 symbols:
 - XAUUSD
 - GBPUSD

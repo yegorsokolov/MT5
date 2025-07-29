@@ -130,6 +130,8 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    python train_nn.py
    # train symbol-specific adapters
    python train_meta.py
+   # train an AutoGluon TabularPredictor
+   python train_autogluon.py
    python train_rl.py
    # end-to-end training of all components
    python train_combined.py
@@ -139,7 +141,10 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    If `data_urls` are provided, `train.py` will download the file(s) for the configured symbols via `gdown` before training.
    When `api_history` entries are present, the data will instead be pulled directly from the MetaTrader&nbsp;5 history center.
 
-The resulting model file (`model.joblib`) can be loaded by the EA.
+The resulting model file (`model.joblib`) can be loaded by the EA. When
+training with `train_autogluon.py` the best predictor is stored under
+`models/autogluon` and will be used when `model_type: autogluon` is set in
+`config.yaml`.
 
 To run live training and keep the repository in sync:
 
