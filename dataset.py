@@ -12,6 +12,7 @@ from sklearn.decomposition import PCA
 from dateutil import parser as date_parser
 import requests
 import logging
+import inspect
 
 try:
     from plugins import FEATURE_PLUGINS
@@ -655,6 +656,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         mom_df = pd.DataFrame(mom_features, index=pivot.index).reset_index()
         df = df.merge(mom_df, on="Timestamp", how="left")
 
+        adjacency_matrices = None
         if df["Symbol"].nunique() > 1:
             pair_data = {}
             for sym1 in pivot.columns:
@@ -662,6 +664,18 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
                     if sym1 == sym2:
                         continue
                     pair_data[(sym1, sym2)] = pivot[sym1].rolling(30).corr(pivot[sym2])
+
+            symbols = list(pivot.columns)
+            adjacency_matrices = {}
+            for ts in pivot.index:
+                mat = np.zeros((len(symbols), len(symbols)))
+                for i, s1 in enumerate(symbols):
+                    for j, s2 in enumerate(symbols):
+                        if s1 == s2:
+                            continue
+                        val = pair_data[(s1, s2)].loc[ts]
+                        mat[i, j] = 0.0 if pd.isna(val) else float(val)
+                adjacency_matrices[ts] = mat
 
             pair_df = pd.concat(pair_data, axis=1)
             pair_df.columns = pd.MultiIndex.from_tuples(
@@ -739,7 +753,10 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
 
     for plugin in FEATURE_PLUGINS:
         try:
-            df = plugin(df)
+            if "adjacency_matrices" in inspect.signature(plugin).parameters:
+                df = plugin(df, adjacency_matrices=adjacency_matrices)
+            else:
+                df = plugin(df)
         except Exception:
             pass
 
