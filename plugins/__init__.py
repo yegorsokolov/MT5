@@ -30,6 +30,7 @@ for _mod in [
     'anomaly',
     'qlib_features',
     'tsfresh_features',
+    'fred_features',
     'autoencoder_features',
     'pair_trading',
     'rl_risk',

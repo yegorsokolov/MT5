@@ -7,6 +7,7 @@ GitPython
 gdown
 duckdb>=0.9.2
 dask[distributed]
+pandas_datareader
 lightgbm
 torch  # required for autoencoder features
 tqdm
