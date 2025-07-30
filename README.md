@@ -125,6 +125,15 @@ Example settings:
 rl_algorithm: RecurrentPPO
 rl_steps: 10000
 ```
+`rl_algorithm: HierarchicalPPO` enables the options framework from
+`sb3-contrib` where a manager policy chooses trade direction and a worker
+controls position sizing.  The trained model is stored as
+`model_hierarchical.zip`.
+
+```yaml
+rl_algorithm: HierarchicalPPO
+rl_steps: 10000
+```
 `rl_algorithm` can also be set to `A2C` or `A3C` to train Advantage Actor-Critic
 agents with Stable-Baselines3.  `A3C` launches multiple parallel environments
 with the number controlled by `rl_num_envs` (default `4`).
