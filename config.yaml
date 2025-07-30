@@ -77,6 +77,8 @@ use_fingpt_summary: true
 use_keltner: true
 # enable Qlib technical factors
 use_qlib_features: true
+# enable tsfresh feature plugin
+use_tsfresh: false
 # enable graph attention network embeddings
 use_gat_features: false
 # pair trading settings
