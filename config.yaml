@@ -83,6 +83,11 @@ use_tsfresh: false
 use_gat_features: false
 # enable autoencoder price embeddings
 use_autoencoder_features: false
+# macroeconomic data from FRED
+use_fred_features: false
+fred_series:
+  - FEDFUNDS
+  - GDP
 # pair trading settings
 use_pair_trading: true
 pair_z_window: 20
