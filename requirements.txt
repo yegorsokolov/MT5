@@ -8,7 +8,7 @@ gdown
 duckdb>=0.9.2
 dask[distributed]
 lightgbm
-torch
+torch  # required for autoencoder features
 tqdm
 stable-baselines3
 sb3-contrib
