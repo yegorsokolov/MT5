@@ -9,10 +9,19 @@ import numpy as np
 from utils import load_config
 from river import compose
 from dataset import load_history_parquet, make_features, load_history_config
-from train_rl import TradingEnv, DiscreteTradingEnv, RLLibTradingEnv
+from train_rl import (
+    TradingEnv,
+    DiscreteTradingEnv,
+    RLLibTradingEnv,
+    HierarchicalTradingEnv,
+)
 from stable_baselines3 import PPO, SAC, A2C
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
+try:  # optional import for hierarchical PPO
+    from sb3_contrib import HierarchicalPPO  # type: ignore
+except Exception:  # pragma: no cover - algorithm may not be available
+    HierarchicalPPO = None  # type: ignore
 from sklearn.linear_model import LogisticRegression
 import asyncio
 from signal_queue import (
@@ -49,12 +58,16 @@ def rl_signals(df, features, cfg):
     model_recurrent = (
         Path(__file__).resolve().parent / "models" / "recurrent_rl" / "recurrent_model.zip"
     )
+    model_hierarchical = Path(__file__).resolve().parent / "model_hierarchical.zip"
     algo = cfg.get("rl_algorithm", "PPO").upper()
     if algo == "RLLIB":
         if not model_rllib.exists():
             return np.zeros(len(df))
     elif algo == "RECURRENTPPO":
         if not model_recurrent.exists():
+            return np.zeros(len(df))
+    elif algo == "HIERARCHICALPPO":
+        if not model_hierarchical.exists():
             return np.zeros(len(df))
     else:
         if not model_path.exists():
@@ -111,6 +124,18 @@ def rl_signals(df, features, cfg):
             var_window=cfg.get("rl_var_window", 30),
         )
         model = RecurrentPPO.load(model_recurrent, env=env)
+    elif algo == "HIERARCHICALPPO":
+        if HierarchicalPPO is None:
+            return np.zeros(len(df))
+        env = HierarchicalTradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = HierarchicalPPO.load(model_hierarchical, env=env)
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,
@@ -168,15 +193,22 @@ def rl_signals(df, features, cfg):
             action, state = model.predict(
                 obs, state=state, episode_start=episode_start, deterministic=True
             )
+        elif algo == "HIERARCHICALPPO":
+            action, _ = model.predict(obs, deterministic=True)
         else:
             action, _ = model.predict(obs, deterministic=True)
-        a = float(action[0]) if not np.isscalar(action) else float(action)
+        if algo == "HIERARCHICALPPO":
+            a = float(action["manager"])  # direction for signal
+            env_action = action
+        else:
+            a = float(action[0]) if not np.isscalar(action) else float(action)
+            env_action = action
         actions.append(a)
         if algo == "RLLIB":
             obs, _, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
         else:
-            obs, _, done, _ = env.step(action)
+            obs, _, done, _ = env.step(env_action)
         episode_start = np.array([done], dtype=bool)
 
     probs = (np.array(actions) > 0).astype(float)
