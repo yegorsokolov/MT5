@@ -117,6 +117,14 @@ rl_var_window: 30
 You can also specify `rl_algorithm: TRPO` to use the Trust Region Policy
 Optimization implementation from `sb3-contrib`.  The trust region size is
 controlled by `rl_max_kl` (default `0.01`).
+`rl_algorithm: RecurrentPPO` trains the LSTM-based PPO implementation from
+`sb3-contrib` and writes checkpoints to `models/recurrent_rl/`.
+Example settings:
+
+```yaml
+rl_algorithm: RecurrentPPO
+rl_steps: 10000
+```
 `rl_algorithm` can also be set to `A2C` or `A3C` to train Advantage Actor-Critic
 agents with Stable-Baselines3.  `A3C` launches multiple parallel environments
 with the number controlled by `rl_num_envs` (default `4`).

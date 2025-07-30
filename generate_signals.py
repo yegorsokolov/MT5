@@ -12,7 +12,7 @@ from dataset import load_history_parquet, make_features, load_history_config
 from train_rl import TradingEnv, DiscreteTradingEnv, RLLibTradingEnv
 from stable_baselines3 import PPO, SAC, A2C
 from sb3_contrib.qrdqn import QRDQN
-from sb3_contrib import TRPO
+from sb3_contrib import TRPO, RecurrentPPO
 from sklearn.linear_model import LogisticRegression
 import asyncio
 from signal_queue import (
@@ -46,9 +46,15 @@ def rl_signals(df, features, cfg):
     """Return probability-like signals from a trained RL agent."""
     model_path = Path(__file__).resolve().parent / "model_rl.zip"
     model_rllib = Path(__file__).resolve().parent / "model_rllib"
+    model_recurrent = (
+        Path(__file__).resolve().parent / "models" / "recurrent_rl" / "recurrent_model.zip"
+    )
     algo = cfg.get("rl_algorithm", "PPO").upper()
     if algo == "RLLIB":
         if not model_rllib.exists():
+            return np.zeros(len(df))
+    elif algo == "RECURRENTPPO":
+        if not model_recurrent.exists():
             return np.zeros(len(df))
     else:
         if not model_path.exists():
@@ -95,6 +101,16 @@ def rl_signals(df, features, cfg):
             var_window=cfg.get("rl_var_window", 30),
         )
         model = TRPO.load(model_path, env=env)
+    elif algo == "RECURRENTPPO":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = RecurrentPPO.load(model_recurrent, env=env)
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,
@@ -143,9 +159,15 @@ def rl_signals(df, features, cfg):
         obs = env.reset()
     done = False
     actions = []
+    state = None
+    episode_start = np.ones((1,), dtype=bool)
     while not done:
         if algo == "RLLIB":
             action = model.compute_single_action(obs)
+        elif algo == "RECURRENTPPO":
+            action, state = model.predict(
+                obs, state=state, episode_start=episode_start, deterministic=True
+            )
         else:
             action, _ = model.predict(obs, deterministic=True)
         a = float(action[0]) if not np.isscalar(action) else float(action)
@@ -155,6 +177,7 @@ def rl_signals(df, features, cfg):
             done = terminated or truncated
         else:
             obs, _, done, _ = env.step(action)
+        episode_start = np.array([done], dtype=bool)
 
     probs = (np.array(actions) > 0).astype(float)
     if len(probs) < len(df):
