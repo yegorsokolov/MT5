@@ -4,6 +4,7 @@ from pathlib import Path
 
 import joblib
 import math
+import mlflow
 import numpy as np
 import pandas as pd
 import torch
@@ -11,7 +12,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-from utils import load_config
+from utils import load_config, mlflow_run
 from dataset import (
     load_history_parquet,
     save_history_parquet,
@@ -120,20 +121,21 @@ def main():
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
 
-    symbols = cfg.get("symbols") or [cfg.get("symbol")]
-    dfs = []
-    for sym in symbols:
-        df_sym = load_history_config(sym, cfg, root)
-        df_sym["Symbol"] = sym
-        dfs.append(df_sym)
+    with mlflow_run("training_nn", cfg):
+        symbols = cfg.get("symbols") or [cfg.get("symbol")]
+        dfs = []
+        for sym in symbols:
+            df_sym = load_history_config(sym, cfg, root)
+            df_sym["Symbol"] = sym
+            dfs.append(df_sym)
 
-    df = make_features(pd.concat(dfs, ignore_index=True))
-    if "Symbol" in df.columns:
-        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+        df = make_features(pd.concat(dfs, ignore_index=True))
+        if "Symbol" in df.columns:
+            df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
-    train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
+        train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
 
-    features = [
+        features = [
         "return",
         "ma_5",
         "ma_10",
@@ -145,86 +147,93 @@ def main():
         "news_sentiment",
         "market_regime",
     ]
-    features += [
+        features += [
         c
         for c in df.columns
         if c.startswith("cross_corr_")
         or c.startswith("factor_")
         or c.startswith("cross_mom_")
     ]
-    if "volume_ratio" in df.columns:
-        features.extend(["volume_ratio", "volume_imbalance"])
-    if "SymbolCode" in df.columns:
-        features.append("SymbolCode")
+        if "volume_ratio" in df.columns:
+            features.extend(["volume_ratio", "volume_imbalance"])
+        if "SymbolCode" in df.columns:
+            features.append("SymbolCode")
 
-    seq_len = cfg.get("sequence_length", 50)
-    X_train, y_train = make_sequence_arrays(train_df, features, seq_len)
-    X_test, y_test = make_sequence_arrays(test_df, features, seq_len)
+        seq_len = cfg.get("sequence_length", 50)
+        X_train, y_train = make_sequence_arrays(train_df, features, seq_len)
+        X_test, y_test = make_sequence_arrays(test_df, features, seq_len)
 
-    if cfg.get("use_data_augmentation", False):
-        aug_path = root / "data" / "augmented" / "synthetic_sequences.npz"
-        if aug_path.exists():
-            data = np.load(aug_path)
-            X_aug = data["X"]
-            y_aug = data["y"]
-            X_train = np.concatenate([X_train, X_aug])
-            y_train = np.concatenate([y_train, y_aug])
+        if cfg.get("use_data_augmentation", False):
+            aug_path = root / "data" / "augmented" / "synthetic_sequences.npz"
+            if aug_path.exists():
+                data = np.load(aug_path)
+                X_aug = data["X"]
+                y_aug = data["y"]
+                X_train = np.concatenate([X_train, X_aug])
+                y_train = np.concatenate([y_train, y_aug])
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
-    num_regimes = (
-        int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
-    )
-    model = TransformerModel(
-        len(features),
-        d_model=cfg.get("d_model", 64),
-        nhead=cfg.get("nhead", 4),
-        num_layers=cfg.get("num_layers", 2),
-        num_symbols=num_symbols,
-        num_regimes=num_regimes,
-    ).to(device)
-    optim = torch.optim.Adam(model.parameters(), lr=1e-3)
-    loss_fn = nn.BCELoss()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
+        num_regimes = (
+            int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
+        )
+        model = TransformerModel(
+            len(features),
+            d_model=cfg.get("d_model", 64),
+            nhead=cfg.get("nhead", 4),
+            num_layers=cfg.get("num_layers", 2),
+            num_symbols=num_symbols,
+            num_regimes=num_regimes,
+        ).to(device)
+        optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+        loss_fn = nn.BCELoss()
 
-    train_ds = TensorDataset(
-        torch.tensor(X_train, dtype=torch.float32),
-        torch.tensor(y_train, dtype=torch.float32),
-    )
-    test_ds = TensorDataset(
-        torch.tensor(X_test, dtype=torch.float32),
-        torch.tensor(y_test, dtype=torch.float32),
-    )
-    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
-    test_loader = DataLoader(test_ds, batch_size=256)
+        train_ds = TensorDataset(
+            torch.tensor(X_train, dtype=torch.float32),
+            torch.tensor(y_train, dtype=torch.float32),
+        )
+        test_ds = TensorDataset(
+            torch.tensor(X_test, dtype=torch.float32),
+            torch.tensor(y_test, dtype=torch.float32),
+        )
+        train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
+        test_loader = DataLoader(test_ds, batch_size=256)
 
-    for epoch in range(cfg.get("epochs", 5)):
-        model.train()
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}")
-        for xb, yb in pbar:
-            xb = xb.to(device)
-            yb = yb.to(device)
-            optim.zero_grad()
-            preds = model(xb)
-            loss = loss_fn(preds, yb)
-            loss.backward()
-            optim.step()
-            pbar.set_postfix(loss=loss.item())
+        for epoch in range(cfg.get("epochs", 5)):
+            model.train()
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}")
+            for xb, yb in pbar:
+                xb = xb.to(device)
+                yb = yb.to(device)
+                optim.zero_grad()
+                preds = model(xb)
+                loss = loss_fn(preds, yb)
+                loss.backward()
+                optim.step()
+                pbar.set_postfix(loss=loss.item())
 
-    model.eval()
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for xb, yb in test_loader:
-            xb = xb.to(device)
-            yb = yb.to(device)
-            preds = model(xb)
-            pred_labels = (preds > 0.5).int()
-            correct += (pred_labels == yb.int()).sum().item()
-            total += yb.size(0)
-    print("Test accuracy:", correct / total)
+        model.eval()
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for xb, yb in test_loader:
+                xb = xb.to(device)
+                yb = yb.to(device)
+                preds = model(xb)
+                pred_labels = (preds > 0.5).int()
+                correct += (pred_labels == yb.int()).sum().item()
+                total += yb.size(0)
+        acc = correct / total
+        print("Test accuracy:", acc)
 
-    joblib.dump(model.state_dict(), root / "model_transformer.pt")
-    print("Model saved to", root / "model_transformer.pt")
+        joblib.dump(model.state_dict(), root / "model_transformer.pt")
+        print("Model saved to", root / "model_transformer.pt")
+        mlflow.log_param("epochs", cfg.get("epochs", 5))
+        mlflow.log_param("d_model", cfg.get("d_model", 64))
+        mlflow.log_param("nhead", cfg.get("nhead", 4))
+        mlflow.log_param("num_layers", cfg.get("num_layers", 2))
+        mlflow.log_metric("test_accuracy", acc)
+        mlflow.log_artifact(str(root / "model_transformer.pt"))
 
 
 if __name__ == "__main__":

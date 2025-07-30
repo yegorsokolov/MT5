@@ -2,8 +2,11 @@
 
 from pathlib import Path
 from datetime import datetime
+from contextlib import contextmanager
 import os
 import yaml
+import mlflow
+import log_utils
 
 
 def load_config() -> dict:
@@ -60,3 +63,14 @@ def update_config(key: str, value, reason: str) -> None:
 
     with open(_LOG_PATH, 'a') as f:
         f.write(f"{datetime.utcnow().isoformat()},{key},{old},{value},{reason}\n")
+
+
+@contextmanager
+def mlflow_run(experiment: str, cfg: dict):
+    """Start an MLflow run under ``logs/mlruns`` and log the given config."""
+    logs_dir = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parent / "logs")
+    mlflow.set_tracking_uri(f"file:{logs_dir / 'mlruns'}")
+    mlflow.set_experiment(experiment)
+    with mlflow.start_run():
+        mlflow.log_dict(cfg, "config.yaml")
+        yield

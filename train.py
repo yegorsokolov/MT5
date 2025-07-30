@@ -16,7 +16,7 @@ try:
 except Exception:  # noqa: E722
     shap = None
 
-from utils import load_config
+from utils import load_config, mlflow_run
 from dataset import (
     load_history_parquet,
     save_history_parquet,
@@ -58,8 +58,7 @@ def main():
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
 
-    mlflow.set_experiment("training")
-    with mlflow.start_run():
+    with mlflow_run("training", cfg):
         symbols = cfg.get("symbols") or [cfg.get("symbol")]
         all_dfs = []
         for sym in symbols:
