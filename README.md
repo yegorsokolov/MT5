@@ -61,9 +61,12 @@ pip install pyqlib[all]
 
 ```yaml
 use_qlib_features: true
+use_gat_features: true
 ```
 Graph-based features can be extracted from cross-correlation networks when
-`torch-geometric` is installed and the `graph_features` plugin is enabled.
+`torch-geometric` is installed and the `graph_features` plugin is enabled. When
+`use_gat_features` is set the plugin will train a small graph attention network
+to embed each symbol at every timestamp.
 Spread and slippage protections are provided via the `spread` and `slippage`
 plugins. Enable them with the `use_spread_check` and `use_slippage_check`
 flags and configure thresholds through `max_spread` and `max_slippage`.
@@ -181,9 +184,10 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Run `pip install -r requirements.txt`.
    3. To use the optional Qlib factors install `pyqlib` via `pip install pyqlib[all]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
-   5. To enable the graph features plugin install `torch-geometric`.
-      When present `train.py` writes `logs/feature_importance.csv` which can be
-      visualised using `python scripts/plot_shap.py`.
+    5. To enable the graph features plugin install `torch-geometric>=2.6`.
+       This also enables optional GAT embeddings when `use_gat_features` is set.
+       When present `train.py` writes `logs/feature_importance.csv` which can be
+       visualised using `python scripts/plot_shap.py`.
 6. **Build Protobuf classes** –
    1. Make sure the `protoc` compiler is installed and on your `PATH`.
    2. Run `protoc --python_out=. proto/signals.proto` from the repository root.
