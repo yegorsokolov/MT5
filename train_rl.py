@@ -21,6 +21,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     gymn = None
 
+import mlflow
 from utils import load_config
 from dataset import (
     load_history_parquet,
@@ -208,6 +209,9 @@ def main():
     cfg = load_config()
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
+    mlflow.set_tracking_uri(f"file:{(root / 'logs' / 'mlruns').resolve()}")
+    mlflow.set_experiment("training_rl")
+    mlflow.start_run()
 
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
@@ -407,6 +411,18 @@ def main():
     models_dir.mkdir(exist_ok=True)
     risk_model.save(models_dir / "rl_risk_policy")
     print("Risk policy saved to", models_dir / "rl_risk_policy.zip")
+    mlflow.log_param("algorithm", algo)
+    mlflow.log_param("steps", cfg.get("rl_steps", 5000))
+    if algo == "RLLIB":
+        mlflow.log_artifact(str(root / "model_rllib"))
+    elif algo == "RECURRENTPPO":
+        mlflow.log_artifact(str(rec_dir / "recurrent_model.zip"))
+    elif algo == "HIERARCHICALPPO":
+        mlflow.log_artifact(str(root / "model_hierarchical.zip"))
+    else:
+        mlflow.log_artifact(str(root / "model_rl.zip"))
+    mlflow.log_artifact(str(models_dir / "rl_risk_policy.zip"))
+    mlflow.end_run()
 
 
 if __name__ == "__main__":
