@@ -3,6 +3,8 @@ model.joblib
 model_lstm.pt
 signals.csv
 data/
-models/
+models/*
+!models/autoencoders/
+!models/autoencoders/.gitkeep
 __pycache__/
 logs/
