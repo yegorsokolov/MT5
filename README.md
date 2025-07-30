@@ -89,7 +89,9 @@ fred_series:
 Graph-based features can be extracted from cross-correlation networks when
 `torch-geometric` is installed and the `graph_features` plugin is enabled. When
 `use_gat_features` is set the plugin will train a small graph attention network
-to embed each symbol at every timestamp.
+to embed each symbol at every timestamp. A temporal variant controlled by
+`use_temporal_gat` processes adjacency matrices sequentially to generate
+per-timestamp node embeddings.
 Spread and slippage protections are provided via the `spread` and `slippage`
 plugins. Enable them with the `use_spread_check` and `use_slippage_check`
 flags and configure thresholds through `max_spread` and `max_slippage`.
@@ -226,6 +228,8 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
    5. To enable the graph features plugin install `torch-geometric>=2.6`.
        This also enables optional GAT embeddings when `use_gat_features` is set.
+       Set `use_temporal_gat` to use the sequential variant which also requires
+       `torch-geometric`.
        When present `train.py` writes `logs/feature_importance.csv` which can be
        visualised using `python scripts/plot_shap.py`.
    6. To use the tsfresh features install `tsfresh` with `pip install tsfresh`.
