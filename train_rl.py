@@ -8,7 +8,7 @@ from gym import spaces
 from stable_baselines3 import PPO, SAC, A2C
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from sb3_contrib.qrdqn import QRDQN
-from sb3_contrib import TRPO
+from sb3_contrib import TRPO, RecurrentPPO
 
 from plugins.rl_risk import RiskEnv
 
@@ -217,6 +217,16 @@ def main():
             var_window=cfg.get("rl_var_window", 30),
         )
         model = PPO("MlpPolicy", env, verbose=0)
+    elif algo == "RECURRENTPPO":
+        env = TradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = RecurrentPPO("MlpLstmPolicy", env, verbose=0)
     elif algo == "A2C":
         env = TradingEnv(
             df,
@@ -327,8 +337,14 @@ def main():
         ray.shutdown()
     else:
         model.learn(total_timesteps=cfg.get("rl_steps", 5000))
-        model.save(root / "model_rl")
-        print("RL model saved to", root / "model_rl.zip")
+        if algo == "RECURRENTPPO":
+            rec_dir = root / "models" / "recurrent_rl"
+            rec_dir.mkdir(parents=True, exist_ok=True)
+            model.save(rec_dir / "recurrent_model")
+            print("RL model saved to", rec_dir / "recurrent_model.zip")
+        else:
+            model.save(root / "model_rl")
+            print("RL model saved to", root / "model_rl.zip")
 
     # train risk management policy
     returns = df.sort_index()["return"].dropna()
