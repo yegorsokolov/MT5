@@ -73,6 +73,19 @@ pip install tsfresh
 ```yaml
 use_tsfresh: true
 ```
+Macroeconomic series from the Federal Reserve's **FRED** database can be merged
+as well. Install the data reader and enable the plugin:
+
+```bash
+pip install pandas_datareader
+```
+
+```yaml
+use_fred_features: true
+fred_series:
+  - FEDFUNDS
+  - GDP
+```
 Graph-based features can be extracted from cross-correlation networks when
 `torch-geometric` is installed and the `graph_features` plugin is enabled. When
 `use_gat_features` is set the plugin will train a small graph attention network
@@ -216,6 +229,9 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
        When present `train.py` writes `logs/feature_importance.csv` which can be
        visualised using `python scripts/plot_shap.py`.
    6. To use the tsfresh features install `tsfresh` with `pip install tsfresh`.
+   7. To use the FRED macro features install `pandas_datareader` with
+      `pip install pandas_datareader` and set the `FRED_API_KEY` environment
+      variable.
 7. **Build Protobuf classes** –
    1. Make sure the `protoc` compiler is installed and on your `PATH`.
    2. Run `protoc --python_out=. proto/signals.proto` from the repository root.
