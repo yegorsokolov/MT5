@@ -9,6 +9,10 @@ from stable_baselines3 import PPO, SAC, A2C
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
+try:  # optional dependency - hierarchical options
+    from sb3_contrib import HierarchicalPPO  # type: ignore
+except Exception:  # pragma: no cover - algorithm may not be available
+    HierarchicalPPO = None  # type: ignore
 
 from plugins.rl_risk import RiskEnv
 
@@ -158,6 +162,35 @@ class DiscreteTradingEnv(TradingEnv):
         return super().step(continuous)
 
 
+class HierarchicalTradingEnv(TradingEnv):
+    """Environment with manager-worker actions."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.action_space = spaces.Dict(
+            {
+                "manager": spaces.Discrete(3),
+                "worker": spaces.Box(
+                    low=0.0,
+                    high=self.max_position,
+                    shape=(self.n_symbols,),
+                    dtype=np.float32,
+                ),
+            }
+        )
+
+    def step(self, action):
+        if isinstance(action, dict):
+            manager = int(action.get("manager", 1))
+            worker = np.asarray(action.get("worker", np.zeros(self.n_symbols)), dtype=np.float32)
+        else:
+            manager, worker = action
+            worker = np.asarray(worker, dtype=np.float32)
+        direction = {0: -1.0, 1: 0.0, 2: 1.0}.get(manager, 0.0)
+        continuous = direction * np.clip(worker, 0.0, self.max_position)
+        return super().step(continuous)
+
+
 class RLLibTradingEnv(TradingEnv):
     """Wrapper returning gymnasium-style tuples for RLlib."""
 
@@ -276,6 +309,18 @@ def main():
             verbose=0,
             max_kl=cfg.get("rl_max_kl", 0.01),
         )
+    elif algo == "HIERARCHICALPPO":
+        if HierarchicalPPO is None:
+            raise RuntimeError("sb3-contrib with HierarchicalPPO required")
+        env = HierarchicalTradingEnv(
+            df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+        )
+        model = HierarchicalPPO("MlpPolicy", env, verbose=0)
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,
@@ -342,6 +387,9 @@ def main():
             rec_dir.mkdir(parents=True, exist_ok=True)
             model.save(rec_dir / "recurrent_model")
             print("RL model saved to", rec_dir / "recurrent_model.zip")
+        elif algo == "HIERARCHICALPPO":
+            model.save(root / "model_hierarchical")
+            print("RL model saved to", root / "model_hierarchical.zip")
         else:
             model.save(root / "model_rl")
             print("RL model saved to", root / "model_rl.zip")
