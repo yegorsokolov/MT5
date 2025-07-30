@@ -81,6 +81,8 @@ use_qlib_features: true
 use_tsfresh: false
 # enable graph attention network embeddings
 use_gat_features: false
+# enable autoencoder price embeddings
+use_autoencoder_features: false
 # pair trading settings
 use_pair_trading: true
 pair_z_window: 20
