@@ -247,6 +247,7 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. To experiment with the transformer-based neural network instead run `python train_nn.py`.
       This trains a small transformer on sequences of the same features and saves `model_transformer.pt`.
    3. After either script finishes you will see the resulting model file under the project folder.
+   4. To browse logged runs start `scripts/mlflow_ui.sh` and open `http://localhost:5000` in your browser.
 9. **Copy the EA** –
    1. Open MetaTrader 5 and click **File → Open Data Folder**.
    2. Run `python scripts/setup_terminal.py "<path-to-terminal>"` to automatically place `AdaptiveEA.mq5` and `RealtimeEA.mq5` inside `MQL5/Experts`.
@@ -271,6 +272,7 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
       are cross‑validated over multiple market regimes and both the metrics and
       chosen hyperparameters are tracked with MLflow. Any improvements are
       written back to `config.yaml` and logged under `logs/config_changes.csv`.
+   2. To view experiment history run `scripts/mlflow_ui.sh` and open `http://localhost:5000`.
 14. **Upload logs** –
    1. Start `python scripts/hourly_log_push.py` in a separate window. This
       script commits and pushes the `logs/` folder every hour so log history is
