@@ -81,6 +81,8 @@ use_qlib_features: true
 use_tsfresh: false
 # enable graph attention network embeddings
 use_gat_features: false
+# enable temporal GAT embeddings
+use_temporal_gat: false
 # enable autoencoder price embeddings
 use_autoencoder_features: false
 # macroeconomic data from FRED
