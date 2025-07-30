@@ -77,6 +77,8 @@ use_fingpt_summary: true
 use_keltner: true
 # enable Qlib technical factors
 use_qlib_features: true
+# enable graph attention network embeddings
+use_gat_features: false
 # pair trading settings
 use_pair_trading: true
 pair_z_window: 20
