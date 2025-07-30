@@ -29,6 +29,7 @@ for _mod in [
     'fingpt_sentiment',
     'anomaly',
     'qlib_features',
+    'tsfresh_features',
     'pair_trading',
     'rl_risk',
     'graph_features',
