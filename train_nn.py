@@ -163,8 +163,13 @@ def main():
         X_train, y_train = make_sequence_arrays(train_df, features, seq_len)
         X_test, y_test = make_sequence_arrays(test_df, features, seq_len)
 
-        if cfg.get("use_data_augmentation", False):
-            aug_path = root / "data" / "augmented" / "synthetic_sequences.npz"
+        if cfg.get("use_data_augmentation", False) or cfg.get("use_diffusion_aug", False):
+            fname = (
+                "synthetic_sequences_diffusion.npz"
+                if cfg.get("use_diffusion_aug", False)
+                else "synthetic_sequences.npz"
+            )
+            aug_path = root / "data" / "augmented" / fname
             if aug_path.exists():
                 data = np.load(aug_path)
                 X_aug = data["X"]
