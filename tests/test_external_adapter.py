@@ -36,5 +36,11 @@ class TestStrategy(bt.Strategy):
         "mid": [1, 1.1, 1.2, 1.1, 1.0],
     })
     metrics = run_external_strategy(df, str(f))
-    assert set(metrics.keys()) == {"sharpe", "max_drawdown", "total_return", "win_rate"}
+    assert set(metrics.keys()) == {
+        "sharpe",
+        "max_drawdown",
+        "total_return",
+        "win_rate",
+        "sharpe_p_value",
+    }
 

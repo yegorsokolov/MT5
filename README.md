@@ -196,6 +196,20 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    python backtest.py
    ```
 
+   The backtest now reports a bootstrap p-value for the Sharpe ratio:
+
+   ```python
+   from backtest import run_backtest
+   from utils import load_config
+
+   cfg = load_config("config.yaml")
+   metrics = run_backtest(cfg)
+   print(f"Sharpe: {metrics['sharpe']:.2f}, p-value: {metrics['sharpe_p_value']:.3f}")
+   ```
+
+   A small p-value (e.g. below 0.05) suggests the Sharpe ratio is unlikely to
+   have occurred by chance.
+
    If `data_urls` are provided, `train.py` will download the file(s) for the configured symbols via `gdown` before training.
    When `api_history` entries are present, the data will instead be pulled directly from the MetaTrader&nbsp;5 history center.
 
