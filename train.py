@@ -104,8 +104,13 @@ def main():
         X_train = train_df[features]
         y_train = (train_df["return"].shift(-1) > 0).astype(int)
 
-        if cfg.get("use_data_augmentation", False):
-            aug_path = root / "data" / "augmented" / "synthetic_sequences.npz"
+        if cfg.get("use_data_augmentation", False) or cfg.get("use_diffusion_aug", False):
+            fname = (
+                "synthetic_sequences_diffusion.npz"
+                if cfg.get("use_diffusion_aug", False)
+                else "synthetic_sequences.npz"
+            )
+            aug_path = root / "data" / "augmented" / fname
             if aug_path.exists():
                 data = np.load(aug_path)
                 X_aug = data["X"][:, -1, :]
