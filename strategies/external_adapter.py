@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import pandas as pd
 from pathlib import Path
+import numpy as np
 
 try:
     from freqtrade.strategy import IStrategy  # type: ignore
@@ -15,6 +16,11 @@ try:
     import backtrader as bt  # type: ignore
 except Exception:  # pragma: no cover - optional dep
     bt = None  # type: ignore
+
+
+LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+BACKTEST_STATS = LOG_DIR / "backtest_stats.csv"
 
 
 def _load_module(path: str):
@@ -51,13 +57,48 @@ def _compute_metrics(returns: pd.Series) -> dict:
     cumulative = (1 + returns).cumprod()
     peak = cumulative.cummax()
     drawdown = (cumulative - peak) / peak
-    sharpe = (returns.mean() / returns.std(ddof=0)) * (len(returns) ** 0.5) if len(returns) > 1 else 0.0
-    return {
+    sharpe = (
+        (returns.mean() / returns.std(ddof=0)) * (len(returns) ** 0.5)
+        if len(returns) > 1
+        else 0.0
+    )
+    metrics = {
         "sharpe": float(sharpe),
         "max_drawdown": float(drawdown.min() * 100) if not drawdown.empty else 0.0,
         "total_return": float(cumulative.iloc[-1] - 1) if not cumulative.empty else 0.0,
         "win_rate": float((returns > 0).mean() * 100) if not returns.empty else 0.0,
     }
+    metrics["sharpe_p_value"] = _bootstrap_sharpe_pvalue(returns)
+    _log_backtest_stats(metrics)
+    return metrics
+
+
+def _bootstrap_sharpe_pvalue(
+    returns: pd.Series, *, n_bootstrap: int = 1000, seed: int = 42
+) -> float:
+    if returns.empty or returns.std(ddof=0) == 0:
+        return float("nan")
+    rng = np.random.default_rng(seed)
+    observed = np.sqrt(252) * returns.mean() / returns.std(ddof=0)
+    centered = returns - returns.mean()
+    sharpes = []
+    for _ in range(n_bootstrap):
+        sample = rng.choice(centered, size=len(centered), replace=True)
+        if sample.std(ddof=0) == 0:
+            continue
+        sharpe = np.sqrt(252) * sample.mean() / sample.std(ddof=0)
+        sharpes.append(sharpe)
+    if not sharpes:
+        return float("nan")
+    sharpes = np.array(sharpes)
+    if observed > 0:
+        return float(np.mean(sharpes >= observed))
+    return float(np.mean(sharpes <= observed))
+
+
+def _log_backtest_stats(metrics: dict) -> None:
+    df = pd.DataFrame([metrics])
+    df.to_csv(BACKTEST_STATS, mode="a", header=not BACKTEST_STATS.exists(), index=False)
 
 
 def _run_freqtrade(df: pd.DataFrame, cls: type) -> dict:
