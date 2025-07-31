@@ -99,6 +99,11 @@ pair_long_threshold: -2.0
 pair_short_threshold: 2.0
 # enable or disable the HMM regime classifier plugin
 use_regime_classifier: true
+# enable deep learning regime detection
+use_deep_regime: false
+deep_regime_window: 30
+deep_regime_dim: 8
+deep_regime_states: 3
 blend_with_rl: false
 # risk check settings
 use_spread_check: true

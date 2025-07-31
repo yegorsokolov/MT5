@@ -51,7 +51,20 @@ use_atr: true
 use_donchian: true
 use_keltner: true
 use_regime_classifier: true
+use_deep_regime: true
 ```
+The `deep_regime` plugin trains an LSTM autoencoder on rolling mid-price windows
+and clusters the latent representations into discrete market states. To train and
+use this detector:
+
+1. Enable it in `config.yaml` with `use_deep_regime: true` (optional settings
+   `deep_regime_window`, `deep_regime_dim` and `deep_regime_states` control the
+   window length, embedding size and number of clusters).
+2. Run `python dataset.py` or any training script. When no saved model is
+   present the plugin fits the autoencoder and a k-means model, storing them
+   under `models/deep_regime/`.
+3. Subsequent feature generation merges the resulting labels into the dataset as
+   the `regime_dl` column.
 Additional technical factors can be generated via Microsoft **Qlib**.
 First install `pyqlib` and then enable the plugin:
 
