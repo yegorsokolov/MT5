@@ -117,4 +117,11 @@ use_data_augmentation: true
 use_diffusion_aug: false
 diffusion_epochs: 5
 use_online_model: false
+use_meta_model: false
+meta_epochs: 5
+meta_batch_size: 2
+inner_lr: 0.01
+inner_steps: 1
+finetune_steps: 3
+
 
