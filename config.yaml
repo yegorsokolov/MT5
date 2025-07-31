@@ -107,5 +107,7 @@ max_slippage: 0.0005
 use_anomaly_check: true
 anomaly_threshold: 0.5
 use_data_augmentation: true
+use_diffusion_aug: false
+diffusion_epochs: 5
 use_online_model: false
 

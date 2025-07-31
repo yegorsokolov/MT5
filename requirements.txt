@@ -27,6 +27,7 @@ mlflow
 transformers
 FinGPT
 shap  # optional, used to compute SHAP feature importance
+diffusers
 torch-geometric>=2.6  # optional, graph feature plugin
 statsmodels
 ydata-synthetic
