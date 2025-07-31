@@ -46,6 +46,8 @@ class TradingEnv(gym.Env):
         transaction_cost: float = 0.0001,
         risk_penalty: float = 0.1,
         var_window: int = 30,
+        cvar_penalty: float = 0.0,
+        cvar_window: int = 30,
     ) -> None:
         super().__init__()
 
@@ -64,6 +66,8 @@ class TradingEnv(gym.Env):
         self.transaction_cost = transaction_cost
         self.risk_penalty = risk_penalty
         self.var_window = var_window
+        self.cvar_penalty = cvar_penalty
+        self.cvar_window = cvar_window
 
         self.price_cols = [f"{sym}_mid" for sym in self.symbols]
         self.feature_cols = []
@@ -133,6 +137,12 @@ class TradingEnv(gym.Env):
         if len(self.portfolio_returns) >= self.var_window:
             var = np.var(self.portfolio_returns[-self.var_window :])
             risk -= self.risk_penalty * var
+
+        if len(self.portfolio_returns) >= self.cvar_window and self.cvar_penalty > 0:
+            window = np.array(self.portfolio_returns[-self.cvar_window :])
+            var_threshold = np.percentile(window, 5)
+            cvar = -window[window <= var_threshold].mean()
+            reward -= self.cvar_penalty * cvar
 
         reward += risk
 
@@ -252,6 +262,8 @@ def main():
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = PPO("MlpPolicy", env, verbose=0)
     elif algo == "RECURRENTPPO":
@@ -262,6 +274,8 @@ def main():
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = RecurrentPPO("MlpLstmPolicy", env, verbose=0)
     elif algo == "A2C":
@@ -272,6 +286,8 @@ def main():
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = A2C("MlpPolicy", env, verbose=0)
     elif algo == "A3C":
@@ -284,6 +300,8 @@ def main():
                 transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
                 risk_penalty=cfg.get("rl_risk_penalty", 0.1),
                 var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
             )
 
         env = SubprocVecEnv([make_env for _ in range(n_envs)])
@@ -296,6 +314,8 @@ def main():
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = SAC("MlpPolicy", env, verbose=0)
     elif algo == "TRPO":
@@ -306,6 +326,8 @@ def main():
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = TRPO(
             "MlpPolicy",
@@ -323,6 +345,8 @@ def main():
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = HierarchicalPPO("MlpPolicy", env, verbose=0)
     elif algo == "QRDQN":
@@ -333,6 +357,8 @@ def main():
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = QRDQN("MlpPolicy", env, verbose=0)
     elif algo == "RLLIB":
@@ -357,6 +383,8 @@ def main():
                 transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
                 risk_penalty=cfg.get("rl_risk_penalty", 0.1),
                 var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
             )
 
         ray.init(ignore_reinit_error=True, include_dashboard=False)
