@@ -82,6 +82,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = PPO.load(model_path, env=env)
     elif algo == "A2C" or algo == "A3C":
@@ -92,6 +94,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = A2C.load(model_path, env=env)
     elif algo == "SAC":
@@ -102,6 +106,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = SAC.load(model_path, env=env)
     elif algo == "TRPO":
@@ -112,6 +118,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = TRPO.load(model_path, env=env)
     elif algo == "RECURRENTPPO":
@@ -122,6 +130,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = RecurrentPPO.load(model_recurrent, env=env)
     elif algo == "HIERARCHICALPPO":
@@ -134,6 +144,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = HierarchicalPPO.load(model_hierarchical, env=env)
     elif algo == "QRDQN":
@@ -144,6 +156,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = QRDQN.load(model_path, env=env)
     elif algo == "RLLIB":
@@ -162,6 +176,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         if rllib_algo == "DDPG":
             model = DDPG.from_checkpoint(model_rllib)
@@ -175,6 +191,8 @@ def rl_signals(df, features, cfg):
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = QRDQN.load(model_path, env=env)
 
