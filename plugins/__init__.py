@@ -32,6 +32,7 @@ for _mod in [
     'tsfresh_features',
     'fred_features',
     'autoencoder_features',
+    'deep_regime',
     'pair_trading',
     'rl_risk',
     'graph_features',
