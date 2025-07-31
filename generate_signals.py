@@ -8,7 +8,7 @@ import numpy as np
 
 from utils import load_config
 from river import compose
-from dataset import load_history_parquet, make_features, load_history_config
+from dataset import load_history_parquet, make_features, load_history_config, make_sequence_arrays
 from train_rl import (
     TradingEnv,
     DiscreteTradingEnv,
@@ -49,6 +49,45 @@ def bayesian_average(prob_arrays):
     logits = [np.log(p / (1 - p + 1e-12)) for p in prob_arrays]
     avg_logit = np.mean(logits, axis=0)
     return 1 / (1 + np.exp(-avg_logit))
+
+
+def meta_transformer_signals(df, features, cfg):
+    """Return probabilities from the meta-trained transformer if available."""
+    if not cfg.get("use_meta_model", False):
+        return np.zeros(len(df))
+    try:  # optional torch dependency
+        import torch
+    except Exception:
+        return np.zeros(len(df))
+    from meta_train_nn import TransformerModel
+
+    model_path = Path(__file__).resolve().parent / "models" / "meta_transformer.pth"
+    if not model_path.exists():
+        return np.zeros(len(df))
+
+    seq_len = cfg.get("sequence_length", 50)
+    X, _ = make_sequence_arrays(df, features, seq_len)
+    if len(X) == 0:
+        return np.zeros(len(df))
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
+    num_regimes = (
+        int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
+    )
+    model = TransformerModel(len(features), num_symbols=num_symbols, num_regimes=num_regimes).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+
+    preds = []
+    with torch.no_grad():
+        for i in range(0, len(X), 256):
+            xb = torch.tensor(X[i : i + 256], dtype=torch.float32).to(device)
+            preds.append(model(xb).cpu().numpy())
+    probs = np.concatenate(preds)
+    if len(probs) < len(df):
+        probs = np.pad(probs, (0, len(df) - len(probs)), "edge")
+    return probs
 
 
 def rl_signals(df, features, cfg):
@@ -319,6 +358,8 @@ def main():
         probs = predictor.predict_proba(df[features])[1].values
     else:
         prob_list = [m.predict_proba(df[features])[:, 1] for m in models]
+        if cfg.get("use_meta_model", False):
+            prob_list.append(meta_transformer_signals(df, features, cfg))
         if online_model is not None:
             river_probs = [
                 online_model.predict_proba_one(row).get(1, 0.0)
