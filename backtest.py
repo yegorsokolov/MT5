@@ -18,6 +18,11 @@ from log_utils import setup_logging, log_exceptions
 logger = setup_logging()
 
 
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+BACKTEST_STATS = LOG_DIR / "backtest_stats.csv"
+
+
 BASE_FEATURES = [
     "return",
     "ma_5",
@@ -69,6 +74,36 @@ def compute_metrics(returns: pd.Series) -> dict:
         "total_return": cumulative.iloc[-1] - 1,
         "win_rate": (returns > 0).mean() * 100,
     }
+
+
+def bootstrap_sharpe_pvalue(
+    returns: pd.Series, *, n_bootstrap: int = 1000, seed: int = 42
+) -> float:
+    """Estimate a p-value for the Sharpe ratio using bootstrap resampling."""
+    if returns.empty or returns.std(ddof=0) == 0:
+        return float("nan")
+    rng = np.random.default_rng(seed)
+    observed = np.sqrt(252) * returns.mean() / returns.std(ddof=0)
+    centered = returns - returns.mean()
+    sharpes = []
+    for _ in range(n_bootstrap):
+        sample = rng.choice(centered, size=len(centered), replace=True)
+        if sample.std(ddof=0) == 0:
+            continue
+        sharpe = np.sqrt(252) * sample.mean() / sample.std(ddof=0)
+        sharpes.append(sharpe)
+    if not sharpes:
+        return float("nan")
+    sharpes = np.array(sharpes)
+    if observed > 0:
+        return float(np.mean(sharpes >= observed))
+    return float(np.mean(sharpes <= observed))
+
+
+def log_backtest_stats(metrics: dict) -> None:
+    """Append backtest metrics to ``logs/backtest_stats.csv``."""
+    df = pd.DataFrame([metrics])
+    df.to_csv(BACKTEST_STATS, mode="a", header=not BACKTEST_STATS.exists(), index=False)
 
 
 def fit_model(train_df: pd.DataFrame, cfg: dict) -> Pipeline:
@@ -127,6 +162,8 @@ def backtest_on_df(
 
     series = pd.Series(returns)
     metrics = compute_metrics(series)
+    metrics["sharpe_p_value"] = bootstrap_sharpe_pvalue(series)
+    log_backtest_stats(metrics)
     if return_returns:
         return metrics, series
     return metrics
