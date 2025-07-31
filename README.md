@@ -186,6 +186,17 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    If `data_urls` are provided, `train.py` will download the file(s) for the configured symbols via `gdown` before training.
    When `api_history` entries are present, the data will instead be pulled directly from the MetaTrader&nbsp;5 history center.
 
+To generate additional synthetic training sequences you can train either a GAN or diffusion model:
+
+```bash
+python scripts/train_tsgan.py        # TimeGAN based augmentation
+python scripts/train_tsdiffusion.py  # Diffusion model (TimeGrad-style)
+```
+
+Enable `use_data_augmentation: true` to include the GAN samples or `use_diffusion_aug: true` to
+blend in the diffusion sequences during model training. The number of diffusion training epochs
+is controlled by the `diffusion_epochs` configuration key.
+
 The resulting model file (`model.joblib`) can be loaded by the EA. When
 training with `train_autogluon.py` the best predictor is stored under
 `models/autogluon` and will be used when `model_type: autogluon` is set in
