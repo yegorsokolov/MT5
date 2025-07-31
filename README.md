@@ -542,6 +542,28 @@ This is a simplified template intended for further extension and tuning.  It is
 up to the user to verify performance using additional backtests and forward
 testing within MetaTrader 5 before deploying to a live environment.
 
+## Meta-learning with MAML
+
+`meta_train_nn.py` trains the transformer model across multiple symbols using
+Model-Agnostic Meta-Learning (MAML). The resulting initialisation is saved to
+`models/meta_transformer.pth`. Enable it by setting `use_meta_model: true` in
+`config.yaml`; `generate_signals.py` will load the weights and blend the
+meta-model's probabilities with any other ensemble members. During evaluation on
+an unseen symbol the script fine-tunes the meta-trained weights on a small
+subset before producing signals, controlled by `finetune_steps`.
+
+Key configuration options:
+
+* `meta_epochs` – outer-loop epochs.
+* `meta_batch_size` – number of symbols per meta-batch.
+* `inner_lr` – inner-loop learning rate.
+* `inner_steps` – gradient steps during adaptation.
+* `finetune_steps` – steps used when adapting to a new symbol.
+* `use_meta_model` – include the meta-trained transformer during signal generation.
+
+A tiny example dataset is provided at `tests/sample_meta.csv` for quick
+testing of the meta-training workflow.
+
 ## Effect of Feature Scaling
 
 The configuration file now includes a `use_scaler` flag to toggle a
