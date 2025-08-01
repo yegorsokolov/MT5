@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                                  AdaptiveEA.mq5  |
 //|                        Example Expert Advisor using ML signals   |
+//|                        Receives signals via ZeroMQ queue         |
 //+------------------------------------------------------------------+
 #property copyright "Yegor Sokolov"
 #property version   "1.00"

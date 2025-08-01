@@ -297,6 +297,9 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    1. In the command prompt run `python generate_signals.py`.
       This publishes prediction messages to `tcp://localhost:5555` which the EA subscribes to.
    2. Set the environment variable `SIGNAL_QUEUE_BIND` or `SIGNAL_QUEUE_URL` to change the port if needed.
+   3. Messages are sent as Protobuf by default.  Set `SIGNAL_FORMAT=json` to
+      publish plain JSON instead.  The Expert Advisors read from this queue via
+      the `ZmqAddress` input and no longer require a `signals.csv` file.
 12. **Run realtime training** –
    1. Back in the command prompt run `python realtime_train.py`.
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
