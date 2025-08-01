@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                                  RealtimeEA.mq5  |
 //|      Example EA that loads model signals and auto-updates repo   |
+//|      Receives signals via ZeroMQ queue                            |
 //+------------------------------------------------------------------+
 #property copyright "Yegor Sokolov"
 #property version   "1.00"
