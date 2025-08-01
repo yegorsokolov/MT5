@@ -1,5 +1,7 @@
 """Train a Transformer model on tick data sequences."""
 
+from log_utils import setup_logging, log_exceptions
+
 from pathlib import Path
 
 import joblib
@@ -8,7 +10,6 @@ import mlflow
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
@@ -21,12 +22,11 @@ from dataset import (
     make_sequence_arrays,
     load_history_config,
 )
-from log_utils import setup_logging, log_exceptions
 
 logger = setup_logging()
 
 
-class PositionalEncoding(nn.Module):
+class PositionalEncoding(torch.nn.Module):
     """Sinusoidal positional encoding for transformer inputs."""
 
     def __init__(self, d_model: int, max_len: int = 500):
@@ -45,7 +45,7 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, : x.size(1)]
 
 
-class TransformerModel(nn.Module):
+class TransformerModel(torch.nn.Module):
     """Sequence model using transformer encoder layers."""
 
     def __init__(
@@ -73,10 +73,10 @@ class TransformerModel(nn.Module):
             self.regime_idx = input_size - 1
 
         if num_symbols is not None:
-            self.symbol_emb = nn.Embedding(num_symbols, emb_dim)
+            self.symbol_emb = torch.nn.Embedding(num_symbols, emb_dim)
             input_size -= 1
         if num_regimes is not None:
-            self.regime_emb = nn.Embedding(num_regimes, emb_dim)
+            self.regime_emb = torch.nn.Embedding(num_regimes, emb_dim)
             input_size -= 1
 
         emb_total = 0
@@ -84,13 +84,13 @@ class TransformerModel(nn.Module):
             emb_total += emb_dim
         if self.regime_emb is not None:
             emb_total += emb_dim
-        self.input_linear = nn.Linear(input_size + emb_total, d_model)
+        self.input_linear = torch.nn.Linear(input_size + emb_total, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
-        encoder_layer = nn.TransformerEncoderLayer(
+        encoder_layer = torch.nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.fc = nn.Linear(d_model, 1)
+        self.transformer = torch.nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.fc = torch.nn.Linear(d_model, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x shape: batch x seq x features
@@ -191,7 +191,7 @@ def main():
             num_regimes=num_regimes,
         ).to(device)
         optim = torch.optim.Adam(model.parameters(), lr=1e-3)
-        loss_fn = nn.BCELoss()
+        loss_fn = torch.nn.BCELoss()
 
         train_ds = TensorDataset(
             torch.tensor(X_train, dtype=torch.float32),

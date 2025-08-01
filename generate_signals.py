@@ -1,5 +1,7 @@
 """Generate per-tick probability signals for the EA."""
 
+from log_utils import setup_logging, log_exceptions
+
 from pathlib import Path
 import joblib
 import pandas as pd
@@ -28,8 +30,6 @@ from signal_queue import (
     get_async_publisher,
     publish_dataframe_async,
 )
-
-from log_utils import setup_logging, log_exceptions
 
 logger = setup_logging()
 

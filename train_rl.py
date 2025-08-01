@@ -1,3 +1,5 @@
+from log_utils import setup_logging, log_exceptions
+
 from pathlib import Path
 from typing import List
 
@@ -29,8 +31,6 @@ from dataset import (
     make_features,
     load_history_config,
 )
-
-from log_utils import setup_logging, log_exceptions
 
 logger = setup_logging()
 
