@@ -1,5 +1,7 @@
 """Simple backtesting for the Adaptive MT5 bot."""
 
+from log_utils import setup_logging, log_exceptions
+
 from pathlib import Path
 import joblib
 import pandas as pd
@@ -12,8 +14,6 @@ from lightgbm import LGBMClassifier
 from utils import load_config
 from dataset import load_history_parquet, make_features, load_history_config
 import ray
-
-from log_utils import setup_logging, log_exceptions
 
 logger = setup_logging()
 
