@@ -67,8 +67,11 @@ use_sharpe_sizing: true
 
 # enable or disable the ATR stop plugin
 use_atr: true
+atr_period: 14
+atr_mult: 3
 # enable or disable the Donchian channel plugin
 use_donchian: true
+donchian_period: 20
 # enable FinBERT sentiment scoring
 use_finbert_sentiment: true
 # enable FinGPT sentiment scoring
