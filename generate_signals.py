@@ -3,6 +3,7 @@
 from log_utils import setup_logging, log_exceptions
 
 from pathlib import Path
+import os
 import joblib
 import pandas as pd
 
@@ -428,8 +429,9 @@ def main():
         "prob": combined,
     })
     pub = get_async_publisher()
-    asyncio.run(publish_dataframe_async(pub, out))
-    print("Signals published via ZeroMQ (async)")
+    fmt = os.getenv("SIGNAL_FORMAT", "protobuf")
+    asyncio.run(publish_dataframe_async(pub, out, fmt=fmt))
+    print(f"Signals published via ZeroMQ ({fmt})")
 
 
 if __name__ == "__main__":
