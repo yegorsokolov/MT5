@@ -608,3 +608,15 @@ upload logs periodically, schedule the script with cron, for example:
 ```cron
 0 * * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/upload_logs.py
 ```
+
+## Quality Checks
+
+Run the placeholder check before committing or tagging a release:
+
+```bash
+python scripts/check_skeletons.py
+```
+
+The script scans the repository for stray `pass` statements, `TODO` markers and
+`NotImplementedError` usage outside of approved locations. It runs as part of
+CI and exits with a non‑zero status when skeleton code is found.
