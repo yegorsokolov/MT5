@@ -26,6 +26,7 @@ class DummyProc:
 
 
 def load_grpc(tmp_log):
+    sys.modules['mlflow'] = types.SimpleNamespace()
     sys.modules['log_utils'] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
         setup_logging=lambda: None,
@@ -91,5 +92,37 @@ async def test_start_stop(tmp_path):
         resp2 = await stub.StopBot(grpc_mod.management_pb2.BotIdRequest(bot_id='b1'), metadata=md)
         assert resp2.status == 'stopped'
         assert 'b1' not in ra.bots
+
+    await server.stop(None)
+
+
+@pytest.mark.asyncio
+async def test_status_and_logs(tmp_path):
+    ra, grpc_mod, _ = load_grpc(tmp_path / 'app.log')
+    server, port = await start_server(grpc_mod)
+
+    async with grpc.aio.insecure_channel(f'localhost:{port}') as channel:
+        stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
+        md = (("x-api-key", "token"),)
+        await stub.StartBot(grpc_mod.management_pb2.StartRequest(bot_id="b1"), metadata=md)
+
+        status = await stub.BotStatus(
+            grpc_mod.management_pb2.BotStatusRequest(bot_id="b1", lines=5),
+            metadata=md,
+        )
+        assert status.bot_id == "b1"
+        assert status.running is True
+        assert status.pid == 123
+        assert status.returncode == 0
+        assert "line1" in status.logs
+
+        logs = await stub.GetLogs(
+            grpc_mod.management_pb2.LogRequest(lines=1), metadata=md
+        )
+        assert "line2" in logs.logs
+
+        await stub.StopBot(
+            grpc_mod.management_pb2.BotIdRequest(bot_id="b1"), metadata=md
+        )
 
     await server.stop(None)
