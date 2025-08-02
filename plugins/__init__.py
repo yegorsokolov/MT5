@@ -41,3 +41,13 @@ for _mod in [
         __import__(f'{__name__}.{_mod}')
     except Exception:
         pass
+
+
+__all__ = [
+    "FEATURE_PLUGINS",
+    "MODEL_PLUGINS",
+    "RISK_CHECKS",
+    "register_feature",
+    "register_model",
+    "register_risk_check",
+]
