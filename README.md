@@ -586,3 +586,21 @@ The live signal generator can also blend in predictions from an incremental
 model trained with `train_online.py`. Set `use_online_model: true` in
 `config.yaml` and run the trainer alongside `realtime_train.py` to enable this
 behaviour.
+
+## Automatic Log Uploading
+
+`scripts/upload_logs.py` commits the contents of `logs/` and `config.yaml` to
+the repository. Set the `GITHUB_TOKEN` environment variable to a token with
+write access before running:
+
+```bash
+GITHUB_TOKEN=<token> python scripts/upload_logs.py
+```
+
+Long-running services can import and call
+`scripts.upload_logs.register_shutdown_hook()` to push logs when they exit. To
+upload logs periodically, schedule the script with cron, for example:
+
+```cron
+0 * * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/upload_logs.py
+```
