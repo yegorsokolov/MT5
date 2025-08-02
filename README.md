@@ -620,3 +620,7 @@ python scripts/check_skeletons.py
 The script scans the repository for stray `pass` statements, `TODO` markers and
 `NotImplementedError` usage outside of approved locations. It runs as part of
 CI and exits with a non‑zero status when skeleton code is found.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
