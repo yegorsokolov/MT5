@@ -6,6 +6,7 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 import asyncio
+import contextlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,6 +19,12 @@ def load_api(tmp_log):
         ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
     )
     sys.modules['metrics'] = importlib.import_module('metrics')
+    sys.modules['mlflow'] = types.SimpleNamespace(
+        set_tracking_uri=lambda *a, **k: None,
+        set_experiment=lambda *a, **k: None,
+        start_run=contextlib.nullcontext,
+        log_dict=lambda *a, **k: None,
+    )
     return importlib.reload(importlib.import_module('remote_api'))
 
 class DummyProc:
@@ -57,6 +64,16 @@ def test_bot_status(tmp_path):
     assert data["running"] is True
     assert "pid" in data and "returncode" in data
     resp = client.get("/bots/none/status", headers={"x-api-key": "token"})
+    assert resp.status_code == 404
+
+
+def test_bot_logs(tmp_path):
+    api, client = setup_client(tmp_path)
+    api.bots["bot1"] = DummyProc()
+    resp = client.get("/bots/bot1/logs", headers={"x-api-key": "token"})
+    assert resp.status_code == 200
+    assert "line2" in resp.json()["logs"]
+    resp = client.get("/bots/none/logs", headers={"x-api-key": "token"})
     assert resp.status_code == 404
 
 

@@ -508,6 +508,7 @@ request. Key endpoints include:
 - `POST /bots/<id>/start` – launch a new training process.
 - `POST /bots/<id>/stop` – terminate an existing process.
 - `GET /bots/<id>/status` – return the bot's PID, exit code and a log tail.
+- `GET /bots/<id>/logs` – fetch recent log lines for the bot.
 - `GET /logs` – fetch the last few lines from `logs/app.log`.
 - `GET /health` – overall service state and recent log snippet.
 - `POST /config` – update `config.yaml` with JSON fields `key`, `value` and

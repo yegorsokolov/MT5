@@ -158,3 +158,11 @@ async def bot_status(bot_id: str, lines: int = 20, _: None = Depends(authorize))
         "returncode": proc.returncode,
         "logs": _log_tail(lines),
     }
+
+
+@app.get("/bots/{bot_id}/logs")
+async def bot_logs(bot_id: str, lines: int = 50, _: None = Depends(authorize)):
+    """Return the last N log lines for a bot."""
+    if bot_id not in bots:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    return {"bot": bot_id, "logs": _log_tail(lines)}
