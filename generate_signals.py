@@ -10,6 +10,9 @@ import pandas as pd
 import numpy as np
 
 from utils import load_config
+from utils.market_hours import is_market_open
+import argparse
+import backtest
 from river import compose
 from dataset import load_history_parquet, make_features, load_history_config, make_sequence_arrays
 from train_rl import (
@@ -279,7 +282,19 @@ def rl_signals(df, features, cfg):
 
 @log_exceptions
 def main():
+    parser = argparse.ArgumentParser(description="Generate probability signals")
+    parser.add_argument(
+        "--simulate-closed-market",
+        action="store_true",
+        help="Force closed market behaviour for testing",
+    )
+    args = parser.parse_args()
+
     cfg = load_config()
+
+    if args.simulate_closed_market or not is_market_open():
+        logger.info("Market closed - running backtest and using historical data")
+        backtest.run_rolling_backtest(cfg)
 
     model_type = cfg.get("model_type", "lgbm").lower()
     model_paths = cfg.get("ensemble_models", ["model.joblib"])
