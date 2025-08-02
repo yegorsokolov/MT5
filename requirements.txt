@@ -32,6 +32,7 @@ torch-geometric>=2.6  # optional, graph feature plugin
 statsmodels
 ydata-synthetic
 tsfresh
+exchange-calendars
 
 grpcio
 grpcio-tools

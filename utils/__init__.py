@@ -8,6 +8,8 @@ import yaml
 import mlflow
 import log_utils
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 def load_config() -> dict:
     """Load YAML configuration from the project root or path in CONFIG_FILE."""
@@ -15,7 +17,7 @@ def load_config() -> dict:
     if cfg_path:
         path = Path(cfg_path)
     else:
-        path = Path(__file__).resolve().parent / 'config.yaml'
+        path = PROJECT_ROOT / 'config.yaml'
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
@@ -26,12 +28,12 @@ def save_config(cfg: dict) -> None:
     if cfg_path:
         path = Path(cfg_path)
     else:
-        path = Path(__file__).resolve().parent / 'config.yaml'
+        path = PROJECT_ROOT / 'config.yaml'
     with open(path, 'w') as f:
         yaml.safe_dump(cfg, f)
 
 
-_LOG_PATH = Path(__file__).resolve().parent / 'logs' / 'config_changes.csv'
+_LOG_PATH = PROJECT_ROOT / 'logs' / 'config_changes.csv'
 _LOG_PATH.parent.mkdir(exist_ok=True)
 
 _RISK_KEYS = {
@@ -68,7 +70,7 @@ def update_config(key: str, value, reason: str) -> None:
 @contextmanager
 def mlflow_run(experiment: str, cfg: dict):
     """Start an MLflow run under ``logs/mlruns`` and log the given config."""
-    logs_dir = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parent / "logs")
+    logs_dir = getattr(log_utils, "LOG_DIR", PROJECT_ROOT / "logs")
     mlflow.set_tracking_uri(f"file:{logs_dir / 'mlruns'}")
     mlflow.set_experiment(experiment)
     with mlflow.start_run():

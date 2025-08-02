@@ -300,6 +300,10 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    3. Messages are sent as Protobuf by default.  Set `SIGNAL_FORMAT=json` to
       publish plain JSON instead.  The Expert Advisors read from this queue via
       the `ZmqAddress` input and no longer require a `signals.csv` file.
+   4. The script checks market hours using `exchange_calendars`; if the market
+      is closed it runs a rolling backtest or falls back to historical data so
+      analysis can continue. Pass `--simulate-closed-market` to manually test
+      this behaviour.
 12. **Run realtime training** –
    1. Back in the command prompt run `python realtime_train.py`.
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
