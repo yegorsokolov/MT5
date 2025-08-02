@@ -76,3 +76,12 @@ def mlflow_run(experiment: str, cfg: dict):
     with mlflow.start_run():
         mlflow.log_dict(cfg, "config.yaml")
         yield
+
+
+__all__ = [
+    "PROJECT_ROOT",
+    "load_config",
+    "save_config",
+    "update_config",
+    "mlflow_run",
+]
