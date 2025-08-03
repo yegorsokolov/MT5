@@ -139,7 +139,9 @@ def main():
     joblib.dump(base_model, root / "models" / "base_model.joblib")
 
     train_meta_network(df, features, base_model, root / "models" / "meta_adapter.pt")
-    print("Meta-learning model saved to", root / "models" / "meta_adapter.pt")
+    logger.info(
+        "Meta-learning model saved to %s", root / "models" / "meta_adapter.pt"
+    )
 
 
 if __name__ == "__main__":

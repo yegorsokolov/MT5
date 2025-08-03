@@ -85,7 +85,7 @@ def main() -> None:
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     futures = [train_symbol.remote(sym, cfg, root) for sym in symbols]
     for res in ray.get(futures):
-        print(res)
+        logger.info(res)
     ray.shutdown()
 
 

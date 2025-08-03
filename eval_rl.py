@@ -131,13 +131,13 @@ def main() -> None:
     curve.to_csv(root / "equity_curve_rl.csv", index=False)
     metrics = compute_metrics(pd.Series(returns))
 
-    print("Evaluation metrics:")
+    logger.info("Evaluation metrics:")
     for k, v in metrics.items():
         if k in {"max_drawdown", "win_rate"}:
-            print(f"{k}: {v:.2f}%")
+            logger.info("%s: %.2f%%", k, v)
         else:
-            print(f"{k}: {v:.4f}")
-    print("Equity curve saved to", root / "equity_curve_rl.csv")
+            logger.info("%s: %.4f", k, v)
+    logger.info("Equity curve saved to %s", root / "equity_curve_rl.csv")
 
 
 if __name__ == "__main__":
