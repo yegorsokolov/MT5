@@ -244,7 +244,7 @@ def main() -> None:  # pragma: no cover - heavy compute
     out_path = root / "models" / "meta_transformer.pth"
     out_path.parent.mkdir(exist_ok=True)
     torch.save(model.state_dict(), out_path)
-    print("Meta model saved to", out_path)
+    logger.info("Meta model saved to %s", out_path)
 
     # Optional evaluation on a new symbol with fine-tuning
     eval_sym = cfg.get("eval_symbol")
@@ -283,7 +283,7 @@ def main() -> None:  # pragma: no cover - heavy compute
         with torch.no_grad():
             preds = adapted(X_test.to(device))
             acc = ((preds > 0.5).float() == y_test.to(device)).float().mean().item()
-        print(f"Fine-tuned accuracy on {eval_sym}: {acc:.3f}")
+        logger.info("Fine-tuned accuracy on %s: %.3f", eval_sym, acc)
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry

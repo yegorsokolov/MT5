@@ -35,19 +35,12 @@ def setup_tmp_logs(tmp_path, monkeypatch):
     return log_mod, tc, ec
 
 
-def test_setup_logging_patches_print(monkeypatch, tmp_path):
+def test_setup_logging_returns_logger(monkeypatch, tmp_path):
     log_mod, _, _ = setup_tmp_logs(tmp_path, monkeypatch)
     orig_print = builtins.print
-    if hasattr(builtins, "print_orig"):
-        builtins.print = builtins.print_orig
-        del builtins.print_orig
     logger = log_mod.setup_logging()
-    try:
-        builtins.print("test")
-    finally:
-        builtins.print = orig_print
-        if hasattr(builtins, "print_orig"):
-            del builtins.print_orig
+    assert builtins.print is orig_print
+    assert logger is not None
 
 
 def test_log_trade_and_exception(monkeypatch, tmp_path):

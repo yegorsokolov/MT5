@@ -229,10 +229,10 @@ def main():
                 correct += (pred_labels == yb.int()).sum().item()
                 total += yb.size(0)
         acc = correct / total
-        print("Test accuracy:", acc)
+        logger.info("Test accuracy: %s", acc)
 
         joblib.dump(model.state_dict(), root / "model_transformer.pt")
-        print("Model saved to", root / "model_transformer.pt")
+        logger.info("Model saved to %s", root / "model_transformer.pt")
         mlflow.log_param("epochs", cfg.get("epochs", 5))
         mlflow.log_param("d_model", cfg.get("d_model", 64))
         mlflow.log_param("nhead", cfg.get("nhead", 4))
