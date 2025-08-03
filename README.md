@@ -609,6 +609,17 @@ upload logs periodically, schedule the script with cron, for example:
 0 * * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/upload_logs.py
 ```
 
+## gRPC Management API
+
+The gRPC management API is served over TLS. Place the server certificate
+and key at `certs/server.crt` and `certs/server.key` respectively. Clients
+must provide the CA certificate `certs/ca.crt` when establishing a
+connection. The example client in `scripts/grpc_client.py` illustrates how
+to configure a secure channel.
+
+When deploying, mount these certificate files into the `certs/` directory
+so the service can load them on startup.
+
 ## Quality Checks
 
 Run the placeholder check before committing or tagging a release:

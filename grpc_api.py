@@ -1,9 +1,12 @@
 import asyncio
+from pathlib import Path
+
 import grpc
+from fastapi import HTTPException
+from google.protobuf import empty_pb2
+
 import remote_api as ra
 from proto import management_pb2, management_pb2_grpc
-from google.protobuf import empty_pb2
-from fastapi import HTTPException
 
 
 class ManagementServicer(management_pb2_grpc.ManagementServiceServicer):
@@ -72,10 +75,22 @@ class ManagementServicer(management_pb2_grpc.ManagementServiceServicer):
         return management_pb2.StatusResponse(status=data["status"])
 
 
+BASE_DIR = Path(__file__).resolve().parent
+
+
 async def serve(address: str = "[::]:50051") -> None:
     server = grpc.aio.server()
-    management_pb2_grpc.add_ManagementServiceServicer_to_server(ManagementServicer(), server)
-    server.add_insecure_port(address)
+    management_pb2_grpc.add_ManagementServiceServicer_to_server(
+        ManagementServicer(), server
+    )
+
+    cert_dir = BASE_DIR / "certs"
+    private_key = (cert_dir / "server.key").read_bytes()
+    certificate_chain = (cert_dir / "server.crt").read_bytes()
+    server_credentials = grpc.ssl_server_credentials(
+        ((private_key, certificate_chain),)
+    )
+    server.add_secure_port(address, server_credentials)
     await server.start()
     await server.wait_for_termination()
 
