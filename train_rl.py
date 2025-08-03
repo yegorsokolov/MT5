@@ -5,6 +5,8 @@ from typing import List
 
 import numpy as np
 import pandas as pd
+import random
+import torch
 import gym
 from gym import spaces
 from stable_baselines3 import PPO, SAC, A2C
@@ -217,6 +219,12 @@ class RLLibTradingEnv(TradingEnv):
 @log_exceptions
 def main():
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
     mlflow.set_tracking_uri(f"file:{(root / 'logs' / 'mlruns').resolve()}")
@@ -265,7 +273,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = PPO("MlpPolicy", env, verbose=0)
+        model = PPO("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "RECURRENTPPO":
         env = TradingEnv(
             df,
@@ -277,7 +285,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = RecurrentPPO("MlpLstmPolicy", env, verbose=0)
+        model = RecurrentPPO("MlpLstmPolicy", env, verbose=0, seed=seed)
     elif algo == "A2C":
         env = TradingEnv(
             df,
@@ -289,7 +297,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = A2C("MlpPolicy", env, verbose=0)
+        model = A2C("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "A3C":
         n_envs = int(cfg.get("rl_num_envs", 4))
         def make_env():
@@ -305,7 +313,7 @@ def main():
             )
 
         env = SubprocVecEnv([make_env for _ in range(n_envs)])
-        model = A2C("MlpPolicy", env, verbose=0)
+        model = A2C("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "SAC":
         env = TradingEnv(
             df,
@@ -317,7 +325,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = SAC("MlpPolicy", env, verbose=0)
+        model = SAC("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "TRPO":
         env = TradingEnv(
             df,
@@ -334,6 +342,7 @@ def main():
             env,
             verbose=0,
             max_kl=cfg.get("rl_max_kl", 0.01),
+            seed=seed,
         )
     elif algo == "HIERARCHICALPPO":
         if HierarchicalPPO is None:
@@ -348,7 +357,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = HierarchicalPPO("MlpPolicy", env, verbose=0)
+        model = HierarchicalPPO("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,
@@ -360,7 +369,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = QRDQN("MlpPolicy", env, verbose=0)
+        model = QRDQN("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "RLLIB":
         if gymn is None:
             raise RuntimeError("gymnasium is required for RLlib")
@@ -393,12 +402,14 @@ def main():
                 DDPGConfig()
                 .environment(env_creator, disable_env_checking=True)
                 .rollouts(num_rollout_workers=0)
+                .seed(seed)
             )
         else:
             config = (
                 PPOConfig()
                 .environment(env_creator, disable_env_checking=True)
                 .rollouts(num_rollout_workers=0)
+                .seed(seed)
             )
 
         model = config.build()
@@ -433,7 +444,7 @@ def main():
         lookback=cfg.get("risk_lookback_bars", 50),
         max_size=cfg.get("rl_max_position", 1.0),
     )
-    risk_model = PPO("MlpPolicy", risk_env, verbose=0)
+    risk_model = PPO("MlpPolicy", risk_env, verbose=0, seed=seed)
     risk_model.learn(total_timesteps=cfg.get("rl_steps", 5000))
     models_dir = root / "models"
     models_dir.mkdir(exist_ok=True)

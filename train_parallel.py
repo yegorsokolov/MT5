@@ -5,6 +5,8 @@ from typing import Dict
 
 import joblib
 import pandas as pd
+import numpy as np
+import random
 from sklearn.metrics import classification_report
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -29,6 +31,9 @@ logger = setup_logging()
 @log_exceptions
 def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     """Load data for one symbol, train model and save it."""
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
     df = load_history_config(sym, cfg, root)
     df["Symbol"] = sym
     df = make_features(df)
@@ -66,7 +71,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     steps = []
     if cfg.get("use_scaler", True):
         steps.append(("scaler", StandardScaler()))
-    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=seed)))
     pipe = Pipeline(steps)
     pipe.fit(train_df[features], (train_df["return"].shift(-1) > 0).astype(int))
     preds = pipe.predict(test_df[features])
@@ -80,6 +85,9 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
 @log_exceptions
 def main() -> None:
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
     root = Path(__file__).resolve().parent
     ray.init(num_cpus=cfg.get("ray_num_cpus"))
     symbols = cfg.get("symbols") or [cfg.get("symbol")]

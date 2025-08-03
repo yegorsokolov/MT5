@@ -1,6 +1,7 @@
 """Training routine for the Adaptive MT5 bot."""
 
 from pathlib import Path
+import random
 import joblib
 import pandas as pd
 from sklearn.metrics import classification_report
@@ -55,6 +56,9 @@ def log_shap_importance(pipe: Pipeline, X_train: pd.DataFrame, features: list[st
 @log_exceptions
 def main():
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
 
@@ -128,7 +132,7 @@ def main():
         steps = []
         if cfg.get("use_scaler", True):
             steps.append(("scaler", StandardScaler()))
-        steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+        steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=seed)))
         pipe = Pipeline(steps)
 
         pipe.fit(X_train, y_train)

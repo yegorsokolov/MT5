@@ -32,6 +32,21 @@ The solution is split into two components:
    backtests and disables those that hurt performance. Run
    `python scripts/evaluate_features.py` after collecting enough data to update
    `config.yaml` automatically.
+
+### Reproducibility
+
+Set the `seed` value in `config.yaml` to reproduce training runs. The
+training scripts will apply this seed to Python's `random` module, NumPy and
+any framework-specific RNGs such as PyTorch:
+
+```yaml
+seed: 123
+```
+
+```bash
+python train.py  # uses the seed from config.yaml
+```
+
 ### Risk management
 
 Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `max_var`, `max_stress_loss`, `max_cvar` and `var_decay`, which controls the exponential weighting for the filtered VaR calculation.
