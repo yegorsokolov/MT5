@@ -1,6 +1,7 @@
 avoid_news_minutes: 5
 backtest_step_months: 6
 backtest_window_months: 6
+seed: 42
 data_urls:
   GBPUSD:
     - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ

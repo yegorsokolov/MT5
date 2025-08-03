@@ -1,4 +1,6 @@
 from pathlib import Path
+import random
+import numpy as np
 import pandas as pd
 
 from utils import load_config
@@ -16,6 +18,9 @@ logger = setup_logging()
 @log_exceptions
 def main():
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
 

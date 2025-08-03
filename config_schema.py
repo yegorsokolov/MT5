@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 class ConfigSchema(BaseModel):
     """Schema for application configuration."""
 
+    seed: int = Field(42, description="Random seed for reproducibility")
     risk_per_trade: float = Field(..., gt=0, le=1, description="Fraction of capital risked per trade")
     symbols: List[str]
 

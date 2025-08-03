@@ -7,6 +7,7 @@ from typing import Dict, Iterable
 
 import numpy as np
 import pandas as pd
+import random
 import torch
 import torch.nn as nn
 from torch.nn.utils.stateless import functional_call
@@ -163,6 +164,12 @@ def _features(df: pd.DataFrame) -> list[str]:
 @log_exceptions
 def main() -> None:  # pragma: no cover - heavy compute
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     root = Path(__file__).resolve().parent
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
 

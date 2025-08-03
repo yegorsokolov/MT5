@@ -3,6 +3,7 @@
 from log_utils import setup_logging, log_exceptions
 
 from pathlib import Path
+import random
 
 import joblib
 import math
@@ -118,6 +119,12 @@ class TransformerModel(torch.nn.Module):
 @log_exceptions
 def main():
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
 
