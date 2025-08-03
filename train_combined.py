@@ -126,10 +126,10 @@ def train_transformer(df: pd.DataFrame, cfg: dict, root: Path) -> None:
             pred_labels = (preds > 0.5).int()
             correct += (pred_labels == yb.int()).sum().item()
             total += yb.size(0)
-    print("Transformer accuracy:", correct / total)
+    logger.info("Transformer accuracy: %s", correct / total)
 
     joblib.dump(model.state_dict(), root / "model_transformer.pt")
-    print("Transformer model saved to", root / "model_transformer.pt")
+    logger.info("Transformer model saved to %s", root / "model_transformer.pt")
 
 
 def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
@@ -160,7 +160,9 @@ def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
     base_model = train_base_model(df, features)
     joblib.dump(base_model, root / "models" / "base_model.joblib")
     train_meta_network(df, features, base_model, root / "models" / "meta_adapter.pt")
-    print("Meta-learning model saved to", root / "models" / "meta_adapter.pt")
+    logger.info(
+        "Meta-learning model saved to %s", root / "models" / "meta_adapter.pt"
+    )
 
 
 def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
@@ -222,7 +224,7 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         raise ValueError(f"Unknown rl_algorithm {algo}")
     model.learn(total_timesteps=cfg.get("rl_steps", 5000))
     model.save(root / "model_rl")
-    print("RL model saved to", root / "model_rl.zip")
+    logger.info("RL model saved to %s", root / "model_rl.zip")
 
 
 def evaluate_filters(df: pd.DataFrame, cfg: dict, root: Path) -> List[str]:
@@ -257,8 +259,8 @@ def evaluate_filters(df: pd.DataFrame, cfg: dict, root: Path) -> List[str]:
 
     keep = [name for name, val in results.items() if pd.notna(val) and val > 0]
     (root / "active_filters.txt").write_text("\n".join(keep))
-    print("Filter performance:", results)
-    print("Keeping filters:", keep)
+    logger.info("Filter performance: %s", results)
+    logger.info("Keeping filters: %s", keep)
     return keep
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import builtins
 import csv
 import logging
 from logging.handlers import RotatingFileHandler
@@ -20,7 +19,7 @@ TRADE_LOG = LOG_DIR / "trades.csv"
 
 
 def setup_logging() -> logging.Logger:
-    """Configure root logger and patch ``print`` to also log messages."""
+    """Configure and return the root logger."""
     logger = logging.getLogger()
     if logger.handlers:
         return logger
@@ -35,16 +34,6 @@ def setup_logging() -> logging.Logger:
     sh = logging.StreamHandler()
     sh.setFormatter(fmt)
     logger.addHandler(sh)
-
-    if not hasattr(builtins, "print_orig"):
-        builtins.print_orig = builtins.print
-
-        def patched_print(*args, **kwargs):
-            message = " ".join(str(a) for a in args)
-            logger.info(message)
-            builtins.print_orig(*args, **kwargs)
-
-        builtins.print = patched_print
 
     return logger
 

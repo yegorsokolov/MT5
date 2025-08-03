@@ -446,7 +446,7 @@ def main():
     pub = get_async_publisher()
     fmt = os.getenv("SIGNAL_FORMAT", "protobuf")
     asyncio.run(publish_dataframe_async(pub, out, fmt=fmt))
-    print(f"Signals published via ZeroMQ ({fmt})")
+    logger.info("Signals published via ZeroMQ (%s)", fmt)
 
 
 if __name__ == "__main__":

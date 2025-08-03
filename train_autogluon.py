@@ -78,8 +78,8 @@ def main():
     predictor.fit(train_df[features + ["target"]], presets=presets, **fit_args)
 
     perf = predictor.evaluate(test_df[features + ["target"]])
-    print(perf)
-    print("Model saved to", out_path)
+    logger.info("%s", perf)
+    logger.info("Model saved to %s", out_path)
 
 
 if __name__ == "__main__":

@@ -410,7 +410,7 @@ def main():
         for _ in range(iters):
             model.train()
         checkpoint = model.save(str(root / "model_rllib"))
-        print("RLlib model saved to", checkpoint)
+        logger.info("RLlib model saved to %s", checkpoint)
         ray.shutdown()
     else:
         model.learn(total_timesteps=cfg.get("rl_steps", 5000))
@@ -418,13 +418,13 @@ def main():
             rec_dir = root / "models" / "recurrent_rl"
             rec_dir.mkdir(parents=True, exist_ok=True)
             model.save(rec_dir / "recurrent_model")
-            print("RL model saved to", rec_dir / "recurrent_model.zip")
+            logger.info("RL model saved to %s", rec_dir / "recurrent_model.zip")
         elif algo == "HIERARCHICALPPO":
             model.save(root / "model_hierarchical")
-            print("RL model saved to", root / "model_hierarchical.zip")
+            logger.info("RL model saved to %s", root / "model_hierarchical.zip")
         else:
             model.save(root / "model_rl")
-            print("RL model saved to", root / "model_rl.zip")
+            logger.info("RL model saved to %s", root / "model_rl.zip")
 
     # train risk management policy
     returns = df.sort_index()["return"].dropna()
@@ -438,7 +438,7 @@ def main():
     models_dir = root / "models"
     models_dir.mkdir(exist_ok=True)
     risk_model.save(models_dir / "rl_risk_policy")
-    print("Risk policy saved to", models_dir / "rl_risk_policy.zip")
+    logger.info("Risk policy saved to %s", models_dir / "rl_risk_policy.zip")
     mlflow.log_param("algorithm", algo)
     mlflow.log_param("steps", cfg.get("rl_steps", 5000))
     if algo == "RLLIB":

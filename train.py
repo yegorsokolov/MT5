@@ -134,10 +134,10 @@ def main():
         pipe.fit(X_train, y_train)
         preds = pipe.predict(X_test)
         report = classification_report(y_test, preds, output_dict=True)
-        print(classification_report(y_test, preds))
+        logger.info("\n%s", classification_report(y_test, preds))
 
         joblib.dump(pipe, root / "model.joblib")
-        print("Model saved to", root / "model.joblib")
+        logger.info("Model saved to %s", root / "model.joblib")
         mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
         mlflow.log_metric("f1_weighted", report["weighted avg"]["f1-score"])
         mlflow.log_artifact(str(root / "model.joblib"))
