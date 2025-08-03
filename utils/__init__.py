@@ -7,19 +7,26 @@ import os
 import yaml
 import mlflow
 import log_utils
+from pydantic import ValidationError
+from config_schema import ConfigSchema
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_config() -> dict:
-    """Load YAML configuration from the project root or path in CONFIG_FILE."""
+    """Load YAML configuration and validate using ``ConfigSchema``."""
     cfg_path = os.getenv('CONFIG_FILE')
     if cfg_path:
         path = Path(cfg_path)
     else:
         path = PROJECT_ROOT / 'config.yaml'
     with open(path, 'r') as f:
-        return yaml.safe_load(f)
+        data = yaml.safe_load(f)
+    try:
+        cfg = ConfigSchema(**data)
+    except ValidationError as e:
+        raise ValueError(f"Invalid configuration: {e}") from e
+    return cfg.model_dump()
 
 
 def save_config(cfg: dict) -> None:
