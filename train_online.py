@@ -1,5 +1,7 @@
 import time
 from pathlib import Path
+import random
+import numpy as np
 import duckdb
 import pandas as pd
 import joblib
@@ -15,6 +17,9 @@ logger = setup_logging()
 def train_online() -> None:
     """Incrementally update a river model with the latest realtime features."""
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
     root = Path(__file__).resolve().parent
     db_path = root / "data" / "realtime.duckdb"
     model_dir = root / "models"

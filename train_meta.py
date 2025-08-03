@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
+import random
 
 from utils import load_config
 from dataset import (
@@ -50,15 +51,15 @@ def load_symbol_data(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
     return df
 
 
-def train_base_model(df: pd.DataFrame, features: List[str]):
+def train_base_model(df: pd.DataFrame, features: List[str], cfg: dict):
     """Train a global base model on all symbols."""
     X = df[features]
     y = (df["return"].shift(-1) > 0).astype(int)
-    cfg = load_config()
     steps = []
     if cfg.get("use_scaler", True):
         steps.append(("scaler", StandardScaler()))
-    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
+    seed = cfg.get("seed", 42)
+    steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=seed)))
     pipe = Pipeline(steps)
     pipe.fit(X, y)
     return pipe
@@ -104,6 +105,12 @@ def train_meta_network(
 @log_exceptions
 def main():
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     root = Path(__file__).resolve().parent
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
 
@@ -135,7 +142,7 @@ def main():
         features.extend(["volume_ratio", "volume_imbalance"])
     features.append("SymbolCode")
 
-    base_model = train_base_model(df, features)
+    base_model = train_base_model(df, features, cfg)
     joblib.dump(base_model, root / "models" / "base_model.joblib")
 
     train_meta_network(df, features, base_model, root / "models" / "meta_adapter.pt")
