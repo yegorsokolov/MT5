@@ -48,7 +48,13 @@ async def start_server(grpc_mod):
     grpc_mod.management_pb2_grpc.add_ManagementServiceServicer_to_server(
         grpc_mod.ManagementServicer(), server
     )
-    port = server.add_insecure_port('localhost:0')
+    cert_dir = Path(__file__).resolve().parents[1] / 'certs'
+    private_key = (cert_dir / 'server.key').read_bytes()
+    certificate_chain = (cert_dir / 'server.crt').read_bytes()
+    server_credentials = grpc.ssl_server_credentials(
+        ((private_key, certificate_chain),)
+    )
+    port = server.add_secure_port('localhost:0', server_credentials)
     await server.start()
     return server, port
 
@@ -58,7 +64,11 @@ async def test_list_and_update(tmp_path):
     ra, grpc_mod, updates = load_grpc(tmp_path / 'app.log')
     server, port = await start_server(grpc_mod)
 
-    async with grpc.aio.insecure_channel(f'localhost:{port}') as channel:
+    cert_dir = Path(__file__).resolve().parents[1] / 'certs'
+    creds = grpc.ssl_channel_credentials(
+        root_certificates=(cert_dir / 'ca.crt').read_bytes()
+    )
+    async with grpc.aio.secure_channel(f'localhost:{port}', creds) as channel:
         stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
         with pytest.raises(grpc.aio.AioRpcError) as exc:
             await stub.ListBots(grpc_mod.empty_pb2.Empty())
@@ -83,7 +93,11 @@ async def test_start_stop(tmp_path):
     ra, grpc_mod, _ = load_grpc(tmp_path / 'app.log')
     server, port = await start_server(grpc_mod)
 
-    async with grpc.aio.insecure_channel(f'localhost:{port}') as channel:
+    cert_dir = Path(__file__).resolve().parents[1] / 'certs'
+    creds = grpc.ssl_channel_credentials(
+        root_certificates=(cert_dir / 'ca.crt').read_bytes()
+    )
+    async with grpc.aio.secure_channel(f'localhost:{port}', creds) as channel:
         stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
         md = (('x-api-key', 'token'),)
         resp = await stub.StartBot(grpc_mod.management_pb2.StartRequest(bot_id='b1'), metadata=md)
@@ -101,7 +115,11 @@ async def test_status_and_logs(tmp_path):
     ra, grpc_mod, _ = load_grpc(tmp_path / 'app.log')
     server, port = await start_server(grpc_mod)
 
-    async with grpc.aio.insecure_channel(f'localhost:{port}') as channel:
+    cert_dir = Path(__file__).resolve().parents[1] / 'certs'
+    creds = grpc.ssl_channel_credentials(
+        root_certificates=(cert_dir / 'ca.crt').read_bytes()
+    )
+    async with grpc.aio.secure_channel(f'localhost:{port}', creds) as channel:
         stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
         md = (("x-api-key", "token"),)
         await stub.StartBot(grpc_mod.management_pb2.StartRequest(bot_id="b1"), metadata=md)
