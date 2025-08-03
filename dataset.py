@@ -13,6 +13,8 @@ from dateutil import parser as date_parser
 import requests
 import logging
 import inspect
+import os
+import time
 
 try:
     from plugins import FEATURE_PLUGINS
@@ -27,6 +29,37 @@ NEWS_SOURCES = [
 logger = logging.getLogger(__name__)
 
 
+EVENT_CACHE_TTL = int(os.getenv("EVENT_CACHE_TTL", "3600"))
+
+
+def ttl_lru_cache(ttl_seconds: int):
+    """Simple TTL cache decorator using :func:`functools.lru_cache`."""
+
+    def decorator(func):
+        cached_func = functools.lru_cache(maxsize=1)(func)
+        last_update = 0.0
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            nonlocal last_update
+            now = time.time()
+            if now - last_update > ttl_seconds:
+                cached_func.cache_clear()
+                last_update = now
+            return cached_func(*args, **kwargs)
+
+        def cache_clear():
+            nonlocal last_update
+            cached_func.cache_clear()
+            last_update = 0.0
+
+        wrapper.cache_clear = cache_clear
+        return wrapper
+
+    return decorator
+
+
+@ttl_lru_cache(EVENT_CACHE_TTL)
 def _get_ff_events() -> List[dict]:
     events = []
     for url in NEWS_SOURCES:
@@ -40,6 +73,7 @@ def _get_ff_events() -> List[dict]:
     return events
 
 
+@ttl_lru_cache(EVENT_CACHE_TTL)
 def _get_tradays_events() -> List[dict]:
     url = "https://www.tradays.com/en/economic-calendar.ics"
     try:
@@ -71,6 +105,7 @@ def _get_tradays_events() -> List[dict]:
     return events
 
 
+@ttl_lru_cache(EVENT_CACHE_TTL)
 def _get_mql5_events() -> List[dict]:
     try:
         import MetaTrader5 as mt5
