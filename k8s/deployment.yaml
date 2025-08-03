@@ -40,7 +40,13 @@ spec:
           volumeMounts:
             - mountPath: /opt/mt5
               name: mt5-data
+            - mountPath: /opt/bot/certs
+              name: grpc-certs
+              readOnly: true
       volumes:
         - name: mt5-data
           persistentVolumeClaim:
             claimName: mt5-pvc
+        - name: grpc-certs
+          secret:
+            secretName: mt5-grpc-certs
