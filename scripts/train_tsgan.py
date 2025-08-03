@@ -1,7 +1,12 @@
 """Train TimeGAN on historical features and save synthetic sequences."""
 from pathlib import Path
+import random
 import numpy as np
 import pandas as pd
+try:
+    import tensorflow as tf
+except Exception:  # pragma: no cover - optional dependency
+    tf = None
 
 from ydata_synthetic.synthesizers.timeseries import TimeGAN
 from ydata_synthetic.preprocessing.timeseries import TimeSeriesScalerMinMax
@@ -20,6 +25,11 @@ logger = setup_logging()
 @log_exceptions
 def main() -> None:
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    if tf is not None:
+        tf.random.set_seed(seed)
     root = Path(__file__).resolve().parents[1]
     aug_dir = root / "data" / "augmented"
     aug_dir.mkdir(parents=True, exist_ok=True)

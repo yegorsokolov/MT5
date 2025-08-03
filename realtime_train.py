@@ -2,6 +2,8 @@ import time
 from pathlib import Path
 import os
 from collections import deque
+import random
+import numpy as np
 import pandas as pd
 import joblib
 import MetaTrader5 as mt5
@@ -33,6 +35,9 @@ def fetch_ticks(symbol: str, n: int = 1000) -> pd.DataFrame:
 @log_exceptions
 def train_realtime():
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
     repo_path = Path(__file__).resolve().parent
     db_path = repo_path / "data" / "realtime.duckdb"
     model_path = repo_path / "model.joblib"

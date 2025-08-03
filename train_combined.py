@@ -7,6 +7,8 @@ from typing import List
 
 import joblib
 import pandas as pd
+import numpy as np
+import random
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -157,7 +159,7 @@ def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
         features.extend(["volume_ratio", "volume_imbalance"])
     features.append("SymbolCode")
 
-    base_model = train_base_model(df, features)
+    base_model = train_base_model(df, features, cfg)
     joblib.dump(base_model, root / "models" / "base_model.joblib")
     train_meta_network(df, features, base_model, root / "models" / "meta_adapter.pt")
     logger.info(
@@ -188,7 +190,7 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
     ]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
-
+    seed = cfg.get("seed", 42)
     algo = cfg.get("rl_algorithm", "PPO").upper()
     if algo == "PPO":
         env = TradingEnv(
@@ -199,7 +201,7 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
         )
-        model = PPO("MlpPolicy", env, verbose=0)
+        model = PPO("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "SAC":
         env = TradingEnv(
             df,
@@ -209,7 +211,7 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
         )
-        model = SAC("MlpPolicy", env, verbose=0)
+        model = SAC("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,
@@ -219,7 +221,7 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
         )
-        model = QRDQN("MlpPolicy", env, verbose=0)
+        model = QRDQN("MlpPolicy", env, verbose=0, seed=seed)
     else:
         raise ValueError(f"Unknown rl_algorithm {algo}")
     model.learn(total_timesteps=cfg.get("rl_steps", 5000))
@@ -267,6 +269,12 @@ def evaluate_filters(df: pd.DataFrame, cfg: dict, root: Path) -> List[str]:
 @log_exceptions
 def main() -> None:
     cfg = load_config()
+    seed = cfg.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     root = Path(__file__).resolve().parent
     df = load_dataset(cfg, root)
 
