@@ -232,7 +232,7 @@ def train_realtime():
         try:
             repo.remote().push()
         except Exception as e:
-            print("Git push failed:", e)
+            logger.info("Git push failed: %s", e)
 
         time.sleep(300)
 

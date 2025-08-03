@@ -62,13 +62,13 @@ def main() -> pd.DataFrame | None:
             results[sym] = metrics
 
     if not results:
-        print("No backtest results")
+        logger.info("No backtest results")
         return None
 
     df = aggregate_results(results)
     header = not _LOG_PATH.exists()
     df.to_csv(_LOG_PATH, mode="a", header=header, index=False)
-    print(df.to_string(index=False))
+    logger.info("%s", df.to_string(index=False))
     return df
 
 

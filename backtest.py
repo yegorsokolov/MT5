@@ -276,9 +276,12 @@ def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dic
                 metrics = backtest_on_df(test_df, model, cfg)
             metrics["period_start"] = start_iso
             metrics["period_end"] = end_iso
-            print(
-                f"{metrics['period_start']} to {metrics['period_end']} - "
-                f"Sharpe {metrics['sharpe']:.4f}, MaxDD {metrics['max_drawdown']:.2f}%"
+            logger.info(
+                "%s to %s - Sharpe %.4f, MaxDD %.2f%%",
+                metrics["period_start"],
+                metrics["period_end"],
+                metrics["sharpe"],
+                metrics["max_drawdown"],
             )
             period_metrics.append(metrics)
 
@@ -286,20 +289,27 @@ def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dic
 
     if parallel:
         for metrics in ray.get(futures):
-            print(
-                f"{metrics['period_start']} to {metrics['period_end']} - "
-                f"Sharpe {metrics['sharpe']:.4f}, MaxDD {metrics['max_drawdown']:.2f}%"
+            logger.info(
+                "%s to %s - Sharpe %.4f, MaxDD %.2f%%",
+                metrics["period_start"],
+                metrics["period_end"],
+                metrics["sharpe"],
+                metrics["max_drawdown"],
             )
             period_metrics.append(metrics)
         ray.shutdown()
 
     if not period_metrics:
-        print("No valid windows for rolling backtest")
+        logger.info("No valid windows for rolling backtest")
         return {}
 
     avg_sharpe = float(np.mean([m["sharpe"] for m in period_metrics]))
     worst_dd = float(np.min([m["max_drawdown"] for m in period_metrics]))
-    print(f"Overall average Sharpe {avg_sharpe:.4f} | Worst drawdown {worst_dd:.2f}%")
+    logger.info(
+        "Overall average Sharpe %.4f | Worst drawdown %.2f%%",
+        avg_sharpe,
+        worst_dd,
+    )
 
     return {
         "periods": period_metrics,
@@ -322,14 +332,14 @@ def main():
 
     cfg = load_config()
     metrics = run_backtest(cfg, external_strategy=args.external_strategy)
-    print("Single period backtest:")
+    logger.info("Single period backtest:")
     for k, v in metrics.items():
         if k in {"max_drawdown", "win_rate"}:
-            print(f"{k}: {v:.2f}%")
+            logger.info("%s: %.2f%%", k, v)
         else:
-            print(f"{k}: {v:.4f}")
+            logger.info("%s: %.4f", k, v)
 
-    print("\nRolling backtest:")
+    logger.info("Rolling backtest:")
     run_rolling_backtest(cfg, external_strategy=args.external_strategy)
 
 
