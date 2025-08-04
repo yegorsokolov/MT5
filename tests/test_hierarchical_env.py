@@ -2,22 +2,98 @@ import pandas as pd
 import numpy as np
 import sys
 import types
+import importlib.machinery
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # stub heavy deps
-sb3 = types.SimpleNamespace(PPO=object, SAC=object, A2C=object)
-sb3.common = types.SimpleNamespace(vec_env=types.SimpleNamespace(SubprocVecEnv=object))
+sb3 = types.ModuleType("stable_baselines3")
+sb3.PPO = object
+sb3.SAC = object
+sb3.A2C = object
+sb3.__spec__ = importlib.machinery.ModuleSpec("stable_baselines3", loader=None)
+sb3.common = types.ModuleType("stable_baselines3.common")
+sb3.common.vec_env = types.ModuleType("stable_baselines3.common.vec_env")
+sb3.common.vec_env.SubprocVecEnv = object
+sb3.common.__spec__ = importlib.machinery.ModuleSpec("stable_baselines3.common", loader=None)
+sb3.common.vec_env.__spec__ = importlib.machinery.ModuleSpec("stable_baselines3.common.vec_env", loader=None)
 sys.modules.setdefault("stable_baselines3", sb3)
 sys.modules.setdefault("stable_baselines3.common", sb3.common)
 sys.modules.setdefault("stable_baselines3.common.vec_env", sb3.common.vec_env)
-contrib = types.SimpleNamespace(TRPO=object, RecurrentPPO=object, HierarchicalPPO=object)
+contrib = types.ModuleType("sb3_contrib")
+contrib.TRPO = object
+contrib.RecurrentPPO = object
+contrib.HierarchicalPPO = object
+contrib.__spec__ = importlib.machinery.ModuleSpec("sb3_contrib", loader=None)
 sys.modules.setdefault("sb3_contrib", contrib)
-sys.modules.setdefault("sb3_contrib.qrdqn", types.SimpleNamespace(QRDQN=object))
-sys.modules.setdefault("duckdb", types.SimpleNamespace(connect=lambda *a, **k: None))
-sys.modules.setdefault("requests", types.SimpleNamespace(get=lambda *a, **k: None))
+qrdqn_mod = types.ModuleType("sb3_contrib.qrdqn")
+qrdqn_mod.QRDQN = object
+qrdqn_mod.__spec__ = importlib.machinery.ModuleSpec("sb3_contrib.qrdqn", loader=None)
+sys.modules.setdefault("sb3_contrib.qrdqn", qrdqn_mod)
+duckdb_stub = types.ModuleType("duckdb")
+duckdb_stub.connect = lambda *a, **k: None
+duckdb_stub.__spec__ = importlib.machinery.ModuleSpec("duckdb", loader=None)
+sys.modules.setdefault("duckdb", duckdb_stub)
+requests_stub = types.ModuleType("requests")
+requests_stub.get = lambda *a, **k: None
+requests_stub.__spec__ = importlib.machinery.ModuleSpec("requests", loader=None)
+sys.modules.setdefault("requests", requests_stub)
 sys.modules.setdefault("prometheus_client", types.SimpleNamespace(Counter=lambda *a, **k: object(), Gauge=lambda *a, **k: object()))
+torch_stub = types.ModuleType("torch")
+torch_stub.manual_seed = lambda *a, **k: None
+torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False, manual_seed_all=lambda *a, **k: None)
+torch_stub.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
+sys.modules.setdefault("torch", torch_stub)
+mlflow_stub = types.ModuleType("mlflow")
+mlflow_stub.set_tracking_uri = lambda *a, **k: None
+mlflow_stub.set_experiment = lambda *a, **k: None
+mlflow_stub.start_run = lambda *a, **k: None
+mlflow_stub.__spec__ = importlib.machinery.ModuleSpec("mlflow", loader=None)
+sys.modules.setdefault("mlflow", mlflow_stub)
+sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda *a, **k: {}))
+def _dummy_validator(*args, **kwargs):
+    def wrap(fn):
+        return fn
+    return wrap
+
+sys.modules.setdefault(
+    "pydantic",
+    types.SimpleNamespace(
+        BaseModel=object,
+        Field=lambda *a, **k: None,
+        field_validator=_dummy_validator,
+        ConfigDict=dict,
+        ValidationError=Exception,
+    ),
+)
+utils_stub = types.ModuleType("utils")
+utils_stub.load_config = lambda *a, **k: {}
+sys.modules.setdefault("utils", utils_stub)
+data_stub = types.ModuleType("data")
+history_stub = types.ModuleType("data.history")
+history_stub.load_history_parquet = lambda *a, **k: None
+history_stub.save_history_parquet = lambda *a, **k: None
+history_stub.load_history_config = lambda *a, **k: pd.DataFrame()
+features_stub = types.ModuleType("data.features")
+features_stub.make_features = lambda df: df
+data_stub.history = history_stub
+data_stub.features = features_stub
+sys.modules.setdefault("data", data_stub)
+sys.modules.setdefault("data.history", history_stub)
+sys.modules.setdefault("data.features", features_stub)
+dummy_space = type("DummySpace", (), {"__init__": lambda self, *a, **k: None})
+gym_stub = types.ModuleType("gym")
+gym_stub.Env = object
+gym_stub.__spec__ = importlib.machinery.ModuleSpec("gym", loader=None)
+spaces_mod = types.ModuleType("gym.spaces")
+spaces_mod.Box = dummy_space
+spaces_mod.Dict = dummy_space
+spaces_mod.Discrete = dummy_space
+spaces_mod.__spec__ = importlib.machinery.ModuleSpec("gym.spaces", loader=None)
+gym_stub.spaces = spaces_mod
+sys.modules.setdefault("gym", gym_stub)
+sys.modules.setdefault("gym.spaces", spaces_mod)
 
 from train_rl import HierarchicalTradingEnv
 
@@ -34,3 +110,47 @@ def test_hierarchical_step():
     action = {"manager": 2, "worker": np.array([1.0], dtype=np.float32)}
     obs, reward, done, _ = env.step(action)
     assert env.positions[0] == 1.0
+
+
+def test_slippage_factor_cost():
+    df = pd.DataFrame({
+        "Timestamp": pd.date_range("2020-01-01", periods=2, freq="min"),
+        "Symbol": ["A"] * 2,
+        "mid": [1.0, 1.0],
+        "return": [0.0, 0.0],
+    })
+    np.random.seed(0)
+    expected_slip = np.abs(np.random.normal(scale=0.1, size=1))[0]
+    np.random.seed(0)
+    env = HierarchicalTradingEnv(
+        df,
+        ["return"],
+        max_position=1.0,
+        slippage_factor=0.1,
+    )
+    env.reset()
+    action = {"manager": 2, "worker": np.array([1.0], dtype=np.float32)}
+    obs, reward, done, info = env.step(action)
+    expected_cost = env.transaction_cost + expected_slip
+    assert np.isclose(info["transaction_costs"][0], expected_cost)
+
+
+def test_spread_execution_price():
+    df = pd.DataFrame({
+        "Timestamp": pd.date_range("2020-01-01", periods=2, freq="min"),
+        "Symbol": ["A"] * 2,
+        "mid": [1.0, 1.0],
+        "spread": [0.1, 0.1],
+        "return": [0.0, 0.0],
+    })
+    env = HierarchicalTradingEnv(
+        df,
+        ["return", "spread"],
+        max_position=1.0,
+        spread_source="column",
+    )
+    env.reset()
+    action = {"manager": 2, "worker": np.array([1.0], dtype=np.float32)}
+    obs, reward, done, info = env.step(action)
+    expected_cost = env.transaction_cost + 0.05
+    assert np.isclose(info["transaction_costs"][0], expected_cost)
