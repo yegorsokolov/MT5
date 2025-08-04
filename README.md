@@ -190,6 +190,12 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    pip install -r requirements.txt
    ```
 
+   Dependencies are pinned for reproducibility. After verifying changes and tests pass, regenerate the list with:
+
+   ```bash
+   pip freeze | sort > requirements.txt
+   ```
+
 2. Place historical CSV files under `data/`, specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`, **or** define `api_history` entries to fetch ticks directly from your MetaTrader&nbsp;5 terminal. Existing CSV files can be converted to Parquet using `python scripts/migrate_to_parquet.py`.
    The MT5 history center provides free tick data once you have logged in to a broker through the terminal.
 3. The realtime trainer stores ticks in a DuckDB database located at `data/realtime.duckdb`. The database is created automatically the first time you run the script and old rows beyond the `realtime_window` setting are pruned on each update.
@@ -276,7 +282,7 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Run `git clone <repo-url>` and press **Enter**.
 5. **Install dependencies** –
    1. Open **Command Prompt** and `cd` into the cloned folder.
-   2. Run `pip install -r requirements.txt`.
+   2. Run `pip install -r requirements.txt`. After verifying any updates, refresh the pinned versions with `pip freeze | sort > requirements.txt`.
    3. To use the optional Qlib factors install `pyqlib` via `pip install pyqlib[all]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
    5. To enable the graph features plugin install `torch-geometric>=2.6`.
