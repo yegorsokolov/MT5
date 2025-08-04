@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
 
 from utils import load_config, mlflow_run
@@ -170,6 +171,13 @@ def main():
         X_train, y_train = make_sequence_arrays(train_df, features, seq_len)
         X_test, y_test = make_sequence_arrays(test_df, features, seq_len)
 
+        X_train, X_val, y_train, y_val = sk_train_test_split(
+            X_train,
+            y_train,
+            test_size=cfg.get("val_size", 0.2),
+            random_state=seed,
+        )
+
         if cfg.get("use_data_augmentation", False) or cfg.get("use_diffusion_aug", False):
             fname = (
                 "synthetic_sequences_diffusion.npz"
@@ -204,12 +212,22 @@ def main():
             torch.tensor(X_train, dtype=torch.float32),
             torch.tensor(y_train, dtype=torch.float32),
         )
+        val_ds = TensorDataset(
+            torch.tensor(X_val, dtype=torch.float32),
+            torch.tensor(y_val, dtype=torch.float32),
+        )
         test_ds = TensorDataset(
             torch.tensor(X_test, dtype=torch.float32),
             torch.tensor(y_test, dtype=torch.float32),
         )
         train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=256)
         test_loader = DataLoader(test_ds, batch_size=256)
+
+        patience = cfg.get("patience", 3)
+        best_val_loss = float("inf")
+        epochs_no_improve = 0
+        model_path = root / "model_transformer.pt"
 
         for epoch in range(cfg.get("epochs", 5)):
             model.train()
@@ -224,6 +242,36 @@ def main():
                 optim.step()
                 pbar.set_postfix(loss=loss.item())
 
+            model.eval()
+            val_loss = 0.0
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for xb, yb in val_loader:
+                    xb = xb.to(device)
+                    yb = yb.to(device)
+                    preds = model(xb)
+                    val_loss += loss_fn(preds, yb).item() * xb.size(0)
+                    pred_labels = (preds > 0.5).int()
+                    correct += (pred_labels == yb.int()).sum().item()
+                    total += yb.size(0)
+            val_loss /= len(val_loader.dataset)
+            val_acc = correct / total if total else 0.0
+            mlflow.log_metric("val_loss", val_loss, step=epoch)
+            mlflow.log_metric("val_accuracy", val_acc, step=epoch)
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                epochs_no_improve = 0
+                joblib.dump(model.state_dict(), model_path)
+                logger.info("Validation improved; model saved.")
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    logger.info("Early stopping at epoch %s", epoch + 1)
+                    break
+
+        model.load_state_dict(joblib.load(model_path))
         model.eval()
         correct = 0
         total = 0
@@ -235,17 +283,19 @@ def main():
                 pred_labels = (preds > 0.5).int()
                 correct += (pred_labels == yb.int()).sum().item()
                 total += yb.size(0)
-        acc = correct / total
+        acc = correct / total if total else 0.0
         logger.info("Test accuracy: %s", acc)
+        logger.info("Best validation loss: %s", best_val_loss)
 
-        joblib.dump(model.state_dict(), root / "model_transformer.pt")
-        logger.info("Model saved to %s", root / "model_transformer.pt")
         mlflow.log_param("epochs", cfg.get("epochs", 5))
         mlflow.log_param("d_model", cfg.get("d_model", 64))
         mlflow.log_param("nhead", cfg.get("nhead", 4))
         mlflow.log_param("num_layers", cfg.get("num_layers", 2))
+        mlflow.log_param("patience", cfg.get("patience", 3))
         mlflow.log_metric("test_accuracy", acc)
-        mlflow.log_artifact(str(root / "model_transformer.pt"))
+        mlflow.log_metric("best_val_loss", best_val_loss)
+        logger.info("Model saved to %s", model_path)
+        mlflow.log_artifact(str(model_path))
 
 
 if __name__ == "__main__":
