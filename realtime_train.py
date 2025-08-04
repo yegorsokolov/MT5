@@ -10,7 +10,7 @@ import MetaTrader5 as mt5
 from git import Repo
 
 from utils import load_config
-from dataset import make_features
+from data.features import make_features
 import duckdb
 from log_utils import setup_logging, log_exceptions
 
