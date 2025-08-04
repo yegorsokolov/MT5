@@ -13,23 +13,32 @@ from utils import load_config
 from data.features import make_features
 import duckdb
 from log_utils import setup_logging, log_exceptions
+from metrics import RECONNECT_COUNT
 
 logger = setup_logging()
 
 
-def fetch_ticks(symbol: str, n: int = 1000) -> pd.DataFrame:
+def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
     """Fetch recent tick data from MetaTrader5."""
-    ticks = mt5.copy_ticks_from(symbol, int(time.time()) - n, n, mt5.COPY_TICKS_ALL)
-    if ticks is None or len(ticks) == 0:
-        return pd.DataFrame()
-    df = pd.DataFrame(ticks)
-    df["Timestamp"] = pd.to_datetime(df["time"], unit="s")
-    df.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
-    df = df[["Timestamp", "Bid", "Ask", "Volume"]]
-    df["BidVolume"] = df["Volume"]
-    df["AskVolume"] = df["Volume"]
-    df.drop(columns=["Volume"], inplace=True)
-    return df
+    for attempt in range(retries):
+        ticks = mt5.copy_ticks_from(symbol, int(time.time()) - n, n, mt5.COPY_TICKS_ALL)
+        if ticks is None:
+            logger.warning("Failed to fetch ticks for %s on attempt %d, reinitializing", symbol, attempt + 1)
+            RECONNECT_COUNT.inc()
+            mt5.initialize()
+            time.sleep(1)
+            continue
+        if len(ticks) == 0:
+            return pd.DataFrame()
+        df = pd.DataFrame(ticks)
+        df["Timestamp"] = pd.to_datetime(df["time"], unit="s")
+        df.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
+        df = df[["Timestamp", "Bid", "Ask", "Volume"]]
+        df["BidVolume"] = df["Volume"]
+        df["AskVolume"] = df["Volume"]
+        df.drop(columns=["Volume"], inplace=True)
+        return df
+    return pd.DataFrame()
 
 
 @log_exceptions
@@ -90,6 +99,7 @@ def train_realtime():
             for rec in sym_hist.to_dict("records"):
                 tick_buffers[sym].append(rec)
 
+    empty_iters = 0
     while True:
         tick_frames = []
         for sym in symbols:
@@ -104,8 +114,19 @@ def train_realtime():
                         tick_buffers[sym].append(rec)
 
         if not tick_frames:
-            time.sleep(60)
+            empty_iters += 1
+            if empty_iters >= 3:
+                backoff = min(300, 60 * empty_iters)
+                logger.warning("No ticks received for %d iterations, reconnecting", empty_iters)
+                RECONNECT_COUNT.inc()
+                mt5.initialize()
+                time.sleep(backoff)
+                empty_iters = 0
+            else:
+                time.sleep(60)
             continue
+        else:
+            empty_iters = 0
 
         new_ticks = pd.concat(tick_frames, ignore_index=True)
         new_ticks["Timestamp"] = pd.to_datetime(new_ticks["Timestamp"])
