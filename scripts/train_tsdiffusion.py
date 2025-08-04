@@ -10,8 +10,8 @@ from diffusers import UNet1DModel, DDPMScheduler
 from ydata_synthetic.preprocessing.timeseries import TimeSeriesScalerMinMax
 
 from utils import load_config
-from dataset import (
-    load_history_config,
+from data.history import load_history_config
+from data.features import (
     make_features,
     make_sequence_arrays,
 )

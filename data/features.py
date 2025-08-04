@@ -1,337 +1,27 @@
-"""Data loading and preprocessing utilities."""
+"""Feature engineering utilities."""
 
+from __future__ import annotations
+
+import hashlib
+import inspect
+import logging
+import os
 from pathlib import Path
-from typing import Tuple, List, Dict
+from typing import Dict, List, Tuple
+
+import duckdb
 import numpy as np
 import pandas as pd
-import datetime as dt
-import functools
-import hashlib
-import duckdb
 from sklearn.decomposition import PCA
-from dateutil import parser as date_parser
-import requests
-import logging
-import inspect
-import os
-import time
 
-try:
-    from plugins import FEATURE_PLUGINS
-except Exception:
+from .events import get_events
+
+try:  # optional plugin system
+    from plugins import FEATURE_PLUGINS  # type: ignore
+except Exception:  # pragma: no cover - plugins optional
     FEATURE_PLUGINS = []
 
-NEWS_SOURCES = [
-    "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json",
-    "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
-]
-
 logger = logging.getLogger(__name__)
-
-
-EVENT_CACHE_TTL = int(os.getenv("EVENT_CACHE_TTL", "3600"))
-
-
-def ttl_lru_cache(ttl_seconds: int):
-    """Simple TTL cache decorator using :func:`functools.lru_cache`."""
-
-    def decorator(func):
-        cached_func = functools.lru_cache(maxsize=1)(func)
-        last_update = 0.0
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            nonlocal last_update
-            now = time.time()
-            if now - last_update > ttl_seconds:
-                cached_func.cache_clear()
-                last_update = now
-            return cached_func(*args, **kwargs)
-
-        def cache_clear():
-            nonlocal last_update
-            cached_func.cache_clear()
-            last_update = 0.0
-
-        wrapper.cache_clear = cache_clear
-        return wrapper
-
-    return decorator
-
-
-@ttl_lru_cache(EVENT_CACHE_TTL)
-def _get_ff_events() -> List[dict]:
-    events = []
-    for url in NEWS_SOURCES:
-        try:
-            logger.debug("Fetching events from %s", url)
-            events.extend(requests.get(url, timeout=10).json())
-        except Exception as e:
-            logger.warning("Failed to fetch events from %s: %s", url, e)
-            continue
-    logger.debug("Fetched %d events from FF", len(events))
-    return events
-
-
-@ttl_lru_cache(EVENT_CACHE_TTL)
-def _get_tradays_events() -> List[dict]:
-    url = "https://www.tradays.com/en/economic-calendar.ics"
-    try:
-        logger.debug("Fetching events from %s", url)
-        text = requests.get(url, timeout=10).text
-    except Exception as e:
-        logger.warning("Failed to fetch events from %s: %s", url, e)
-        return []
-    events = []
-    cur: Dict[str, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if line == "BEGIN:VEVENT":
-            cur = {}
-        elif line == "END:VEVENT":
-            if "DTSTART" in cur:
-                events.append(
-                    {
-                        "date": cur["DTSTART"],
-                        "impact": cur.get("IMPORTANCE", "Medium"),
-                        "currency": cur.get("CURRENCY", ""),
-                        "event": cur.get("SUMMARY", ""),
-                    }
-                )
-        elif ":" in line:
-            key, val = line.split(":", 1)
-            cur[key] = val
-    logger.debug("Fetched %d events from Tradays", len(events))
-    return events
-
-
-@ttl_lru_cache(EVENT_CACHE_TTL)
-def _get_mql5_events() -> List[dict]:
-    try:
-        import MetaTrader5 as mt5
-    except Exception:
-        return []
-    if not mt5.initialize():
-        logger.warning("Failed to initialize MetaTrader5 for events")
-        return []
-    now = dt.datetime.now(tz=dt.timezone.utc)
-    start = now - dt.timedelta(days=1)
-    end = now + dt.timedelta(days=7)
-    logger.debug("Fetching events from MetaTrader5")
-    values = mt5.calendar_value_history(from_date=start, to_date=end)
-    mt5.shutdown()
-    if values is None:
-        return []
-    events = []
-    for v in values:
-        try:
-            event_time = dt.datetime.fromtimestamp(v.time, tz=dt.timezone.utc)
-        except Exception:
-            continue
-        impact = getattr(v, "importance", 1)
-        impact_map = {0: "Low", 1: "Medium", 2: "High"}
-        events.append(
-            {
-                "date": event_time.isoformat(),
-                "impact": impact_map.get(impact, "Medium"),
-                "currency": getattr(v, "currency", ""),
-                "event": getattr(v, "event", ""),
-            }
-        )
-    logger.debug("Fetched %d events from MetaTrader5", len(events))
-    return events
-
-
-@functools.lru_cache
-def get_events(past_events: bool = False) -> List[dict]:
-    """Download economic calendar events from multiple sources."""
-    logger.info("Fetching economic events")
-    events = []
-    events.extend(_get_ff_events())
-    events.extend(_get_tradays_events())
-    events.extend(_get_mql5_events())
-
-    now = dt.datetime.now(tz=dt.timezone.utc)
-    filtered = []
-    for e in events:
-        try:
-            date = e["date"] = (
-                date_parser.parse(e["date"])
-                if isinstance(e["date"], str)
-                else e["date"]
-            )
-        except Exception:
-            continue
-        if past_events or date >= now:
-            filtered.append(e)
-    logger.info("Total events returned: %d", len(filtered))
-    return filtered
-
-
-def load_history_from_urls(urls: List[str]) -> pd.DataFrame:
-    """Download multiple CSV files and return a combined DataFrame."""
-    import gdown
-    from tempfile import TemporaryDirectory
-
-    dfs = []
-    with TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        for i, url in enumerate(urls):
-            dest = tmp_dir / f"part_{i}.csv"
-            logger.info("Downloading history from %s", url)
-            gdown.download(url, str(dest), quiet=False)
-            dfs.append(pd.read_csv(dest))
-
-    df = pd.concat(dfs, ignore_index=True)
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
-    logger.info("Loaded %d rows from URLs", len(df))
-    return df
-
-
-def _find_mt5_symbol(symbol: str):
-    """Return the matching MetaTrader 5 symbol name, trying common prefixes and suffixes."""
-    import MetaTrader5 as mt5
-
-    info = mt5.symbol_info(symbol)
-    if info:
-        return symbol
-
-    all_symbols = mt5.symbols_get()
-    for s in all_symbols:
-        name = s.name
-        if name.endswith(symbol) or name.startswith(symbol):
-            return name
-    return None
-
-
-def load_history_mt5(symbol: str, start: dt.datetime, end: dt.datetime) -> pd.DataFrame:
-    """Download tick history from the MetaTrader 5 terminal history center."""
-    try:
-        import MetaTrader5 as mt5
-    except Exception as e:
-        raise ImportError("MetaTrader5 package is required") from e
-
-    if not mt5.initialize():
-        logger.error("Failed to initialize MetaTrader5")
-        raise RuntimeError("Failed to initialize MetaTrader5")
-
-    real_sym = _find_mt5_symbol(symbol)
-    if not real_sym:
-        mt5.shutdown()
-        raise ValueError(f"Symbol {symbol} not found in MetaTrader5")
-
-    mt5.symbol_select(real_sym, True)
-
-    start_ts = int(start.timestamp())
-    end_ts = int(end.timestamp())
-    chunk = 86400 * 7  # request one week at a time to avoid server limits
-
-    ticks = []
-    cur = start_ts
-    while cur < end_ts:
-        to = min(cur + chunk, end_ts)
-        logger.debug("Requesting ticks %s - %s", cur, to)
-        arr = mt5.copy_ticks_range(real_sym, cur, to, mt5.COPY_TICKS_ALL)
-        if arr is not None and len(arr) > 0:
-            ticks.extend(arr)
-        cur = to
-
-    mt5.shutdown()
-
-    if not ticks:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(ticks)
-    df["Timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_localize(None)
-    df.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
-    df = df[["Timestamp", "Bid", "Ask", "Volume"]]
-    df["BidVolume"] = df["Volume"]
-    df["AskVolume"] = df["Volume"]
-    df.drop(columns=["Volume"], inplace=True)
-    logger.info("Loaded %d ticks from MetaTrader5", len(df))
-    return df
-
-
-def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
-    """Load history for ``sym`` using local files, URLs or APIs."""
-    csv_path = root / "data" / f"{sym}_history.csv"
-    pq_path = root / "data" / f"{sym}_history.parquet"
-    if pq_path.exists():
-        logger.info("Loading history for %s from %s", sym, pq_path)
-        return load_history_parquet(pq_path)
-    if csv_path.exists():
-        logger.info("Loading history for %s from %s", sym, csv_path)
-        return load_history(csv_path)
-
-    api_cfg = (cfg.get("api_history") or {}).get(sym)
-    if api_cfg:
-        provider = api_cfg.get("provider", "mt5")
-        start = pd.to_datetime(api_cfg.get("start"))
-        end = pd.to_datetime(api_cfg.get("end"))
-        if provider == "mt5":
-            logger.info("Downloading history for %s from MetaTrader5", sym)
-            df = load_history_mt5(sym, start, end)
-        else:
-            raise ValueError(f"Unknown history provider {provider}")
-        save_history_parquet(df, pq_path)
-        return df
-
-    urls = cfg.get("data_urls", {}).get(sym)
-    if urls:
-        logger.info("Downloading history for %s from URLs", sym)
-        df = load_history_from_urls(urls)
-        save_history_parquet(df, pq_path)
-        return df
-
-    raise FileNotFoundError(f"No history found for {sym} and no data source configured")
-
-
-def load_history(path: Path) -> pd.DataFrame:
-    """Load historical tick data from CSV."""
-    logger.info("Loading CSV history from %s", path)
-    df = pd.read_csv(path)
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
-    logger.debug("Loaded %d rows from CSV", len(df))
-    return df
-
-
-def load_history_parquet(path: Path) -> pd.DataFrame:
-    """Load historical tick data stored in a Parquet file."""
-    logger.info("Loading Parquet history from %s", path)
-    df = pd.read_parquet(path)
-    if "Timestamp" in df.columns:
-        # ensure the Timestamp column is parsed as datetime
-        df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
-    logger.debug("Loaded %d rows from Parquet", len(df))
-    return df
-
-
-def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
-    """Save tick history to a Parquet file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = df.copy()
-    if "Timestamp" in data.columns:
-        data["Timestamp"] = pd.to_datetime(data["Timestamp"], utc=True).dt.tz_localize(
-            None
-        )
-    logger.info("Saving history to %s", path)
-    data.to_parquet(path, index=False)
-
-
-def load_multiple_histories(paths: Dict[str, Path]) -> pd.DataFrame:
-    """Load and concatenate history files for multiple symbols."""
-    dfs = []
-    for symbol, p in paths.items():
-        logger.info("Loading history for %s from %s", symbol, p)
-        if p.suffix == ".parquet":
-            df = load_history_parquet(p)
-        else:
-            df = load_history(p)
-        df["Symbol"] = symbol
-        dfs.append(df)
-    combined = pd.concat(dfs, ignore_index=True)
-    logger.info("Loaded %d total rows", len(combined))
-    return combined
 
 
 def load_index_ohlc(source: str) -> pd.DataFrame:
@@ -355,7 +45,7 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
 
         cfg = load_config()
         index_sources = cfg.get("index_data", {})
-    except Exception:
+    except Exception:  # pragma: no cover - config issues shouldn't fail
         index_sources = {}
 
     logger.debug("Adding index features: %s", list(index_sources.keys()))
@@ -389,7 +79,6 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
             df[f"{name}_vol"] = 0.0
 
     if not index_sources:
-        # provide default columns when config not set
         for col in ["sp500_ret", "sp500_vol", "vix_ret", "vix_vol"]:
             if col not in df.columns:
                 df[col] = 0.0
@@ -400,7 +89,7 @@ def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
     logger.debug("Adding economic calendar features")
     try:
         events = get_events(past_events=True)
-    except Exception:
+    except Exception:  # pragma: no cover - network issues
         df["minutes_to_event"] = np.nan
         df["minutes_from_event"] = np.nan
         df["nearest_news_minutes"] = np.nan
@@ -473,7 +162,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
 
     if cfg.get("use_fingpt_sentiment", False):
         try:
-            from plugins.fingpt_sentiment import score_events
+            from plugins.fingpt_sentiment import score_events  # type: ignore
 
             events = get_events(past_events=True)
             news_df = pd.DataFrame(events)
@@ -499,7 +188,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
 
     if cfg.get("use_finbert_sentiment", False):
         try:
-            from plugins.finbert_sentiment import score_events
+            from plugins.finbert_sentiment import score_events  # type: ignore
 
             events = get_events(past_events=True)
             news_df = pd.DataFrame(events)
@@ -531,7 +220,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
         df["news_summary"] = ""
         return df
 
-    news["Timestamp"] = pd.to_datetime(news["Timestamp"])  # ensure datetime
+    news["Timestamp"] = pd.to_datetime(news["Timestamp"])
     df["Timestamp"] = pd.to_datetime(df["Timestamp"])
     news = news.sort_values("Timestamp")
     df = df.sort_values("Timestamp")
@@ -585,12 +274,12 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         conn.close()
 
     if use_dask:
-        import dask.dataframe as dd
-        from dask.distributed import Client
+        import dask.dataframe as dd  # type: ignore
+        from dask.distributed import Client  # type: ignore
 
         try:
             Client(dask_url) if dask_url else Client()
-        except Exception:
+        except Exception:  # pragma: no cover - dask cluster issues
             pass
 
     def _feat(group: pd.DataFrame) -> pd.DataFrame:
@@ -640,38 +329,6 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
 
-        # microstructure features
-        spread = group["Ask"] - group["Bid"]
-        group["spread"] = spread
-        group["mid_change"] = group["mid"].diff()
-        group["spread_change"] = spread.diff()
-        delta_sec = group["Timestamp"].diff().dt.total_seconds().replace(0, np.nan)
-        group["trade_rate"] = 1 / delta_sec
-        group["quote_revision"] = (
-            (group["Bid"].diff() != 0) | (group["Ask"].diff() != 0)
-        ).astype(int)
-
-        # order book related features if volumes are present
-        if {"BidVolume", "AskVolume"}.issubset(group.columns):
-            group["volume_ratio"] = group["BidVolume"] / group["AskVolume"].replace(
-                0, pd.NA
-            )
-            group["volume_imbalance"] = group["BidVolume"] - group["AskVolume"]
-            group["depth_imbalance"] = group["volume_imbalance"] / (
-                group["BidVolume"] + group["AskVolume"]
-            )
-            group["depth_imbalance"] = group["depth_imbalance"].replace(
-                [np.inf, -np.inf], np.nan
-            )
-            total_volume = group["BidVolume"] + group["AskVolume"]
-            avg_volume = total_volume.rolling(20).mean()
-            group["volume_spike"] = (total_volume > avg_volume * 1.5).astype(int)
-        group["hour"] = group["Timestamp"].dt.hour + group["Timestamp"].dt.minute / 60
-        group["hour_sin"] = np.sin(2 * np.pi * group["hour"] / 24)
-        group["hour_cos"] = np.cos(2 * np.pi * group["hour"] / 24)
-
-        group = group.dropna().reset_index(drop=True)
-        group["ma_cross"] = ma_cross_signal(group)
         return group
 
     if "Symbol" in df.columns:
@@ -685,7 +342,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
         pivot = df.pivot_table(index="Timestamp", columns="Symbol", values="return")
 
         # rolling momentum of each symbol's returns shifted by 1-2 periods
-        mom_features = {}
+        mom_features: Dict[str, pd.Series] = {}
         for sym in pivot.columns:
             for lag in [1, 2]:
                 mom = pivot[sym].shift(lag).rolling(10).mean()
@@ -695,7 +352,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
 
         adjacency_matrices = None
         if df["Symbol"].nunique() > 1:
-            pair_data = {}
+            pair_data: Dict[tuple, pd.Series] = {}
             for sym1 in pivot.columns:
                 for sym2 in pivot.columns:
                     if sym1 == sym2:
@@ -815,7 +472,7 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
                 df = plugin(df, adjacency_matrices=adjacency_matrices)
             else:
                 df = plugin(df)
-        except Exception:
+        except Exception:  # pragma: no cover - plugin failure
             pass
 
     thresh = cfg.get("anomaly_threshold")
@@ -826,10 +483,10 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
             df["skip_trade"] = False
 
     try:
-        from regime import label_regimes
+        from regime import label_regimes  # type: ignore
 
         df = label_regimes(df)
-    except Exception:
+    except Exception:  # pragma: no cover - optional dependency
         df["market_regime"] = 0
     logger.info("Finished feature engineering")
 
@@ -878,8 +535,8 @@ def train_test_split(
     """Simple ordered train/test split. When multiple symbols are present
     the split is applied per symbol."""
     if "Symbol" in df.columns:
-        trains = []
-        tests = []
+        trains: List[pd.DataFrame] = []
+        tests: List[pd.DataFrame] = []
         for _, group in df.groupby("Symbol"):
             trains.append(group.iloc[:n_train].copy())
             tests.append(group.iloc[n_train:].copy())
@@ -896,8 +553,8 @@ def make_sequence_arrays(
     df: pd.DataFrame, features: List[str], seq_len: int
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Convert a dataframe to sequences suitable for neural network models."""
-    X_list = []
-    y_list = []
+    X_list: List[np.ndarray] = []
+    y_list: List[int] = []
 
     groups = [df]
     if "Symbol" in df.columns:
@@ -913,3 +570,14 @@ def make_sequence_arrays(
     X = np.stack(X_list)
     y = np.array(y_list)
     return X, y
+
+__all__ = [
+    "add_index_features",
+    "add_economic_calendar_features",
+    "add_news_sentiment_features",
+    "make_features",
+    "compute_rsi",
+    "ma_cross_signal",
+    "train_test_split",
+    "make_sequence_arrays",
+]

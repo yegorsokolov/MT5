@@ -14,7 +14,8 @@ from utils.market_hours import is_market_open
 import argparse
 import backtest
 from river import compose
-from dataset import load_history_parquet, make_features, load_history_config, make_sequence_arrays
+from data.history import load_history_parquet, load_history_config
+from data.features import make_features, make_sequence_arrays
 from train_rl import (
     TradingEnv,
     DiscreteTradingEnv,

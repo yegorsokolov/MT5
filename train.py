@@ -20,12 +20,12 @@ except Exception:  # noqa: E722
     shap = None
 
 from utils import load_config, mlflow_run
-from dataset import (
+from data.history import (
     load_history_parquet,
     save_history_parquet,
-    make_features,
     load_history_config,
 )
+from data.features import make_features
 
 logger = setup_logging()
 
