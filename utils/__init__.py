@@ -92,3 +92,9 @@ __all__ = [
     "update_config",
     "mlflow_run",
 ]
+
+from .environment import ensure_environment  # noqa: E402
+
+# Perform an environment check on import so scripts automatically attempt
+# to resolve missing dependencies and adjust configuration for low-spec VMs.
+ensure_environment()
