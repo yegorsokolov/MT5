@@ -21,6 +21,7 @@ scikit-optimize==0.10.2
 scipy==1.16.1
 river==0.22.0
 pyzmq==27.0.1
+filelock==3.18.0
 fastapi==0.116.1
 uvicorn==0.35.0
 mlflow==3.1.4
