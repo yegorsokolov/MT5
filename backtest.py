@@ -12,7 +12,8 @@ from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 from utils import load_config
-from dataset import load_history_parquet, make_features, load_history_config
+from data.history import load_history_parquet, load_history_config
+from data.features import make_features
 import ray
 
 logger = setup_logging()
