@@ -13,8 +13,8 @@ import torch.nn as nn
 from torch.nn.utils.stateless import functional_call
 
 from utils import load_config
-from dataset import (
-    load_history_config,
+from data.history import load_history_config
+from data.features import (
     make_features,
     train_test_split,
     make_sequence_arrays,

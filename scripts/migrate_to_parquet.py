@@ -1,6 +1,6 @@
 from pathlib import Path
 import pandas as pd
-from dataset import save_history_parquet
+from data.history import save_history_parquet
 
 
 def main() -> None:

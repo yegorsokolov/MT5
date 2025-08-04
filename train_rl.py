@@ -27,12 +27,12 @@ except Exception:  # pragma: no cover - optional dependency
 
 import mlflow
 from utils import load_config
-from dataset import (
+from data.history import (
     load_history_parquet,
     save_history_parquet,
-    make_features,
     load_history_config,
 )
+from data.features import make_features
 
 logger = setup_logging()
 
