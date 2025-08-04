@@ -2,11 +2,13 @@
 
 from pathlib import Path
 import random
+import json
 import joblib
 import pandas as pd
 from sklearn.metrics import classification_report
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMClassifier
 import mlflow
 
@@ -22,7 +24,6 @@ from dataset import (
     load_history_parquet,
     save_history_parquet,
     make_features,
-    train_test_split,
     load_history_config,
 )
 
@@ -78,8 +79,6 @@ def main():
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
-        train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
-
     features = [
         "return",
         "ma_5",
@@ -105,8 +104,18 @@ def main():
         features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
-        X_train = train_df[features]
-        y_train = (train_df["return"].shift(-1) > 0).astype(int)
+
+    X = df[features]
+    y = (df["return"].shift(-1) > 0).astype(int)
+
+    tscv = TimeSeriesSplit(n_splits=cfg.get("n_splits", 5))
+    all_preds: list[int] = []
+    all_true: list[int] = []
+    final_pipe: Pipeline | None = None
+    X_train_final: pd.DataFrame | None = None
+    for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
         if cfg.get("use_data_augmentation", False) or cfg.get("use_diffusion_aug", False):
             fname = (
@@ -126,27 +135,48 @@ def main():
                     ignore_index=True,
                 )
 
-        X_test = test_df[features]
-        y_test = (test_df["return"].shift(-1) > 0).astype(int)
-
         steps = []
         if cfg.get("use_scaler", True):
             steps.append(("scaler", StandardScaler()))
         steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=seed)))
         pipe = Pipeline(steps)
 
-        pipe.fit(X_train, y_train)
-        preds = pipe.predict(X_test)
-        report = classification_report(y_test, preds, output_dict=True)
-        logger.info("\n%s", classification_report(y_test, preds))
+        pipe.fit(
+            X_train,
+            y_train,
+            clf__eval_set=[(X_val, y_val)],
+            clf__early_stopping_rounds=cfg.get("early_stopping_rounds", 50),
+            clf__verbose=False,
+        )
 
-        joblib.dump(pipe, root / "model.joblib")
-        logger.info("Model saved to %s", root / "model.joblib")
-        mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
-        mlflow.log_metric("f1_weighted", report["weighted avg"]["f1-score"])
-        mlflow.log_artifact(str(root / "model.joblib"))
+        preds = pipe.predict(X_val)
+        report = classification_report(y_val, preds, output_dict=True)
+        logger.info("Fold %d\n%s", fold, classification_report(y_val, preds))
+        mlflow.log_metric(f"fold_{fold}_f1_weighted", report["weighted avg"]["f1-score"])
 
-        log_shap_importance(pipe, X_train, features)
+        all_preds.extend(preds)
+        all_true.extend(y_val)
+
+        if fold == tscv.n_splits - 1:
+            final_pipe = pipe
+            X_train_final = X_train
+
+    aggregate_report = classification_report(all_true, all_preds, output_dict=True)
+    logger.info("\n%s", classification_report(all_true, all_preds))
+
+    joblib.dump(final_pipe, root / "model.joblib")
+    logger.info("Model saved to %s", root / "model.joblib")
+    mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
+    mlflow.log_metric("f1_weighted", aggregate_report["weighted avg"]["f1-score"])
+    mlflow.log_artifact(str(root / "model.joblib"))
+
+    out = root / "classification_report.json"
+    with out.open("w") as f:
+        json.dump(aggregate_report, f, indent=2)
+    mlflow.log_artifact(str(out))
+
+    if final_pipe is not None and X_train_final is not None:
+        log_shap_importance(final_pipe, X_train_final, features)
 
 
 if __name__ == "__main__":
