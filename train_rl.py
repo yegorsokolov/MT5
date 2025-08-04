@@ -50,6 +50,8 @@ class TradingEnv(gym.Env):
         var_window: int = 30,
         cvar_penalty: float = 0.0,
         cvar_window: int = 30,
+        slippage_factor: float = 0.0,
+        spread_source: str | None = None,
     ) -> None:
         super().__init__()
 
@@ -70,11 +72,15 @@ class TradingEnv(gym.Env):
         self.var_window = var_window
         self.cvar_penalty = cvar_penalty
         self.cvar_window = cvar_window
+        self.slippage_factor = slippage_factor
+        self.spread_source = spread_source
 
         self.price_cols = [f"{sym}_mid" for sym in self.symbols]
         self.feature_cols = []
         for feat in features:
             self.feature_cols.extend([f"{sym}_{feat}" for sym in self.symbols])
+
+        self.spread_cols = [f"{sym}_spread" for sym in self.symbols]
 
         self.n_symbols = len(self.symbols)
         self.action_space = spaces.Box(
@@ -118,7 +124,32 @@ class TradingEnv(gym.Env):
             portfolio_ret = per_symbol_ret.sum()
             self.equity *= 1 + portfolio_ret
 
-        costs = np.abs(action - self.positions) * self.transaction_cost
+        deltas = action - self.positions
+
+        exec_prices = prices.copy()
+        if self.spread_source == "column":
+            try:
+                spreads = self.df.loc[self.i, self.spread_cols].values
+            except KeyError:
+                spreads = np.zeros(self.n_symbols, dtype=np.float32)
+            bids = prices - spreads / 2
+            asks = prices + spreads / 2
+            exec_prices = np.where(deltas > 0, asks, bids)
+
+        slippage = np.zeros(self.n_symbols, dtype=np.float32)
+        if self.slippage_factor > 0:
+            slippage = np.abs(
+                np.random.normal(scale=self.slippage_factor, size=self.n_symbols)
+            )
+            exec_prices = np.where(
+                deltas > 0,
+                exec_prices * (1 + slippage),
+                exec_prices * (1 - slippage),
+            )
+
+        transaction_costs = np.abs(deltas) * self.transaction_cost
+        slippage_costs = np.abs(deltas) * np.abs(exec_prices - prices) / prices
+        costs = transaction_costs + slippage_costs
         cost_total = costs.sum()
         self.equity *= 1 - cost_total
 
@@ -152,6 +183,7 @@ class TradingEnv(gym.Env):
             "portfolio_return": float(portfolio_ret),
             "per_symbol_returns": per_symbol_ret,
             "transaction_costs": costs,
+            "execution_prices": exec_prices,
         }
 
         return next_obs, reward, done, info
