@@ -18,6 +18,7 @@ dependencies = [
     "pyyaml",
     "GitPython",
     "gdown",
+    "filelock",
     "duckdb>=0.9.2",
     "dask[distributed]",
     "pandas_datareader",
