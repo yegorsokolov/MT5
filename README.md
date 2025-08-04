@@ -33,6 +33,46 @@ The solution is split into two components:
    `python scripts/evaluate_features.py` after collecting enough data to update
    `config.yaml` automatically.
 
+## Deployment and Environment Checks
+
+The toolkit attempts to run even on minimal virtual machines. An environment
+check installs any missing Python packages from `requirements.txt`, verifies
+available CPU cores and memory and adjusts the configuration when the host has
+limited resources. If the VM does not meet the minimum requirements the process
+aborts with a message describing the detected hardware and the suggested
+specification (minimum 2 GB RAM and 1 CPU core; recommended 8 GB RAM and 4 cores).
+
+The check runs automatically whenever modules from `utils` are imported but can
+also be invoked directly:
+
+```bash
+python -m utils.environment
+```
+
+### Example deployment
+
+Linux/macOS:
+
+```bash
+git clone https://github.com/USERNAME/MT5.git
+cd MT5
+python -m utils.environment  # install deps and adjust config
+python train.py
+```
+
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/USERNAME/MT5.git
+Set-Location MT5
+python -m utils.environment
+python train.py
+```
+
+These commands download the repository, install required packages and start a
+training run. Adjust the final command for backtesting or signal generation as
+needed.
+
 ### Reproducibility
 
 Set the `seed` value in `config.yaml` to reproduce training runs. The
