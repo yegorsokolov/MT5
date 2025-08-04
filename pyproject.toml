@@ -85,3 +85,9 @@ py-modules = [
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["tests*"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+ignore = ["E", "F"]
