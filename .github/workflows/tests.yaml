@@ -33,6 +33,16 @@ jobs:
             pip freeze | sort > requirements.lock
             diff -u requirements.txt requirements.lock
 
+        - name: Install linting tools
+          run: |
+            pip install ruff flake8 mypy
+
+        - name: Run linters and type checks
+          run: |
+            ruff check .
+            flake8 .
+            mypy .
+
         - name: Run quality checks and tests
           run: |
             python scripts/check_skeletons.py
