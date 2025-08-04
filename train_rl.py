@@ -11,6 +11,7 @@ import gym
 from gym import spaces
 from stable_baselines3 import PPO, SAC, A2C
 from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.evaluation import evaluate_policy
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
 try:  # optional dependency - hierarchical options
@@ -468,6 +469,32 @@ def main():
         else:
             model.save(root / "model_rl")
             logger.info("RL model saved to %s", root / "model_rl.zip")
+        # evaluate trained policy
+        eval_size = max(2, len(df) // 5)
+        eval_df = df.tail(eval_size).reset_index(drop=True)
+        eval_env = TradingEnv(
+            eval_df,
+            features,
+            max_position=cfg.get("rl_max_position", 1.0),
+            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+            var_window=cfg.get("rl_var_window", 30),
+            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_window=cfg.get("rl_cvar_window", 30),
+        )
+        evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
+        eval_returns = np.array(eval_env.portfolio_returns)
+        if eval_returns.size:
+            cumulative_return = float((1 + eval_returns).prod() - 1)
+            sharpe = float(
+                np.sqrt(252) * eval_returns.mean() / eval_returns.std(ddof=0)
+            ) if eval_returns.std(ddof=0) > 0 else 0.0
+            equity_curve = (1 + eval_returns).cumprod()
+            peak = np.maximum.accumulate(equity_curve)
+            max_drawdown = float(((equity_curve - peak) / peak).min())
+            mlflow.log_metric("cumulative_return", cumulative_return)
+            mlflow.log_metric("sharpe_ratio", sharpe)
+            mlflow.log_metric("max_drawdown", max_drawdown)
 
     # train risk management policy
     returns = df.sort_index()["return"].dropna()
