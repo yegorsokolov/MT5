@@ -8,6 +8,7 @@ import yaml
 import mlflow
 import log_utils
 from pydantic import ValidationError
+from filelock import FileLock
 from config_schema import ConfigSchema
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -62,16 +63,24 @@ def update_config(key: str, value, reason: str) -> None:
     if key in _RISK_KEYS:
         raise ValueError(f'Modification of {key} is not allowed due to FTMO risk rules')
 
-    cfg = load_config()
-    old = cfg.get(key)
-    if old == value:
-        return
+    cfg_path_env = os.getenv('CONFIG_FILE')
+    if cfg_path_env:
+        cfg_path = Path(cfg_path_env)
+    else:
+        cfg_path = PROJECT_ROOT / 'config.yaml'
+    lock = FileLock(str(cfg_path) + '.lock')
 
-    cfg[key] = value
-    save_config(cfg)
+    with lock:
+        cfg = load_config()
+        old = cfg.get(key)
+        if old == value:
+            return
 
-    with open(_LOG_PATH, 'a') as f:
-        f.write(f"{datetime.utcnow().isoformat()},{key},{old},{value},{reason}\n")
+        cfg[key] = value
+        save_config(cfg)
+
+        with open(_LOG_PATH, 'a') as f:
+            f.write(f"{datetime.utcnow().isoformat()},{key},{old},{value},{reason}\n")
 
 
 @contextmanager
