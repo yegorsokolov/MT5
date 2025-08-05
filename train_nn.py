@@ -20,6 +20,7 @@ from data.history import (
     load_history_parquet,
     save_history_parquet,
     load_history_config,
+    load_history_iter,
 )
 from data.features import (
     make_features,
@@ -134,10 +135,23 @@ def main():
     with mlflow_run("training_nn", cfg):
         symbols = cfg.get("symbols") or [cfg.get("symbol")]
         dfs = []
+        chunk_size = cfg.get("stream_chunk_size", 100_000)
+        stream = cfg.get("stream_history", False)
         for sym in symbols:
-            df_sym = load_history_config(sym, cfg, root)
-            df_sym["Symbol"] = sym
-            dfs.append(df_sym)
+            if stream:
+                pq_path = root / "data" / f"{sym}_history.parquet"
+                if pq_path.exists():
+                    for chunk in load_history_iter(pq_path, chunk_size):
+                        chunk["Symbol"] = sym
+                        dfs.append(chunk)
+                else:
+                    df_sym = load_history_config(sym, cfg, root)
+                    df_sym["Symbol"] = sym
+                    dfs.append(df_sym)
+            else:
+                df_sym = load_history_config(sym, cfg, root)
+                df_sym["Symbol"] = sym
+                dfs.append(df_sym)
 
         df = make_features(pd.concat(dfs, ignore_index=True))
         if "Symbol" in df.columns:
