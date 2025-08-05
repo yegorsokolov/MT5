@@ -132,4 +132,10 @@ inner_lr: 0.01
 inner_steps: 1
 finetune_steps: 3
 
+# mixed precision training
+use_amp: false
+
+# checkpointing for transformer layers
+use_checkpointing: false
+
 

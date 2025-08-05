@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.checkpoint import checkpoint
+from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
 
@@ -62,12 +64,14 @@ class TransformerModel(torch.nn.Module):
         num_symbols: int | None = None,
         num_regimes: int | None = None,
         emb_dim: int = 8,
+        use_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.symbol_emb = None
         self.symbol_idx = None
         self.regime_emb = None
         self.regime_idx = None
+        self.use_checkpointing = use_checkpointing
 
         if num_symbols is not None and num_regimes is not None:
             self.symbol_idx = input_size - 2
@@ -115,7 +119,11 @@ class TransformerModel(torch.nn.Module):
 
         x = self.input_linear(x)
         x = self.pos_encoder(x)
-        x = self.transformer(x)
+        if self.use_checkpointing:
+            for layer in self.transformer.layers:
+                x = checkpoint(layer, x)
+        else:
+            x = self.transformer(x)
         out = self.fc(x[:, -1])
         return torch.sigmoid(out).squeeze(1)
 
@@ -220,9 +228,13 @@ def main():
             num_layers=cfg.get("num_layers", 2),
             num_symbols=num_symbols,
             num_regimes=num_regimes,
+            use_checkpointing=cfg.get("use_checkpointing", False),
         ).to(device)
         optim = torch.optim.Adam(model.parameters(), lr=1e-3)
         loss_fn = torch.nn.BCELoss()
+
+        use_amp = cfg.get("use_amp", False)
+        scaler = GradScaler() if use_amp else None
 
         train_ds = TensorDataset(
             torch.tensor(X_train, dtype=torch.float32),
@@ -252,10 +264,18 @@ def main():
                 xb = xb.to(device)
                 yb = yb.to(device)
                 optim.zero_grad()
-                preds = model(xb)
-                loss = loss_fn(preds, yb)
-                loss.backward()
-                optim.step()
+                if use_amp:
+                    with autocast():
+                        preds = model(xb)
+                        loss = loss_fn(preds, yb)
+                    scaler.scale(loss).backward()
+                    scaler.step(optim)
+                    scaler.update()
+                else:
+                    preds = model(xb)
+                    loss = loss_fn(preds, yb)
+                    loss.backward()
+                    optim.step()
                 pbar.set_postfix(loss=loss.item())
 
             model.eval()
@@ -266,8 +286,10 @@ def main():
                 for xb, yb in val_loader:
                     xb = xb.to(device)
                     yb = yb.to(device)
-                    preds = model(xb)
-                    val_loss += loss_fn(preds, yb).item() * xb.size(0)
+                    with autocast(enabled=use_amp):
+                        preds = model(xb)
+                        loss = loss_fn(preds, yb)
+                    val_loss += loss.item() * xb.size(0)
                     pred_labels = (preds > 0.5).int()
                     correct += (pred_labels == yb.int()).sum().item()
                     total += yb.size(0)
@@ -295,7 +317,8 @@ def main():
             for xb, yb in test_loader:
                 xb = xb.to(device)
                 yb = yb.to(device)
-                preds = model(xb)
+                with autocast(enabled=use_amp):
+                    preds = model(xb)
                 pred_labels = (preds > 0.5).int()
                 correct += (pred_labels == yb.int()).sum().item()
                 total += yb.size(0)
