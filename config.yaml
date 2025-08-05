@@ -79,6 +79,10 @@ use_finbert_sentiment: true
 use_fingpt_sentiment: true
 # enable FinGPT news summarization
 use_fingpt_summary: true
+# sentiment processing mode: full, lite, or remote
+sentiment_mode: full
+# API endpoint for remote sentiment mode
+sentiment_api_url:
 # enable or disable the Keltner channel plugin
 use_keltner: true
 # enable Qlib technical factors

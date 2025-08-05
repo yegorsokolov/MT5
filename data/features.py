@@ -183,6 +183,9 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:  # pragma: no cover - config issues shouldn't fail
         cfg = {}
 
+    mode = cfg.get("sentiment_mode", "full")
+    api_url = cfg.get("sentiment_api_url")
+
     if cfg.get("use_fingpt_sentiment", False):
         try:
             from plugins.fingpt_sentiment import score_events  # type: ignore
@@ -190,7 +193,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
             events = get_events(past_events=True)
             news_df = pd.DataFrame(events)
             if not news_df.empty:
-                news_df = score_events(news_df)
+                news_df = score_events(news_df, mode=mode, api_url=api_url)
                 news_df = news_df.rename(columns={"date": "Timestamp"})
                 news_df["Timestamp"] = pd.to_datetime(news_df["Timestamp"])
                 keep_cols = ["Timestamp", "sentiment"]
@@ -216,7 +219,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
             events = get_events(past_events=True)
             news_df = pd.DataFrame(events)
             if not news_df.empty:
-                news_df = score_events(news_df)
+                news_df = score_events(news_df, mode=mode, api_url=api_url)
                 news_df = news_df.rename(columns={"date": "Timestamp"})
                 news_df["Timestamp"] = pd.to_datetime(news_df["Timestamp"])
                 news_df = news_df.sort_values("Timestamp")[["Timestamp", "sentiment"]]
