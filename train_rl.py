@@ -29,6 +29,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 import mlflow
 from utils import load_config
+from utils.resource_monitor import monitor
 from data.history import (
     load_history_parquet,
     save_history_parquet,
@@ -37,6 +38,9 @@ from data.history import (
 from data.features import make_features
 
 logger = setup_logging()
+
+# Periodically refresh hardware capabilities
+monitor.start()
 
 
 class TradingEnv(gym.Env):
@@ -295,7 +299,12 @@ def main():
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
 
-    algo = cfg.get("rl_algorithm", "PPO").upper()
+    size = monitor.capabilities.model_size()
+    algo_cfg = cfg.get("rl_algorithm", "AUTO").upper()
+    if algo_cfg == "AUTO":
+        algo = "A2C" if size == "lite" else "PPO"
+    else:
+        algo = algo_cfg
     if algo == "PPO":
         env = TradingEnv(
             df,

@@ -18,6 +18,7 @@ from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
 
 from utils import load_config, mlflow_run
+from utils.resource_monitor import monitor
 from data.history import (
     load_history_parquet,
     save_history_parquet,
@@ -31,6 +32,9 @@ from data.features import (
 )
 
 logger = setup_logging()
+
+# Periodically refresh hardware capabilities
+monitor.start()
 
 
 class PositionalEncoding(torch.nn.Module):
@@ -131,6 +135,15 @@ class TransformerModel(torch.nn.Module):
 @log_exceptions
 def main():
     cfg = load_config()
+    size = cfg.get("model_size", "auto")
+    if size == "auto":
+        size = monitor.capabilities.model_size()
+    if size == "lite":
+        cfg.setdefault("d_model", 32)
+        cfg.setdefault("num_layers", 1)
+    else:
+        cfg.setdefault("d_model", 128)
+        cfg.setdefault("num_layers", 4)
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)

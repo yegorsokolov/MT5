@@ -4,12 +4,17 @@ import functools
 import logging
 from typing import Optional
 
+from utils.resource_monitor import monitor
+
 try:
     from utils import load_config
 except Exception:  # pragma: no cover - optional
     load_config = lambda: {}
 
 logger = logging.getLogger(__name__)
+
+# Periodically refresh hardware capabilities
+monitor.start()
 
 try:
     from transformers import pipeline
@@ -18,10 +23,12 @@ except Exception:  # pragma: no cover - transformers optional in tests
 
 
 @functools.lru_cache()
-def _get_pipeline(mode: str):
+def _get_pipeline(mode: str | None):
     """Return a sentiment pipeline based on the requested mode."""
     if pipeline is None:
         return None
+    if mode in (None, "auto"):
+        mode = monitor.capabilities.model_size()
     try:
         model_name = (
             "distilbert-base-uncased-finetuned-sst-2-english"
@@ -47,7 +54,7 @@ def _get_summary_pipeline():
 
 @register_feature
 def score_events(
-    df: pd.DataFrame, mode: str = "full", api_url: Optional[str] = None
+    df: pd.DataFrame, mode: str = "auto", api_url: Optional[str] = None
 ) -> pd.DataFrame:
     """Add a FinGPT sentiment score for each row with a 'event' or 'text' column."""
     if df.empty:
