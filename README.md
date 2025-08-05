@@ -421,6 +421,12 @@ to further refine entries. Set `enable_news_trading` to `false` to automatically
 block trades within a few minutes of scheduled high impact events pulled from
 all three calendars.
 
+Sentiment scoring behaviour can be tuned via `sentiment_mode` in
+`config.yaml`. The default `full` mode loads the original FinBERT/FinGPT
+models, `lite` uses a small distilled model for faster local inference and
+`remote` posts texts to the URL specified by `sentiment_api_url` expecting a
+JSON response with a `scores` array (and optional `summaries` for FinGPT).
+
 An optional **advanced signal combination** stage can ensemble multiple models
 stored under the `models/` folder. When `ensemble_models` is defined in
 `config.yaml` the script loads each model and either averages the probabilities
