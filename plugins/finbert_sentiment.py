@@ -2,6 +2,7 @@ from . import register_feature
 import pandas as pd
 import functools
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -12,11 +13,17 @@ except Exception:  # pragma: no cover - transformers optional in tests
 
 
 @functools.lru_cache()
-def _get_pipeline():
+def _get_pipeline(mode: str):
+    """Return a sentiment pipeline based on the requested mode."""
     if pipeline is None:
         return None
     try:
-        return pipeline("sentiment-analysis", model="ProsusAI/finbert")
+        model_name = (
+            "distilbert-base-uncased-finetuned-sst-2-english"
+            if mode == "lite"
+            else "ProsusAI/finbert"
+        )
+        return pipeline("sentiment-analysis", model=model_name)
     except Exception as e:  # pragma: no cover - download/initialization may fail
         logger.warning("Failed to load FinBERT model: %s", e)
         return None
@@ -24,7 +31,9 @@ def _get_pipeline():
 
 
 @register_feature
-def score_events(df: pd.DataFrame) -> pd.DataFrame:
+def score_events(
+    df: pd.DataFrame, mode: str = "full", api_url: Optional[str] = None
+) -> pd.DataFrame:
     """Add a FinBERT sentiment score for each row with a 'event' or 'text' column."""
     if df.empty:
         return df
@@ -33,7 +42,25 @@ def score_events(df: pd.DataFrame) -> pd.DataFrame:
     if text_col is None:
         return df
 
-    pipe = _get_pipeline()
+    if mode == "remote" and api_url:
+        try:  # pragma: no cover - network dependent
+            import requests
+
+            resp = requests.post(
+                api_url, json={"texts": df[text_col].astype(str).tolist()}, timeout=10
+            )
+            resp.raise_for_status()
+            scores = [float(s) for s in resp.json().get("scores", [])]
+            if len(scores) != len(df):
+                raise ValueError("Score length mismatch")
+            out_df = df.copy()
+            out_df["sentiment"] = scores
+            return out_df
+        except Exception as e:  # pragma: no cover - remote failures
+            logger.warning("Remote sentiment request failed: %s", e)
+            return df.assign(sentiment=0.0)
+
+    pipe = _get_pipeline(mode)
     if pipe is None:
         return df.assign(sentiment=0.0)
 
@@ -48,6 +75,6 @@ def score_events(df: pd.DataFrame) -> pd.DataFrame:
             scores.append(-score)
         else:
             scores.append(0.0)
-    df = df.copy()
-    df["sentiment"] = scores
-    return df
+    out_df = df.copy()
+    out_df["sentiment"] = scores
+    return out_df
