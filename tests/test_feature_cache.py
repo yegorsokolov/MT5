@@ -2,28 +2,29 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-import dataset
-import utils
+import sys
+import types
 
 
 def test_make_features_uses_cache(monkeypatch, tmp_path):
-    data_dir = Path(dataset.__file__).resolve().parent / "data"
+    stub_utils = types.SimpleNamespace(
+        load_config=lambda: {
+            "use_feature_cache": True,
+            "use_atr": False,
+            "use_donchian": False,
+            "use_dask": False,
+        }
+    )
+    sys.modules["utils"] = stub_utils
+
+    import dataset
+
+    data_dir = Path(dataset.__file__).resolve().parents[1] / "data" / "data"
     if data_dir.exists():
         for f in data_dir.iterdir():
             f.unlink()
     else:
         data_dir.mkdir()
-
-    monkeypatch.setattr(
-        utils,
-        "load_config",
-        lambda: {
-            "use_feature_cache": True,
-            "use_atr": False,
-            "use_donchian": False,
-            "use_dask": False,
-        },
-    )
 
     df = pd.DataFrame({
         "Timestamp": pd.date_range("2020-01-01", periods=60, freq="min"),
@@ -35,8 +36,25 @@ def test_make_features_uses_cache(monkeypatch, tmp_path):
     cache_file = data_dir / "features.duckdb"
     assert cache_file.exists()
 
+    # numeric columns should be downcast from 64-bit types
+    num_cols = first.select_dtypes(include="number").columns
+    assert not any(first[c].dtype == np.float64 for c in num_cols)
+    assert not any(first[c].dtype == np.int64 for c in num_cols)
+
+    # optimized DataFrame should use less memory than the upcast equivalent
+    optimized_mem = first.memory_usage(deep=True).sum()
+    upcast = first.copy()
+    float_cols = first.select_dtypes(include="float").columns
+    int_cols = first.select_dtypes(include="int").columns
+    upcast[float_cols] = upcast[float_cols].astype("float64")
+    upcast[int_cols] = upcast[int_cols].astype("int64")
+    upcast_mem = upcast.memory_usage(deep=True).sum()
+    assert optimized_mem < upcast_mem
+
+    from data import features as feature_mod
+
     logs = []
-    monkeypatch.setattr(dataset.logger, "info", lambda msg, *a: logs.append(msg % a if a else msg))
+    monkeypatch.setattr(feature_mod.logger, "info", lambda msg, *a: logs.append(msg % a if a else msg))
     second = dataset.make_features(df)
     assert any("Loading features from cache" in m for m in logs)
     pd.testing.assert_frame_equal(
