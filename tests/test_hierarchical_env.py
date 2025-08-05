@@ -16,11 +16,16 @@ sb3.__spec__ = importlib.machinery.ModuleSpec("stable_baselines3", loader=None)
 sb3.common = types.ModuleType("stable_baselines3.common")
 sb3.common.vec_env = types.ModuleType("stable_baselines3.common.vec_env")
 sb3.common.vec_env.SubprocVecEnv = object
+sb3.common.vec_env.DummyVecEnv = object
+sb3.common.evaluation = types.ModuleType("stable_baselines3.common.evaluation")
+sb3.common.evaluation.evaluate_policy = lambda *a, **k: None
 sb3.common.__spec__ = importlib.machinery.ModuleSpec("stable_baselines3.common", loader=None)
 sb3.common.vec_env.__spec__ = importlib.machinery.ModuleSpec("stable_baselines3.common.vec_env", loader=None)
+sb3.common.evaluation.__spec__ = importlib.machinery.ModuleSpec("stable_baselines3.common.evaluation", loader=None)
 sys.modules.setdefault("stable_baselines3", sb3)
 sys.modules.setdefault("stable_baselines3.common", sb3.common)
 sys.modules.setdefault("stable_baselines3.common.vec_env", sb3.common.vec_env)
+sys.modules.setdefault("stable_baselines3.common.evaluation", sb3.common.evaluation)
 contrib = types.ModuleType("sb3_contrib")
 contrib.TRPO = object
 contrib.RecurrentPPO = object
@@ -154,3 +159,101 @@ def test_spread_execution_price():
     obs, reward, done, info = env.step(action)
     expected_cost = env.transaction_cost + 0.05
     assert np.isclose(info["transaction_costs"][0], expected_cost)
+
+
+def test_single_env_uses_dummy(monkeypatch, tmp_path):
+    import importlib
+
+    train_rl = importlib.import_module("train_rl")
+    calls = {"dummy": 0, "subproc": 0}
+
+    class DummyVecEnv:
+        def __init__(self, env_fns):
+            calls["dummy"] += 1
+            self.env = env_fns[0]()
+            self.action_space = self.env.action_space
+
+        def reset(self):
+            return self.env.reset()
+
+        def step(self, action):
+            return self.env.step(action)
+
+    class SubprocVecEnv:
+        def __init__(self, env_fns):
+            calls["subproc"] += 1
+            self.env = env_fns[0]()
+            self.action_space = self.env.action_space
+
+        def reset(self):
+            return self.env.reset()
+
+        def step(self, action):
+            return self.env.step(action)
+
+    monkeypatch.setattr(train_rl, "DummyVecEnv", DummyVecEnv)
+    monkeypatch.setattr(train_rl, "SubprocVecEnv", SubprocVecEnv)
+
+    class DummyAlgo:
+        def __init__(self, policy, env, verbose=0, seed=0, **kwargs):
+            pass
+
+        def learn(self, total_timesteps):
+            pass
+
+        def save(self, path):
+            pass
+
+    monkeypatch.setattr(train_rl, "A2C", DummyAlgo)
+    monkeypatch.setattr(train_rl, "PPO", DummyAlgo)
+    monkeypatch.setattr(train_rl, "evaluate_policy", lambda *a, **k: None)
+
+    mlflow_stub = types.SimpleNamespace(
+        set_tracking_uri=lambda *a, **k: None,
+        set_experiment=lambda *a, **k: None,
+        start_run=lambda *a, **k: None,
+        log_param=lambda *a, **k: None,
+        log_artifact=lambda *a, **k: None,
+        end_run=lambda *a, **k: None,
+        log_metric=lambda *a, **k: None,
+    )
+    monkeypatch.setattr(train_rl, "mlflow", mlflow_stub)
+
+    monkeypatch.setattr(train_rl, "__file__", tmp_path / "train_rl.py")
+    monkeypatch.setattr(
+        train_rl,
+        "load_config",
+        lambda: {
+            "seed": 0,
+            "symbols": ["TEST"],
+            "rl_algorithm": "A3C",
+            "rl_num_envs": 1,
+            "rl_steps": 1,
+            "rl_transaction_cost": 0.0,
+            "rl_risk_penalty": 0.0,
+        },
+    )
+    df = pd.DataFrame(
+        {
+            "Timestamp": pd.date_range("2020-01-01", periods=3, freq="H"),
+            "Symbol": ["TEST"] * 3,
+            "mid": 1.0,
+            "return": 0.0,
+            "ma_5": 0.0,
+            "ma_10": 0.0,
+            "ma_30": 0.0,
+            "ma_60": 0.0,
+            "volatility_30": 0.0,
+            "spread": 0.0,
+            "rsi_14": 0.0,
+            "news_sentiment": 0.0,
+            "market_regime": 0.0,
+        }
+    )
+    monkeypatch.setattr(train_rl, "load_history_config", lambda *a, **k: df)
+    monkeypatch.setattr(train_rl, "make_features", lambda d: d)
+
+    train_rl.main()
+
+    assert calls["dummy"] == 1
+    assert calls["subproc"] == 0
