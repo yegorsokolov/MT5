@@ -24,6 +24,29 @@ except Exception:  # pragma: no cover - plugins optional
 logger = logging.getLogger(__name__)
 
 
+def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Downcast numeric columns to reduce memory usage.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame whose numeric columns should be downcast.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with numeric columns downcast to more memory efficient types.
+    """
+
+    df = df.copy()
+    for col in df.select_dtypes(include=["int", "float"]).columns:
+        if pd.api.types.is_float_dtype(df[col]):
+            df[col] = pd.to_numeric(df[col], downcast="float")
+        else:
+            df[col] = pd.to_numeric(df[col], downcast="integer")
+    return df
+
+
 def load_index_ohlc(source: str) -> pd.DataFrame:
     """Load daily OHLC data for an index from a local path or URL."""
     try:
@@ -489,6 +512,8 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:  # pragma: no cover - optional dependency
         df["market_regime"] = 0
     logger.info("Finished feature engineering")
+
+    df = optimize_dtypes(df)
 
     if use_cache:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
