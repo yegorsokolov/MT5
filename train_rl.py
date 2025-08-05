@@ -3,6 +3,7 @@ from log_utils import setup_logging, log_exceptions
 from pathlib import Path
 from typing import List
 
+import os
 import numpy as np
 import pandas as pd
 import random
@@ -10,7 +11,7 @@ import torch
 import gym
 from gym import spaces
 from stable_baselines3 import PPO, SAC, A2C
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
@@ -333,6 +334,8 @@ def main():
         model = A2C("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "A3C":
         n_envs = int(cfg.get("rl_num_envs", 4))
+        n_envs = min(n_envs, os.cpu_count() or 1)
+
         def make_env():
             return TradingEnv(
                 df,
@@ -345,7 +348,10 @@ def main():
                 cvar_window=cfg.get("rl_cvar_window", 30),
             )
 
-        env = SubprocVecEnv([make_env for _ in range(n_envs)])
+        if n_envs == 1:
+            env = DummyVecEnv([make_env])
+        else:
+            env = SubprocVecEnv([make_env for _ in range(n_envs)])
         model = A2C("MlpPolicy", env, verbose=0, seed=seed)
     elif algo == "SAC":
         env = TradingEnv(
