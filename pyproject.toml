@@ -25,12 +25,7 @@ dependencies = [
     "lightgbm",
     "torch",
     "tqdm",
-    "stable-baselines3",
-    "sb3-contrib",
-    "gym",
     "MetaTrader5",
-    "ray",
-    "autogluon",
     "scikit-optimize",
     "scipy",
     "river",
@@ -38,11 +33,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "mlflow",
-    "transformers",
-    "FinGPT",
     "shap",
-    "diffusers",
-    "torch-geometric>=2.6",
     "statsmodels",
     "ydata-synthetic",
     "tsfresh",
@@ -61,6 +52,21 @@ mt5-train-rl = "mt5.cli:train_rl_entry"
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
 gpu = ["tensorflow"]
+heavy = [
+    "autogluon==1.4.0",
+    "ray==2.48.0",
+    "torch-geometric==2.6.1",
+]
+rl = [
+    "stable-baselines3==2.7.0",
+    "sb3-contrib==2.7.0",
+    "gym==0.26.2",
+]
+nlp = [
+    "transformers==4.54.1",
+    "FinGPT",
+    "diffusers==0.34.0",
+]
 
 [tool.setuptools]
 py-modules = [

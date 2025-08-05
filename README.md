@@ -36,7 +36,7 @@ The solution is split into two components:
 ## Deployment and Environment Checks
 
 The toolkit attempts to run even on minimal virtual machines. An environment
-check installs any missing Python packages from `requirements.txt`, verifies
+check installs any missing Python packages from `requirements-core.txt`, verifies
 available CPU cores and memory and adjusts the configuration when the host has
 limited resources. If the VM does not meet the minimum requirements the process
 aborts with a message describing the detected hardware and the suggested
@@ -227,13 +227,17 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
 1. Install Python dependencies:
 
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements-core.txt
+   # optional extras
+   pip install .[heavy]
+   pip install .[rl]
+   pip install .[nlp]
    ```
 
-   Dependencies are pinned for reproducibility. After verifying changes and tests pass, regenerate the list with:
+   Dependencies are pinned for reproducibility. After verifying changes and tests pass, regenerate the lists with:
 
    ```bash
-   pip freeze | sort > requirements.txt
+   pip freeze | sort > requirements-core.txt
    ```
 
 2. Place historical CSV files under `data/`, specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`, **or** define `api_history` entries to fetch ticks directly from your MetaTrader&nbsp;5 terminal. Existing CSV files can be converted to Parquet using `python scripts/migrate_to_parquet.py`.
@@ -322,8 +326,8 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Run `git clone <repo-url>` and press **Enter**.
 5. **Install dependencies** –
    1. Open **Command Prompt** and `cd` into the cloned folder.
-   2. Run `pip install -r requirements.txt`. After verifying any updates, refresh the pinned versions with `pip freeze | sort > requirements.txt`.
-   3. To use the optional Qlib factors install `pyqlib` via `pip install pyqlib[all]`.
+   2. Run `pip install -r requirements-core.txt`. After verifying any updates, refresh the pinned versions with `pip freeze | sort > requirements-core.txt`.
+   3. Install extras as needed, e.g. `pip install .[heavy]` or `pip install .[rl]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
    5. To enable the graph features plugin install `torch-geometric>=2.6`.
        This also enables optional GAT embeddings when `use_gat_features` is set.
