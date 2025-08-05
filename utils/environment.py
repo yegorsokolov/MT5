@@ -18,7 +18,7 @@ except Exception:
     import yaml  # type: ignore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-REQ_FILE = PROJECT_ROOT / "requirements.txt"
+REQ_FILE = PROJECT_ROOT / "requirements-core.txt"
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", PROJECT_ROOT / "config.yaml"))
 
 MIN_RAM_GB = 2
