@@ -15,6 +15,8 @@ def _prepare_config(
     seed: Optional[int],
     steps: Optional[int],
     steps_key: Optional[str],
+    n_jobs: Optional[int] = None,
+    num_threads: Optional[int] = None,
 ) -> Optional[str]:
     """Load config and apply overrides, returning temp file path if needed."""
     if config is not None:
@@ -28,6 +30,12 @@ def _prepare_config(
         key = steps_key or "steps"
         cfg[key] = steps
         modified = True
+    if n_jobs is not None:
+        cfg["n_jobs"] = n_jobs
+        modified = True
+    if num_threads is not None:
+        cfg["num_threads"] = num_threads
+        modified = True
     if modified:
         tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
         yaml.safe_dump(cfg, tmp)
@@ -40,7 +48,9 @@ def _prepare_config(
 def train_cmd(args: argparse.Namespace) -> None:
     from train import main as train_main
 
-    tmp = _prepare_config(args.config, args.seed, None, None)
+    tmp = _prepare_config(
+        args.config, args.seed, None, None, n_jobs=args.n_jobs, num_threads=None
+    )
     try:
         train_main()
     finally:
@@ -51,7 +61,14 @@ def train_cmd(args: argparse.Namespace) -> None:
 def train_nn_cmd(args: argparse.Namespace) -> None:
     from train_nn import main as train_nn_main
 
-    tmp = _prepare_config(args.config, args.seed, None, None)
+    tmp = _prepare_config(
+        args.config,
+        args.seed,
+        None,
+        None,
+        n_jobs=None,
+        num_threads=args.num_threads,
+    )
     try:
         train_nn_main()
     finally:
@@ -77,11 +94,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_train = sub.add_parser("train", help="Run classic training pipeline")
     p_train.add_argument("--seed", type=int, default=None, help="Random seed")
     p_train.add_argument("--config", type=Path, default=None, help="Path to config YAML")
+    p_train.add_argument(
+        "--n-jobs",
+        type=int,
+        default=None,
+        help="Number of parallel jobs for LightGBM/scikit-learn",
+    )
     p_train.set_defaults(func=train_cmd)
 
     p_nn = sub.add_parser("train-nn", help="Train neural network model")
     p_nn.add_argument("--seed", type=int, default=None, help="Random seed")
     p_nn.add_argument("--config", type=Path, default=None, help="Path to config YAML")
+    p_nn.add_argument(
+        "--num-threads",
+        type=int,
+        default=None,
+        help="Number of CPU threads for PyTorch",
+    )
     p_nn.set_defaults(func=train_nn_cmd)
 
     p_rl = sub.add_parser("train-rl", help="Train reinforcement learning model")
