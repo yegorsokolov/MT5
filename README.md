@@ -658,6 +658,19 @@ model trained with `train_online.py`. Set `use_online_model: true` in
 `config.yaml` and run the trainer alongside `realtime_train.py` to enable this
 behaviour.
 
+## Mixed Precision and Checkpointing
+
+`train_nn.py` supports memory-saving options controlled by two flags in
+`config.yaml`:
+
+* `use_amp` – enables automatic mixed precision, cutting GPU memory use and
+  often improving training throughput.
+* `use_checkpointing` – checkpoints transformer encoder layers, reducing peak
+  memory at the cost of extra compute.
+
+These options allow larger models or batch sizes to fit in memory; while AMP
+can speed up training, checkpointing may slow it slightly due to recomputation.
+
 ## Automatic Log Uploading
 
 `scripts/upload_logs.py` commits the contents of `logs/` and `config.yaml` to
