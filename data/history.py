@@ -149,6 +149,42 @@ def load_history_parquet(path: Path) -> pd.DataFrame:
     return df
 
 
+def load_history_iter(path: Path, chunk_size: int):
+    """Yield history dataframes from ``path`` in ``chunk_size`` rows.
+
+    This utility streams Parquet data using ``pyarrow.dataset`` if available,
+    falling back to ``pandas.read_parquet`` with ``chunksize``. Each yielded
+    chunk has the ``Timestamp`` column normalized to naive ``datetime`` objects
+    for consistency with other loaders.
+    """
+
+    logger.info(
+        "Streaming Parquet history from %s in chunks of %d", path, chunk_size
+    )
+    try:  # Prefer the pyarrow dataset API for efficient streaming
+        import pyarrow.dataset as ds  # type: ignore
+
+        dataset = ds.dataset(path)
+        for batch in dataset.to_batches(batch_size=chunk_size):
+            df = batch.to_pandas()
+            if "Timestamp" in df.columns:
+                df["Timestamp"] = pd.to_datetime(
+                    df["Timestamp"], utc=True
+                ).dt.tz_localize(None)
+            yield df
+        return
+    except Exception:  # pragma: no cover - pyarrow.dataset may be unavailable
+        pass
+
+    # Fallback to pandas iterator which also yields chunks
+    for df in pd.read_parquet(path, chunksize=chunk_size):
+        if "Timestamp" in df.columns:
+            df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(
+                None
+            )
+        yield df
+
+
 def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
     """Save tick history to a Parquet file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +216,7 @@ __all__ = [
     "load_history_config",
     "load_history",
     "load_history_parquet",
+    "load_history_iter",
     "save_history_parquet",
     "load_multiple_histories",
 ]
