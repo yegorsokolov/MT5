@@ -137,6 +137,7 @@ def main():
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    torch.set_num_threads(cfg.get("num_threads", 1))
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
 
