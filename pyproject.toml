@@ -53,6 +53,11 @@ dependencies = [
     "freqtrade",
 ]
 
+[project.scripts]
+mt5-train = "mt5.cli:train_entry"
+mt5-train-nn = "mt5.cli:train_nn_entry"
+mt5-train-rl = "mt5.cli:train_rl_entry"
+
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
 gpu = ["tensorflow"]
@@ -72,7 +77,7 @@ py-modules = [
     "realtime_train",
     "remote_api",
     "signal_queue",
-    "train",
+    "train", 
     "train_autogluon",
     "train_combined",
     "train_meta",
@@ -80,6 +85,7 @@ py-modules = [
     "train_online",
     "train_parallel",
     "train_rl",
+    "cli",
     "walk_forward",
 ]
 
