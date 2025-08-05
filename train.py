@@ -151,7 +151,16 @@ def main():
         steps = []
         if cfg.get("use_scaler", True):
             steps.append(("scaler", StandardScaler()))
-        steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=seed)))
+        steps.append(
+            (
+                "clf",
+                LGBMClassifier(
+                    n_estimators=200,
+                    n_jobs=cfg.get("n_jobs", 1),
+                    random_state=seed,
+                ),
+            )
+        )
         pipe = Pipeline(steps)
 
         pipe.fit(
