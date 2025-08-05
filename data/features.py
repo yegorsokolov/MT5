@@ -183,7 +183,12 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:  # pragma: no cover - config issues shouldn't fail
         cfg = {}
 
-    mode = cfg.get("sentiment_mode", "full")
+    mode = cfg.get("sentiment_mode", "auto")
+    if mode == "auto":
+        from utils.resource_monitor import monitor
+
+        monitor.start()
+        mode = monitor.capabilities.model_size()
     api_url = cfg.get("sentiment_api_url")
 
     if cfg.get("use_fingpt_sentiment", False):
