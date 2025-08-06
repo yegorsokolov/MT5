@@ -1,6 +1,23 @@
-FEATURE_PLUGINS = []
-MODEL_PLUGINS = []
-RISK_CHECKS = []
+"""Plugin registration and loading helpers.
+
+This module imports a number of built-in plugins for their side effects. Any
+errors during import should not fail the entire application, so we log them
+and continue.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from log_utils import setup_logging
+
+# Configure root logging so warnings are visible to the global logger.
+setup_logging()
+logger = logging.getLogger(__name__)
+
+FEATURE_PLUGINS: list = []
+MODEL_PLUGINS: list = []
+RISK_CHECKS: list = []
 
 
 def register_feature(func):
@@ -38,9 +55,9 @@ for _mod in [
     'graph_features',
 ]:
     try:
-        __import__(f'{__name__}.{_mod}')
-    except Exception:
-        pass
+        __import__(f"{__name__}.{_mod}")
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("Failed to load plugin '%s'", _mod, exc_info=True)
 
 
 __all__ = [
