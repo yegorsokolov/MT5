@@ -1,11 +1,10 @@
 """Dynamic model selection based on system capabilities."""
 
 import asyncio
-from dataclasses import dataclass
-from typing import Dict, List, Optional
-
 import importlib.util
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, List, Optional
 
 # ``utils.resource_monitor`` lives inside a package whose ``__init__`` pulls in
 # heavy optional dependencies. Import the module directly from its file path to
