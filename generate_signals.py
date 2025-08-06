@@ -1,6 +1,6 @@
 """Generate per-tick probability signals for the EA."""
 
-from log_utils import setup_logging, log_exceptions
+from log_utils import setup_logging, log_exceptions, log_predictions
 
 from pathlib import Path
 import os
@@ -444,6 +444,10 @@ def main():
         "Symbol": cfg.get("symbol"),
         "prob": combined,
     })
+    log_df = df[["Timestamp"] + features].copy()
+    log_df["Symbol"] = cfg.get("symbol")
+    log_df["prob"] = combined
+    log_predictions(log_df)
     pub = get_async_publisher()
     fmt = os.getenv("SIGNAL_FORMAT", "protobuf")
     asyncio.run(publish_dataframe_async(pub, out, fmt=fmt))
