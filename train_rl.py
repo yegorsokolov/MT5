@@ -29,6 +29,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 import mlflow
 from utils import load_config
+from state_manager import save_checkpoint, load_latest_checkpoint
 from utils.resource_monitor import monitor
 from data.history import (
     load_history_parquet,
@@ -465,14 +466,47 @@ def main():
         raise ValueError(f"Unknown rl_algorithm {algo}")
 
     if algo == "RLLIB":
+        ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
+        start_iter = 0
+        if ckpt:
+            last_iter, state = ckpt
+            model.restore(state["model_path"])
+            start_iter = last_iter + 1
+            logger.info("Resuming from checkpoint at iteration %s", last_iter)
         iters = max(1, int(cfg.get("rl_steps", 5)))
-        for _ in range(iters):
+        for i in range(start_iter, iters):
             model.train()
+            ckpt_path = model.save(str(root / "model_rllib"))
+            save_checkpoint({"model_path": ckpt_path}, i, cfg.get("checkpoint_dir"))
         checkpoint = model.save(str(root / "model_rllib"))
         logger.info("RLlib model saved to %s", checkpoint)
         ray.shutdown()
     else:
-        model.learn(total_timesteps=cfg.get("rl_steps", 5000))
+        ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
+        start_step = 0
+        if ckpt:
+            last_step, state = ckpt
+            model.policy.load_state_dict(state["model"])
+            model.policy.optimizer.load_state_dict(state["optimizer"])
+            model.num_timesteps = last_step
+            start_step = last_step
+            logger.info("Resuming from checkpoint at step %s", last_step)
+        total_steps = int(cfg.get("rl_steps", 5000))
+        interval = int(cfg.get("checkpoint_interval", 1000))
+        current = start_step
+        while current < total_steps:
+            learn_steps = min(interval, total_steps - current)
+            model.learn(total_timesteps=learn_steps, reset_num_timesteps=False)
+            current += learn_steps
+            save_checkpoint(
+                {
+                    "model": model.policy.state_dict(),
+                    "optimizer": model.policy.optimizer.state_dict(),
+                    "metrics": {"timesteps": current},
+                },
+                current,
+                cfg.get("checkpoint_dir"),
+            )
         if algo == "RECURRENTPPO":
             rec_dir = root / "models" / "recurrent_rl"
             rec_dir.mkdir(parents=True, exist_ok=True)
