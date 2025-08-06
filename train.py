@@ -27,6 +27,7 @@ from data.history import (
     load_history_iter,
 )
 from data.features import make_features
+from state_manager import save_checkpoint, load_latest_checkpoint
 
 logger = setup_logging()
 
@@ -126,7 +127,19 @@ def main():
     all_true: list[int] = []
     final_pipe: Pipeline | None = None
     X_train_final: pd.DataFrame | None = None
+    start_fold = 0
+    ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
+    if ckpt:
+        last_fold, state = ckpt
+        start_fold = last_fold + 1
+        all_preds = state.get("all_preds", [])
+        all_true = state.get("all_true", [])
+        final_pipe = state.get("model")
+        logger.info("Resuming from checkpoint at fold %s", last_fold)
+
     for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
+        if fold < start_fold:
+            continue
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
@@ -178,6 +191,16 @@ def main():
 
         all_preds.extend(preds)
         all_true.extend(y_val)
+        save_checkpoint(
+            {
+                "model": pipe,
+                "all_preds": all_preds,
+                "all_true": all_true,
+                "metrics": report,
+            },
+            fold,
+            cfg.get("checkpoint_dir"),
+        )
 
         if fold == tscv.n_splits - 1:
             final_pipe = pipe

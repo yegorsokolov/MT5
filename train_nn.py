@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from utils import load_config, mlflow_run
 from utils.resource_monitor import monitor
+from state_manager import save_checkpoint, load_latest_checkpoint
 from data.history import (
     load_history_parquet,
     save_history_parquet,
@@ -271,7 +272,18 @@ def main():
         epochs_no_improve = 0
         model_path = root / "model_transformer.pt"
 
-        for epoch in range(cfg.get("epochs", 5)):
+        start_epoch = 0
+        ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
+        if ckpt:
+            last_epoch, state = ckpt
+            start_epoch = last_epoch + 1
+            model.load_state_dict(state["model"])
+            optim.load_state_dict(state["optimizer"])
+            best_val_loss = state.get("best_val_loss", best_val_loss)
+            epochs_no_improve = state.get("epochs_no_improve", 0)
+            logger.info("Resuming from checkpoint at epoch %s", last_epoch)
+
+        for epoch in range(start_epoch, cfg.get("epochs", 5)):
             model.train()
             pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}")
             for xb, yb in pbar:
@@ -319,9 +331,22 @@ def main():
                 logger.info("Validation improved; model saved.")
             else:
                 epochs_no_improve += 1
-                if epochs_no_improve >= patience:
-                    logger.info("Early stopping at epoch %s", epoch + 1)
-                    break
+
+            save_checkpoint(
+                {
+                    "model": model.state_dict(),
+                    "optimizer": optim.state_dict(),
+                    "metrics": {"val_loss": val_loss, "val_accuracy": val_acc},
+                    "best_val_loss": best_val_loss,
+                    "epochs_no_improve": epochs_no_improve,
+                },
+                epoch,
+                cfg.get("checkpoint_dir"),
+            )
+
+            if epochs_no_improve >= patience:
+                logger.info("Early stopping at epoch %s", epoch + 1)
+                break
 
         model.load_state_dict(joblib.load(model_path))
         model.eval()
