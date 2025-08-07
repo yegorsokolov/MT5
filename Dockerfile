@@ -22,4 +22,5 @@ RUN mkdir -p /opt/mt5 && \
 
 ENV DISPLAY=:0
 HEALTHCHECK CMD ["python3", "scripts/healthcheck.py"]
+EXPOSE 8000
 CMD ["bash", "scripts/run_bot.sh"]

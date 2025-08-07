@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import os
 
 import types
 import importlib
@@ -11,6 +12,7 @@ import contextlib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def load_api(tmp_log):
+    os.environ['API_KEY'] = 'token'
     sys.modules['log_utils'] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
         setup_logging=lambda: None,
@@ -52,7 +54,6 @@ class DummyProc:
 
 def setup_client(tmp_path):
     api = load_api(tmp_path / "app.log")
-    api.API_KEY = "token"
     api.bots.clear()
     Path(api.LOG_FILE).write_text("line1\nline2\n")
     return api, TestClient(api.app)

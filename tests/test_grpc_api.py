@@ -3,6 +3,7 @@ import types
 import importlib
 import asyncio
 from pathlib import Path
+import os
 
 import pytest
 import grpc
@@ -26,6 +27,7 @@ class DummyProc:
 
 
 def load_grpc(tmp_log):
+    os.environ['API_KEY'] = 'token'
     sys.modules['mlflow'] = types.SimpleNamespace()
     sys.modules['log_utils'] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
@@ -33,7 +35,6 @@ def load_grpc(tmp_log):
         log_exceptions=lambda f: f,
     )
     ra = importlib.reload(importlib.import_module('remote_api'))
-    ra.API_KEY = 'token'
     ra.bots.clear()
     Path(ra.LOG_FILE).write_text('line1\nline2\n')
     updates = {}
