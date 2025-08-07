@@ -13,6 +13,8 @@ from typing import Dict, Any, Set
 import asyncio
 from pydantic import BaseModel
 import os
+from pathlib import Path
+import uvicorn
 from utils import update_config
 from log_utils import LOG_FILE
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
@@ -27,7 +29,12 @@ class ConfigUpdate(BaseModel):
 
 app = FastAPI(title="MT5 Bot Controller")
 
-API_KEY = os.getenv("API_KEY", "")
+API_KEY = os.getenv("API_KEY")
+if not API_KEY:
+    raise RuntimeError("API_KEY environment variable is required")
+
+CERT_FILE = Path("certs/api.crt")
+KEY_FILE = Path("certs/api.key")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 async def authorize(key: str = Security(api_key_header)) -> None:
@@ -175,3 +182,15 @@ async def bot_logs(bot_id: str, lines: int = 50, _: None = Depends(authorize)):
         if bot_id not in bots:
             raise HTTPException(status_code=404, detail="Bot not found")
     return {"bot": bot_id, "logs": _log_tail(lines)}
+
+
+if __name__ == "__main__":
+    if not CERT_FILE.exists() or not KEY_FILE.exists():
+        raise RuntimeError("SSL certificate or key file missing")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        ssl_certfile=str(CERT_FILE),
+        ssl_keyfile=str(KEY_FILE),
+    )

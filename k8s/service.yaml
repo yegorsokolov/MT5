@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mt5-bot
+spec:
+  selector:
+    app: mt5-bot
+  ports:
+    - name: https
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
