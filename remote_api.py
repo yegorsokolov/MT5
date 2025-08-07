@@ -35,6 +35,7 @@ async def authorize(key: str = Security(api_key_header)) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 bots: Dict[str, Popen] = {}
+bots_lock = asyncio.Lock()
 metrics_clients: Set[WebSocket] = set()
 
 async def broadcast_update(data: Dict[str, Any]) -> None:
@@ -59,25 +60,28 @@ def _log_tail(lines: int) -> str:
 @app.get("/bots")
 async def list_bots(_: None = Depends(authorize)):
     """Return running bot IDs and their status."""
-    return {bid: proc.poll() is None for bid, proc in bots.items()}
+    async with bots_lock:
+        return {bid: proc.poll() is None for bid, proc in bots.items()}
 
 @app.post("/bots/{bot_id}/start")
 async def start_bot(bot_id: str, _: None = Depends(authorize)):
     """Launch a realtime training instance for the given bot."""
-    if bot_id in bots and bots[bot_id].poll() is None:
-        raise HTTPException(status_code=400, detail="Bot already running")
-    proc = Popen(["python", "realtime_train.py"])
-    bots[bot_id] = proc
+    async with bots_lock:
+        if bot_id in bots and bots[bot_id].poll() is None:
+            raise HTTPException(status_code=400, detail="Bot already running")
+        proc = Popen(["python", "realtime_train.py"])
+        bots[bot_id] = proc
     return {"bot": bot_id, "status": "started"}
 
 @app.post("/bots/{bot_id}/stop")
 async def stop_bot(bot_id: str, _: None = Depends(authorize)):
     """Terminate a running bot."""
-    proc = bots.get(bot_id)
-    if not proc:
-        raise HTTPException(status_code=404, detail="Bot not found")
-    proc.terminate()
-    bots.pop(bot_id)
+    async with bots_lock:
+        proc = bots.get(bot_id)
+        if not proc:
+            raise HTTPException(status_code=404, detail="Bot not found")
+        proc.terminate()
+        bots.pop(bot_id)
     return {"bot": bot_id, "status": "stopped"}
 
 
@@ -131,16 +135,18 @@ async def update_configuration(change: ConfigUpdate, _: None = Depends(authorize
 @app.get("/health")
 async def health(lines: int = 20, _: None = Depends(authorize)):
     """Return service status and recent log lines."""
-    return {
-        "running": True,
-        "bots": {
+    async with bots_lock:
+        bot_data = {
             bid: {
                 "running": proc.poll() is None,
                 "pid": proc.pid,
                 "returncode": proc.returncode,
             }
             for bid, proc in bots.items()
-        },
+        }
+    return {
+        "running": True,
+        "bots": bot_data,
         "logs": _log_tail(lines),
     }
 
@@ -148,21 +154,24 @@ async def health(lines: int = 20, _: None = Depends(authorize)):
 @app.get("/bots/{bot_id}/status")
 async def bot_status(bot_id: str, lines: int = 20, _: None = Depends(authorize)):
     """Return bot state and recent log lines."""
-    proc = bots.get(bot_id)
-    if not proc:
-        raise HTTPException(status_code=404, detail="Bot not found")
-    return {
-        "bot": bot_id,
-        "running": proc.poll() is None,
-        "pid": proc.pid,
-        "returncode": proc.returncode,
-        "logs": _log_tail(lines),
-    }
+    async with bots_lock:
+        proc = bots.get(bot_id)
+        if not proc:
+            raise HTTPException(status_code=404, detail="Bot not found")
+        data = {
+            "bot": bot_id,
+            "running": proc.poll() is None,
+            "pid": proc.pid,
+            "returncode": proc.returncode,
+            "logs": _log_tail(lines),
+        }
+    return data
 
 
 @app.get("/bots/{bot_id}/logs")
 async def bot_logs(bot_id: str, lines: int = 50, _: None = Depends(authorize)):
     """Return the last N log lines for a bot."""
-    if bot_id not in bots:
-        raise HTTPException(status_code=404, detail="Bot not found")
+    async with bots_lock:
+        if bot_id not in bots:
+            raise HTTPException(status_code=404, detail="Bot not found")
     return {"bot": bot_id, "logs": _log_tail(lines)}
