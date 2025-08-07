@@ -13,9 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def load_api(tmp_log):
     os.environ['API_KEY'] = 'token'
+    logs = []
+    logger = types.SimpleNamespace(warning=lambda msg, *a: logs.append(msg % a if a else msg))
     sys.modules['log_utils'] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
-        setup_logging=lambda: None,
+        setup_logging=lambda: logger,
         log_exceptions=lambda f: f,
         TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
         ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
@@ -33,6 +35,7 @@ def load_api(tmp_log):
     env_mod = types.ModuleType("environment")
     env_mod.ensure_environment = lambda: None
     sys.modules['utils.environment'] = env_mod
+    sys.modules['utils'] = types.SimpleNamespace(update_config=lambda *a, **k: None)
     sys.modules['metrics'] = importlib.import_module('metrics')
     sys.modules['mlflow'] = types.SimpleNamespace(
         set_tracking_uri=lambda *a, **k: None,
@@ -40,15 +43,19 @@ def load_api(tmp_log):
         start_run=contextlib.nullcontext,
         log_dict=lambda *a, **k: None,
     )
-    return importlib.reload(importlib.import_module('remote_api'))
+    mod = importlib.reload(importlib.import_module('remote_api'))
+    mod._logs = logs
+    return mod
 
 class DummyProc:
     def __init__(self):
         self.terminated = False
         self.pid = 123
         self.returncode = None
+
     def poll(self):
-        return None if not self.terminated else 0
+        return None if not self.terminated else self.returncode or 0
+
     def terminate(self):
         self.terminated = True
 
@@ -81,7 +88,7 @@ def test_concurrent_start(tmp_path):
 def test_concurrent_stop(tmp_path):
     api = load_api(tmp_path / "app.log")
     api.bots.clear()
-    api.bots["bot1"] = DummyProc()
+    api.bots["bot1"] = api.BotInfo(proc=DummyProc())
 
     async def stop_call():
         try:
@@ -100,7 +107,7 @@ def test_concurrent_stop(tmp_path):
 def test_status_during_stop(tmp_path):
     api = load_api(tmp_path / "app.log")
     api.bots.clear()
-    api.bots["bot1"] = DummyProc()
+    api.bots["bot1"] = api.BotInfo(proc=DummyProc())
 
     async def status_call():
         try:
