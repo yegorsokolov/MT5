@@ -10,6 +10,7 @@ from .history import (
     save_history_parquet,
     load_multiple_histories,
 )
+from .versioning import compute_hash
 from .features import (
     add_index_features,
     add_economic_calendar_features,
@@ -30,6 +31,7 @@ __all__ = [
     "load_history_parquet",
     "save_history_parquet",
     "load_multiple_histories",
+    "compute_hash",
     "add_index_features",
     "add_economic_calendar_features",
     "add_news_sentiment_features",
