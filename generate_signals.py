@@ -448,9 +448,13 @@ def main():
     log_df["Symbol"] = cfg.get("symbol")
     log_df["prob"] = combined
     log_predictions(log_df)
-    pub = get_async_publisher()
     fmt = os.getenv("SIGNAL_FORMAT", "protobuf")
-    asyncio.run(publish_dataframe_async(pub, out, fmt=fmt))
+
+    async def _publish():
+        async with get_async_publisher() as pub:
+            await publish_dataframe_async(pub, out, fmt=fmt)
+
+    asyncio.run(_publish())
     logger.info("Signals published via ZeroMQ (%s)", fmt)
 
 
