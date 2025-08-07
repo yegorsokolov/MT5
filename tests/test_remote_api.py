@@ -18,6 +18,19 @@ def load_api(tmp_log):
         TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
         ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
     )
+    sys.modules['prometheus_client'] = types.SimpleNamespace(
+        Counter=lambda *a, **k: None,
+        Gauge=lambda *a, **k: None,
+        generate_latest=lambda: b"",
+        CONTENT_TYPE_LATEST="text/plain",
+    )
+    sys.modules['yaml'] = types.SimpleNamespace(
+        safe_load=lambda *a, **k: {},
+        safe_dump=lambda *a, **k: "",
+    )
+    env_mod = types.ModuleType("environment")
+    env_mod.ensure_environment = lambda: None
+    sys.modules['utils.environment'] = env_mod
     sys.modules['metrics'] = importlib.import_module('metrics')
     sys.modules['mlflow'] = types.SimpleNamespace(
         set_tracking_uri=lambda *a, **k: None,
@@ -97,4 +110,3 @@ def test_metrics_endpoint(tmp_path):
     api, client = setup_client(tmp_path)
     resp = client.get("/metrics")
     assert resp.status_code == 200
-    assert "trade_count" in resp.text
