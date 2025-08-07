@@ -576,14 +576,15 @@ deployment manifest.
 ## Remote Management API
 
 A small FastAPI application defined in `remote_api.py` exposes REST endpoints for
-starting and stopping multiple bots. Launch the server with:
+starting and stopping multiple bots. Launch the server with TLS enabled:
 
 ```bash
-uvicorn remote_api:app --host 0.0.0.0 --port 8000
+python remote_api.py
 ```
 
-Set `API_KEY` before launching and include the header `X-API-Key` in each
-request. Key endpoints include:
+The process reads `certs/api.crt` and `certs/api.key` and **fails to start** if
+`API_KEY` is unset. Include the header `X-API-Key` in each request. Key
+endpoints include:
 
 - `GET /bots` – list running bot IDs and whether each is alive.
 - `POST /bots/<id>/start` – launch a new training process.
@@ -598,8 +599,15 @@ request. Key endpoints include:
 Example:
 
 ```bash
-curl -H "X-API-Key: <token>" http://localhost:8000/health
+curl -k -H "X-API-Key: <token>" https://localhost:8000/health
 ```
+
+### API Key Rotation
+
+Generate a new key and update the `API_KEY` environment variable or Kubernetes
+secret. Restart the service or roll your deployment so pods pick up the new
+value. Once clients have been updated to use the new token, remove the old key
+from the secret or environment.
 
 ### Monitoring and Dashboard
 
@@ -613,6 +621,7 @@ the service:
       prometheus.io/scrape: "true"
       prometheus.io/path: "/metrics"
       prometheus.io/port: "8000"
+      prometheus.io/scheme: "https"
 ```
 
 Import the provided Grafana dashboard JSON in the `grafana/` folder to visualise

@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import os
 import types
 import importlib
 import contextlib
@@ -11,6 +12,7 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def load_api(tmp_log):
+    os.environ['API_KEY'] = 'token'
     sys.modules['log_utils'] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
         setup_logging=lambda: None,
@@ -52,7 +54,6 @@ class DummyProc:
 
 def test_concurrent_start(tmp_path):
     api = load_api(tmp_path / "app.log")
-    api.API_KEY = "token"
     api.bots.clear()
 
     count = 0
@@ -79,7 +80,6 @@ def test_concurrent_start(tmp_path):
 
 def test_concurrent_stop(tmp_path):
     api = load_api(tmp_path / "app.log")
-    api.API_KEY = "token"
     api.bots.clear()
     api.bots["bot1"] = DummyProc()
 
@@ -99,7 +99,6 @@ def test_concurrent_stop(tmp_path):
 
 def test_status_during_stop(tmp_path):
     api = load_api(tmp_path / "app.log")
-    api.API_KEY = "token"
     api.bots.clear()
     api.bots["bot1"] = DummyProc()
 

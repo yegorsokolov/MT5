@@ -15,6 +15,7 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/metrics"
         prometheus.io/port: "8000"
+        prometheus.io/scheme: "https"
     spec:
       containers:
         - name: bot
@@ -22,11 +23,17 @@ spec:
           args: ["bash", "scripts/run_bot.sh"]
           ports:
             - containerPort: 8000
+              name: https
           env:
             - name: CONFIG_FILE
               value: "/opt/bot/config.yaml"
             - name: SIGNAL_QUEUE_URL
               value: "tcp://localhost:5555"
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mt5-api-key
+                  key: api-key
           livenessProbe:
             exec:
               command: ["python3", "scripts/healthcheck.py"]
@@ -41,12 +48,12 @@ spec:
             - mountPath: /opt/mt5
               name: mt5-data
             - mountPath: /opt/bot/certs
-              name: grpc-certs
+              name: api-certs
               readOnly: true
       volumes:
         - name: mt5-data
           persistentVolumeClaim:
             claimName: mt5-pvc
-        - name: grpc-certs
+        - name: api-certs
           secret:
-            secretName: mt5-grpc-certs
+            secretName: mt5-api-certs
