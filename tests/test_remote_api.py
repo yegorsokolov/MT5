@@ -13,9 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def load_api(tmp_log):
     os.environ['API_KEY'] = 'token'
+    logs = []
+    logger = types.SimpleNamespace(warning=lambda msg, *a: logs.append(msg % a if a else msg))
     sys.modules['log_utils'] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
-        setup_logging=lambda: None,
+        setup_logging=lambda: logger,
         log_exceptions=lambda f: f,
         TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
         ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
@@ -33,6 +35,7 @@ def load_api(tmp_log):
     env_mod = types.ModuleType("environment")
     env_mod.ensure_environment = lambda: None
     sys.modules['utils.environment'] = env_mod
+    sys.modules['utils'] = types.SimpleNamespace(update_config=lambda *a, **k: None)
     sys.modules['metrics'] = importlib.import_module('metrics')
     sys.modules['mlflow'] = types.SimpleNamespace(
         set_tracking_uri=lambda *a, **k: None,
@@ -40,15 +43,19 @@ def load_api(tmp_log):
         start_run=contextlib.nullcontext,
         log_dict=lambda *a, **k: None,
     )
-    return importlib.reload(importlib.import_module('remote_api'))
+    mod = importlib.reload(importlib.import_module('remote_api'))
+    mod._logs = logs
+    return mod
 
 class DummyProc:
     def __init__(self):
         self.terminated = False
         self.pid = 123
         self.returncode = None
+
     def poll(self):
-        return None if not self.terminated else 0
+        return None if not self.terminated else self.returncode or 0
+
     def terminate(self):
         self.terminated = True
 
@@ -71,7 +78,7 @@ def test_health_auth(tmp_path):
 
 def test_bot_status(tmp_path):
     api, client = setup_client(tmp_path)
-    api.bots["bot1"] = DummyProc()
+    api.bots["bot1"] = api.BotInfo(proc=DummyProc())
     resp = client.get("/bots/bot1/status", headers={"x-api-key": "token"})
     assert resp.status_code == 200
     data = resp.json()
@@ -83,7 +90,7 @@ def test_bot_status(tmp_path):
 
 def test_bot_logs(tmp_path):
     api, client = setup_client(tmp_path)
-    api.bots["bot1"] = DummyProc()
+    api.bots["bot1"] = api.BotInfo(proc=DummyProc())
     resp = client.get("/bots/bot1/logs", headers={"x-api-key": "token"})
     assert resp.status_code == 200
     assert "line2" in resp.json()["logs"]
@@ -111,3 +118,51 @@ def test_metrics_endpoint(tmp_path):
     api, client = setup_client(tmp_path)
     resp = client.get("/metrics")
     assert resp.status_code == 200
+
+
+def test_bot_restart_and_health(tmp_path):
+    api, client = setup_client(tmp_path)
+
+    class CrashProc(DummyProc):
+        def __init__(self, code=1):
+            super().__init__()
+            self.terminated = True
+            self.returncode = code
+
+    restarted = DummyProc()
+
+    def fake_popen(cmd):
+        return restarted
+
+    api.Popen = fake_popen
+    api.bots["bot1"] = api.BotInfo(proc=CrashProc())
+
+    asyncio.get_event_loop().run_until_complete(api._check_bots_once())
+
+    resp = client.get("/bots", headers={"x-api-key": "token"})
+    data = resp.json()["bot1"]
+    assert data["restart_count"] == 1
+    assert data["exit_code"] == 1
+    assert data["running"] is True
+    assert "Bot bot1 exited with code 1" in api._logs[0]
+
+
+def test_bot_removed_on_restart_failure(tmp_path):
+    api, client = setup_client(tmp_path)
+
+    class CrashProc(DummyProc):
+        def __init__(self):
+            super().__init__()
+            self.terminated = True
+            self.returncode = 2
+
+    def fail_popen(cmd):
+        raise RuntimeError("fail")
+
+    api.Popen = fail_popen
+    api.bots["bot1"] = api.BotInfo(proc=CrashProc())
+
+    asyncio.get_event_loop().run_until_complete(api._check_bots_once())
+
+    assert "bot1" not in api.bots
+    assert any("bot1" in msg for msg in api._logs)
