@@ -1,21 +1,18 @@
 import logging
 import os
 import pkgutil
-import subprocess
 import sys
 from pathlib import Path
 
 try:
     import psutil  # type: ignore
-except Exception:
-    subprocess.run([sys.executable, "-m", "pip", "install", "psutil"], check=False)
-    import psutil  # type: ignore
+except Exception:  # pragma: no cover - handled later
+    psutil = None  # type: ignore
 
 try:
     import yaml  # type: ignore
-except Exception:
-    subprocess.run([sys.executable, "-m", "pip", "install", "pyyaml"], check=False)
-    import yaml  # type: ignore
+except Exception:  # pragma: no cover - handled later
+    yaml = None  # type: ignore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQ_FILE = PROJECT_ROOT / "requirements-core.txt"
@@ -25,14 +22,6 @@ MIN_RAM_GB = 2
 REC_RAM_GB = 8
 MIN_CORES = 1
 REC_CORES = 4
-
-
-def _install_packages(packages: list[str]) -> None:
-    if not packages:
-        return
-    cmd = [sys.executable, "-m", "pip", "install", *packages]
-    subprocess.run(cmd, check=False)
-
 
 def _check_dependencies() -> list[str]:
     missing: list[str] = []
@@ -67,24 +56,27 @@ def _adjust_config_for_low_spec() -> None:
 
 
 def ensure_environment() -> None:
-    """Install missing dependencies and warn about weak hardware.
+    """Validate dependencies and warn about weak hardware.
 
     If resources are below recommended thresholds the configuration is adjusted
-    for slower machines. If requirements are not met, a warning is logged so the
-    user can upgrade the VM.
+    for slower machines. If requirements are not met, a clear error is raised so
+    the user can install the missing packages.
     """
     logger = logging.getLogger("environment")
 
     missing = _check_dependencies()
+    if psutil is None:
+        missing.append("psutil")
+    if yaml is None:
+        missing.append("pyyaml")
+
     if missing:
-        logger.info("Installing missing packages: %s", ", ".join(missing))
-        _install_packages(missing)
-        remaining = _check_dependencies()
-        if remaining:
-            logger.error("Unable to install packages: %s", ", ".join(remaining))
-            raise RuntimeError(
-                "Missing dependencies: " + ", ".join(remaining)
-            )
+        raise RuntimeError(
+            "Missing dependencies: "
+            + ", ".join(missing)
+            + ". Install with 'pip install -r requirements-core.txt'"
+            " or the appropriate extras."
+        )
 
     mem_gb = psutil.virtual_memory().total / 1_000_000_000
     cores = psutil.cpu_count() or 1
