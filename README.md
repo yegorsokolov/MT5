@@ -630,6 +630,16 @@ these metrics.
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.
 
+### Data Drift Mitigation
+
+When monitoring detects significant drift between live data and training
+distributions, consider the following responses:
+
+* **Retrain** – update models on recent data so they adapt to new market
+  conditions.
+* **Rollback** – revert to a previously stable model version while the cause of
+  drift is investigated.
+
 ---
 
 This is a simplified template intended for further extension and tuning.  It is
