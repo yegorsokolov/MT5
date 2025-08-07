@@ -9,16 +9,17 @@ from fastapi import (
 )
 from fastapi.security.api_key import APIKeyHeader
 from subprocess import Popen
-from typing import Dict, Any, Set
+from typing import Dict, Any, Set, Optional
 import asyncio
 from pydantic import BaseModel
 import os
 from pathlib import Path
 import uvicorn
 from utils import update_config
-from log_utils import LOG_FILE
+from log_utils import LOG_FILE, setup_logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
+from dataclasses import dataclass
 
 
 class ConfigUpdate(BaseModel):
@@ -28,6 +29,7 @@ class ConfigUpdate(BaseModel):
 
 
 app = FastAPI(title="MT5 Bot Controller")
+logger = setup_logging()
 
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:
@@ -41,8 +43,17 @@ async def authorize(key: str = Security(api_key_header)) -> None:
     if API_KEY and key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-bots: Dict[str, Popen] = {}
 bots_lock = asyncio.Lock()
+
+
+@dataclass
+class BotInfo:
+    proc: Popen
+    restart_count: int = 0
+    exit_code: Optional[int] = None
+
+
+bots: Dict[str, BotInfo] = {}
 metrics_clients: Set[WebSocket] = set()
 
 async def broadcast_update(data: Dict[str, Any]) -> None:
@@ -64,30 +75,64 @@ def _log_tail(lines: int) -> str:
     with open(LOG_FILE, "r") as f:
         return "".join(f.readlines()[-lines:])
 
+
+async def _check_bots_once() -> None:
+    """Inspect running bots and restart or remove if exited."""
+    async with bots_lock:
+        for bid, info in list(bots.items()):
+            rc = info.proc.poll()
+            if rc is not None:
+                info.exit_code = rc
+                logger.warning("Bot %s exited with code %s", bid, rc)
+                try:
+                    info.proc = Popen(["python", "realtime_train.py"])
+                    info.restart_count += 1
+                except Exception:
+                    bots.pop(bid, None)
+
+
+async def _bot_watcher() -> None:
+    """Background task to monitor bot processes."""
+    while True:
+        await asyncio.sleep(1)
+        await _check_bots_once()
+
+
+@app.on_event("startup")
+async def _start_watcher() -> None:
+    asyncio.create_task(_bot_watcher())
+
 @app.get("/bots")
 async def list_bots(_: None = Depends(authorize)):
     """Return running bot IDs and their status."""
     async with bots_lock:
-        return {bid: proc.poll() is None for bid, proc in bots.items()}
+        return {
+            bid: {
+                "running": info.proc.poll() is None,
+                "exit_code": info.exit_code,
+                "restart_count": info.restart_count,
+            }
+            for bid, info in bots.items()
+        }
 
 @app.post("/bots/{bot_id}/start")
 async def start_bot(bot_id: str, _: None = Depends(authorize)):
     """Launch a realtime training instance for the given bot."""
     async with bots_lock:
-        if bot_id in bots and bots[bot_id].poll() is None:
+        if bot_id in bots and bots[bot_id].proc.poll() is None:
             raise HTTPException(status_code=400, detail="Bot already running")
         proc = Popen(["python", "realtime_train.py"])
-        bots[bot_id] = proc
+        bots[bot_id] = BotInfo(proc=proc)
     return {"bot": bot_id, "status": "started"}
 
 @app.post("/bots/{bot_id}/stop")
 async def stop_bot(bot_id: str, _: None = Depends(authorize)):
     """Terminate a running bot."""
     async with bots_lock:
-        proc = bots.get(bot_id)
-        if not proc:
+        info = bots.get(bot_id)
+        if not info:
             raise HTTPException(status_code=404, detail="Bot not found")
-        proc.terminate()
+        info.proc.terminate()
         bots.pop(bot_id)
     return {"bot": bot_id, "status": "stopped"}
 
@@ -145,11 +190,13 @@ async def health(lines: int = 20, _: None = Depends(authorize)):
     async with bots_lock:
         bot_data = {
             bid: {
-                "running": proc.poll() is None,
-                "pid": proc.pid,
-                "returncode": proc.returncode,
+                "running": info.proc.poll() is None,
+                "pid": info.proc.pid,
+                "returncode": info.proc.returncode,
+                "exit_code": info.exit_code,
+                "restart_count": info.restart_count,
             }
-            for bid, proc in bots.items()
+            for bid, info in bots.items()
         }
     return {
         "running": True,
@@ -162,14 +209,16 @@ async def health(lines: int = 20, _: None = Depends(authorize)):
 async def bot_status(bot_id: str, lines: int = 20, _: None = Depends(authorize)):
     """Return bot state and recent log lines."""
     async with bots_lock:
-        proc = bots.get(bot_id)
-        if not proc:
+        info = bots.get(bot_id)
+        if not info:
             raise HTTPException(status_code=404, detail="Bot not found")
         data = {
             "bot": bot_id,
-            "running": proc.poll() is None,
-            "pid": proc.pid,
-            "returncode": proc.returncode,
+            "running": info.proc.poll() is None,
+            "pid": info.proc.pid,
+            "returncode": info.proc.returncode,
+            "exit_code": info.exit_code,
+            "restart_count": info.restart_count,
             "logs": _log_tail(lines),
         }
     return data
