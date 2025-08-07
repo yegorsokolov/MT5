@@ -3,13 +3,40 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
 
+from .versioning import compute_hash
+
 logger = logging.getLogger(__name__)
+DATA_VERSIONS_LOG = Path("logs/data_versions.json")
+
+
+def _guess_symbol(path: Path) -> str:
+    stem = path.stem
+    if stem.endswith("_history"):
+        return stem[:-8]
+    return stem
+
+
+def _record_data_version(path: Path, symbol: str | None = None) -> None:
+    try:
+        sym = symbol or _guess_symbol(path)
+        digest = compute_hash(path)
+        logger.info("Hash for %s: %s", sym, digest)
+        DATA_VERSIONS_LOG.parent.mkdir(exist_ok=True)
+        if DATA_VERSIONS_LOG.exists():
+            versions = json.loads(DATA_VERSIONS_LOG.read_text())
+        else:
+            versions = {}
+        versions[sym] = digest
+        DATA_VERSIONS_LOG.write_text(json.dumps(versions, indent=2, sort_keys=True))
+    except Exception as e:
+        logger.warning("Failed to record data version for %s: %s", path, e)
 
 
 def load_history_from_urls(urls: List[str]) -> pd.DataFrame:
@@ -118,6 +145,7 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
         else:
             raise ValueError(f"Unknown history provider {provider}")
         save_history_parquet(df, pq_path)
+        _record_data_version(pq_path, sym)
         return df
 
     urls = cfg.get("data_urls", {}).get(sym)
@@ -125,6 +153,7 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
         logger.info("Downloading history for %s from URLs", sym)
         df = load_history_from_urls(urls)
         save_history_parquet(df, pq_path)
+        _record_data_version(pq_path, sym)
         return df
 
     raise FileNotFoundError(f"No history found for {sym} and no data source configured")
@@ -136,6 +165,7 @@ def load_history(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
     logger.debug("Loaded %d rows from CSV", len(df))
+    _record_data_version(path)
     return df
 
 
@@ -146,6 +176,7 @@ def load_history_parquet(path: Path) -> pd.DataFrame:
     if "Timestamp" in df.columns:
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
     logger.debug("Loaded %d rows from Parquet", len(df))
+    _record_data_version(path)
     return df
 
 
