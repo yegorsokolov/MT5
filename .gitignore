@@ -2,7 +2,8 @@
 model.joblib
 model_lstm.pt
 signals.csv
-data/
+data/*
+!data/*.py
 models/*
 !models/autoencoders/
 !models/autoencoders/.gitkeep
