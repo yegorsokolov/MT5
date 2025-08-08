@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Dict
 
+import logging
 import joblib
 import pandas as pd
 import numpy as np
@@ -26,7 +27,8 @@ from data.features import (
     train_test_split,
 )
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 @ray.remote

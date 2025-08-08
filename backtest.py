@@ -1,5 +1,6 @@
 """Simple backtesting for the Adaptive MT5 bot."""
 
+import logging
 from log_utils import setup_logging, log_exceptions
 
 from pathlib import Path
@@ -16,7 +17,8 @@ from data.history import load_history_parquet, load_history_config
 from data.features import make_features
 import ray
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 LOG_DIR = Path(__file__).resolve().parent / "logs"

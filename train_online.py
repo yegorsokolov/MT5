@@ -1,6 +1,7 @@
 import time
 from pathlib import Path
 import random
+import logging
 import numpy as np
 import duckdb
 import pandas as pd
@@ -10,7 +11,8 @@ from river import compose, preprocessing, linear_model
 from utils import load_config
 from log_utils import setup_logging, log_exceptions
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 @log_exceptions

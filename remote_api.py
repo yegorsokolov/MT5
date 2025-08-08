@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import os
 from pathlib import Path
 import uvicorn
+import logging
 from utils import update_config
 from log_utils import LOG_FILE, setup_logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
@@ -29,7 +30,8 @@ class ConfigUpdate(BaseModel):
 
 
 app = FastAPI(title="MT5 Bot Controller")
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:

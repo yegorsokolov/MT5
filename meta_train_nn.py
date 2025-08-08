@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Iterable
 
+import logging
 import numpy as np
 import pandas as pd
 import random
@@ -22,7 +23,8 @@ from data.features import (
 from log_utils import setup_logging, log_exceptions
 
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 class PositionalEncoding(nn.Module):
