@@ -35,6 +35,7 @@ import asyncio
 from signal_queue import (
     get_async_publisher,
     publish_dataframe_async,
+    get_signal_backend,
 )
 
 setup_logging()
@@ -451,13 +452,22 @@ def main():
     log_df["prob"] = combined
     log_predictions(log_df)
     fmt = os.getenv("SIGNAL_FORMAT", "protobuf")
+    backend = cfg.get("signal_backend", "zmq").lower()
 
-    async def _publish():
-        async with get_async_publisher() as pub:
-            await publish_dataframe_async(pub, out, fmt=fmt)
+    if backend == "zmq":
+        async def _publish():
+            async with get_async_publisher() as pub:
+                await publish_dataframe_async(pub, out, fmt=fmt)
 
-    asyncio.run(_publish())
-    logger.info("Signals published via ZeroMQ (%s)", fmt)
+        asyncio.run(_publish())
+        logger.info("Signals published via ZeroMQ (%s)", fmt)
+    else:
+        queue = get_signal_backend(cfg)
+        if queue is None:
+            raise ValueError(f"Unknown signal backend: {backend}")
+        queue.publish_dataframe(out, fmt=fmt)
+        queue.close()
+        logger.info("Signals published via %s (%s)", backend, fmt)
 
 
 if __name__ == "__main__":
