@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 import pandas as pd
 
 from utils import load_config
 from backtest import run_rolling_backtest
 from log_utils import setup_logging, log_exceptions
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 # default location for walk forward summary output
 _LOG_PATH = (

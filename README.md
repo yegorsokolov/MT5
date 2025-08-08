@@ -524,10 +524,19 @@ dataframe to the strategy, recording the resulting trades.
 
 ## Detailed Logging
 
-All scripts now log to `logs/app.log` with rotation to prevent the file from
-growing indefinitely. The `log_utils` module also patches `print` so anything
-printed to the console is captured in the log file. Key functions are wrapped
-with a decorator to record start/end markers and any exceptions.
+All scripts now emit structured JSON logs to `logs/app.log` with rotation to
+prevent the file from growing indefinitely. The `log_utils` module also patches
+`print` so anything printed to the console is captured in the log file. Key
+functions are wrapped with a decorator to record start/end markers and any
+exceptions. Each JSON record includes timestamp, log level and module name.
+
+These logs can be ingested directly by monitoring stacks such as the ELK stack
+or Grafana Loki by enabling JSON parsing on the collector. For quick
+inspection, pipe the log through `jq`:
+
+```bash
+tail -f logs/app.log | jq .
+```
 
 The helper script `scripts/upload_logs.py` can be run to automatically commit
 and push the log directory to your repository for later analysis.

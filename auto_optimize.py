@@ -2,6 +2,7 @@ import copy
 from pathlib import Path
 from typing import Dict, List
 
+import logging
 import pandas as pd
 from scipy.stats import ttest_ind
 import optuna
@@ -12,7 +13,8 @@ from utils import load_config, update_config
 from backtest import run_backtest, run_rolling_backtest
 from log_utils import setup_logging, log_exceptions
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 _LOG_PATH = Path(__file__).resolve().parent / "logs" / "optuna_history.csv"

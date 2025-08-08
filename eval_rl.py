@@ -1,5 +1,6 @@
 """Evaluate a trained RL agent by replaying actions on historical data."""
 
+import logging
 from pathlib import Path
 from typing import List
 
@@ -18,7 +19,8 @@ from data.features import make_features
 from train_rl import TradingEnv, DiscreteTradingEnv
 from log_utils import setup_logging, log_exceptions
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 def compute_metrics(returns: pd.Series) -> dict:

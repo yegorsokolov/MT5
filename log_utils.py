@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 from functools import wraps
@@ -21,6 +22,21 @@ TRADE_LOG = LOG_DIR / "trades.csv"
 DECISION_LOG = LOG_DIR / "decisions.parquet"
 
 
+class JsonFormatter(logging.Formatter):
+    """Simple JSON log formatter."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_record = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "level": record.levelname,
+            "name": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_record["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_record)
+
+
 def setup_logging() -> logging.Logger:
     """Configure and return the root logger."""
     logger = logging.getLogger()
@@ -28,7 +44,7 @@ def setup_logging() -> logging.Logger:
         return logger
 
     logger.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    fmt = JsonFormatter()
 
     fh = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5)
     fh.setFormatter(fmt)

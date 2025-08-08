@@ -15,12 +15,14 @@ import atexit
 import os
 import signal
 from pathlib import Path
+import logging
 
 from git import Repo
 
 from log_utils import setup_logging, log_exceptions
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 REPO_PATH = Path(__file__).resolve().parents[1]
 LOG_DIR = REPO_PATH / "logs"
