@@ -62,7 +62,7 @@ def ensure_environment() -> None:
     for slower machines. If requirements are not met, a clear error is raised so
     the user can install the missing packages.
     """
-    logger = logging.getLogger("environment")
+    logger = logging.getLogger(__name__)
 
     missing = _check_dependencies()
     if psutil is None:

@@ -4,6 +4,7 @@ from log_utils import setup_logging, log_exceptions, log_predictions
 
 from pathlib import Path
 import os
+import logging
 import joblib
 import pandas as pd
 
@@ -36,7 +37,8 @@ from signal_queue import (
     publish_dataframe_async,
 )
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 def load_models(paths):

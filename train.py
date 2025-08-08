@@ -3,6 +3,7 @@
 from pathlib import Path
 import random
 import json
+import logging
 import joblib
 import pandas as pd
 from sklearn.metrics import classification_report
@@ -29,7 +30,8 @@ from data.history import (
 from data.features import make_features
 from state_manager import save_checkpoint, load_latest_checkpoint
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 def log_shap_importance(pipe: Pipeline, X_train: pd.DataFrame, features: list[str]) -> None:

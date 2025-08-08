@@ -1,6 +1,7 @@
 """Train TimeGAN on historical features and save synthetic sequences."""
 from pathlib import Path
 import random
+import logging
 import numpy as np
 import pandas as pd
 try:
@@ -19,7 +20,8 @@ from data.features import (
 )
 from log_utils import setup_logging, log_exceptions
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 @log_exceptions

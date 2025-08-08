@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 from collections import deque
 import random
+import logging
 import numpy as np
 import pandas as pd
 import joblib
@@ -15,7 +16,8 @@ import duckdb
 from log_utils import setup_logging, log_exceptions
 from metrics import RECONNECT_COUNT
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
