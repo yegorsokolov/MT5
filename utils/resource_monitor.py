@@ -17,12 +17,17 @@ class ResourceCapabilities:
     cpus: int
     memory_gb: float
     has_gpu: bool
+    gpu_count: int
 
     def model_size(self) -> str:
         """Return "full" for capable machines else "lite"."""
         if self.cpus >= 4 and self.memory_gb >= 16 and self.has_gpu:
             return "full"
         return "lite"
+
+    def ddp(self) -> bool:
+        """Return True if DistributedDataParallel should be enabled."""
+        return self.gpu_count > 1
 
 
 class ResourceMonitor:
@@ -36,8 +41,11 @@ class ResourceMonitor:
     def _probe(self) -> ResourceCapabilities:
         cpus = psutil.cpu_count(logical=True) or 1
         memory_gb = psutil.virtual_memory().total / (1024**3)
-        has_gpu = bool(torch and torch.cuda.is_available())
-        return ResourceCapabilities(cpus=cpus, memory_gb=memory_gb, has_gpu=has_gpu)
+        gpu_count = int(torch.cuda.device_count()) if torch and torch.cuda else 0
+        has_gpu = gpu_count > 0
+        return ResourceCapabilities(
+            cpus=cpus, memory_gb=memory_gb, has_gpu=has_gpu, gpu_count=gpu_count
+        )
 
     async def _periodic_probe(self) -> None:
         while True:
