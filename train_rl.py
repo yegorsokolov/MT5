@@ -38,6 +38,10 @@ from data.history import (
     load_history_config,
 )
 from data.features import make_features
+import argparse
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -258,19 +262,30 @@ class RLLibTradingEnv(TradingEnv):
 
 
 @log_exceptions
-def main():
-    cfg = load_config()
-    seed = cfg.get("seed", 42)
+def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
+    if cfg is None:
+        cfg = load_config()
+    if world_size is None:
+        world_size = 1
+    seed = cfg.get("seed", 42) + rank
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    use_cuda = torch.cuda.is_available()
+    if world_size > 1:
+        backend = "nccl" if use_cuda else "gloo"
+        if use_cuda:
+            torch.cuda.set_device(rank)
+        dist.init_process_group(backend, rank=rank, world_size=world_size)
+    device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
-    mlflow.set_tracking_uri(f"file:{(root / 'logs' / 'mlruns').resolve()}")
-    mlflow.set_experiment("training_rl")
-    mlflow.start_run()
+    if rank == 0:
+        mlflow.set_tracking_uri(f"file:{(root / 'logs' / 'mlruns').resolve()}")
+        mlflow.set_experiment("training_rl")
+        mlflow.start_run()
 
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
@@ -319,7 +334,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = PPO("MlpPolicy", env, verbose=0, seed=seed)
+        model = PPO("MlpPolicy", env, verbose=0, seed=seed, device=device)
     elif algo == "RECURRENTPPO":
         env = TradingEnv(
             df,
@@ -331,7 +346,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = RecurrentPPO("MlpLstmPolicy", env, verbose=0, seed=seed)
+        model = RecurrentPPO("MlpLstmPolicy", env, verbose=0, seed=seed, device=device)
     elif algo == "A2C":
         env = TradingEnv(
             df,
@@ -343,7 +358,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = A2C("MlpPolicy", env, verbose=0, seed=seed)
+        model = A2C("MlpPolicy", env, verbose=0, seed=seed, device=device)
     elif algo == "A3C":
         n_envs = int(cfg.get("rl_num_envs", 4))
         n_envs = min(n_envs, os.cpu_count() or 1)
@@ -364,7 +379,7 @@ def main():
             env = DummyVecEnv([make_env])
         else:
             env = SubprocVecEnv([make_env for _ in range(n_envs)])
-        model = A2C("MlpPolicy", env, verbose=0, seed=seed)
+        model = A2C("MlpPolicy", env, verbose=0, seed=seed, device=device)
     elif algo == "SAC":
         env = TradingEnv(
             df,
@@ -376,7 +391,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = SAC("MlpPolicy", env, verbose=0, seed=seed)
+        model = SAC("MlpPolicy", env, verbose=0, seed=seed, device=device)
     elif algo == "TRPO":
         env = TradingEnv(
             df,
@@ -394,6 +409,7 @@ def main():
             verbose=0,
             max_kl=cfg.get("rl_max_kl", 0.01),
             seed=seed,
+            device=device,
         )
     elif algo == "HIERARCHICALPPO":
         if HierarchicalPPO is None:
@@ -408,7 +424,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = HierarchicalPPO("MlpPolicy", env, verbose=0, seed=seed)
+        model = HierarchicalPPO("MlpPolicy", env, verbose=0, seed=seed, device=device)
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,
@@ -420,7 +436,7 @@ def main():
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = QRDQN("MlpPolicy", env, verbose=0, seed=seed)
+        model = QRDQN("MlpPolicy", env, verbose=0, seed=seed, device=device)
     elif algo == "RLLIB":
         if gymn is None:
             raise RuntimeError("gymnasium is required for RLlib")
@@ -467,6 +483,9 @@ def main():
     else:
         raise ValueError(f"Unknown rl_algorithm {algo}")
 
+    if world_size > 1 and algo != "RLLIB":
+        model.policy = DDP(model.policy, device_ids=[rank] if use_cuda else None)
+
     if algo == "RLLIB":
         ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
         start_iter = 0
@@ -509,70 +528,91 @@ def main():
                 current,
                 cfg.get("checkpoint_dir"),
             )
-        if algo == "RECURRENTPPO":
-            rec_dir = root / "models" / "recurrent_rl"
-            rec_dir.mkdir(parents=True, exist_ok=True)
-            model.save(rec_dir / "recurrent_model")
-            logger.info("RL model saved to %s", rec_dir / "recurrent_model.zip")
-        elif algo == "HIERARCHICALPPO":
-            model.save(root / "model_hierarchical")
-            logger.info("RL model saved to %s", root / "model_hierarchical.zip")
-        else:
-            model.save(root / "model_rl")
-            logger.info("RL model saved to %s", root / "model_rl.zip")
-        # evaluate trained policy
-        eval_size = max(2, len(df) // 5)
-        eval_df = df.tail(eval_size).reset_index(drop=True)
-        eval_env = TradingEnv(
-            eval_df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
-        eval_returns = np.array(eval_env.portfolio_returns)
-        if eval_returns.size:
-            cumulative_return = float((1 + eval_returns).prod() - 1)
-            sharpe = float(
-                np.sqrt(252) * eval_returns.mean() / eval_returns.std(ddof=0)
-            ) if eval_returns.std(ddof=0) > 0 else 0.0
-            equity_curve = (1 + eval_returns).cumprod()
-            peak = np.maximum.accumulate(equity_curve)
-            max_drawdown = float(((equity_curve - peak) / peak).min())
-            mlflow.log_metric("cumulative_return", cumulative_return)
-            mlflow.log_metric("sharpe_ratio", sharpe)
-            mlflow.log_metric("max_drawdown", max_drawdown)
+        if rank == 0:
+            if algo == "RECURRENTPPO":
+                rec_dir = root / "models" / "recurrent_rl"
+                rec_dir.mkdir(parents=True, exist_ok=True)
+                model.save(rec_dir / "recurrent_model")
+                logger.info("RL model saved to %s", rec_dir / "recurrent_model.zip")
+            elif algo == "HIERARCHICALPPO":
+                model.save(root / "model_hierarchical")
+                logger.info("RL model saved to %s", root / "model_hierarchical.zip")
+            else:
+                model.save(root / "model_rl")
+                logger.info("RL model saved to %s", root / "model_rl.zip")
+            # evaluate trained policy
+            eval_size = max(2, len(df) // 5)
+            eval_df = df.tail(eval_size).reset_index(drop=True)
+            eval_env = TradingEnv(
+                eval_df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
+            eval_returns = np.array(eval_env.portfolio_returns)
+            if eval_returns.size:
+                cumulative_return = float((1 + eval_returns).prod() - 1)
+                sharpe = float(
+                    np.sqrt(252) * eval_returns.mean() / eval_returns.std(ddof=0)
+                ) if eval_returns.std(ddof=0) > 0 else 0.0
+                equity_curve = (1 + eval_returns).cumprod()
+                peak = np.maximum.accumulate(equity_curve)
+                max_drawdown = float(((equity_curve - peak) / peak).min())
+                mlflow.log_metric("cumulative_return", cumulative_return)
+                mlflow.log_metric("sharpe_ratio", sharpe)
+                mlflow.log_metric("max_drawdown", max_drawdown)
 
-    # train risk management policy
-    returns = df.sort_index()["return"].dropna()
-    risk_env = RiskEnv(
-        returns.values,
-        lookback=cfg.get("risk_lookback_bars", 50),
-        max_size=cfg.get("rl_max_position", 1.0),
-    )
-    risk_model = PPO("MlpPolicy", risk_env, verbose=0, seed=seed)
-    risk_model.learn(total_timesteps=cfg.get("rl_steps", 5000))
-    models_dir = root / "models"
-    models_dir.mkdir(exist_ok=True)
-    risk_model.save(models_dir / "rl_risk_policy")
-    logger.info("Risk policy saved to %s", models_dir / "rl_risk_policy.zip")
-    mlflow.log_param("algorithm", algo)
-    mlflow.log_param("steps", cfg.get("rl_steps", 5000))
-    if algo == "RLLIB":
-        mlflow.log_artifact(str(root / "model_rllib"))
-    elif algo == "RECURRENTPPO":
-        mlflow.log_artifact(str(rec_dir / "recurrent_model.zip"))
-    elif algo == "HIERARCHICALPPO":
-        mlflow.log_artifact(str(root / "model_hierarchical.zip"))
+            # train risk management policy
+            returns = df.sort_index()["return"].dropna()
+            risk_env = RiskEnv(
+                returns.values,
+                lookback=cfg.get("risk_lookback_bars", 50),
+                max_size=cfg.get("rl_max_position", 1.0),
+            )
+            risk_model = PPO("MlpPolicy", risk_env, verbose=0, seed=seed, device=device)
+            risk_model.learn(total_timesteps=cfg.get("rl_steps", 5000))
+            models_dir = root / "models"
+            models_dir.mkdir(exist_ok=True)
+            risk_model.save(models_dir / "rl_risk_policy")
+            logger.info("Risk policy saved to %s", models_dir / "rl_risk_policy.zip")
+            mlflow.log_param("algorithm", algo)
+            mlflow.log_param("steps", cfg.get("rl_steps", 5000))
+            if algo == "RLLIB":
+                mlflow.log_artifact(str(root / "model_rllib"))
+            elif algo == "RECURRENTPPO":
+                mlflow.log_artifact(str(rec_dir / "recurrent_model.zip"))
+            elif algo == "HIERARCHICALPPO":
+                mlflow.log_artifact(str(root / "model_hierarchical.zip"))
+            else:
+                mlflow.log_artifact(str(root / "model_rl.zip"))
+            mlflow.log_artifact(str(models_dir / "rl_risk_policy.zip"))
+            mlflow.end_run()
+
+    if world_size > 1:
+        dist.destroy_process_group()
+
+
+def launch(cfg: dict | None = None) -> None:
+    if cfg is None:
+        cfg = load_config()
+    use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
+    world_size = torch.cuda.device_count()
+    if use_ddp and world_size > 1:
+        mp.spawn(main, args=(world_size, cfg), nprocs=world_size)
     else:
-        mlflow.log_artifact(str(root / "model_rl.zip"))
-    mlflow.log_artifact(str(models_dir / "rl_risk_policy.zip"))
-    mlflow.end_run()
+        main(0, 1, cfg)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ddp", action="store_true", help="Enable DistributedDataParallel")
+    args = parser.parse_args()
+    cfg = load_config()
+    if args.ddp:
+        cfg["ddp"] = True
+    launch(cfg)
