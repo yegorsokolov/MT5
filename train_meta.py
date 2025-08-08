@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import List
 
+import logging
 import joblib
 import pandas as pd
 import numpy as np
@@ -23,7 +24,8 @@ from data.history import (
 from data.features import make_features
 from log_utils import setup_logging, log_exceptions
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 class MetaAdapterNet(nn.Module):

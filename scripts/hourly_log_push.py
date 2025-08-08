@@ -6,11 +6,13 @@ process exits.
 """
 
 import time
+import logging
 
 from log_utils import setup_logging
 from scripts.upload_logs import register_shutdown_hook, upload_logs
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 register_shutdown_hook()
 
 

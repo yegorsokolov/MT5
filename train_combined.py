@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+import logging
 import joblib
 import pandas as pd
 import numpy as np
@@ -28,7 +29,8 @@ from data.features import (
 )
 from log_utils import setup_logging, log_exceptions
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger(__name__)
 from train_meta import load_symbol_data, train_base_model, train_meta_network
 from train_rl import TradingEnv, DiscreteTradingEnv
 from train_nn import TransformerModel
