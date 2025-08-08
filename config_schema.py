@@ -8,6 +8,9 @@ class ConfigSchema(BaseModel):
     seed: int = Field(42, description="Random seed for reproducibility")
     risk_per_trade: float = Field(..., gt=0, le=1, description="Fraction of capital risked per trade")
     symbols: List[str]
+    ddp: bool | None = Field(
+        None, description="Enable DistributedDataParallel if true, auto-detect if null"
+    )
 
     model_config = ConfigDict(extra="allow")
 
