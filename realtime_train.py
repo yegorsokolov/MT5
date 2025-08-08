@@ -15,6 +15,7 @@ from data.features import make_features
 import duckdb
 from log_utils import setup_logging, log_exceptions
 from metrics import RECONNECT_COUNT
+from signal_queue import get_signal_backend
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -62,6 +63,12 @@ def train_realtime():
         raise RuntimeError("Failed to initialize MT5")
 
     symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
+
+    signal_backend = cfg.get("signal_backend", "zmq")
+    queue = None
+    if signal_backend in {"kafka", "redis"}:
+        queue = get_signal_backend(cfg)
+        logger.info("Using %s backend for signal queue", signal_backend)
 
     conn = duckdb.connect(db_path.as_posix())
 
