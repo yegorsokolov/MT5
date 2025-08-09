@@ -30,13 +30,13 @@ try:  # optional import for hierarchical PPO
     from sb3_contrib import HierarchicalPPO  # type: ignore
 except Exception:  # pragma: no cover - algorithm may not be available
     HierarchicalPPO = None  # type: ignore
-from sklearn.linear_model import LogisticRegression
 import asyncio
 from signal_queue import (
     get_async_publisher,
     publish_dataframe_async,
     get_signal_backend,
 )
+from models.ensemble import EnsembleModel
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -377,34 +377,35 @@ def main():
         predictor = TabularPredictor.load(str(ag_path))
         probs = predictor.predict_proba(df[features])[1].values
     else:
-        prob_list = [m.predict_proba(df[features])[:, 1] for m in models]
-        if cfg.get("use_meta_model", False):
-            prob_list.append(meta_transformer_signals(df, features, cfg))
-        if online_model is not None:
-            river_probs = [
+    base_models = {}
+    if models:
+        def _gbm_predict(data: pd.DataFrame) -> np.ndarray:
+            return np.mean([m.predict_proba(data[features])[:, 1] for m in models], axis=0)
+
+        base_models["lightgbm"] = _gbm_predict
+
+    if cfg.get("use_meta_model", False):
+        base_models["transformer"] = lambda d: meta_transformer_signals(d, features, cfg)
+
+    if online_model is not None:
+        def _online_predict(data: pd.DataFrame) -> np.ndarray:
+            return np.array([
                 online_model.predict_proba_one(row).get(1, 0.0)
-                for row in df[features].to_dict("records")
-            ]
-            prob_list.append(np.array(river_probs))
-        if not prob_list:
-            probs = np.zeros(len(df))
-        elif len(prob_list) == 1:
-            probs = prob_list[0]
-        else:
-            method = cfg.get("ensemble_method", "average")
-            if method == "bayesian":
-                probs = bayesian_average(prob_list)
-            else:
-                probs = np.mean(prob_list, axis=0)
+                for row in data[features].to_dict("records")
+            ])
+
+        base_models["online"] = _online_predict
 
     if cfg.get("blend_with_rl", False):
-        rl_probs = rl_signals(df, features, cfg)
-        X = np.column_stack([probs, rl_probs])
-        y = (df["return"].shift(-1) > 0).astype(int)
-        train_n = int(len(X) * 0.7)
-        lr = LogisticRegression()
-        lr.fit(X[:train_n], y[:train_n])
-        probs = lr.predict_proba(X)[:, 1]
+        base_models["rl"] = lambda d: rl_signals(d, features, cfg)
+
+    probs = np.zeros(len(df))
+    if base_models:
+        ensemble = EnsembleModel(base_models)
+        pred_dict = ensemble.predict(df)
+        probs = pred_dict["ensemble"]
+    else:
+        pred_dict = {"ensemble": probs}
 
     ma_ok = df["ma_cross"] == 1
     rsi_ok = df["rsi_14"] > cfg.get("rsi_buy", 55)
@@ -449,6 +450,8 @@ def main():
     })
     log_df = df[["Timestamp"] + features].copy()
     log_df["Symbol"] = cfg.get("symbol")
+    for name, arr in pred_dict.items():
+        log_df[f"prob_{name}"] = arr
     log_df["prob"] = combined
     log_predictions(log_df)
     fmt = os.getenv("SIGNAL_FORMAT", "protobuf")

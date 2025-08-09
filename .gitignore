@@ -7,5 +7,7 @@ data/*
 models/*
 !models/autoencoders/
 !models/autoencoders/.gitkeep
+!models/ensemble.py
+!models/__init__.py
 __pycache__/
 logs/
