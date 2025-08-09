@@ -335,12 +335,15 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Run `pip install -r requirements-core.txt`. After verifying any updates, refresh the pinned versions with `pip freeze | sort > requirements-core.txt`.
    3. Install extras as needed, e.g. `pip install .[heavy]` or `pip install .[rl]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
+      When the config option `feature_importance: true` is set, `train.py` and
+      `train_nn.py` also write SHAP bar plots under `reports/` and a ranked
+      `feature_importance.csv` file. For ad-hoc interpretation of an existing
+      model run `python analysis/interpret_model.py` which produces a similar
+      report for the most recent dataset.
    5. To enable the graph features plugin install `torch-geometric>=2.6`.
-       This also enables optional GAT embeddings when `use_gat_features` is set.
-       Set `use_temporal_gat` to use the sequential variant which also requires
-       `torch-geometric`.
-       When present `train.py` writes `logs/feature_importance.csv` which can be
-       visualised using `python scripts/plot_shap.py`.
+      This also enables optional GAT embeddings when `use_gat_features` is set.
+      Set `use_temporal_gat` to use the sequential variant which also requires
+      `torch-geometric`.
    6. To use the tsfresh features install `tsfresh` with `pip install tsfresh`.
    7. To use the FRED macro features install `pandas_datareader` with
       `pip install pandas_datareader` and set the `FRED_API_KEY` environment
