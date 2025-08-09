@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import duckdb
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 
 from .events import get_events
+from .feature_store import FeatureStore
+from .versioning import compute_hash
 
 try:  # optional plugin system
     from plugins import FEATURE_PLUGINS  # type: ignore
@@ -279,11 +280,6 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     logger.info("Creating features for dataframe with %d rows", len(df))
 
-    hist_hash = hashlib.md5(
-        pd.util.hash_pandas_object(df, index=True).values.tobytes()
-    ).hexdigest()
-    cache_path = Path(__file__).resolve().parent / "data" / "features.duckdb"
-
     try:
         from utils import load_config
 
@@ -299,19 +295,24 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     adjacency_matrices: dict | None = None
 
-    if use_cache and cache_path.exists():
-        conn = duckdb.connect(cache_path.as_posix())
-        tables = {t[0] for t in conn.execute("PRAGMA show_tables").fetchall()}
-        if {"features", "metadata"}.issubset(tables):
-            cached = conn.execute(
-                "SELECT hist_hash FROM metadata LIMIT 1"
-            ).fetchone()
-            if cached and cached[0] == hist_hash:
-                logger.info("Loading features from cache %s", cache_path)
-                df_cached = conn.execute("SELECT * FROM features").fetch_df()
-                conn.close()
-                return df_cached
-        conn.close()
+    cached_store: FeatureStore | None = None
+    raw_hash = ""
+    if use_cache:
+        cached_store = FeatureStore()
+        # Hash the raw dataframe via a temporary file using `compute_hash`
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            df.to_csv(tmp.name, index=False)
+            raw_hash = compute_hash(tmp.name)
+        os.unlink(tmp.name)
+        symbol_key = (
+            "-".join(sorted(df["Symbol"].unique())) if "Symbol" in df.columns else "nosymbol"
+        )
+        window_key = len(df)
+        params_key = {"use_atr": use_atr, "use_donchian": use_donchian}
+        cached_df = cached_store.load(symbol_key, window_key, params_key, raw_hash)
+        if cached_df is not None:
+            logger.info("Loading features from cache %s", cached_store.path)
+            return cached_df
 
     if use_dask:
         import dask.dataframe as dd  # type: ignore
@@ -535,18 +536,14 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         from .validators import FEATURE_SCHEMA
 
         FEATURE_SCHEMA.validate(df, lazy=True)
-    if use_cache:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = duckdb.connect(cache_path.as_posix())
-        conn.register("feat_df", df)
-        conn.execute("CREATE TABLE IF NOT EXISTS features AS SELECT * FROM feat_df LIMIT 0")
-        conn.execute("DELETE FROM features")
-        conn.execute("INSERT INTO features SELECT * FROM feat_df")
-        conn.execute("CREATE TABLE IF NOT EXISTS metadata(hist_hash VARCHAR)")
-        conn.execute("DELETE FROM metadata")
-        conn.execute("INSERT INTO metadata VALUES (?)", [hist_hash])
-        conn.close()
-        logger.info("Cached features written to %s", cache_path)
+    if use_cache and cached_store is not None:
+        symbol_key = (
+            "-".join(sorted(df["Symbol"].unique())) if "Symbol" in df.columns else "nosymbol"
+        )
+        window_key = len(df)
+        params_key = {"use_atr": use_atr, "use_donchian": use_donchian}
+        cached_store.save(df, symbol_key, window_key, params_key, raw_hash)
+        logger.info("Cached features written to %s", cached_store.path)
 
     return df
 
