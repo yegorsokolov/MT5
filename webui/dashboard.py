@@ -106,6 +106,9 @@ def main() -> None:
         current = load_current_config()
         rows = schema_table(current)
         st.subheader("Config Explorer")
+        st.markdown(
+            "[Full config documentation](https://github.com/USERNAME/MT5/blob/main/docs/config.md)"
+        )
         st.table(rows)
 
     # Logs tab

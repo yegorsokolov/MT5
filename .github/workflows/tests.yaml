@@ -40,6 +40,11 @@ jobs:
             pip install .[test]
             pip install ruff flake8 mypy
 
+        - name: Ensure config docs up to date
+          run: |
+            python tools/config_docs.py
+            git diff --exit-code docs/config.md docs/config.html
+
         - name: Run linters and type checks
           run: |
             ruff check .
