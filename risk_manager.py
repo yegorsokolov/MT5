@@ -6,6 +6,7 @@ import asyncio
 import os
 
 import numpy as np
+from scheduler import start_scheduler
 
 
 @dataclass
@@ -65,3 +66,4 @@ MAX_DRAWDOWN = float(os.getenv("MAX_PORTFOLIO_DRAWDOWN", "1e9"))
 MAX_VAR = float(os.getenv("MAX_VAR", "1e9"))
 
 risk_manager = RiskManager(MAX_DRAWDOWN, MAX_VAR)
+start_scheduler()
