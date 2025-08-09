@@ -483,6 +483,12 @@ def main(
                 X_sample = X_train[: cfg.get("shap_samples", 100)]
                 log_shap_importance(model, X_sample, features, report_dir, device)
 
+    if cfg.get("export"):
+        from models.export import export_pytorch
+
+        sample = torch.tensor(X_train[:1], dtype=torch.float32)
+        export_pytorch(model, sample)
+
     if world_size > 1:
         dist.destroy_process_group()
 
@@ -507,10 +513,13 @@ if __name__ == "__main__":
         "--ddp", action="store_true", help="Enable DistributedDataParallel"
     )
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
+    parser.add_argument("--export", action="store_true", help="Export model to ONNX")
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
         cfg["ddp"] = True
+    if args.export:
+        cfg["export"] = True
     if args.tune:
         from tuning.hyperopt import tune_transformer
 
