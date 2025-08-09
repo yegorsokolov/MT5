@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import json
 import time
@@ -11,6 +13,7 @@ from kafka import KafkaProducer, KafkaConsumer, TopicPartition, errors as kafka_
 import redis
 
 from metrics import QUEUE_DEPTH, OFFSET_GAUGE
+from risk.position_sizer import PositionSizer
 
 import asyncio
 from proto import signals_pb2
@@ -114,7 +117,9 @@ async def publish_dataframe_async(
 
 
 async def iter_messages(
-    sock: zmq.asyncio.Socket, fmt: str = "protobuf"
+    sock: zmq.asyncio.Socket,
+    fmt: str = "protobuf",
+    sizer: PositionSizer | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield decoded messages from a subscriber socket as they arrive."""
     fmt = fmt.lower()
@@ -122,20 +127,26 @@ async def iter_messages(
         if fmt == "json":
             data = await sock.recv_json()
             QUEUE_DEPTH.dec()
+            prob = float(data.get("prob", 0.0))
+            size = sizer.size(prob) if sizer else prob
             yield {
                 "Timestamp": data.get("Timestamp", ""),
                 "Symbol": data.get("Symbol", ""),
-                "prob": float(data.get("prob", 0.0)),
+                "prob": prob,
+                "size": size,
             }
         else:
             raw = await sock.recv()
             sig = signals_pb2.Signal()
             sig.ParseFromString(raw)
             QUEUE_DEPTH.dec()
+            prob = float(sig.probability)
+            size = sizer.size(prob) if sizer else prob
             yield {
                 "Timestamp": sig.timestamp,
                 "Symbol": sig.symbol,
-                "prob": float(sig.probability),
+                "prob": prob,
+                "size": size,
             }
 
 
@@ -198,7 +209,7 @@ class KafkaSignalQueue:
                         raise
                     time.sleep(1)
 
-    def iter_messages(self, fmt: str = "protobuf"):
+    def iter_messages(self, fmt: str = "protobuf", sizer: PositionSizer | None = None):
         fmt = fmt.lower()
         for msg in self.consumer:
             QUEUE_DEPTH.dec()
@@ -206,18 +217,24 @@ class KafkaSignalQueue:
             OFFSET_GAUGE.set(self.offset)
             if fmt == "json":
                 data = json.loads(msg.value.decode())
+                prob = float(data.get("prob", 0.0))
+                size = sizer.size(prob) if sizer else prob
                 yield {
                     "Timestamp": data.get("Timestamp", ""),
                     "Symbol": data.get("Symbol", ""),
-                    "prob": float(data.get("prob", 0.0)),
+                    "prob": prob,
+                    "size": size,
                 }
             else:
                 sig = signals_pb2.Signal()
                 sig.ParseFromString(msg.value)
+                prob = float(sig.probability)
+                size = sizer.size(prob) if sizer else prob
                 yield {
                     "Timestamp": sig.timestamp,
                     "Symbol": sig.symbol,
-                    "prob": float(sig.probability),
+                    "prob": prob,
+                    "size": size,
                 }
 
 
@@ -265,7 +282,7 @@ class RedisSignalQueue:
                         raise
                     time.sleep(1)
 
-    def iter_messages(self, fmt: str = "protobuf"):
+    def iter_messages(self, fmt: str = "protobuf", sizer: PositionSizer | None = None):
         fmt = fmt.lower()
         while True:
             resp = self.client.xread({self.stream: self.last_id}, count=1, block=1000)
@@ -282,18 +299,24 @@ class RedisSignalQueue:
                     pass
                 if fmt == "json":
                     payload = json.loads(data.decode())
+                    prob = float(payload.get("prob", 0.0))
+                    size = sizer.size(prob) if sizer else prob
                     yield {
                         "Timestamp": payload.get("Timestamp", ""),
                         "Symbol": payload.get("Symbol", ""),
-                        "prob": float(payload.get("prob", 0.0)),
+                        "prob": prob,
+                        "size": size,
                     }
                 else:
                     sig = signals_pb2.Signal()
                     sig.ParseFromString(data)
+                    prob = float(sig.probability)
+                    size = sizer.size(prob) if sizer else prob
                     yield {
                         "Timestamp": sig.timestamp,
                         "Symbol": sig.symbol,
-                        "prob": float(sig.probability),
+                        "prob": prob,
+                        "size": size,
                     }
 
 
