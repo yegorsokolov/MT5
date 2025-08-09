@@ -6,6 +6,8 @@ import requests
 import streamlit as st
 import yaml
 
+from analytics.metrics_store import MetricsStore
+
 from config_schema import ConfigSchema
 
 API_URL = os.getenv("REMOTE_API_URL", "https://localhost:8000")
@@ -70,7 +72,7 @@ def main() -> None:
         st.info("Enter API key to connect")
         return
 
-    tabs = st.tabs(["Overview", "Config Explorer", "Logs"])
+    tabs = st.tabs(["Overview", "Performance", "Config Explorer", "Logs"])
 
     # Overview tab
     with tabs[0]:
@@ -101,8 +103,31 @@ def main() -> None:
                     file_name=f"{bid}.log"
                 )
 
-    # Config Explorer tab
+    # Performance tab
     with tabs[1]:
+        store = MetricsStore()
+        df = store.load()
+        if df.empty:
+            st.info("No performance metrics available")
+        else:
+            st.subheader("Daily Metrics")
+            st.line_chart(df["return"], height=150)
+            st.line_chart(df["sharpe"], height=150)
+            st.line_chart(df["drawdown"], height=150)
+
+            if "regime" in df.columns and df["regime"].notna().any():
+                st.subheader("Average Performance by Regime")
+                st.table(df.groupby("regime")[ ["return", "sharpe", "drawdown"] ].mean())
+
+            latest = df.iloc[-1]
+            for col in ["return", "sharpe", "drawdown"]:
+                mean = df[col].mean()
+                std = df[col].std()
+                if std and abs(latest[col] - mean) > 2 * std:
+                    st.warning(f"{col.capitalize()} deviates significantly: {latest[col]:.2f}")
+
+    # Config Explorer tab
+    with tabs[2]:
         current = load_current_config()
         rows = schema_table(current)
         st.subheader("Config Explorer")
@@ -112,7 +137,7 @@ def main() -> None:
         st.table(rows)
 
     # Logs tab
-    with tabs[2]:
+    with tabs[3]:
         if st.button("Refresh Logs"):
             st.session_state["logs"] = fetch_json("/logs", api_key)
         logs = st.session_state.get("logs", fetch_json("/logs", api_key))
