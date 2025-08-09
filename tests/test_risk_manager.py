@@ -1,0 +1,82 @@
+import sys
+import os
+import types
+import importlib
+import asyncio
+from pathlib import Path
+from fastapi.testclient import TestClient
+import contextlib
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from risk_manager import RiskManager
+
+
+def test_combined_drawdown_triggers_global_stop():
+    rm = RiskManager(max_drawdown=100)
+
+    async def bot(loss):
+        rm.update("bot", loss)
+
+    asyncio.get_event_loop().run_until_complete(
+        asyncio.gather(bot(-60), bot(-50))
+    )
+    assert rm.status()["trading_halted"] is True
+
+
+def load_api(tmp_log):
+    os.environ["API_KEY"] = "token"
+    logger = types.SimpleNamespace(warning=lambda *a, **k: None)
+    sys.modules["log_utils"] = types.SimpleNamespace(
+        LOG_FILE=tmp_log,
+        setup_logging=lambda: logger,
+        log_exceptions=lambda f: f,
+        TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
+        ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
+    )
+    sys.modules["prometheus_client"] = types.SimpleNamespace(
+        Counter=lambda *a, **k: None,
+        Gauge=lambda *a, **k: None,
+        generate_latest=lambda: b"",
+        CONTENT_TYPE_LATEST="text/plain",
+    )
+    sys.modules["yaml"] = types.SimpleNamespace(
+        safe_load=lambda *a, **k: {},
+        safe_dump=lambda *a, **k: "",
+    )
+    env_mod = types.ModuleType("environment")
+    env_mod.ensure_environment = lambda: None
+    sys.modules["utils.environment"] = env_mod
+    sys.modules["utils"] = types.SimpleNamespace(update_config=lambda *a, **k: None)
+    sys.modules["metrics"] = importlib.import_module("metrics")
+    sys.modules["mlflow"] = types.SimpleNamespace(
+        set_tracking_uri=lambda *a, **k: None,
+        set_experiment=lambda *a, **k: None,
+        start_run=contextlib.nullcontext,
+        log_dict=lambda *a, **k: None,
+    )
+    return importlib.reload(importlib.import_module("remote_api"))
+
+
+def setup_client(tmp_path):
+    api = load_api(tmp_path / "app.log")
+    api.bots.clear()
+    Path(api.LOG_FILE).write_text("line1\nline2\n")
+    return api, TestClient(api.app)
+
+
+def test_risk_status_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAX_PORTFOLIO_DRAWDOWN", "100")
+    import risk_manager as rm_mod
+    importlib.reload(rm_mod)
+    api, client = setup_client(tmp_path)
+    rm = rm_mod.risk_manager
+    rm.reset()
+    rm.update("b1", -60)
+    rm.update("b2", -50)
+    resp = client.get("/risk/status", headers={"x-api-key": "token"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["trading_halted"] is True
+    assert data["daily_loss"] == -110
+    rm.reset()

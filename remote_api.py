@@ -15,12 +15,12 @@ from pydantic import BaseModel
 import os
 from pathlib import Path
 import uvicorn
-import logging
 from utils import update_config
 from log_utils import LOG_FILE, setup_logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 from dataclasses import dataclass
+from risk_manager import risk_manager
 
 
 class ConfigUpdate(BaseModel):
@@ -30,8 +30,7 @@ class ConfigUpdate(BaseModel):
 
 
 app = FastAPI(title="MT5 Bot Controller")
-setup_logging()
-logger = logging.getLogger(__name__)
+logger = setup_logging()
 
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:
@@ -150,6 +149,12 @@ async def push_metrics(data: Dict[str, Any], _: None = Depends(authorize)):
 async def get_metrics() -> Response:
     """Expose Prometheus metrics."""
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/risk/status")
+async def risk_status(_: None = Depends(authorize)):
+    """Return aggregated risk metrics."""
+    return risk_manager.status()
 
 
 @app.websocket("/ws/metrics")

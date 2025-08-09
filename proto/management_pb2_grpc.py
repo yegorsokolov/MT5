@@ -65,6 +65,11 @@ class ManagementServiceStub(object):
                 request_serializer=management__pb2.ConfigChange.SerializeToString,
                 response_deserializer=management__pb2.StatusResponse.FromString,
                 _registered_method=True)
+        self.GetRiskStatus = channel.unary_unary(
+                '/management.ManagementService/GetRiskStatus',
+                request_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+                response_deserializer=management__pb2.RiskStatus.FromString,
+                _registered_method=True)
 
 
 class ManagementServiceServicer(object):
@@ -106,6 +111,12 @@ class ManagementServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetRiskStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ManagementServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -138,6 +149,11 @@ def add_ManagementServiceServicer_to_server(servicer, server):
                     servicer.UpdateConfig,
                     request_deserializer=management__pb2.ConfigChange.FromString,
                     response_serializer=management__pb2.StatusResponse.SerializeToString,
+            ),
+            'GetRiskStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRiskStatus,
+                    request_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+                    response_serializer=management__pb2.RiskStatus.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -302,6 +318,33 @@ class ManagementService(object):
             '/management.ManagementService/UpdateConfig',
             management__pb2.ConfigChange.SerializeToString,
             management__pb2.StatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRiskStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/management.ManagementService/GetRiskStatus',
+            google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+            management__pb2.RiskStatus.FromString,
             options,
             channel_credentials,
             insecure,
