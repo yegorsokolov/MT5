@@ -7,6 +7,7 @@ import logging
 import argparse
 import joblib
 import pandas as pd
+import math
 from sklearn.metrics import classification_report
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -77,7 +78,12 @@ def log_shap_importance(
 
 
 @log_exceptions
-def main(cfg: dict | None = None, export: bool = False) -> float:
+def main(
+    cfg: dict | None = None,
+    export: bool = False,
+    resume_online: bool = False,
+    df_override: pd.DataFrame | None = None,
+) -> float:
     """Train LightGBM model and return weighted F1 score."""
     if cfg is None:
         cfg = load_config()
@@ -88,37 +94,42 @@ def main(cfg: dict | None = None, export: bool = False) -> float:
     root.joinpath("data").mkdir(exist_ok=True)
 
     with mlflow_run("training", cfg):
-        symbols = cfg.get("symbols") or [cfg.get("symbol")]
-        all_dfs = []
-        chunk_size = cfg.get("stream_chunk_size", 100_000)
-        stream = cfg.get("stream_history", False)
-        for sym in symbols:
-            if stream:
-                pq_path = root / "data" / f"{sym}_history.parquet"
-                if pq_path.exists():
-                    for chunk in load_history_iter(pq_path, chunk_size):
-                        chunk["Symbol"] = sym
-                        all_dfs.append(chunk)
+        if df_override is not None:
+            df = df_override
+        else:
+            symbols = cfg.get("symbols") or [cfg.get("symbol")]
+            all_dfs = []
+            chunk_size = cfg.get("stream_chunk_size", 100_000)
+            stream = cfg.get("stream_history", False)
+            for sym in symbols:
+                if stream:
+                    pq_path = root / "data" / f"{sym}_history.parquet"
+                    if pq_path.exists():
+                        for chunk in load_history_iter(pq_path, chunk_size):
+                            chunk["Symbol"] = sym
+                            all_dfs.append(chunk)
+                    else:
+                        df_sym = load_history_config(
+                            sym, cfg, root, validate=cfg.get("validate", False)
+                        )
+                        df_sym["Symbol"] = sym
+                        all_dfs.append(df_sym)
                 else:
                     df_sym = load_history_config(
                         sym, cfg, root, validate=cfg.get("validate", False)
                     )
                     df_sym["Symbol"] = sym
                     all_dfs.append(df_sym)
-            else:
-                df_sym = load_history_config(
-                    sym, cfg, root, validate=cfg.get("validate", False)
-                )
-                df_sym["Symbol"] = sym
-                all_dfs.append(df_sym)
 
-        df = pd.concat(all_dfs, ignore_index=True)
-        save_history_parquet(df, root / "data" / "history.parquet")
+            df = pd.concat(all_dfs, ignore_index=True)
+            save_history_parquet(df, root / "data" / "history.parquet")
 
-        df = make_features(df, validate=cfg.get("validate", False))
-        df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
-        if "Symbol" in df.columns:
-            df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+            df = make_features(df, validate=cfg.get("validate", False))
+            df = periodic_reclassification(
+                df, step=cfg.get("regime_reclass_period", 500)
+            )
+            if "Symbol" in df.columns:
+                df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
     features = [
         "return",
@@ -148,6 +159,47 @@ def main(cfg: dict | None = None, export: bool = False) -> float:
 
     X = df[features]
     y = (df["return"].shift(-1) > 0).astype(int)
+
+    if resume_online:
+        batch_size = cfg.get("online_batch_size", 1000)
+        ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
+        if ckpt:
+            start_batch = ckpt[0] + 1
+            pipe: Pipeline = ckpt[1]["model"]
+        else:
+            start_batch = 0
+            steps: list[tuple[str, object]] = []
+            if cfg.get("use_scaler", True):
+                steps.append(("scaler", StandardScaler()))
+            steps.append(
+                (
+                    "clf",
+                    LGBMClassifier(
+                        n_estimators=200,
+                        n_jobs=cfg.get("n_jobs", 1),
+                        random_state=seed,
+                        keep_training_booster=True,
+                    ),
+                )
+            )
+            pipe = Pipeline(steps)
+        n_batches = math.ceil(len(X) / batch_size)
+        for batch_idx in range(start_batch, n_batches):
+            start = batch_idx * batch_size
+            end = min(len(X), start + batch_size)
+            Xb = X.iloc[start:end]
+            yb = y.iloc[start:end]
+            if "scaler" in pipe.named_steps:
+                scaler = pipe.named_steps["scaler"]
+                if hasattr(scaler, "partial_fit"):
+                    scaler.partial_fit(Xb)
+                Xb = scaler.transform(Xb)
+            clf = pipe.named_steps["clf"]
+            init_model = clf.booster_ if (batch_idx > 0 or ckpt) else None
+            clf.fit(Xb, yb, init_model=init_model)
+            save_checkpoint({"model": pipe}, batch_idx, cfg.get("checkpoint_dir"))
+        joblib.dump(pipe, root / "model.joblib")
+        return 0.0
 
     tscv = TimeSeriesSplit(n_splits=cfg.get("n_splits", 5))
     all_preds: list[int] = []
@@ -310,6 +362,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
     parser.add_argument("--export", action="store_true", help="Export model to ONNX")
+    parser.add_argument(
+        "--resume-online",
+        action="store_true",
+        help="Resume incremental training from the latest checkpoint",
+    )
     args = parser.parse_args()
     if args.tune:
         from tuning.hyperopt import tune_lgbm
@@ -317,4 +374,4 @@ if __name__ == "__main__":
         cfg = load_config()
         tune_lgbm(cfg)
     else:
-        main(export=args.export)
+        main(export=args.export, resume_online=args.resume_online)
