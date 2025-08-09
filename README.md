@@ -5,6 +5,8 @@ backtesting machine learning driven trading strategies on MetaTrader 5.
 
 ## Overview
 
+Detailed configuration options are documented in [docs/config.md](docs/config.md).
+
 The solution is split into two components:
 
 1. **Python toolkit** — handles data preprocessing, feature engineering, machine
