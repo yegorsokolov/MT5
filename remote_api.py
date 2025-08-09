@@ -21,6 +21,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 from dataclasses import dataclass
 from risk_manager import risk_manager
+from scheduler import start_scheduler
 
 
 class ConfigUpdate(BaseModel):
@@ -101,6 +102,7 @@ async def _bot_watcher() -> None:
 
 @app.on_event("startup")
 async def _start_watcher() -> None:
+    start_scheduler()
     asyncio.create_task(_bot_watcher())
 
 @app.get("/bots")
