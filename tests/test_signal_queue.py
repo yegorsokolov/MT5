@@ -5,6 +5,7 @@ import pytest
 from prometheus_client import Gauge
 
 import signal_queue
+from risk.position_sizer import PositionSizer
 
 
 def test_publish_and_receive(monkeypatch):
@@ -71,4 +72,20 @@ async def test_async_publish_and_iter_json(monkeypatch):
         assert out["prob"] == 0.6
     assert pub.closed
     assert sub.closed
+
+
+@pytest.mark.asyncio
+async def test_iter_with_position_sizer(monkeypatch):
+    gauge = Gauge("qd_ps", "queue")
+    monkeypatch.setattr(signal_queue, "QUEUE_DEPTH", gauge)
+    sizer = PositionSizer(capital=1000.0)
+    async with signal_queue.get_async_publisher(
+        "tcp://127.0.0.1:6004"
+    ) as pub, signal_queue.get_async_subscriber("tcp://127.0.0.1:6004") as sub:
+        df = pd.DataFrame({"Timestamp": ["2023"], "prob": [0.8]})
+        await signal_queue.publish_dataframe_async(pub, df)
+        await asyncio.sleep(0.1)
+        gen = signal_queue.iter_messages(sub, sizer=sizer)
+        out = await asyncio.wait_for(gen.__anext__(), timeout=1)
+        assert "size" in out and out["size"] > 0
 
