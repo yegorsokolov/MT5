@@ -8,3 +8,5 @@ RECONNECT_COUNT = Counter('reconnect_attempts', 'Total MT5 reconnection attempts
 DRIFT_EVENTS = Counter('drift_events', 'Detected data drift events')
 TARGET_RISK = Gauge('target_risk', 'Target risk allocation per trade')
 REALIZED_RISK = Gauge('realized_risk', 'Realized risk from executed trade')
+PORTFOLIO_DRAWDOWN = Gauge('portfolio_drawdown', 'Current portfolio drawdown')
+DIVERSIFICATION_RATIO = Gauge('diversification_ratio', 'Portfolio diversification ratio')

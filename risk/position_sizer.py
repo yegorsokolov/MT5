@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 from metrics import TARGET_RISK, REALIZED_RISK
@@ -19,29 +19,40 @@ class PositionSizer:
     method: str = "kelly"
     target_vol: float = 0.01
     odds: float = 1.0
+    weights: dict[str, float] | None = field(default=None, init=False)
 
     def kelly_fraction(self, prob: float) -> float:
         """Return Kelly fraction for win probability ``prob`` and payoff ``odds``."""
         return max(0.0, min((self.odds * prob - (1 - prob)) / self.odds, 1.0))
 
-    def volatility_target(self, volatility: float) -> float:
+    def update_weights(self, weights: dict[str, float]) -> None:
+        """Set optimizer-provided asset ``weights``."""
+        self.weights = weights
+
+    def volatility_target(self, volatility: float, capital: float) -> float:
         """Return position size to hit ``target_vol`` given current ``volatility``."""
         if volatility <= 0:
             return 0.0
-        return self.capital * (self.target_vol / volatility)
+        return capital * (self.target_vol / volatility)
 
-    def size(self, prob: float, volatility: float | None = None) -> float:
+    def size(
+        self, prob: float, symbol: str | None = None, volatility: float | None = None
+    ) -> float:
         """Return position size based on configured sizing method."""
+        weight = 1.0
+        if self.weights and symbol is not None:
+            weight = self.weights.get(symbol, 0.0)
+        capital = self.capital * weight
         if self.method == "kelly":
             frac = self.kelly_fraction(prob)
-            size = self.capital * frac
+            size = capital * frac
             target = size
             realized = size
         else:
             if volatility is None:
                 return 0.0
-            size = self.volatility_target(volatility)
-            target = self.capital * self.target_vol
+            size = self.volatility_target(volatility, capital)
+            target = capital * self.target_vol
             realized = size * volatility
         TARGET_RISK.set(target)
         REALIZED_RISK.set(realized)
