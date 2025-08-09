@@ -184,7 +184,10 @@ def log_shap_importance(
 
 @log_exceptions
 def main(
-    rank: int = 0, world_size: int | None = None, cfg: dict | None = None
+    rank: int = 0,
+    world_size: int | None = None,
+    cfg: dict | None = None,
+    resume_online: bool = False,
 ) -> float:
     if cfg is None:
         cfg = load_config()
@@ -342,38 +345,54 @@ def main(
             if world_size > 1
             else None
         )
+        batch_size = cfg.get("batch_size", 128)
+        eval_batch_size = cfg.get("eval_batch_size", 256)
         train_loader = DataLoader(
             train_ds,
-            batch_size=128,
+            batch_size=batch_size,
             shuffle=train_sampler is None,
             sampler=train_sampler,
         )
         if rank == 0:
-            val_loader = DataLoader(val_ds, batch_size=256)
-            test_loader = DataLoader(test_ds, batch_size=256)
+            val_loader = DataLoader(val_ds, batch_size=eval_batch_size)
+            test_loader = DataLoader(test_ds, batch_size=eval_batch_size)
 
         patience = cfg.get("patience", 3)
         best_val_loss = float("inf")
         epochs_no_improve = 0
         model_path = root / "model_transformer.pt"
 
+        steps_per_epoch = math.ceil(len(train_loader.dataset) / batch_size)
         start_epoch = 0
-        ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir")) if rank == 0 else None
+        start_batch = 0
+        ckpt = (
+            load_latest_checkpoint(cfg.get("checkpoint_dir"))
+            if (rank == 0 and resume_online)
+            else None
+        )
         if ckpt:
-            last_epoch, state = ckpt
-            start_epoch = last_epoch + 1
+            last_step, state = ckpt
+            start_epoch = last_step // steps_per_epoch
+            start_batch = last_step % steps_per_epoch
             model.load_state_dict(state["model"])
             optim.load_state_dict(state["optimizer"])
             best_val_loss = state.get("best_val_loss", best_val_loss)
             epochs_no_improve = state.get("epochs_no_improve", 0)
-            logger.info("Resuming from checkpoint at epoch %s", last_epoch)
+            logger.info(
+                "Resuming from checkpoint at step %s (epoch %s batch %s)",
+                last_step,
+                start_epoch,
+                start_batch,
+            )
 
         for epoch in range(start_epoch, cfg.get("epochs", 5)):
             if train_sampler is not None:
                 train_sampler.set_epoch(epoch)
             model.train()
             pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}", disable=rank != 0)
-            for xb, yb in pbar:
+            for batch_idx, (xb, yb) in enumerate(pbar):
+                if epoch == start_epoch and batch_idx < start_batch:
+                    continue
                 xb = xb.to(device)
                 yb = yb.to(device)
                 optim.zero_grad()
@@ -390,6 +409,19 @@ def main(
                     loss.backward()
                     optim.step()
                 if rank == 0:
+                    global_step = epoch * steps_per_epoch + batch_idx
+                    save_checkpoint(
+                        {
+                            "model": (
+                                model.module.state_dict()
+                                if isinstance(model, DDP)
+                                else model.state_dict()
+                            ),
+                            "optimizer": optim.state_dict(),
+                        },
+                        global_step + 1,
+                        cfg.get("checkpoint_dir"),
+                    )
                     pbar.set_postfix(loss=loss.item())
 
             if rank == 0:
@@ -440,7 +472,7 @@ def main(
                         "best_val_loss": best_val_loss,
                         "epochs_no_improve": epochs_no_improve,
                     },
-                    epoch,
+                    (epoch + 1) * steps_per_epoch,
                     cfg.get("checkpoint_dir"),
                 )
 
@@ -500,11 +532,12 @@ def launch(cfg: dict | None = None) -> float:
         cfg = load_config()
     use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
     world_size = torch.cuda.device_count()
+    resume_online = cfg.get("resume_online", False)
     if use_ddp and world_size > 1:
-        mp.spawn(main, args=(world_size, cfg), nprocs=world_size)
+        mp.spawn(main, args=(world_size, cfg, resume_online), nprocs=world_size)
         return 0.0
     else:
-        return main(0, 1, cfg)
+        return main(0, 1, cfg, resume_online=resume_online)
 
 
 if __name__ == "__main__":
@@ -514,12 +547,19 @@ if __name__ == "__main__":
     )
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
     parser.add_argument("--export", action="store_true", help="Export model to ONNX")
+    parser.add_argument(
+        "--resume-online",
+        action="store_true",
+        help="Resume incremental training from the latest checkpoint",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
         cfg["ddp"] = True
     if args.export:
         cfg["export"] = True
+    if args.resume_online:
+        cfg["resume_online"] = True
     if args.tune:
         from tuning.hyperopt import tune_transformer
 
