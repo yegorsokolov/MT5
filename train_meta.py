@@ -48,7 +48,7 @@ class MetaAdapterNet(nn.Module):
 
 def load_symbol_data(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
     """Load history for a single symbol, downloading if needed."""
-    df = load_history_config(sym, cfg, root)
+    df = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
     df["Symbol"] = sym
     return df
 
@@ -118,7 +118,7 @@ def main():
 
     # load and combine histories
     dfs = [load_symbol_data(s, cfg, root) for s in symbols]
-    df = make_features(pd.concat(dfs, ignore_index=True))
+    df = make_features(pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False))
     df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
     features = [
