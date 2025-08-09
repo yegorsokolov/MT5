@@ -12,10 +12,15 @@ import torch
 import gym
 from gym import spaces
 from stable_baselines3 import PPO, SAC, A2C
-from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+
+try:
+    from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+except Exception:  # pragma: no cover - optional dependency
+    SubprocVecEnv = DummyVecEnv = None  # type: ignore
 from stable_baselines3.common.evaluation import evaluate_policy
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
+
 try:  # optional dependency - hierarchical options
     from sb3_contrib import HierarchicalPPO  # type: ignore
 except Exception:  # pragma: no cover - algorithm may not be available
@@ -241,7 +246,9 @@ class HierarchicalTradingEnv(TradingEnv):
     def step(self, action):
         if isinstance(action, dict):
             manager = int(action.get("manager", 1))
-            worker = np.asarray(action.get("worker", np.zeros(self.n_symbols)), dtype=np.float32)
+            worker = np.asarray(
+                action.get("worker", np.zeros(self.n_symbols)), dtype=np.float32
+            )
         else:
             manager, worker = action
             worker = np.asarray(worker, dtype=np.float32)
@@ -263,7 +270,9 @@ class RLLibTradingEnv(TradingEnv):
 
 
 @log_exceptions
-def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
+def main(
+    rank: int = 0, world_size: int | None = None, cfg: dict | None = None
+) -> float:
     if cfg is None:
         cfg = load_config()
     if world_size is None:
@@ -291,14 +300,16 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
     for sym in symbols:
-        df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
+        df_sym = load_history_config(
+            sym, cfg, root, validate=cfg.get("validate", False)
+        )
         df_sym["Symbol"] = sym
         dfs.append(df_sym)
 
-    df = make_features(pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False))
-    df = periodic_reclassification(
-        df, step=cfg.get("regime_reclass_period", 500)
+    df = make_features(
+        pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False)
     )
+    df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
     features = [
         "return",
         "ma_5",
@@ -322,7 +333,9 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
         features.extend(["volume_ratio", "volume_imbalance"])
 
     # focus training on the most recent regime
-    current_regime = int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
+    current_regime = (
+        int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
+    )
     df = df[df["market_regime"] == current_regime]
 
     size = monitor.capabilities.model_size()
@@ -342,7 +355,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = PPO("MlpPolicy", env, verbose=0, seed=seed, device=device)
+        model = PPO(
+            "MlpPolicy",
+            env,
+            verbose=0,
+            seed=seed,
+            device=device,
+            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            gamma=cfg.get("rl_gamma", 0.99),
+        )
     elif algo == "RECURRENTPPO":
         env = TradingEnv(
             df,
@@ -354,7 +375,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = RecurrentPPO("MlpLstmPolicy", env, verbose=0, seed=seed, device=device)
+        model = RecurrentPPO(
+            "MlpLstmPolicy",
+            env,
+            verbose=0,
+            seed=seed,
+            device=device,
+            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            gamma=cfg.get("rl_gamma", 0.99),
+        )
     elif algo == "A2C":
         env = TradingEnv(
             df,
@@ -366,7 +395,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = A2C("MlpPolicy", env, verbose=0, seed=seed, device=device)
+        model = A2C(
+            "MlpPolicy",
+            env,
+            verbose=0,
+            seed=seed,
+            device=device,
+            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            gamma=cfg.get("rl_gamma", 0.99),
+        )
     elif algo == "A3C":
         n_envs = int(cfg.get("rl_num_envs", 4))
         n_envs = min(n_envs, os.cpu_count() or 1)
@@ -387,7 +424,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             env = DummyVecEnv([make_env])
         else:
             env = SubprocVecEnv([make_env for _ in range(n_envs)])
-        model = A2C("MlpPolicy", env, verbose=0, seed=seed, device=device)
+        model = A2C(
+            "MlpPolicy",
+            env,
+            verbose=0,
+            seed=seed,
+            device=device,
+            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            gamma=cfg.get("rl_gamma", 0.99),
+        )
     elif algo == "SAC":
         env = TradingEnv(
             df,
@@ -399,7 +444,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = SAC("MlpPolicy", env, verbose=0, seed=seed, device=device)
+        model = SAC(
+            "MlpPolicy",
+            env,
+            verbose=0,
+            seed=seed,
+            device=device,
+            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            gamma=cfg.get("rl_gamma", 0.99),
+        )
     elif algo == "TRPO":
         env = TradingEnv(
             df,
@@ -418,6 +471,8 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             max_kl=cfg.get("rl_max_kl", 0.01),
             seed=seed,
             device=device,
+            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            gamma=cfg.get("rl_gamma", 0.99),
         )
     elif algo == "HIERARCHICALPPO":
         if HierarchicalPPO is None:
@@ -432,7 +487,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = HierarchicalPPO("MlpPolicy", env, verbose=0, seed=seed, device=device)
+        model = HierarchicalPPO(
+            "MlpPolicy",
+            env,
+            verbose=0,
+            seed=seed,
+            device=device,
+            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            gamma=cfg.get("rl_gamma", 0.99),
+        )
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(
             df,
@@ -444,7 +507,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
-        model = QRDQN("MlpPolicy", env, verbose=0, seed=seed, device=device)
+        model = QRDQN(
+            "MlpPolicy",
+            env,
+            verbose=0,
+            seed=seed,
+            device=device,
+            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            gamma=cfg.get("rl_gamma", 0.99),
+        )
     elif algo == "RLLIB":
         if gymn is None:
             raise RuntimeError("gymnasium is required for RLlib")
@@ -454,7 +525,7 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             from ray.rllib.algorithms.ddpg import DDPGConfig
         except Exception as e:  # pragma: no cover - optional dependency
             raise RuntimeError(
-                "RLlib not installed. Run `pip install \"ray[rllib]\"`"
+                'RLlib not installed. Run `pip install "ray[rllib]"`'
             ) from e
 
         rllib_algo = cfg.get("rllib_algorithm", "PPO").upper()
@@ -477,6 +548,10 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
                 DDPGConfig()
                 .environment(env_creator, disable_env_checking=True)
                 .rollouts(num_rollout_workers=0)
+                .training(
+                    gamma=cfg.get("rl_gamma", 0.99),
+                    lr=cfg.get("rl_learning_rate", 3e-4),
+                )
                 .seed(seed)
             )
         else:
@@ -484,6 +559,10 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
                 PPOConfig()
                 .environment(env_creator, disable_env_checking=True)
                 .rollouts(num_rollout_workers=0)
+                .training(
+                    gamma=cfg.get("rl_gamma", 0.99),
+                    lr=cfg.get("rl_learning_rate", 3e-4),
+                )
                 .seed(seed)
             )
 
@@ -536,6 +615,7 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
                 current,
                 cfg.get("checkpoint_dir"),
             )
+        cumulative_return = 0.0
         if rank == 0:
             if algo == "RECURRENTPPO":
                 rec_dir = root / "models" / "recurrent_rl"
@@ -565,9 +645,11 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             eval_returns = np.array(eval_env.portfolio_returns)
             if eval_returns.size:
                 cumulative_return = float((1 + eval_returns).prod() - 1)
-                sharpe = float(
-                    np.sqrt(252) * eval_returns.mean() / eval_returns.std(ddof=0)
-                ) if eval_returns.std(ddof=0) > 0 else 0.0
+                sharpe = (
+                    float(np.sqrt(252) * eval_returns.mean() / eval_returns.std(ddof=0))
+                    if eval_returns.std(ddof=0) > 0
+                    else 0.0
+                )
                 equity_curve = (1 + eval_returns).cumprod()
                 peak = np.maximum.accumulate(equity_curve)
                 max_drawdown = float(((equity_curve - peak) / peak).min())
@@ -582,7 +664,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
                 lookback=cfg.get("risk_lookback_bars", 50),
                 max_size=cfg.get("rl_max_position", 1.0),
             )
-            risk_model = PPO("MlpPolicy", risk_env, verbose=0, seed=seed, device=device)
+            risk_model = PPO(
+                "MlpPolicy",
+                risk_env,
+                verbose=0,
+                seed=seed,
+                device=device,
+                learning_rate=cfg.get("rl_learning_rate", 3e-4),
+                gamma=cfg.get("rl_gamma", 0.99),
+            )
             risk_model.learn(total_timesteps=cfg.get("rl_steps", 5000))
             models_dir = root / "models"
             models_dir.mkdir(exist_ok=True)
@@ -604,23 +694,34 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
     if world_size > 1:
         dist.destroy_process_group()
 
+    return cumulative_return
 
-def launch(cfg: dict | None = None) -> None:
+
+def launch(cfg: dict | None = None) -> float:
     if cfg is None:
         cfg = load_config()
     use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
     world_size = torch.cuda.device_count()
     if use_ddp and world_size > 1:
         mp.spawn(main, args=(world_size, cfg), nprocs=world_size)
+        return 0.0
     else:
-        main(0, 1, cfg)
+        return main(0, 1, cfg)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ddp", action="store_true", help="Enable DistributedDataParallel")
+    parser.add_argument(
+        "--ddp", action="store_true", help="Enable DistributedDataParallel"
+    )
+    parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
         cfg["ddp"] = True
-    launch(cfg)
+    if args.tune:
+        from tuning.hyperopt import tune_rl
+
+        tune_rl(cfg)
+    else:
+        launch(cfg)
