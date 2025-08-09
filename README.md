@@ -32,6 +32,9 @@ The solution is split into two components:
    backtests and disables those that hurt performance. Run
    `python scripts/evaluate_features.py` after collecting enough data to update
    `config.yaml` automatically.
+6. **Hyperparameter tuner** — pass `--tune` to the training scripts to launch
+   an Optuna search over learning rate, model depth and RL discount factors. The
+   best settings are logged to MLflow and persisted in `tuning/*.db`.
 
 ## Deployment and Environment Checks
 
@@ -92,6 +95,21 @@ seed: 123
 ```bash
 python train.py  # uses the seed from config.yaml
 ```
+
+### Hyperparameter tuning
+
+Each training script accepts a `--tune` flag which launches an Optuna search
+over core parameters and logs the best trial to MLflow. Recommended ranges:
+
+| Script | Parameters |
+| ------ | ---------- |
+| `train.py` | `learning_rate` 1e-4–0.2, `num_leaves` 16–255, `max_depth` 3–12 |
+| `train_nn.py` | `learning_rate` 1e-5–1e-2, `d_model` 32–256, `num_layers` 1–4 |
+| `train_rl.py` | `rl_learning_rate` 1e-5–1e-2, `rl_gamma` 0.90–0.999 |
+
+Studies are stored in `tuning/*.db`. Rerun the script with `--tune` to resume an
+interrupted optimisation or continue adding trials. Training checkpoints allow
+each trial to pick up where it left off if terminated mid‑run.
 
 ### Risk management
 
