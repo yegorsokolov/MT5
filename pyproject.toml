@@ -42,6 +42,10 @@ dependencies = [
     "grpcio-tools",
     "backtrader",
     "freqtrade",
+    "onnx",
+    "onnxruntime",
+    "skl2onnx",
+    "onnxmltools",
 ]
 
 [project.scripts]
