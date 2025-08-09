@@ -3,9 +3,22 @@ import pandas as pd
 import zmq
 import pytest
 from prometheus_client import Gauge
+from pathlib import Path
+import sys
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import signal_queue
 from risk.position_sizer import PositionSizer
+import importlib.util
+
+spec = importlib.util.spec_from_file_location(
+    "ensemble", Path(__file__).resolve().parents[1] / "models" / "ensemble.py"
+)
+ensemble_mod = importlib.util.module_from_spec(spec)
+sys.modules["ensemble"] = ensemble_mod
+spec.loader.exec_module(ensemble_mod)
+EnsembleModel = ensemble_mod.EnsembleModel
 
 
 def test_publish_and_receive(monkeypatch):
@@ -52,6 +65,19 @@ async def test_async_publish_and_iter(monkeypatch):
         gen = signal_queue.iter_messages(sub)
         out = await asyncio.wait_for(gen.__anext__(), timeout=1)
         assert out["prob"] == 0.9
+        # consumer combines model outputs via EnsembleModel
+        class _Const:
+            def __init__(self, p: float) -> None:
+                self.p = p
+
+            def predict_proba(self, X):  # pragma: no cover - trivial
+                import numpy as np
+
+                return np.column_stack([1 - self.p, np.full(len(X), self.p)])
+
+        ens = EnsembleModel({"a": _Const(out["prob"]), "b": _Const(0.5)})
+        preds = ens.predict(pd.DataFrame({"x": [0]}))
+        assert pytest.approx(preds["ensemble"][0]) == (out["prob"] + 0.5) / 2
         assert gauge._value.get() == 0
     assert pub.closed
     assert sub.closed
