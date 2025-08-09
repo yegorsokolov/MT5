@@ -1,0 +1,121 @@
+import os
+from pathlib import Path
+from typing import Any, Dict
+
+import requests
+import streamlit as st
+import yaml
+
+from config_schema import ConfigSchema
+
+API_URL = os.getenv("REMOTE_API_URL", "https://localhost:8000")
+CERT_PATH = os.getenv("API_CERT", "certs/api.crt")
+
+@st.cache_data
+def load_current_config() -> Dict[str, Any]:
+    cfg_file = Path("config.yaml")
+    if cfg_file.exists():
+        with cfg_file.open() as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+@st.cache_data
+def schema_table(current: Dict[str, Any]):
+    rows = []
+    for name, field in ConfigSchema.model_fields.items():
+        default = field.default if field.default is not None else "required"
+        rows.append({
+            "parameter": name,
+            "description": field.description or "",
+            "default": default,
+            "current": current.get(name, default),
+        })
+    return rows
+
+
+def _auth_headers(api_key: str) -> Dict[str, str]:
+    return {"x-api-key": api_key}
+
+
+def _ssl_opts():
+    if CERT_PATH and Path(CERT_PATH).exists():
+        return {"verify": CERT_PATH}
+    return {"verify": True}
+
+
+def fetch_json(path: str, api_key: str) -> Dict[str, Any]:
+    try:
+        resp = requests.get(f"{API_URL}{path}", headers=_auth_headers(api_key), **_ssl_opts())
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return {}
+
+
+def post_json(path: str, api_key: str):
+    try:
+        resp = requests.post(f"{API_URL}{path}", headers=_auth_headers(api_key), **_ssl_opts())
+        resp.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+def main() -> None:
+    st.set_page_config(page_title="Trading Dashboard", layout="wide")
+    st.title("Trading Bot Dashboard")
+
+    api_key = st.sidebar.text_input("API Key", type="password")
+    if not api_key:
+        st.info("Enter API key to connect")
+        return
+
+    tabs = st.tabs(["Overview", "Config Explorer", "Logs"])
+
+    # Overview tab
+    with tabs[0]:
+        metrics = fetch_json("/risk/status", api_key)
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("PnL", metrics.get("daily_loss", 0))
+        col2.metric("Exposure", metrics.get("exposure", 0))
+        col3.metric("VaR", metrics.get("var", 0))
+        col4.metric("Trading Halted", metrics.get("trading_halted", False))
+
+        bots = fetch_json("/bots", api_key)
+        st.subheader("Running Bots")
+        for bid, info in bots.items():
+            c1, c2, c3 = st.columns([3,1,1])
+            running = info.get("running")
+            c1.write(f"{bid} (restarts: {info.get('restart_count',0)})")
+            if running:
+                if c2.button("Pause", key=f"pause-{bid}"):
+                    post_json(f"/bots/{bid}/stop", api_key)
+            else:
+                if c2.button("Resume", key=f"resume-{bid}"):
+                    post_json(f"/bots/{bid}/start", api_key)
+            if c3.button("Logs", key=f"logs-{bid}"):
+                log_data = fetch_json(f"/bots/{bid}/logs", api_key)
+                st.download_button(
+                    label=f"Download {bid} logs",
+                    data=log_data.get("logs", ""),
+                    file_name=f"{bid}.log"
+                )
+
+    # Config Explorer tab
+    with tabs[1]:
+        current = load_current_config()
+        rows = schema_table(current)
+        st.subheader("Config Explorer")
+        st.table(rows)
+
+    # Logs tab
+    with tabs[2]:
+        if st.button("Refresh Logs"):
+            st.session_state["logs"] = fetch_json("/logs", api_key)
+        logs = st.session_state.get("logs", fetch_json("/logs", api_key))
+        st.text_area("Recent Logs", logs.get("logs", ""), height=300)
+        st.download_button("Download Logs", logs.get("logs", ""), file_name="system.log")
+
+
+if __name__ == "__main__":
+    main()
