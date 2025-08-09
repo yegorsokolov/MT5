@@ -29,6 +29,7 @@ from data.history import (
 )
 from data.features import make_features
 from state_manager import save_checkpoint, load_latest_checkpoint
+from analysis.regime_detection import periodic_reclassification
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -107,6 +108,9 @@ def main():
         save_history_parquet(df, root / "data" / "history.parquet")
 
         df = make_features(df, validate=cfg.get("validate", False))
+        df = periodic_reclassification(
+            df, step=cfg.get("regime_reclass_period", 500)
+        )
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
@@ -231,6 +235,36 @@ def main():
     mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
     mlflow.log_metric("f1_weighted", aggregate_report["weighted avg"]["f1-score"])
     mlflow.log_artifact(str(root / "model.joblib"))
+
+    # Train dedicated models for each market regime
+    base_features = [f for f in features if f != "market_regime"]
+    regime_models: dict[int, Pipeline] = {}
+    for regime in sorted(df["market_regime"].unique()):
+        mask = df["market_regime"] == regime
+        X_reg = df.loc[mask, base_features]
+        y_reg = (df.loc[mask, "return"].shift(-1) > 0).astype(int)
+        steps_reg: list[tuple[str, object]] = []
+        if cfg.get("use_scaler", True):
+            steps_reg.append(("scaler", StandardScaler()))
+        steps_reg.append(
+            (
+                "clf",
+                LGBMClassifier(
+                    n_estimators=200,
+                    n_jobs=cfg.get("n_jobs", 1),
+                    random_state=seed,
+                ),
+            )
+        )
+        pipe_reg = Pipeline(steps_reg)
+        pipe_reg.fit(X_reg, y_reg)
+        regime_models[int(regime)] = pipe_reg
+        logger.info("Trained regime-specific model for regime %s", regime)
+
+    regimes_path = root / "regime_models.joblib"
+    joblib.dump(regime_models, regimes_path)
+    mlflow.log_artifact(str(regimes_path))
+    logger.info("Regime-specific models saved to %s", regimes_path)
 
     out = root / "classification_report.json"
     with out.open("w") as f:
