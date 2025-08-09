@@ -95,7 +95,7 @@ python train.py  # uses the seed from config.yaml
 
 ### Risk management
 
-Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `max_var`, `max_stress_loss`, `max_cvar` and `var_decay`, which controls the exponential weighting for the filtered VaR calculation.
+Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `max_var`, `max_stress_loss`, `max_cvar` and `var_decay`, which controls the exponential weighting for the filtered VaR calculation.  A portfolio level risk manager aggregates exposure and PnL across bots. Configure its limits with `max_portfolio_drawdown` and `max_var` (or set the environment variables `MAX_PORTFOLIO_DRAWDOWN` and `MAX_VAR`).
 
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
@@ -607,11 +607,20 @@ endpoints include:
 - `GET /health` – overall service state and recent log snippet.
 - `POST /config` – update `config.yaml` with JSON fields `key`, `value` and
   `reason`.
+- `GET /risk/status` – aggregated exposure, daily loss, VaR and whether trading
+  has been halted by the risk manager.
 
 Example:
 
 ```bash
 curl -k -H "X-API-Key: <token>" https://localhost:8000/health
+```
+
+Set `MAX_PORTFOLIO_DRAWDOWN` (and optional `MAX_VAR`) before launching
+`remote_api.py` to enable the portfolio level risk manager:
+
+```bash
+MAX_PORTFOLIO_DRAWDOWN=1000 python remote_api.py
 ```
 
 ### API Key Rotation

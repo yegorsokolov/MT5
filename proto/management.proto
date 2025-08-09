@@ -45,6 +45,13 @@ message ConfigChange {
   string reason = 3;
 }
 
+message RiskStatus {
+  double exposure = 1;
+  double daily_loss = 2;
+  double var = 3;
+  bool trading_halted = 4;
+}
+
 service ManagementService {
   rpc StartBot(StartRequest) returns (StatusResponse);
   rpc StopBot(BotIdRequest) returns (StatusResponse);
@@ -52,4 +59,5 @@ service ManagementService {
   rpc GetLogs(LogRequest) returns (LogResponse);
   rpc ListBots(google.protobuf.Empty) returns (BotList);
   rpc UpdateConfig(ConfigChange) returns (StatusResponse);
+  rpc GetRiskStatus(google.protobuf.Empty) returns (RiskStatus);
 }
