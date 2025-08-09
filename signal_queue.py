@@ -82,6 +82,7 @@ def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf")
                 "Timestamp": str(row["Timestamp"]),
                 "Symbol": str(row.get("Symbol", "")),
                 "prob": float(row["prob"]),
+                "confidence": float(row.get("confidence", 1.0)),
             }
             sock.send_json(payload)
         else:
@@ -89,6 +90,7 @@ def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf")
                 timestamp=str(row["Timestamp"]),
                 symbol=str(row.get("Symbol", "")),
                 probability=str(row["prob"]),
+                confidence=float(row.get("confidence", 1.0)),
             )
             sock.send(msg.SerializeToString())
 
@@ -105,6 +107,7 @@ async def publish_dataframe_async(
                 "Timestamp": str(row["Timestamp"]),
                 "Symbol": str(row.get("Symbol", "")),
                 "prob": float(row["prob"]),
+                "confidence": float(row.get("confidence", 1.0)),
             }
             await sock.send_json(payload)
         else:
@@ -112,6 +115,7 @@ async def publish_dataframe_async(
                 timestamp=str(row["Timestamp"]),
                 symbol=str(row.get("Symbol", "")),
                 probability=str(row["prob"]),
+                confidence=float(row.get("confidence", 1.0)),
             )
             await sock.send(msg.SerializeToString())
 
@@ -129,11 +133,13 @@ async def iter_messages(
             QUEUE_DEPTH.dec()
             symbol = data.get("Symbol", "")
             prob = float(data.get("prob", 0.0))
-            size = sizer.size(prob, symbol) if sizer else prob
+            conf = float(data.get("confidence", 1.0))
+            size = sizer.size(prob, symbol, confidence=conf) if sizer else prob * conf
             yield {
                 "Timestamp": data.get("Timestamp", ""),
                 "Symbol": symbol,
                 "prob": prob,
+                "confidence": conf,
                 "size": size,
             }
         else:
@@ -143,11 +149,13 @@ async def iter_messages(
             QUEUE_DEPTH.dec()
             prob = float(sig.probability)
             symbol = sig.symbol
-            size = sizer.size(prob, symbol) if sizer else prob
+            conf = float(getattr(sig, "confidence", 1.0))
+            size = sizer.size(prob, symbol, confidence=conf) if sizer else prob * conf
             yield {
                 "Timestamp": sig.timestamp,
                 "Symbol": symbol,
                 "prob": prob,
+                "confidence": conf,
                 "size": size,
             }
 
@@ -189,6 +197,7 @@ class KafkaSignalQueue:
                         "Timestamp": str(row["Timestamp"]),
                         "Symbol": str(row.get("Symbol", "")),
                         "prob": float(row["prob"]),
+                        "confidence": float(row.get("confidence", 1.0)),
                     }
                 ).encode()
             else:
@@ -196,6 +205,7 @@ class KafkaSignalQueue:
                     timestamp=str(row["Timestamp"]),
                     symbol=str(row.get("Symbol", "")),
                     probability=str(row["prob"]),
+                    confidence=float(row.get("confidence", 1.0)),
                 )
                 payload = msg.SerializeToString()
             for attempt in range(retries):
@@ -221,11 +231,17 @@ class KafkaSignalQueue:
                 data = json.loads(msg.value.decode())
                 symbol = data.get("Symbol", "")
                 prob = float(data.get("prob", 0.0))
-                size = sizer.size(prob, symbol) if sizer else prob
+                conf = float(data.get("confidence", 1.0))
+                size = (
+                    sizer.size(prob, symbol, confidence=conf)
+                    if sizer
+                    else prob * conf
+                )
                 yield {
                     "Timestamp": data.get("Timestamp", ""),
                     "Symbol": symbol,
                     "prob": prob,
+                    "confidence": conf,
                     "size": size,
                 }
             else:
@@ -233,11 +249,17 @@ class KafkaSignalQueue:
                 sig.ParseFromString(msg.value)
                 prob = float(sig.probability)
                 symbol = sig.symbol
-                size = sizer.size(prob, symbol) if sizer else prob
+                conf = float(getattr(sig, "confidence", 1.0))
+                size = (
+                    sizer.size(prob, symbol, confidence=conf)
+                    if sizer
+                    else prob * conf
+                )
                 yield {
                     "Timestamp": sig.timestamp,
                     "Symbol": symbol,
                     "prob": prob,
+                    "confidence": conf,
                     "size": size,
                 }
 
@@ -266,6 +288,7 @@ class RedisSignalQueue:
                         "Timestamp": str(row["Timestamp"]),
                         "Symbol": str(row.get("Symbol", "")),
                         "prob": float(row["prob"]),
+                        "confidence": float(row.get("confidence", 1.0)),
                     }
                 ).encode()
             else:
@@ -273,6 +296,7 @@ class RedisSignalQueue:
                     timestamp=str(row["Timestamp"]),
                     symbol=str(row.get("Symbol", "")),
                     probability=str(row["prob"]),
+                    confidence=float(row.get("confidence", 1.0)),
                 )
                 payload = msg.SerializeToString()
             for attempt in range(retries):
@@ -305,11 +329,17 @@ class RedisSignalQueue:
                     payload = json.loads(data.decode())
                     symbol = payload.get("Symbol", "")
                     prob = float(payload.get("prob", 0.0))
-                    size = sizer.size(prob, symbol) if sizer else prob
+                    conf = float(payload.get("confidence", 1.0))
+                    size = (
+                        sizer.size(prob, symbol, confidence=conf)
+                        if sizer
+                        else prob * conf
+                    )
                     yield {
                         "Timestamp": payload.get("Timestamp", ""),
                         "Symbol": symbol,
                         "prob": prob,
+                        "confidence": conf,
                         "size": size,
                     }
                 else:
@@ -317,11 +347,17 @@ class RedisSignalQueue:
                     sig.ParseFromString(data)
                     prob = float(sig.probability)
                     symbol = sig.symbol
-                    size = sizer.size(prob, symbol) if sizer else prob
+                    conf = float(getattr(sig, "confidence", 1.0))
+                    size = (
+                        sizer.size(prob, symbol, confidence=conf)
+                        if sizer
+                        else prob * conf
+                    )
                     yield {
                         "Timestamp": sig.timestamp,
                         "Symbol": symbol,
                         "prob": prob,
+                        "confidence": conf,
                         "size": size,
                     }
 

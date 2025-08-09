@@ -1,5 +1,10 @@
 {
   "title": "MT5 Bot",
-  "panels": [],
+  "panels": [
+    {"title": "Target Risk", "type": "graph", "targets": [{"expr": "target_risk"}]},
+    {"title": "Realized Risk", "type": "graph", "targets": [{"expr": "realized_risk"}]},
+    {"title": "Adj Target Risk", "type": "graph", "targets": [{"expr": "adj_target_risk"}]},
+    {"title": "Adj Realized Risk", "type": "graph", "targets": [{"expr": "adj_realized_risk"}]}
+  ],
   "version": 1
 }

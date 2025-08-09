@@ -27,12 +27,13 @@ def test_publish_and_receive(monkeypatch):
     with signal_queue.get_publisher("tcp://127.0.0.1:6000") as pub, signal_queue.get_subscriber(
         "tcp://127.0.0.1:6000"
     ) as sub:
-        df = pd.DataFrame({"Timestamp": ["2020"], "prob": [0.8]})
+        df = pd.DataFrame({"Timestamp": ["2020"], "prob": [0.8], "confidence": [0.9]})
         signal_queue.publish_dataframe(pub, df)
         raw = sub.recv()
         msg = signal_queue.signals_pb2.Signal()
         msg.ParseFromString(raw)
         assert float(msg.probability) == 0.8
+        assert pytest.approx(msg.confidence) == 0.9
         assert gauge._value.get() == 1
     assert pub.closed
     assert sub.closed
@@ -44,10 +45,11 @@ def test_publish_and_receive_json(monkeypatch):
     with signal_queue.get_publisher("tcp://127.0.0.1:6002") as pub, signal_queue.get_subscriber(
         "tcp://127.0.0.1:6002"
     ) as sub:
-        df = pd.DataFrame({"Timestamp": ["2021"], "prob": [0.7]})
+        df = pd.DataFrame({"Timestamp": ["2021"], "prob": [0.7], "confidence": [0.8]})
         signal_queue.publish_dataframe(pub, df, fmt="json")
         data = sub.recv_json()
         assert data["prob"] == 0.7
+        assert data["confidence"] == 0.8
     assert pub.closed
     assert sub.closed
 
@@ -59,12 +61,13 @@ async def test_async_publish_and_iter(monkeypatch):
     async with signal_queue.get_async_publisher(
         "tcp://127.0.0.1:6001"
     ) as pub, signal_queue.get_async_subscriber("tcp://127.0.0.1:6001") as sub:
-        df = pd.DataFrame({"Timestamp": ["2020"], "prob": [0.9]})
+        df = pd.DataFrame({"Timestamp": ["2020"], "prob": [0.9], "confidence": [0.6]})
         await signal_queue.publish_dataframe_async(pub, df)
         await asyncio.sleep(0.1)
         gen = signal_queue.iter_messages(sub)
         out = await asyncio.wait_for(gen.__anext__(), timeout=1)
         assert out["prob"] == 0.9
+        assert pytest.approx(out["confidence"]) == 0.6
         # consumer combines model outputs via EnsembleModel
         class _Const:
             def __init__(self, p: float) -> None:
@@ -90,12 +93,13 @@ async def test_async_publish_and_iter_json(monkeypatch):
     async with signal_queue.get_async_publisher(
         "tcp://127.0.0.1:6003"
     ) as pub, signal_queue.get_async_subscriber("tcp://127.0.0.1:6003") as sub:
-        df = pd.DataFrame({"Timestamp": ["2022"], "prob": [0.6]})
+        df = pd.DataFrame({"Timestamp": ["2022"], "prob": [0.6], "confidence": [0.7]})
         await signal_queue.publish_dataframe_async(pub, df, fmt="json")
         await asyncio.sleep(0.1)
         gen = signal_queue.iter_messages(sub, fmt="json")
         out = await asyncio.wait_for(gen.__anext__(), timeout=1)
         assert out["prob"] == 0.6
+        assert out["confidence"] == 0.7
     assert pub.closed
     assert sub.closed
 
@@ -108,10 +112,11 @@ async def test_iter_with_position_sizer(monkeypatch):
     async with signal_queue.get_async_publisher(
         "tcp://127.0.0.1:6004"
     ) as pub, signal_queue.get_async_subscriber("tcp://127.0.0.1:6004") as sub:
-        df = pd.DataFrame({"Timestamp": ["2023"], "prob": [0.8]})
+        df = pd.DataFrame({"Timestamp": ["2023"], "prob": [0.8], "confidence": [0.5]})
         await signal_queue.publish_dataframe_async(pub, df)
         await asyncio.sleep(0.1)
         gen = signal_queue.iter_messages(sub, sizer=sizer)
         out = await asyncio.wait_for(gen.__anext__(), timeout=1)
-        assert "size" in out and out["size"] > 0
+        assert out["confidence"] == 0.5
+        assert pytest.approx(out["size"]) == 300.0
 
