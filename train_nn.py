@@ -18,6 +18,11 @@ from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
 
+try:
+    import shap
+except Exception:  # pragma: no cover - optional dependency
+    shap = None
+
 from utils import load_config, mlflow_run
 from utils.resource_monitor import monitor
 from state_manager import save_checkpoint, load_latest_checkpoint
@@ -138,6 +143,41 @@ class TransformerModel(torch.nn.Module):
             x = self.transformer(x)
         out = self.fc(x[:, -1])
         return torch.sigmoid(out).squeeze(1)
+
+
+def log_shap_importance(
+    model: torch.nn.Module,
+    X_sample: np.ndarray,
+    features: list[str],
+    report_dir: Path,
+    device: torch.device,
+) -> None:
+    """Compute SHAP values for the transformer and save a bar plot."""
+    if shap is None:
+        logger.info("shap not installed, skipping feature importance")
+        return
+    try:
+        import matplotlib.pyplot as plt
+
+        model.eval()
+        background = torch.tensor(X_sample, dtype=torch.float32, device=device)
+        explainer = shap.DeepExplainer(model, background)
+        shap_values = explainer.shap_values(background)
+        if isinstance(shap_values, list):
+            shap_values = shap_values[0]
+        shap_mean = np.abs(shap_values).mean(axis=1)
+        report_dir.mkdir(exist_ok=True)
+        plt.figure()
+        shap.summary_plot(
+            shap_mean,
+            pd.DataFrame(X_sample.mean(axis=1), columns=features),
+            show=False,
+            plot_type="bar",
+        )
+        plt.tight_layout()
+        plt.savefig(report_dir / "feature_importance_nn.png")
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Failed to compute SHAP values: %s", exc)
 
 
 @log_exceptions
@@ -413,6 +453,10 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             mlflow.log_metric("best_val_loss", best_val_loss)
             logger.info("Model saved to %s", model_path)
             mlflow.log_artifact(str(model_path))
+            if cfg.get("feature_importance", False):
+                report_dir = root / "reports"
+                X_sample = X_train[: cfg.get("shap_samples", 100)]
+                log_shap_importance(model, X_sample, features, report_dir, device)
 
     if world_size > 1:
         dist.destroy_process_group()

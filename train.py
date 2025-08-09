@@ -34,8 +34,13 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-def log_shap_importance(pipe: Pipeline, X_train: pd.DataFrame, features: list[str]) -> None:
-    """Compute SHAP values and save ranked features."""
+def log_shap_importance(
+    pipe: Pipeline,
+    X_train: pd.DataFrame,
+    features: list[str],
+    report_dir: Path | None = None,
+) -> None:
+    """Compute SHAP values, saving ranked features and optional plot."""
     if shap is None:
         logger.info("shap not installed, skipping feature importance")
         return
@@ -47,13 +52,23 @@ def log_shap_importance(pipe: Pipeline, X_train: pd.DataFrame, features: list[st
         shap_values = explainer.shap_values(X_used)
         if isinstance(shap_values, list):
             shap_values = shap_values[1]
-        fi = pd.DataFrame({
-            "feature": features,
-            "importance": np.abs(shap_values).mean(axis=0),
-        })
+        fi = pd.DataFrame(
+            {
+                "feature": features,
+                "importance": np.abs(shap_values).mean(axis=0),
+            }
+        )
         out = LOG_DIR / "feature_importance.csv"
         fi.sort_values("importance", ascending=False).to_csv(out, index=False)
         logger.info("Logged feature importance to %s", out)
+        if report_dir is not None:
+            import matplotlib.pyplot as plt
+
+            report_dir.mkdir(exist_ok=True)
+            plt.figure()
+            shap.summary_plot(shap_values, X_used, show=False, plot_type="bar")
+            plt.tight_layout()
+            plt.savefig(report_dir / "feature_importance.png")
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to compute SHAP values: %s", e)
 
@@ -222,8 +237,13 @@ def main():
         json.dump(aggregate_report, f, indent=2)
     mlflow.log_artifact(str(out))
 
-    if final_pipe is not None and X_train_final is not None:
-        log_shap_importance(final_pipe, X_train_final, features)
+    if (
+        final_pipe is not None
+        and X_train_final is not None
+        and cfg.get("feature_importance", False)
+    ):
+        report_dir = Path(__file__).resolve().parent / "reports"
+        log_shap_importance(final_pipe, X_train_final, features, report_dir)
 
 
 if __name__ == "__main__":
