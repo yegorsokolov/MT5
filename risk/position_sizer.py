@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 
-from metrics import TARGET_RISK, REALIZED_RISK
+from metrics import (
+    TARGET_RISK,
+    REALIZED_RISK,
+    ADJ_TARGET_RISK,
+    ADJ_REALIZED_RISK,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -36,25 +41,41 @@ class PositionSizer:
         return capital * (self.target_vol / volatility)
 
     def size(
-        self, prob: float, symbol: str | None = None, volatility: float | None = None
+        self,
+        prob: float,
+        symbol: str | None = None,
+        volatility: float | None = None,
+        confidence: float = 1.0,
     ) -> float:
         """Return position size based on configured sizing method."""
         weight = 1.0
         if self.weights and symbol is not None:
             weight = self.weights.get(symbol, 0.0)
         capital = self.capital * weight
+        confidence = max(0.0, min(confidence, 1.0))
         if self.method == "kelly":
             frac = self.kelly_fraction(prob)
-            size = capital * frac
-            target = size
-            realized = size
+            base_size = capital * frac
+            target = base_size
+            realized = base_size
         else:
             if volatility is None:
                 return 0.0
-            size = self.volatility_target(volatility, capital)
+            base_size = self.volatility_target(volatility, capital)
             target = capital * self.target_vol
-            realized = size * volatility
+            realized = base_size * volatility
+        size = base_size * confidence
         TARGET_RISK.set(target)
         REALIZED_RISK.set(realized)
-        logger.info("Position size computed: size=%.4f target=%.4f", realized, target)
+        ADJ_TARGET_RISK.set(target * confidence)
+        ADJ_REALIZED_RISK.set(realized * confidence)
+        logger.info(
+            "Position size computed: base=%.4f adjusted=%.4f target=%.4f adj_target=%.4f conf=%.2f",
+            base_size,
+            size,
+            target,
+            target * confidence,
+            confidence,
+        )
         return size
+

@@ -17,6 +17,7 @@ import mlflow
 
 from log_utils import setup_logging, log_exceptions, LOG_DIR
 import numpy as np
+from risk.position_sizer import PositionSizer
 
 try:
     import shap
@@ -271,6 +272,11 @@ def main(
         )
 
         preds = pipe.predict(X_val)
+        probs = pipe.predict_proba(X_val)[:, 1]
+        conf = np.abs(probs - 0.5) * 2
+        sizer = PositionSizer(capital=cfg.get("eval_capital", 1000.0))
+        for p, c in zip(probs, conf):
+            sizer.size(p, confidence=c)
         report = classification_report(y_val, preds, output_dict=True)
         logger.info("Fold %d\n%s", fold, classification_report(y_val, preds))
         mlflow.log_metric(
