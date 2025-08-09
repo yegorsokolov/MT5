@@ -38,6 +38,7 @@ from data.history import (
     load_history_config,
 )
 from data.features import make_features
+from analysis.regime_detection import periodic_reclassification
 import argparse
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -295,6 +296,9 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
         dfs.append(df_sym)
 
     df = make_features(pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False))
+    df = periodic_reclassification(
+        df, step=cfg.get("regime_reclass_period", 500)
+    )
     features = [
         "return",
         "ma_5",
@@ -316,6 +320,10 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
     ]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
+
+    # focus training on the most recent regime
+    current_regime = int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
+    df = df[df["market_regime"] == current_regime]
 
     size = monitor.capabilities.model_size()
     algo_cfg = cfg.get("rl_algorithm", "AUTO").upper()
