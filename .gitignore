@@ -9,5 +9,6 @@ models/*
 !models/autoencoders/.gitkeep
 !models/ensemble.py
 !models/__init__.py
+!models/export.py
 __pycache__/
 logs/

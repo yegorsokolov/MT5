@@ -77,7 +77,7 @@ def log_shap_importance(
 
 
 @log_exceptions
-def main(cfg: dict | None = None) -> float:
+def main(cfg: dict | None = None, export: bool = False) -> float:
     """Train LightGBM model and return weighted F1 score."""
     if cfg is None:
         cfg = load_config()
@@ -293,12 +293,23 @@ def main(cfg: dict | None = None) -> float:
     ):
         report_dir = Path(__file__).resolve().parent / "reports"
         log_shap_importance(final_pipe, X_train_final, features, report_dir)
+
+    if export and final_pipe is not None:
+        from models.export import export_lightgbm
+
+        sample = X.iloc[: min(len(X), 10)]
+        if "scaler" in final_pipe.named_steps:
+            sample = final_pipe.named_steps["scaler"].transform(sample)
+        clf = final_pipe.named_steps.get("clf", final_pipe)
+        export_lightgbm(clf, sample)
+
     return float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
+    parser.add_argument("--export", action="store_true", help="Export model to ONNX")
     args = parser.parse_args()
     if args.tune:
         from tuning.hyperopt import tune_lgbm
@@ -306,4 +317,4 @@ if __name__ == "__main__":
         cfg = load_config()
         tune_lgbm(cfg)
     else:
-        main()
+        main(export=args.export)
