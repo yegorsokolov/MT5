@@ -185,15 +185,15 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
                         chunk["Symbol"] = sym
                         dfs.append(chunk)
                 else:
-                    df_sym = load_history_config(sym, cfg, root)
+                    df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
                     df_sym["Symbol"] = sym
                     dfs.append(df_sym)
             else:
-                df_sym = load_history_config(sym, cfg, root)
+                df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
                 df_sym["Symbol"] = sym
                 dfs.append(df_sym)
 
-        df = make_features(pd.concat(dfs, ignore_index=True))
+        df = make_features(pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False))
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 

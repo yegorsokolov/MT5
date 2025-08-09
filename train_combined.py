@@ -42,11 +42,11 @@ def load_dataset(cfg: dict, root: Path) -> pd.DataFrame:
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
     for sym in symbols:
-        df_sym = load_history_config(sym, cfg, root)
+        df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
         df_sym["Symbol"] = sym
         dfs.append(df_sym)
 
-    df = make_features(pd.concat(dfs, ignore_index=True))
+    df = make_features(pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False))
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
     return df
