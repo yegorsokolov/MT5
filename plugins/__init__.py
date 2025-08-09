@@ -8,6 +8,8 @@ and continue.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from typing import Any, Callable, List
 
 from log_utils import setup_logging
 
@@ -15,23 +17,40 @@ from log_utils import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-FEATURE_PLUGINS: list = []
-MODEL_PLUGINS: list = []
-RISK_CHECKS: list = []
+
+@dataclass
+class PluginSpec:
+    """Metadata about a registered plugin.
+
+    The ``plugin`` attribute stores the actual callable or object that
+    implements the plugin. ``PluginSpec`` implements ``__call__`` so existing
+    code that expects a callable continues to work transparently.
+    """
+
+    name: str
+    plugin: Callable[..., Any]
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - thin wrapper
+        return self.plugin(*args, **kwargs)
 
 
-def register_feature(func):
-    FEATURE_PLUGINS.append(func)
+FEATURE_PLUGINS: List[PluginSpec] = []
+MODEL_PLUGINS: List[PluginSpec] = []
+RISK_CHECKS: List[PluginSpec] = []
+
+
+def register_feature(func: Callable[..., Any]) -> Callable[..., Any]:
+    FEATURE_PLUGINS.append(PluginSpec(name=getattr(func, "__name__", str(func)), plugin=func))
     return func
 
 
-def register_model(obj):
-    MODEL_PLUGINS.append(obj)
+def register_model(obj: Callable[..., Any]) -> Callable[..., Any]:
+    MODEL_PLUGINS.append(PluginSpec(name=getattr(obj, "__name__", str(obj)), plugin=obj))
     return obj
 
 
-def register_risk_check(func):
-    RISK_CHECKS.append(func)
+def register_risk_check(func: Callable[..., Any]) -> Callable[..., Any]:
+    RISK_CHECKS.append(PluginSpec(name=getattr(func, "__name__", str(func)), plugin=func))
     return func
 
 # Import built-in plugins so registration side effects occur
@@ -67,4 +86,5 @@ __all__ = [
     "register_feature",
     "register_model",
     "register_risk_check",
+    "PluginSpec",
 ]
