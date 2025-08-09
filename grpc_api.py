@@ -7,6 +7,7 @@ from google.protobuf import empty_pb2
 
 import remote_api as ra
 from proto import management_pb2, management_pb2_grpc
+from risk_manager import risk_manager
 
 
 class ManagementServicer(management_pb2_grpc.ManagementServiceServicer):
@@ -73,6 +74,16 @@ class ManagementServicer(management_pb2_grpc.ManagementServiceServicer):
         except HTTPException as exc:
             await context.abort(grpc.StatusCode(exc.status_code), exc.detail)
         return management_pb2.StatusResponse(status=data["status"])
+
+    async def GetRiskStatus(self, request, context):
+        await self._authorize(context)
+        data = risk_manager.status()
+        return management_pb2.RiskStatus(
+            exposure=data["exposure"],
+            daily_loss=data["daily_loss"],
+            var=data["var"],
+            trading_halted=data["trading_halted"],
+        )
 
 
 BASE_DIR = Path(__file__).resolve().parent

@@ -145,3 +145,27 @@ async def test_status_and_logs(tmp_path):
         )
 
     await server.stop(None)
+
+
+@pytest.mark.asyncio
+async def test_get_risk_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAX_PORTFOLIO_DRAWDOWN", "100")
+    ra, grpc_mod, _ = load_grpc(tmp_path / "app.log")
+    import risk_manager as rm_mod
+    rm_mod.risk_manager.reset()
+    rm_mod.risk_manager.update("b1", -60)
+    rm_mod.risk_manager.update("b2", -50)
+    server, port = await start_server(grpc_mod)
+
+    cert_dir = Path(__file__).resolve().parents[1] / "certs"
+    creds = grpc.ssl_channel_credentials(
+        root_certificates=(cert_dir / "ca.crt").read_bytes()
+    )
+    async with grpc.aio.secure_channel(f"localhost:{port}", creds) as channel:
+        stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
+        md = (("x-api-key", "token"),)
+        status = await stub.GetRiskStatus(grpc_mod.empty_pb2.Empty(), metadata=md)
+        assert status.trading_halted is True
+        assert status.daily_loss == -110
+
+    await server.stop(None)
