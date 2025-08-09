@@ -123,16 +123,19 @@ def load_history_mt5(symbol: str, start: dt.datetime, end: dt.datetime) -> pd.Da
     return df
 
 
-def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
+def load_history_config(
+    sym: str, cfg: dict, root: Path, validate: bool = False
+) -> pd.DataFrame:
     """Load history for ``sym`` using local files, URLs or APIs."""
+
     csv_path = root / "data" / f"{sym}_history.csv"
     pq_path = root / "data" / f"{sym}_history.parquet"
     if pq_path.exists():
         logger.info("Loading history for %s from %s", sym, pq_path)
-        return load_history_parquet(pq_path)
+        return load_history_parquet(pq_path, validate=validate)
     if csv_path.exists():
         logger.info("Loading history for %s from %s", sym, csv_path)
-        return load_history(csv_path)
+        return load_history(csv_path, validate=validate)
 
     api_cfg = (cfg.get("api_history") or {}).get(sym)
     if api_cfg:
@@ -144,6 +147,10 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
             df = load_history_mt5(sym, start, end)
         else:
             raise ValueError(f"Unknown history provider {provider}")
+        if validate:
+            from .validators import TICK_SCHEMA
+
+            TICK_SCHEMA.validate(df, lazy=True)
         save_history_parquet(df, pq_path)
         _record_data_version(pq_path, sym)
         return df
@@ -152,6 +159,10 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
     if urls:
         logger.info("Downloading history for %s from URLs", sym)
         df = load_history_from_urls(urls)
+        if validate:
+            from .validators import TICK_SCHEMA
+
+            TICK_SCHEMA.validate(df, lazy=True)
         save_history_parquet(df, pq_path)
         _record_data_version(pq_path, sym)
         return df
@@ -159,22 +170,48 @@ def load_history_config(sym: str, cfg: dict, root: Path) -> pd.DataFrame:
     raise FileNotFoundError(f"No history found for {sym} and no data source configured")
 
 
-def load_history(path: Path) -> pd.DataFrame:
-    """Load historical tick data from CSV."""
+def load_history(path: Path, validate: bool = False) -> pd.DataFrame:
+    """Load historical tick data from CSV.
+
+    Parameters
+    ----------
+    path : Path
+        CSV file path.
+    validate : bool, optional
+        If True, validate the resulting dataframe against ``TICK_SCHEMA``.
+    """
+
     logger.info("Loading CSV history from %s", path)
     df = pd.read_csv(path)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
+    if validate:
+        from .validators import TICK_SCHEMA
+
+        TICK_SCHEMA.validate(df, lazy=True)
     logger.debug("Loaded %d rows from CSV", len(df))
     _record_data_version(path)
     return df
 
 
-def load_history_parquet(path: Path) -> pd.DataFrame:
-    """Load historical tick data stored in a Parquet file."""
+def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
+    """Load historical tick data stored in a Parquet file.
+
+    Parameters
+    ----------
+    path : Path
+        Parquet file path.
+    validate : bool, optional
+        If True, validate the resulting dataframe against ``TICK_SCHEMA``.
+    """
+
     logger.info("Loading Parquet history from %s", path)
     df = pd.read_parquet(path)
     if "Timestamp" in df.columns:
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
+    if validate:
+        from .validators import TICK_SCHEMA
+
+        TICK_SCHEMA.validate(df, lazy=True)
     logger.debug("Loaded %d rows from Parquet", len(df))
     _record_data_version(path)
     return df
