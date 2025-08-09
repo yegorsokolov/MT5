@@ -4,6 +4,7 @@ from pathlib import Path
 import random
 import json
 import logging
+import argparse
 import joblib
 import pandas as pd
 from sklearn.metrics import classification_report
@@ -15,6 +16,7 @@ import mlflow
 
 from log_utils import setup_logging, log_exceptions, LOG_DIR
 import numpy as np
+
 try:
     import shap
 except Exception:  # noqa: E722
@@ -75,8 +77,10 @@ def log_shap_importance(
 
 
 @log_exceptions
-def main():
-    cfg = load_config()
+def main(cfg: dict | None = None) -> float:
+    """Train LightGBM model and return weighted F1 score."""
+    if cfg is None:
+        cfg = load_config()
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
@@ -96,11 +100,15 @@ def main():
                         chunk["Symbol"] = sym
                         all_dfs.append(chunk)
                 else:
-                    df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
+                    df_sym = load_history_config(
+                        sym, cfg, root, validate=cfg.get("validate", False)
+                    )
                     df_sym["Symbol"] = sym
                     all_dfs.append(df_sym)
             else:
-                df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
+                df_sym = load_history_config(
+                    sym, cfg, root, validate=cfg.get("validate", False)
+                )
                 df_sym["Symbol"] = sym
                 all_dfs.append(df_sym)
 
@@ -108,9 +116,7 @@ def main():
         save_history_parquet(df, root / "data" / "history.parquet")
 
         df = make_features(df, validate=cfg.get("validate", False))
-        df = periodic_reclassification(
-            df, step=cfg.get("regime_reclass_period", 500)
-        )
+        df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
@@ -164,7 +170,9 @@ def main():
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        if cfg.get("use_data_augmentation", False) or cfg.get("use_diffusion_aug", False):
+        if cfg.get("use_data_augmentation", False) or cfg.get(
+            "use_diffusion_aug", False
+        ):
             fname = (
                 "synthetic_sequences_diffusion.npz"
                 if cfg.get("use_diffusion_aug", False)
@@ -178,7 +186,12 @@ def main():
                 df_aug = pd.DataFrame(X_aug, columns=features)
                 X_train = pd.concat([X_train, df_aug], ignore_index=True)
                 y_train = pd.concat(
-                    [y_train, pd.Series(y_aug, index=range(len(y_train), len(y_train) + len(y_aug)))],
+                    [
+                        y_train,
+                        pd.Series(
+                            y_aug, index=range(len(y_train), len(y_train) + len(y_aug))
+                        ),
+                    ],
                     ignore_index=True,
                 )
 
@@ -208,7 +221,9 @@ def main():
         preds = pipe.predict(X_val)
         report = classification_report(y_val, preds, output_dict=True)
         logger.info("Fold %d\n%s", fold, classification_report(y_val, preds))
-        mlflow.log_metric(f"fold_{fold}_f1_weighted", report["weighted avg"]["f1-score"])
+        mlflow.log_metric(
+            f"fold_{fold}_f1_weighted", report["weighted avg"]["f1-score"]
+        )
 
         all_preds.extend(preds)
         all_true.extend(y_val)
@@ -278,7 +293,17 @@ def main():
     ):
         report_dir = Path(__file__).resolve().parent / "reports"
         log_shap_importance(final_pipe, X_train_final, features, report_dir)
+    return float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
+    args = parser.parse_args()
+    if args.tune:
+        from tuning.hyperopt import tune_lgbm
+
+        cfg = load_config()
+        tune_lgbm(cfg)
+    else:
+        main()

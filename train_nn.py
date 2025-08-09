@@ -115,7 +115,9 @@ class TransformerModel(torch.nn.Module):
         encoder_layer = torch.nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, batch_first=True
         )
-        self.transformer = torch.nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer = torch.nn.TransformerEncoder(
+            encoder_layer, num_layers=num_layers
+        )
         self.fc = torch.nn.Linear(d_model, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -181,7 +183,9 @@ def log_shap_importance(
 
 
 @log_exceptions
-def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
+def main(
+    rank: int = 0, world_size: int | None = None, cfg: dict | None = None
+) -> float:
     if cfg is None:
         cfg = load_config()
     if world_size is None:
@@ -225,39 +229,45 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
                         chunk["Symbol"] = sym
                         dfs.append(chunk)
                 else:
-                    df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
+                    df_sym = load_history_config(
+                        sym, cfg, root, validate=cfg.get("validate", False)
+                    )
                     df_sym["Symbol"] = sym
                     dfs.append(df_sym)
             else:
-                df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
+                df_sym = load_history_config(
+                    sym, cfg, root, validate=cfg.get("validate", False)
+                )
                 df_sym["Symbol"] = sym
                 dfs.append(df_sym)
 
-        df = make_features(pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False))
+        df = make_features(
+            pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False)
+        )
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
         train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
 
         features = [
-        "return",
-        "ma_5",
-        "ma_10",
-        "ma_30",
-        "ma_60",
-        "volatility_30",
-        "spread",
-        "rsi_14",
-        "news_sentiment",
-        "market_regime",
-    ]
+            "return",
+            "ma_5",
+            "ma_10",
+            "ma_30",
+            "ma_60",
+            "volatility_30",
+            "spread",
+            "rsi_14",
+            "news_sentiment",
+            "market_regime",
+        ]
         features += [
-        c
-        for c in df.columns
-        if c.startswith("cross_corr_")
-        or c.startswith("factor_")
-        or c.startswith("cross_mom_")
-    ]
+            c
+            for c in df.columns
+            if c.startswith("cross_corr_")
+            or c.startswith("factor_")
+            or c.startswith("cross_mom_")
+        ]
         if "volume_ratio" in df.columns:
             features.extend(["volume_ratio", "volume_imbalance"])
         if "SymbolCode" in df.columns:
@@ -274,7 +284,9 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             random_state=seed,
         )
 
-        if cfg.get("use_data_augmentation", False) or cfg.get("use_diffusion_aug", False):
+        if cfg.get("use_data_augmentation", False) or cfg.get(
+            "use_diffusion_aug", False
+        ):
             fname = (
                 "synthetic_sequences_diffusion.npz"
                 if cfg.get("use_diffusion_aug", False)
@@ -290,7 +302,9 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
 
         num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
         num_regimes = (
-            int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
+            int(df["market_regime"].nunique())
+            if "market_regime" in df.columns
+            else None
         )
         model = TransformerModel(
             len(features),
@@ -322,7 +336,9 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
             torch.tensor(y_test, dtype=torch.float32),
         )
         train_sampler = (
-            DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
+            DistributedSampler(
+                train_ds, num_replicas=world_size, rank=rank, shuffle=True
+            )
             if world_size > 1
             else None
         )
@@ -401,7 +417,11 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
                     best_val_loss = val_loss
                     epochs_no_improve = 0
                     joblib.dump(
-                        model.module.state_dict() if isinstance(model, DDP) else model.state_dict(),
+                        (
+                            model.module.state_dict()
+                            if isinstance(model, DDP)
+                            else model.state_dict()
+                        ),
                         model_path,
                     )
                     logger.info("Validation improved; model saved.")
@@ -410,7 +430,11 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
 
                 save_checkpoint(
                     {
-                        "model": model.module.state_dict() if isinstance(model, DDP) else model.state_dict(),
+                        "model": (
+                            model.module.state_dict()
+                            if isinstance(model, DDP)
+                            else model.state_dict()
+                        ),
                         "optimizer": optim.state_dict(),
                         "metrics": {"val_loss": val_loss, "val_accuracy": val_acc},
                         "best_val_loss": best_val_loss,
@@ -426,6 +450,7 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
                 logger.info("Early stopping at epoch %s", epoch + 1)
                 break
 
+        acc = 0.0
         if rank == 0:
             model.load_state_dict(joblib.load(model_path))
             model.eval()
@@ -461,23 +486,34 @@ def main(rank: int = 0, world_size: int | None = None, cfg: dict | None = None):
     if world_size > 1:
         dist.destroy_process_group()
 
+    return acc
 
-def launch(cfg: dict | None = None) -> None:
+
+def launch(cfg: dict | None = None) -> float:
     if cfg is None:
         cfg = load_config()
     use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
     world_size = torch.cuda.device_count()
     if use_ddp and world_size > 1:
         mp.spawn(main, args=(world_size, cfg), nprocs=world_size)
+        return 0.0
     else:
-        main(0, 1, cfg)
+        return main(0, 1, cfg)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ddp", action="store_true", help="Enable DistributedDataParallel")
+    parser.add_argument(
+        "--ddp", action="store_true", help="Enable DistributedDataParallel"
+    )
+    parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
         cfg["ddp"] = True
-    launch(cfg)
+    if args.tune:
+        from tuning.hyperopt import tune_transformer
+
+        tune_transformer(cfg)
+    else:
+        launch(cfg)
