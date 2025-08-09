@@ -80,18 +80,18 @@ def main():
                         chunk["Symbol"] = sym
                         all_dfs.append(chunk)
                 else:
-                    df_sym = load_history_config(sym, cfg, root)
+                    df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
                     df_sym["Symbol"] = sym
                     all_dfs.append(df_sym)
             else:
-                df_sym = load_history_config(sym, cfg, root)
+                df_sym = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
                 df_sym["Symbol"] = sym
                 all_dfs.append(df_sym)
 
         df = pd.concat(all_dfs, ignore_index=True)
         save_history_parquet(df, root / "data" / "history.parquet")
 
-        df = make_features(df)
+        df = make_features(df, validate=cfg.get("validate", False))
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 

@@ -266,8 +266,17 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def make_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add common technical features used by the ML model."""
+def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
+    """Add common technical features used by the ML model.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input tick dataframe.
+    validate : bool, optional
+        If True, validate the engineered features against ``FEATURE_SCHEMA``.
+    """
+
     logger.info("Creating features for dataframe with %d rows", len(df))
 
     hist_hash = hashlib.md5(
@@ -522,7 +531,10 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Finished feature engineering")
 
     df = optimize_dtypes(df)
+    if validate:
+        from .validators import FEATURE_SCHEMA
 
+        FEATURE_SCHEMA.validate(df, lazy=True)
     if use_cache:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         conn = duckdb.connect(cache_path.as_posix())

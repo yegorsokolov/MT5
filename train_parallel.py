@@ -38,9 +38,9 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
-    df = load_history_config(sym, cfg, root)
+    df = load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
     df["Symbol"] = sym
-    df = make_features(df)
+    df = make_features(df, validate=cfg.get("validate", False))
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
     train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
