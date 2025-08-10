@@ -548,6 +548,13 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         else:
             df = _feat(df)
 
+    timeframes = cfg.get("multi_timeframes", [])
+    if timeframes:
+        from .multitimeframe import aggregate_timeframes
+
+        agg_df = aggregate_timeframes(df, timeframes)
+        df = df.merge(agg_df, on="Timestamp", how="left")
+
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
     df = add_index_features(df)
