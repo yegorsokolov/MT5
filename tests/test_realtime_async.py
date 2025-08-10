@@ -32,6 +32,8 @@ sys.modules['metrics'] = types.SimpleNamespace(
     RECONNECT_COUNT=types.SimpleNamespace(inc=lambda: None),
     ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
     TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
+    FEATURE_ANOMALIES=types.SimpleNamespace(inc=lambda: None),
+    RESOURCE_RESTARTS=types.SimpleNamespace(inc=lambda: None),
 )
 sys.modules['models'] = types.SimpleNamespace(model_store=types.SimpleNamespace(load_model=lambda *a, **k: (None, None)))
 import importlib.machinery
@@ -39,6 +41,9 @@ sys.modules['mlflow'] = types.SimpleNamespace(
     __loader__=True, __spec__=importlib.machinery.ModuleSpec('mlflow', loader=None)
 )
 sys.modules['prometheus_client'] = types.SimpleNamespace(Counter=lambda *a, **k: None, Gauge=lambda *a, **k: None)
+sys.modules['analysis.anomaly_detector'] = types.SimpleNamespace(
+    detect_anomalies=lambda df, quarantine_path=None, counter=None: (df, [])
+)
 
 
 # Create fake MetaTrader5 module before importing realtime_train
