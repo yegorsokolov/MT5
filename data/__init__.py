@@ -21,6 +21,7 @@ from .features import (
     train_test_split,
     make_sequence_arrays,
 )
+from .multitimeframe import aggregate_timeframes
 
 __all__ = [
     "get_events",
@@ -35,6 +36,7 @@ __all__ = [
     "add_index_features",
     "add_economic_calendar_features",
     "add_news_sentiment_features",
+    "aggregate_timeframes",
     "make_features",
     "compute_rsi",
     "ma_cross_signal",

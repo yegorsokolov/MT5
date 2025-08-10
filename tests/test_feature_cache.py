@@ -13,6 +13,7 @@ def test_make_features_uses_cache(monkeypatch, tmp_path):
         "use_atr": False,
         "use_donchian": False,
         "use_dask": False,
+        "multi_timeframes": ["15min", "1H"],
     }
 
     class _Mon:
@@ -69,6 +70,10 @@ def test_make_features_uses_cache(monkeypatch, tmp_path):
     cache_file = tmp_path / "feature_store.duckdb"
     assert cache_file.exists()
 
+    # multi-timeframe features should be present
+    assert "mid_15m_mean" in first.columns
+    assert "mid_1h_mean" in first.columns
+
     # numeric columns should be downcast from 64-bit types
     num_cols = first.select_dtypes(include="number").columns
     assert not any(first[c].dtype == np.float64 for c in num_cols)
@@ -95,6 +100,8 @@ def test_make_features_uses_cache(monkeypatch, tmp_path):
     second_time = time.time() - t1
     assert second_time < first_time
     assert any("Loading features from cache" in m for m in logs)
+    assert "mid_15m_mean" in second.columns
+    assert "mid_1h_mean" in second.columns
     pd.testing.assert_frame_equal(
         first.reset_index(drop=True),
         second.reset_index(drop=True),
