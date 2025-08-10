@@ -3,13 +3,37 @@ import time
 import types
 import sys
 from pathlib import Path
+import os
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+os.environ.setdefault("DISABLE_ENV_CHECK", "1")
 
 # stub git module for realtime_train
 sys.modules['git'] = types.SimpleNamespace(Repo=lambda *args, **kwargs: None)
 sys.modules['yaml'] = types.SimpleNamespace(safe_load=lambda *args, **kwargs: {})
+sys.modules['utils'] = types.SimpleNamespace(load_config=lambda: {})
+data_pkg = types.ModuleType('data')
+data_pkg.features = types.SimpleNamespace(make_features=lambda df: df)
+data_pkg.sanitize = types.SimpleNamespace(sanitize_ticks=lambda df: df)
+data_pkg.trade_log = types.SimpleNamespace(
+    TradeLog=lambda *a, **k: types.SimpleNamespace(
+        record_order=lambda *a, **k: None,
+        record_fill=lambda *a, **k: None,
+        sync_mt5_positions=lambda *a, **k: None,
+    )
+)
+sys.modules['data'] = data_pkg
+sys.modules['data.features'] = data_pkg.features
+sys.modules['data.sanitize'] = data_pkg.sanitize
+sys.modules['data.trade_log'] = data_pkg.trade_log
+sys.modules['signal_queue'] = types.SimpleNamespace(get_signal_backend=lambda cfg: None)
+sys.modules['metrics'] = types.SimpleNamespace(
+    RECONNECT_COUNT=types.SimpleNamespace(inc=lambda: None),
+    ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
+    TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
+)
+sys.modules['models'] = types.SimpleNamespace(model_store=types.SimpleNamespace(load_model=lambda *a, **k: (None, None)))
 import importlib.machinery
 sys.modules['mlflow'] = types.SimpleNamespace(
     __loader__=True, __spec__=importlib.machinery.ModuleSpec('mlflow', loader=None)
@@ -46,8 +70,7 @@ def fake_make_features(df):
     return df
 
 
-@pytest.mark.asyncio
-async def test_pipeline_parallel(monkeypatch):
+def test_pipeline_parallel(monkeypatch):
     monkeypatch.setattr(rt, 'make_features', fake_make_features)
     queue = FakeQueue()
 
@@ -59,10 +82,12 @@ async def test_pipeline_parallel(monkeypatch):
         feats = await rt.generate_features(ticks)
         await rt.dispatch_signals(queue, feats)
 
+    async def run():
+        await asyncio.gather(pipeline('EURUSD'), pipeline('GBPUSD'))
+
     start = time.perf_counter()
-    await asyncio.gather(pipeline('EURUSD'), pipeline('GBPUSD'))
+    asyncio.run(run())
     elapsed = time.perf_counter() - start
-    # sequential would be about 0.6s; concurrent should be under 0.5s
     assert elapsed < 0.5
     assert len(queue.published) == 2
 
