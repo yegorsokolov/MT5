@@ -16,6 +16,7 @@ from sklearn.decomposition import PCA
 from .events import get_events
 from .feature_store import FeatureStore
 from .versioning import compute_hash
+from .macro_features import load_macro_series
 
 try:  # optional plugin system
     from plugins import FEATURE_PLUGINS  # type: ignore
@@ -559,6 +560,27 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     df = add_news_sentiment_features(df)
     df = add_index_features(df)
     df = add_cross_asset_features(df)
+
+    macro_symbols = cfg.get("macro_series", [])
+    if macro_symbols:
+        macro_df = load_macro_series(macro_symbols)
+        if not macro_df.empty:
+            macro_df = macro_df.sort_values("Date").rename(columns={"Date": "macro_date"})
+            df = df.sort_values("Timestamp")
+            df = pd.merge_asof(
+                df,
+                macro_df,
+                left_on="Timestamp",
+                right_on="macro_date",
+                direction="backward",
+            )
+            df = df.drop(columns=["macro_date"])
+            rename_map = {sym: f"macro_{sym}" for sym in macro_symbols if sym in macro_df.columns}
+            df = df.rename(columns=rename_map)
+        for sym in macro_symbols:
+            col = f"macro_{sym}"
+            if col not in df.columns:
+                df[col] = np.nan
 
     if adjacency_matrices is None:
         if "Symbol" in df.columns:
