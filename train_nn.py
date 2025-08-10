@@ -12,12 +12,14 @@ import mlflow
 import numpy as np
 import pandas as pd
 import torch
+import json
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.checkpoint import checkpoint
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
 from models import model_store
+from analysis.feature_selector import select_features
 
 try:
     import shap
@@ -282,6 +284,11 @@ def main(
             features.extend(["volume_ratio", "volume_imbalance"])
         if "SymbolCode" in df.columns:
             features.append("SymbolCode")
+
+        y_full = (df["return"].shift(-1) > 0).astype(int)
+        features = select_features(df[features], y_full)
+        feat_path = root / "selected_features.json"
+        feat_path.write_text(json.dumps(features))
 
         seq_len = cfg.get("sequence_length", 50)
         X_train, y_train = make_sequence_arrays(train_df, features, seq_len)
