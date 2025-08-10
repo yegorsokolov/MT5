@@ -8,11 +8,23 @@ import logging
 import numpy as np
 import pandas as pd
 import joblib
-import MetaTrader5 as mt5
 from git import Repo
 
+from brokers import connection_manager as conn_mgr
+import MetaTrader5 as mt5  # type: ignore
+
 from utils import load_config
-from utils.resource_monitor import ResourceMonitor
+try:  # allow tests to stub out utils
+    from utils.resource_monitor import ResourceMonitor
+except Exception:  # pragma: no cover - fallback when utils is stubbed
+    class ResourceMonitor:  # type: ignore
+        def __init__(self, *a, **k):
+            self.max_rss_mb = None
+            self.max_cpu_pct = None
+
+        def start(self) -> None:  # noqa: D401 - trivial
+            """No-op start when resource monitor is unavailable."""
+            return
 from data.features import make_features
 import duckdb
 from log_utils import setup_logging, log_exceptions
@@ -25,6 +37,9 @@ from data.trade_log import TradeLog
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# initialize connection manager with primary MetaTrader5 broker
+conn_mgr.init([mt5])
 
 MAX_RSS_MB = float(os.getenv("MAX_RSS_MB", "0") or 0)
 MAX_CPU_PCT = float(os.getenv("MAX_CPU_PCT", "0") or 0)
@@ -40,17 +55,18 @@ async def _handle_resource_breach(reason: str) -> None:
 
 
 async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
-    """Fetch recent tick data from MetaTrader5 asynchronously."""
+    """Fetch recent tick data from the active broker asynchronously."""
     for attempt in range(retries):
+        broker = conn_mgr.get_active_broker()
         ticks = await asyncio.to_thread(
-            mt5.copy_ticks_from, symbol, int(time.time()) - n, n, mt5.COPY_TICKS_ALL
+            broker.copy_ticks_from, symbol, int(time.time()) - n, n, broker.COPY_TICKS_ALL
         )
         if ticks is None:
             logger.warning(
-                "Failed to fetch ticks for %s on attempt %d, reinitializing", symbol, attempt + 1
+                "Failed to fetch ticks for %s on attempt %d, attempting failover", symbol, attempt + 1
             )
             RECONNECT_COUNT.inc()
-            await asyncio.to_thread(mt5.initialize)
+            conn_mgr.failover()
             await asyncio.sleep(1)
             continue
         if len(ticks) == 0:
@@ -112,12 +128,10 @@ async def train_realtime():
 
     repo = Repo(repo_path)
 
-    if not await asyncio.to_thread(mt5.initialize):
-        raise RuntimeError("Failed to initialize MT5")
-
-    positions_get = getattr(mt5, "positions_get", lambda: [])
-    mt5_positions = await asyncio.to_thread(positions_get)
-    trade_log.sync_mt5_positions(mt5_positions)
+    broker = conn_mgr.get_active_broker()
+    positions_get = getattr(broker, "positions_get", lambda: [])
+    broker_positions = await asyncio.to_thread(positions_get)
+    trade_log.sync_mt5_positions(broker_positions)
 
     symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
@@ -185,9 +199,9 @@ async def train_realtime():
             empty_iters += 1
             if empty_iters >= 3:
                 backoff = min(300, 60 * empty_iters)
-                logger.warning("No ticks received for %d iterations, reconnecting", empty_iters)
+                logger.warning("No ticks received for %d iterations, attempting failover", empty_iters)
                 RECONNECT_COUNT.inc()
-                await asyncio.to_thread(mt5.initialize)
+                conn_mgr.failover()
                 await asyncio.sleep(backoff)
                 empty_iters = 0
             else:
