@@ -267,6 +267,61 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_cross_asset_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute cross-asset statistics between symbol pairs.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing at least ``Timestamp``, ``Symbol``, ``mid`` and
+        ``return`` columns.
+
+    Returns
+    -------
+    pd.DataFrame
+        Input dataframe with additional cross-asset feature columns. Column
+        names encode both symbols, e.g. ``EURUSD_GBPUSD_corr_30``.
+    """
+
+    if "Symbol" not in df.columns or df["Symbol"].nunique() < 2:
+        return df
+
+    pivot_mid = df.pivot_table(index="Timestamp", columns="Symbol", values="mid")
+    pivot_ret = df.pivot_table(index="Timestamp", columns="Symbol", values="return")
+
+    feat: Dict[str, pd.Series] = {}
+    symbols = list(pivot_mid.columns)
+    for i, s1 in enumerate(symbols):
+        for s2 in symbols[i + 1 :]:
+            # Rolling correlation of returns
+            corr = pivot_ret[s1].rolling(30).corr(pivot_ret[s2])
+            feat[f"{s1}_{s2}_corr_30"] = corr
+
+            # Spread between mid prices
+            spread = pivot_mid[s1] - pivot_mid[s2]
+            feat[f"{s1}_{s2}_spread"] = spread
+
+            # Cointegration p-value (constant across time)
+            try:
+                from statsmodels.tsa.stattools import coint  # type: ignore
+
+                aligned = pivot_mid[[s1, s2]].dropna()
+                if len(aligned) > 30:
+                    _, pval, _ = coint(aligned[s1], aligned[s2])
+                else:
+                    pval = np.nan
+            except Exception:  # pragma: no cover - optional dependency
+                pval = np.nan
+            feat[f"{s1}_{s2}_coint_p"] = pd.Series(pval, index=pivot_mid.index)
+
+    if not feat:
+        return df
+
+    feat_df = pd.DataFrame(feat, index=pivot_mid.index).reset_index()
+    df = df.merge(feat_df, on="Timestamp", how="left")
+    return df
+
+
 def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """Add common technical features used by the ML model.
 
@@ -496,6 +551,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
     df = add_index_features(df)
+    df = add_cross_asset_features(df)
 
     if adjacency_matrices is None:
         if "Symbol" in df.columns:
@@ -617,6 +673,7 @@ __all__ = [
     "add_index_features",
     "add_economic_calendar_features",
     "add_news_sentiment_features",
+    "add_cross_asset_features",
     "make_features",
     "compute_rsi",
     "ma_cross_signal",

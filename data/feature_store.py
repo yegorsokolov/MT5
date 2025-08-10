@@ -62,7 +62,7 @@ class FeatureStore:
             conn.close()
             return None
 
-        df = conn.execute(f"SELECT * FROM {table_name}").fetch_df()
+        df = conn.execute(f'SELECT * FROM "{table_name}"').fetch_df()
         conn.close()
         return df
 
@@ -85,9 +85,9 @@ class FeatureStore:
         )
         conn.execute("DELETE FROM metadata WHERE key = ?", [key])
         conn.execute("INSERT INTO metadata VALUES (?, ?)", [key, raw_hash])
-        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+        conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
         conn.register("feat_df", df)
-        conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM feat_df")
+        conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM feat_df')
         conn.close()
 
     # ------------------------------------------------------------------
@@ -103,7 +103,7 @@ class FeatureStore:
             "CREATE TABLE IF NOT EXISTS metadata(key VARCHAR PRIMARY KEY, raw_hash VARCHAR)"
         )
         conn.execute("DELETE FROM metadata WHERE key = ?", [key])
-        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+        conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
         conn.close()
 
 
