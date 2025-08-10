@@ -17,6 +17,7 @@ import duckdb
 from log_utils import setup_logging, log_exceptions
 from metrics import RECONNECT_COUNT
 from signal_queue import get_signal_backend
+from data.sanitize import sanitize_ticks
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
         df["BidVolume"] = df["Volume"]
         df["AskVolume"] = df["Volume"]
         df.drop(columns=["Volume"], inplace=True)
+        df = sanitize_ticks(df)
         return df
     return pd.DataFrame()
 
