@@ -12,7 +12,7 @@ from sklearn.metrics import classification_report
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
-import ray
+from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 
 from log_utils import setup_logging, log_exceptions
 
@@ -93,12 +93,12 @@ def main() -> None:
     random.seed(seed)
     np.random.seed(seed)
     root = Path(__file__).resolve().parent
-    ray.init(num_cpus=cfg.get("ray_num_cpus"))
+    ray_init(num_cpus=cfg.get("ray_num_cpus"))
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     futures = [train_symbol.remote(sym, cfg, root) for sym in symbols]
     for res in ray.get(futures):
         logger.info(res)
-    ray.shutdown()
+    ray_shutdown()
 
 
 if __name__ == "__main__":
