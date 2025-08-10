@@ -41,6 +41,7 @@ from data.features import make_features
 from state_manager import save_checkpoint, load_latest_checkpoint
 from analysis.regime_detection import periodic_reclassification
 from models import model_store
+from analysis.feature_selector import select_features
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -165,8 +166,12 @@ def main(
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
 
-    X = df[features]
     y = (df["return"].shift(-1) > 0).astype(int)
+    features = select_features(df[features], y)
+    feat_path = root / "selected_features.json"
+    feat_path.write_text(json.dumps(features))
+
+    X = df[features]
 
     if resume_online:
         batch_size = cfg.get("online_batch_size", 1000)
