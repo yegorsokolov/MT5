@@ -19,6 +19,7 @@ from metrics import RECONNECT_COUNT
 from signal_queue import get_signal_backend
 from data.sanitize import sanitize_ticks
 from models import model_store
+from data.trade_log import TradeLog
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ async def train_realtime():
     repo_path = Path(__file__).resolve().parent
     db_path = repo_path / "data" / "realtime.duckdb"
     model_path = repo_path / "model.joblib"
+    trade_log = TradeLog(repo_path / "data" / "trade_log.db")
 
     version_id = os.getenv("MODEL_VERSION_ID")
     if version_id:
@@ -92,6 +94,10 @@ async def train_realtime():
 
     if not await asyncio.to_thread(mt5.initialize):
         raise RuntimeError("Failed to initialize MT5")
+
+    positions_get = getattr(mt5, "positions_get", lambda: [])
+    mt5_positions = await asyncio.to_thread(positions_get)
+    trade_log.sync_mt5_positions(mt5_positions)
 
     symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
@@ -298,6 +304,22 @@ async def train_realtime():
         out = new_features[["Timestamp", "Symbol"]].copy()
         out["prob"] = probs[:, 1]
         await dispatch_signals(queue, out)
+
+        for rec in out.to_dict("records"):
+            sym_ticks = new_ticks[new_ticks["Symbol"] == rec["Symbol"]]
+            if sym_ticks.empty:
+                continue
+            price = float(sym_ticks["Bid"].iloc[-1])
+            side = "BUY" if rec["prob"] > 0.5 else "SELL"
+            order = {
+                "timestamp": rec["Timestamp"],
+                "symbol": rec["Symbol"],
+                "side": side,
+                "volume": 1.0,
+                "price": price,
+            }
+            order_id = trade_log.record_order(order)
+            trade_log.record_fill({**order, "order_id": order_id})
 
         returns = df["return"].dropna()
         from backtest import compute_metrics
