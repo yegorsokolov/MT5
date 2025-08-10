@@ -40,6 +40,7 @@ from data.history import (
 from data.features import make_features
 from state_manager import save_checkpoint, load_latest_checkpoint
 from analysis.regime_detection import periodic_reclassification
+from models import model_store
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -314,6 +315,12 @@ def main(
     mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
     mlflow.log_metric("f1_weighted", aggregate_report["weighted avg"]["f1-score"])
     mlflow.log_artifact(str(root / "model.joblib"))
+    version_id = model_store.save_model(
+        final_pipe,
+        cfg,
+        {"f1_weighted": aggregate_report["weighted avg"]["f1-score"]},
+    )
+    logger.info("Registered model version %s", version_id)
 
     # Train dedicated models for each market regime
     base_features = [f for f in features if f != "market_regime"]
