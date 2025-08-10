@@ -1,3 +1,4 @@
+import asyncio
 import time
 from pathlib import Path
 import os
@@ -21,15 +22,19 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
-    """Fetch recent tick data from MetaTrader5."""
+async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
+    """Fetch recent tick data from MetaTrader5 asynchronously."""
     for attempt in range(retries):
-        ticks = mt5.copy_ticks_from(symbol, int(time.time()) - n, n, mt5.COPY_TICKS_ALL)
+        ticks = await asyncio.to_thread(
+            mt5.copy_ticks_from, symbol, int(time.time()) - n, n, mt5.COPY_TICKS_ALL
+        )
         if ticks is None:
-            logger.warning("Failed to fetch ticks for %s on attempt %d, reinitializing", symbol, attempt + 1)
+            logger.warning(
+                "Failed to fetch ticks for %s on attempt %d, reinitializing", symbol, attempt + 1
+            )
             RECONNECT_COUNT.inc()
-            mt5.initialize()
-            time.sleep(1)
+            await asyncio.to_thread(mt5.initialize)
+            await asyncio.sleep(1)
             continue
         if len(ticks) == 0:
             return pd.DataFrame()
@@ -44,8 +49,22 @@ def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+async def generate_features(context: pd.DataFrame) -> pd.DataFrame:
+    """Asynchronously generate features from context data."""
+    if context.empty:
+        return pd.DataFrame()
+    return await asyncio.to_thread(make_features, context)
+
+
+async def dispatch_signals(queue, df: pd.DataFrame) -> None:
+    """Asynchronously dispatch signals to the provided queue."""
+    if queue is None or df.empty:
+        return
+    await asyncio.to_thread(queue.publish_dataframe, df)
+
+
 @log_exceptions
-def train_realtime():
+async def train_realtime():
     cfg = load_config()
     seed = cfg.get("seed", 42)
     random.seed(seed)
@@ -59,7 +78,7 @@ def train_realtime():
 
     repo = Repo(repo_path)
 
-    if not mt5.initialize():
+    if not await asyncio.to_thread(mt5.initialize):
         raise RuntimeError("Failed to initialize MT5")
 
     symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
@@ -111,8 +130,10 @@ def train_realtime():
     empty_iters = 0
     while True:
         tick_frames = []
-        for sym in symbols:
-            ticks = fetch_ticks(sym, 500)
+        fetch_results = await asyncio.gather(
+            *(fetch_ticks(sym, 500) for sym in symbols)
+        )
+        for sym, ticks in zip(symbols, fetch_results):
             if not ticks.empty:
                 ticks["Symbol"] = sym
                 tick_frames.append(ticks)
@@ -128,11 +149,11 @@ def train_realtime():
                 backoff = min(300, 60 * empty_iters)
                 logger.warning("No ticks received for %d iterations, reconnecting", empty_iters)
                 RECONNECT_COUNT.inc()
-                mt5.initialize()
-                time.sleep(backoff)
+                await asyncio.to_thread(mt5.initialize)
+                await asyncio.sleep(backoff)
                 empty_iters = 0
             else:
-                time.sleep(60)
+                await asyncio.sleep(60)
             continue
         else:
             empty_iters = 0
@@ -147,10 +168,17 @@ def train_realtime():
         )
         history = history.groupby("Symbol", as_index=False, group_keys=False).tail(window)
 
-        conn.register("new_ticks", new_ticks)
-        conn.execute("CREATE TABLE IF NOT EXISTS history AS SELECT * FROM new_ticks LIMIT 0")
-        conn.execute("INSERT INTO history SELECT * FROM new_ticks")
-        conn.execute(
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, conn.register, "new_ticks", new_ticks)
+        await loop.run_in_executor(
+            None,
+            conn.execute,
+            "CREATE TABLE IF NOT EXISTS history AS SELECT * FROM new_ticks LIMIT 0",
+        )
+        await loop.run_in_executor(None, conn.execute, "INSERT INTO history SELECT * FROM new_ticks")
+        await loop.run_in_executor(
+            None,
+            conn.execute,
             f"""
             DELETE FROM history
             WHERE rowid IN (
@@ -160,7 +188,7 @@ def train_realtime():
                     FROM history
                 ) t WHERE rn > {window}
             )
-            """
+            """,
         )
 
         # build context from rolling buffers for all symbols
@@ -168,7 +196,7 @@ def train_realtime():
         context = pd.concat(context_frames, ignore_index=True)
         context = context.drop_duplicates(subset=["Timestamp", "Symbol"], keep="last")
 
-        df = make_features(context)
+        df = await generate_features(context)
         new_features = df.merge(
             new_ticks[["Timestamp", "Symbol"]], on=["Timestamp", "Symbol"], how="inner"
         )
@@ -179,10 +207,16 @@ def train_realtime():
         )
         feature_df = feature_df.groupby("Symbol", as_index=False, group_keys=False).tail(window)
 
-        conn.register("new_feat", new_features)
-        conn.execute("CREATE TABLE IF NOT EXISTS features AS SELECT * FROM new_feat LIMIT 0")
-        conn.execute("INSERT INTO features SELECT * FROM new_feat")
-        conn.execute(
+        await loop.run_in_executor(None, conn.register, "new_feat", new_features)
+        await loop.run_in_executor(
+            None,
+            conn.execute,
+            "CREATE TABLE IF NOT EXISTS features AS SELECT * FROM new_feat LIMIT 0",
+        )
+        await loop.run_in_executor(None, conn.execute, "INSERT INTO features SELECT * FROM new_feat")
+        await loop.run_in_executor(
+            None,
+            conn.execute,
             f"""
             DELETE FROM features
             WHERE rowid IN (
@@ -192,11 +226,11 @@ def train_realtime():
                     FROM features
                 ) t WHERE rn > {window}
             )
-            """
+            """,
         )
 
         if feature_df.empty:
-            time.sleep(60)
+            await asyncio.sleep(60)
             continue
 
         df = feature_df.copy()
@@ -244,8 +278,14 @@ def train_realtime():
         steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
         pipe = Pipeline(steps)
 
-        pipe.fit(X, y)
+        await asyncio.to_thread(pipe.fit, X, y)
         joblib.dump(pipe, model_path)
+
+        # dispatch model predictions for the newly generated features
+        probs = await asyncio.to_thread(pipe.predict_proba, new_features[features])
+        out = new_features[["Timestamp", "Symbol"]].copy()
+        out["prob"] = probs[:, 1]
+        await dispatch_signals(queue, out)
 
         returns = df["return"].dropna()
         from backtest import compute_metrics
@@ -260,7 +300,7 @@ def train_realtime():
             logger.error("Failed to broadcast metrics: %s", exc)
 
         # commit updates
-        conn.execute("checkpoint")
+        await loop.run_in_executor(None, conn.execute, "checkpoint")
         repo.git.add(db_path.as_posix())
         repo.git.add(model_path.as_posix())
         repo.index.commit("Update model with realtime data")
@@ -269,8 +309,8 @@ def train_realtime():
         except Exception as e:
             logger.info("Git push failed: %s", e)
 
-        time.sleep(300)
+        await asyncio.sleep(300)
 
 
 if __name__ == "__main__":
-    train_realtime()
+    asyncio.run(train_realtime())
