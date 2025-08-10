@@ -18,6 +18,12 @@ import mlflow
 from log_utils import setup_logging, log_exceptions, LOG_DIR
 import numpy as np
 from risk.position_sizer import PositionSizer
+from ray_utils import (
+    init as ray_init,
+    shutdown as ray_shutdown,
+    cluster_available,
+    submit,
+)
 
 try:
     import shap
@@ -364,6 +370,32 @@ def main(
     return float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
 
 
+def launch(
+    cfg: dict | None = None,
+    export: bool = False,
+    resume_online: bool = False,
+) -> list[float]:
+    """Launch training locally or across a Ray cluster."""
+    if cfg is None:
+        cfg = load_config()
+    if cluster_available():
+        seeds = cfg.get("seeds", [cfg.get("seed", 42)])
+        results = []
+        for s in seeds:
+            cfg_s = dict(cfg)
+            cfg_s["seed"] = s
+            results.append(
+                submit(
+                    main,
+                    cfg_s,
+                    export=export,
+                    resume_online=resume_online,
+                )
+            )
+        return results
+    return [main(cfg, export=export, resume_online=resume_online)]
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
@@ -374,10 +406,14 @@ if __name__ == "__main__":
         help="Resume incremental training from the latest checkpoint",
     )
     args = parser.parse_args()
-    if args.tune:
-        from tuning.hyperopt import tune_lgbm
+    ray_init()
+    try:
+        if args.tune:
+            from tuning.hyperopt import tune_lgbm
 
-        cfg = load_config()
-        tune_lgbm(cfg)
-    else:
-        main(export=args.export, resume_online=args.resume_online)
+            cfg = load_config()
+            tune_lgbm(cfg)
+        else:
+            launch(export=args.export, resume_online=args.resume_online)
+    finally:
+        ray_shutdown()
