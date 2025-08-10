@@ -16,3 +16,4 @@ DIVERSIFICATION_RATIO = Gauge('diversification_ratio', 'Portfolio diversificatio
 SLIPPAGE_BPS = Gauge('slippage_bps', 'Configured slippage in basis points')
 PARTIAL_FILL_COUNT = Counter('partial_fill_count', 'Trades partially filled due to insufficient liquidity')
 SKIPPED_TRADE_COUNT = Counter('skipped_trade_count', 'Trades skipped due to insufficient liquidity')
+FEATURE_ANOMALIES = Counter('feature_anomalies', 'Detected feature anomalies')
