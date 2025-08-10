@@ -11,5 +11,6 @@ models/*
 !models/__init__.py
 !models/export.py
 !models/model_store.py
+!models/meta_learner.py
 __pycache__/
 logs/

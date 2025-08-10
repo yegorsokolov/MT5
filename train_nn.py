@@ -59,6 +59,22 @@ logger = logging.getLogger(__name__)
 monitor.start()
 
 
+def _load_donor_state_dict(symbol: str):
+    """Return state_dict of latest model trained on a symbol."""
+    try:
+        versions = model_store.list_versions()
+    except Exception:  # pragma: no cover
+        return None
+    for meta in reversed(versions):
+        cfg = meta.get("training_config", {})
+        syms = cfg.get("symbols") or [cfg.get("symbol")]
+        if syms and symbol in syms:
+            state, _ = model_store.load_model(meta["version_id"])
+            if isinstance(state, dict):
+                return state
+    return None
+
+
 class PositionalEncoding(torch.nn.Module):
     """Sinusoidal positional encoding for transformer inputs."""
 
@@ -197,6 +213,7 @@ def main(
     world_size: int | None = None,
     cfg: dict | None = None,
     resume_online: bool = False,
+    transfer_from: str | None = None,
 ) -> float:
     if cfg is None:
         cfg = load_config()
@@ -332,6 +349,10 @@ def main(
             num_regimes=num_regimes,
             use_checkpointing=cfg.get("use_checkpointing", False),
         ).to(device)
+        if transfer_from:
+            state_dict = _load_donor_state_dict(transfer_from)
+            if state_dict:
+                model.load_state_dict(state_dict, strict=False)
         if world_size > 1:
             model = DDP(model, device_ids=[rank] if use_cuda else None)
         optim = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -551,6 +572,7 @@ def launch(cfg: dict | None = None) -> float:
     if cfg is None:
         cfg = load_config()
     resume_online = cfg.get("resume_online", False)
+    transfer_from = cfg.get("transfer_from")
     if cluster_available():
         seeds = cfg.get("seeds", [cfg.get("seed", 42)])
         results = []
@@ -558,16 +580,27 @@ def launch(cfg: dict | None = None) -> float:
             cfg_s = dict(cfg)
             cfg_s["seed"] = s
             results.append(
-                submit(main, 0, 1, cfg_s, resume_online=resume_online)
+                submit(
+                    main,
+                    0,
+                    1,
+                    cfg_s,
+                    resume_online=resume_online,
+                    transfer_from=transfer_from,
+                )
             )
         return float(results[0] if results else 0.0)
     use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
     world_size = torch.cuda.device_count()
     if use_ddp and world_size > 1:
-        mp.spawn(main, args=(world_size, cfg, resume_online), nprocs=world_size)
+        mp.spawn(
+            main,
+            args=(world_size, cfg, resume_online, transfer_from),
+            nprocs=world_size,
+        )
         return 0.0
     else:
-        return main(0, 1, cfg, resume_online=resume_online)
+        return main(0, 1, cfg, resume_online=resume_online, transfer_from=transfer_from)
 
 
 if __name__ == "__main__":
@@ -582,6 +615,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Resume incremental training from the latest checkpoint",
     )
+    parser.add_argument(
+        "--transfer-from",
+        type=str,
+        help="Initialize model using weights from a donor symbol",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -590,6 +628,8 @@ if __name__ == "__main__":
         cfg["export"] = True
     if args.resume_online:
         cfg["resume_online"] = True
+    if args.transfer_from:
+        cfg["transfer_from"] = args.transfer_from
     if args.tune:
         from tuning.hyperopt import tune_transformer
 
