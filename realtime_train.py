@@ -18,6 +18,7 @@ from log_utils import setup_logging, log_exceptions
 from metrics import RECONNECT_COUNT
 from signal_queue import get_signal_backend
 from data.sanitize import sanitize_ticks
+from models import model_store
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -74,6 +75,15 @@ async def train_realtime():
     repo_path = Path(__file__).resolve().parent
     db_path = repo_path / "data" / "realtime.duckdb"
     model_path = repo_path / "model.joblib"
+
+    version_id = os.getenv("MODEL_VERSION_ID")
+    if version_id:
+        try:
+            model, _ = model_store.load_model(version_id)
+            joblib.dump(model, model_path)
+            logger.info("Loaded model version %s", version_id)
+        except FileNotFoundError:
+            logger.warning("Model version %s not found", version_id)
 
     window = cfg.get("realtime_window", 10000)
     context_rows = 300  # number of rows to keep for feature context

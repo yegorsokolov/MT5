@@ -42,6 +42,7 @@ from data.history import (
     save_history_parquet,
     load_history_config,
 )
+from models import model_store
 from data.features import make_features
 from analysis.regime_detection import periodic_reclassification
 import argparse
@@ -594,6 +595,8 @@ def main(
             save_checkpoint({"model_path": ckpt_path}, i, cfg.get("checkpoint_dir"))
         checkpoint = model.save(str(root / "model_rllib"))
         logger.info("RLlib model saved to %s", checkpoint)
+        version_id = model_store.save_model(Path(checkpoint), cfg, {})
+        logger.info("Registered model version %s", version_id)
         ray.shutdown()
     else:
         ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
@@ -695,6 +698,20 @@ def main(
             else:
                 mlflow.log_artifact(str(root / "model_rl.zip"))
             mlflow.log_artifact(str(models_dir / "rl_risk_policy.zip"))
+            if algo == "RECURRENTPPO":
+                artifact = rec_dir / "recurrent_model.zip"
+            elif algo == "HIERARCHICALPPO":
+                artifact = root / "model_hierarchical.zip"
+            elif algo == "RLLIB":
+                artifact = root / "model_rllib"
+            else:
+                artifact = root / "model_rl.zip"
+            version_id = model_store.save_model(
+                artifact,
+                cfg,
+                {"cumulative_return": cumulative_return},
+            )
+            logger.info("Registered model version %s", version_id)
             mlflow.end_run()
 
     if cfg.get("export"):
