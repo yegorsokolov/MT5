@@ -47,6 +47,23 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def _load_donor_booster(symbol: str):
+    """Load LightGBM booster for the latest model trained on a symbol."""
+    try:
+        versions = model_store.list_versions()
+    except Exception:  # pragma: no cover - store may not exist
+        return None
+    for meta in reversed(versions):
+        cfg = meta.get("training_config", {})
+        syms = cfg.get("symbols") or [cfg.get("symbol")]
+        if syms and symbol in syms:
+            model, _ = model_store.load_model(meta["version_id"])
+            clf = model.named_steps.get("clf") if hasattr(model, "named_steps") else None
+            if clf and hasattr(clf, "booster_"):
+                return clf.booster_
+    return None
+
+
 def log_shap_importance(
     pipe: Pipeline,
     X_train: pd.DataFrame,
@@ -92,6 +109,7 @@ def main(
     export: bool = False,
     resume_online: bool = False,
     df_override: pd.DataFrame | None = None,
+    transfer_from: str | None = None,
 ) -> float:
     """Train LightGBM model and return weighted F1 score."""
     if cfg is None:
@@ -101,6 +119,8 @@ def main(
     np.random.seed(seed)
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
+
+    donor_booster = _load_donor_booster(transfer_from) if transfer_from else None
 
     with mlflow_run("training", cfg):
         if df_override is not None:
@@ -208,7 +228,11 @@ def main(
                     scaler.partial_fit(Xb)
                 Xb = scaler.transform(Xb)
             clf = pipe.named_steps["clf"]
-            init_model = clf.booster_ if (batch_idx > 0 or ckpt) else None
+            init_model = (
+                donor_booster
+                if batch_idx == 0 and donor_booster is not None and not ckpt
+                else (clf.booster_ if (batch_idx > 0 or ckpt) else None)
+            )
             clf.fit(Xb, yb, init_model=init_model)
             save_checkpoint({"model": pipe}, batch_idx, cfg.get("checkpoint_dir"))
         joblib.dump(pipe, root / "model.joblib")
@@ -275,13 +299,14 @@ def main(
         )
         pipe = Pipeline(steps)
 
-        pipe.fit(
-            X_train,
-            y_train,
-            clf__eval_set=[(X_val, y_val)],
-            clf__early_stopping_rounds=cfg.get("early_stopping_rounds", 50),
-            clf__verbose=False,
-        )
+        fit_params = {
+            "clf__eval_set": [(X_val, y_val)],
+            "clf__early_stopping_rounds": cfg.get("early_stopping_rounds", 50),
+            "clf__verbose": False,
+        }
+        if donor_booster is not None:
+            fit_params["clf__init_model"] = donor_booster
+        pipe.fit(X_train, y_train, **fit_params)
 
         preds = pipe.predict(X_val)
         probs = pipe.predict_proba(X_val)[:, 1]
@@ -386,6 +411,7 @@ def launch(
     cfg: dict | None = None,
     export: bool = False,
     resume_online: bool = False,
+    transfer_from: str | None = None,
 ) -> list[float]:
     """Launch training locally or across a Ray cluster."""
     if cfg is None:
@@ -402,10 +428,18 @@ def launch(
                     cfg_s,
                     export=export,
                     resume_online=resume_online,
+                    transfer_from=transfer_from,
                 )
             )
         return results
-    return [main(cfg, export=export, resume_online=resume_online)]
+    return [
+        main(
+            cfg,
+            export=export,
+            resume_online=resume_online,
+            transfer_from=transfer_from,
+        )
+    ]
 
 
 if __name__ == "__main__":
@@ -417,6 +451,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Resume incremental training from the latest checkpoint",
     )
+    parser.add_argument(
+        "--transfer-from",
+        type=str,
+        help="Initialize model using weights from a donor symbol",
+    )
     args = parser.parse_args()
     ray_init()
     try:
@@ -426,6 +465,10 @@ if __name__ == "__main__":
             cfg = load_config()
             tune_lgbm(cfg)
         else:
-            launch(export=args.export, resume_online=args.resume_online)
+            launch(
+                export=args.export,
+                resume_online=args.resume_online,
+                transfer_from=args.transfer_from,
+            )
     finally:
         ray_shutdown()
