@@ -6,6 +6,51 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+
+class DummyGauge:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def set(self, value):
+        pass
+
+    def inc(self, value=1):
+        pass
+
+
+DummyCounter = DummyGauge
+
+sys.modules.setdefault(
+    "prometheus_client",
+    types.SimpleNamespace(Gauge=DummyGauge, Counter=DummyCounter),
+)
+
+sys.modules.setdefault("utils", types.SimpleNamespace(load_config=lambda: {}))
+
+sk_module = types.ModuleType("sklearn")
+sk_module.pipeline = types.SimpleNamespace(Pipeline=object)
+sk_module.preprocessing = types.SimpleNamespace(StandardScaler=object)
+sys.modules["sklearn"] = sk_module
+sys.modules["sklearn.pipeline"] = sk_module.pipeline
+sys.modules["sklearn.preprocessing"] = sk_module.preprocessing
+
+data_mod = types.ModuleType("data")
+data_history = types.ModuleType("data.history")
+data_history.load_history_parquet = lambda *a, **k: None
+data_history.load_history_config = lambda *a, **k: None
+data_features = types.ModuleType("data.features")
+data_features.make_features = lambda df: df
+data_mod.history = data_history
+data_mod.features = data_features
+sys.modules["data"] = data_mod
+sys.modules["data.history"] = data_history
+sys.modules["data.features"] = data_features
+ray_stub = types.SimpleNamespace(remote=lambda f: f)
+sys.modules.setdefault(
+    "ray_utils",
+    types.SimpleNamespace(ray=ray_stub, init=lambda **k: None, shutdown=lambda: None),
+)
+
 # Load backtest module with dummy logging to avoid import side effects
 spec = importlib.util.spec_from_file_location("backtest", Path(__file__).resolve().parents[1] / "backtest.py")
 sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=object)

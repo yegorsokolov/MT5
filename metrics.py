@@ -13,3 +13,6 @@ ADJ_TARGET_RISK = Gauge('adj_target_risk', 'Confidence-adjusted target risk per 
 ADJ_REALIZED_RISK = Gauge('adj_realized_risk', 'Confidence-adjusted realized risk per trade')
 PORTFOLIO_DRAWDOWN = Gauge('portfolio_drawdown', 'Current portfolio drawdown')
 DIVERSIFICATION_RATIO = Gauge('diversification_ratio', 'Portfolio diversification ratio')
+SLIPPAGE_BPS = Gauge('slippage_bps', 'Configured slippage in basis points')
+PARTIAL_FILL_COUNT = Counter('partial_fill_count', 'Trades partially filled due to insufficient liquidity')
+SKIPPED_TRADE_COUNT = Counter('skipped_trade_count', 'Trades skipped due to insufficient liquidity')
