@@ -1,8 +1,4 @@
-"""Minimal stub of the ray API for tests.
-
-This provides just enough of the Ray interface used inside the unit tests so
-that modules importing ``ray`` do not raise ``ImportError`` when the real
-package is not installed."""
+"""Minimal stub of the Ray API for tests and offline execution."""
 
 import types
 
@@ -16,12 +12,12 @@ def remote(func=None, **kwargs):
 
 def init(*args, **kwargs):
     """No-op ``ray.init`` replacement."""
-    pass
+    return None
 
 
 def shutdown(*args, **kwargs):
     """No-op ``ray.shutdown`` replacement."""
-    pass
+    return None
 
 
 def get(obj):
@@ -55,17 +51,9 @@ class _TuneModule:
 
     @staticmethod
     def report(**kwargs):
-        pass
+        return None
 
 
 tune = _TuneModule()
-
-import sys
-
-# expose submodules so `from ray.tune.search.optuna import OptunaSearch` works
-sys.modules[__name__ + ".tune"] = tune
-sys.modules[__name__ + ".tune.search"] = tune.search
-sys.modules[__name__ + ".tune.search.optuna"] = tune.search.optuna
-
 
 __all__ = ["remote", "init", "shutdown", "get", "tune"]

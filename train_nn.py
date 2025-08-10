@@ -38,6 +38,12 @@ from data.features import (
     make_sequence_arrays,
 )
 import argparse
+from ray_utils import (
+    init as ray_init,
+    shutdown as ray_shutdown,
+    cluster_available,
+    submit,
+)
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -530,9 +536,19 @@ def main(
 def launch(cfg: dict | None = None) -> float:
     if cfg is None:
         cfg = load_config()
+    resume_online = cfg.get("resume_online", False)
+    if cluster_available():
+        seeds = cfg.get("seeds", [cfg.get("seed", 42)])
+        results = []
+        for s in seeds:
+            cfg_s = dict(cfg)
+            cfg_s["seed"] = s
+            results.append(
+                submit(main, 0, 1, cfg_s, resume_online=resume_online)
+            )
+        return float(results[0] if results else 0.0)
     use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
     world_size = torch.cuda.device_count()
-    resume_online = cfg.get("resume_online", False)
     if use_ddp and world_size > 1:
         mp.spawn(main, args=(world_size, cfg, resume_online), nprocs=world_size)
         return 0.0
@@ -565,4 +581,8 @@ if __name__ == "__main__":
 
         tune_transformer(cfg)
     else:
-        launch(cfg)
+        ray_init()
+        try:
+            launch(cfg)
+        finally:
+            ray_shutdown()

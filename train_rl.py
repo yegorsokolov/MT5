@@ -48,6 +48,12 @@ import argparse
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
+from ray_utils import (
+    init as ray_init,
+    shutdown as ray_shutdown,
+    cluster_available,
+    submit,
+)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -707,6 +713,14 @@ def main(
 def launch(cfg: dict | None = None) -> float:
     if cfg is None:
         cfg = load_config()
+    if cluster_available():
+        seeds = cfg.get("seeds", [cfg.get("seed", 42)])
+        results = []
+        for s in seeds:
+            cfg_s = dict(cfg)
+            cfg_s["seed"] = s
+            results.append(submit(main, 0, 1, cfg_s))
+        return float(results[0] if results else 0.0)
     use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
     world_size = torch.cuda.device_count()
     if use_ddp and world_size > 1:
@@ -734,4 +748,8 @@ if __name__ == "__main__":
 
         tune_rl(cfg)
     else:
-        launch(cfg)
+        ray_init()
+        try:
+            launch(cfg)
+        finally:
+            ray_shutdown()
