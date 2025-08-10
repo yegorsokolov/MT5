@@ -15,7 +15,8 @@ from utils import load_config
 from data.features import make_features
 import duckdb
 from log_utils import setup_logging, log_exceptions
-from metrics import RECONNECT_COUNT
+from analysis.anomaly_detector import detect_anomalies
+from metrics import RECONNECT_COUNT, FEATURE_ANOMALIES
 from signal_queue import get_signal_backend
 from data.sanitize import sanitize_ticks
 from models import model_store
@@ -77,6 +78,7 @@ async def train_realtime():
     db_path = repo_path / "data" / "realtime.duckdb"
     model_path = repo_path / "model.joblib"
     trade_log = TradeLog(repo_path / "data" / "trade_log.db")
+    quarantine_path = repo_path / "data" / "anomaly_quarantine.csv"
 
     version_id = os.getenv("MODEL_VERSION_ID")
     if version_id:
@@ -217,6 +219,9 @@ async def train_realtime():
         df = await generate_features(context)
         new_features = df.merge(
             new_ticks[["Timestamp", "Symbol"]], on=["Timestamp", "Symbol"], how="inner"
+        )
+        new_features, anomalies = detect_anomalies(
+            new_features, quarantine_path=quarantine_path, counter=FEATURE_ANOMALIES
         )
         feature_df = (
             pd.concat([feature_df, new_features])
