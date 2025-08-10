@@ -22,6 +22,8 @@ from fastapi.responses import Response
 from dataclasses import dataclass
 from risk_manager import risk_manager
 from scheduler import start_scheduler
+from utils.resource_monitor import ResourceMonitor
+from metrics import RESOURCE_RESTARTS
 
 
 class ConfigUpdate(BaseModel):
@@ -32,6 +34,18 @@ class ConfigUpdate(BaseModel):
 
 app = FastAPI(title="MT5 Bot Controller")
 logger = setup_logging()
+
+MAX_RSS_MB = float(os.getenv("MAX_RSS_MB", "0") or 0)
+MAX_CPU_PCT = float(os.getenv("MAX_CPU_PCT", "0") or 0)
+resource_watchdog = ResourceMonitor(
+    max_rss_mb=MAX_RSS_MB or None, max_cpu_pct=MAX_CPU_PCT or None
+)
+
+
+async def _handle_resource_breach(reason: str) -> None:
+    logger.error("Resource watchdog triggered: %s", reason)
+    RESOURCE_RESTARTS.inc()
+    os._exit(1)
 
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:
@@ -104,6 +118,9 @@ async def _bot_watcher() -> None:
 async def _start_watcher() -> None:
     start_scheduler()
     asyncio.create_task(_bot_watcher())
+    if resource_watchdog.max_rss_mb or resource_watchdog.max_cpu_pct:
+        resource_watchdog.alert_callback = _handle_resource_breach
+        resource_watchdog.start()
 
 @app.get("/bots")
 async def list_bots(_: None = Depends(authorize)):
