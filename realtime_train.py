@@ -12,11 +12,12 @@ import MetaTrader5 as mt5
 from git import Repo
 
 from utils import load_config
+from utils.resource_monitor import ResourceMonitor
 from data.features import make_features
 import duckdb
 from log_utils import setup_logging, log_exceptions
 from analysis.anomaly_detector import detect_anomalies
-from metrics import RECONNECT_COUNT, FEATURE_ANOMALIES
+from metrics import RECONNECT_COUNT, FEATURE_ANOMALIES, RESOURCE_RESTARTS
 from signal_queue import get_signal_backend
 from data.sanitize import sanitize_ticks
 from models import model_store
@@ -24,6 +25,18 @@ from data.trade_log import TradeLog
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+MAX_RSS_MB = float(os.getenv("MAX_RSS_MB", "0") or 0)
+MAX_CPU_PCT = float(os.getenv("MAX_CPU_PCT", "0") or 0)
+watchdog = ResourceMonitor(
+    max_rss_mb=MAX_RSS_MB or None, max_cpu_pct=MAX_CPU_PCT or None
+)
+
+
+async def _handle_resource_breach(reason: str) -> None:
+    logger.error("Resource watchdog triggered: %s", reason)
+    RESOURCE_RESTARTS.inc()
+    os._exit(1)
 
 
 async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
@@ -71,6 +84,11 @@ async def dispatch_signals(queue, df: pd.DataFrame) -> None:
 @log_exceptions
 async def train_realtime():
     cfg = load_config()
+    if watchdog.max_rss_mb or watchdog.max_cpu_pct:
+        watchdog.alert_callback = lambda msg: asyncio.create_task(
+            _handle_resource_breach(msg)
+        )
+        watchdog.start()
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
