@@ -15,7 +15,7 @@ from lightgbm import LGBMClassifier
 from utils import load_config
 from data.history import load_history_parquet, load_history_config
 from data.features import make_features
-import ray
+from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -250,7 +250,7 @@ def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dic
 
     parallel = cfg.get("parallel_backtest", False) and not external_strategy
     if parallel:
-        ray.init(num_cpus=cfg.get("ray_num_cpus"))
+        ray_init(num_cpus=cfg.get("ray_num_cpus"))
         futures = []
     period_metrics = []
     while start + pd.DateOffset(months=window * 2) <= end:
@@ -300,7 +300,7 @@ def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dic
                 metrics["max_drawdown"],
             )
             period_metrics.append(metrics)
-        ray.shutdown()
+        ray_shutdown()
 
     if not period_metrics:
         logger.info("No valid windows for rolling backtest")
