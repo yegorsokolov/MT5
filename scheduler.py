@@ -77,6 +77,35 @@ def run_drift_detection() -> None:
     except Exception:
         logger.exception("Drift detection failed")
 
+
+def run_trade_analysis() -> None:
+    """Run trade analysis and persist daily statistics."""
+    try:
+        import pandas as pd
+        import json
+        from analytics.trade_analyzer import TradeAnalyzer
+    except Exception:  # pragma: no cover - optional dependency
+        logger.exception("Trade analysis dependencies unavailable")
+        return
+
+    trades_path = Path("reports/trades.csv")
+    if not trades_path.exists():
+        logger.info("No trades found at %s", trades_path)
+        return
+
+    try:
+        trades = pd.read_csv(trades_path, parse_dates=["entry_time", "exit_time"])
+        analyzer = TradeAnalyzer(trades)
+        stats = analyzer.summary()
+        out_dir = Path("reports/trade_stats")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"{pd.Timestamp.utcnow():%Y-%m-%d}.json"
+        with open(out_file, "w") as fh:
+            json.dump(stats, fh)
+        logger.info("Saved trade stats to %s", out_file)
+    except Exception:
+        logger.exception("Trade analysis failed")
+
 def start_scheduler() -> None:
     """Start background scheduler based on configuration."""
     global _started
@@ -91,6 +120,8 @@ def start_scheduler() -> None:
         jobs.append(("drift_detection", run_drift_detection))
     if s_cfg.get("checkpoint_cleanup", True):
         jobs.append(("checkpoint_cleanup", cleanup_checkpoints))
+    if s_cfg.get("trade_stats", True):
+        jobs.append(("trade_stats", run_trade_analysis))
     if jobs:
         _schedule_jobs(jobs)
     _started = True
@@ -101,4 +132,5 @@ __all__ = [
     "cleanup_checkpoints",
     "resource_reprobe",
     "run_drift_detection",
+    "run_trade_analysis",
 ]
