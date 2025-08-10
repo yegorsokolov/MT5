@@ -34,6 +34,8 @@ def test_make_features_uses_cache(monkeypatch, tmp_path):
     sys.modules["sklearn.decomposition"] = sklearn_stub.decomposition
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
+    sys.modules.pop("data", None)
+    sys.modules.pop("data.features", None)
     from data import features as feature_mod
     from data import feature_store as fs_mod
 
@@ -93,6 +95,83 @@ def test_make_features_uses_cache(monkeypatch, tmp_path):
     second_time = time.time() - t1
     assert second_time < first_time
     assert any("Loading features from cache" in m for m in logs)
+    pd.testing.assert_frame_equal(
+        first.reset_index(drop=True),
+        second.reset_index(drop=True),
+        check_dtype=False,
+    )
+
+
+def test_cross_asset_features_cached(monkeypatch, tmp_path):
+    stub_utils = types.ModuleType("utils")
+    stub_utils.load_config = lambda: {
+        "use_feature_cache": True,
+        "use_atr": False,
+        "use_donchian": False,
+        "use_dask": False,
+    }
+
+    class _Mon:
+        def start(self):
+            pass
+
+        class capabilities:
+            @staticmethod
+            def model_size():
+                return "small"
+
+    stub_utils.resource_monitor = types.SimpleNamespace(monitor=_Mon())
+    sys.modules["utils"] = stub_utils
+    sys.modules["utils.resource_monitor"] = stub_utils.resource_monitor
+
+    class _PCA:
+        def __init__(self, *a, **k):
+            self.n_components = k.get("n_components", 1)
+
+        def fit_transform(self, X):  # pragma: no cover - simple stub
+            return np.zeros((len(X), self.n_components))
+
+    sklearn_stub = types.SimpleNamespace(
+        decomposition=types.SimpleNamespace(PCA=_PCA)
+    )
+    sys.modules["sklearn"] = sklearn_stub
+    sys.modules["sklearn.decomposition"] = sklearn_stub.decomposition
+
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    sys.modules.pop("data", None)
+    sys.modules.pop("data.features", None)
+    from data import features as feature_mod
+    from data import feature_store as fs_mod
+
+    monkeypatch.setattr(
+        feature_mod,
+        "FeatureStore",
+        lambda: fs_mod.FeatureStore(tmp_path / "feature_store.duckdb"),
+    )
+
+    ts = pd.date_range("2020-01-01", periods=60, freq="min")
+    df_a = pd.DataFrame(
+        {
+            "Timestamp": ts,
+            "Bid": np.linspace(1.0, 1.5, 60),
+            "Ask": np.linspace(1.0001, 1.5001, 60),
+            "Symbol": "AAA",
+        }
+    )
+    df_b = pd.DataFrame(
+        {
+            "Timestamp": ts,
+            "Bid": np.linspace(2.0, 2.5, 60),
+            "Ask": np.linspace(2.0001, 2.5001, 60),
+            "Symbol": "BBB",
+        }
+    )
+    df = pd.concat([df_a, df_b], ignore_index=True)
+
+    first = feature_mod.make_features(df)
+    assert any(col.startswith("AAA_BBB_corr_30") for col in first.columns)
+
+    second = feature_mod.make_features(df)
     pd.testing.assert_frame_equal(
         first.reset_index(drop=True),
         second.reset_index(drop=True),
