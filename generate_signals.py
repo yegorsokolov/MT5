@@ -37,14 +37,22 @@ from signal_queue import (
     get_signal_backend,
 )
 from models.ensemble import EnsembleModel
+from models import model_store
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
 
-def load_models(paths):
-    """Load multiple joblib models from relative paths."""
+def load_models(paths, versions=None):
+    """Load multiple models from paths or version identifiers."""
     models = []
+    versions = versions or []
+    for vid in versions:
+        try:
+            m, _ = model_store.load_model(vid)
+            models.append(m)
+        except FileNotFoundError:
+            logger.warning("Model version %s not found", vid)
     for p in paths:
         mp = Path(__file__).resolve().parent / p
         if mp.exists():
@@ -302,7 +310,11 @@ def main():
 
     model_type = cfg.get("model_type", "lgbm").lower()
     model_paths = cfg.get("ensemble_models", ["model.joblib"])
-    models = load_models(model_paths)
+    model_versions = cfg.get("model_versions", [])
+    env_version = os.getenv("MODEL_VERSION_ID")
+    if env_version:
+        model_versions.append(env_version)
+    models = load_models(model_paths, model_versions)
     if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
 

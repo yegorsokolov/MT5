@@ -17,6 +17,7 @@ from torch.utils.checkpoint import checkpoint
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
+from models import model_store
 
 try:
     import shap
@@ -516,6 +517,12 @@ def main(
             mlflow.log_metric("best_val_loss", best_val_loss)
             logger.info("Model saved to %s", model_path)
             mlflow.log_artifact(str(model_path))
+            version_id = model_store.save_model(
+                joblib.load(model_path),
+                cfg,
+                {"val_loss": best_val_loss, "test_accuracy": acc},
+            )
+            logger.info("Registered model version %s", version_id)
             if cfg.get("feature_importance", False):
                 report_dir = root / "reports"
                 X_sample = X_train[: cfg.get("shap_samples", 100)]
