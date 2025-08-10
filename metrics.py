@@ -5,6 +5,7 @@ OFFSET_GAUGE = Gauge('queue_offset', 'Last processed offset in durable signal qu
 TRADE_COUNT = Counter('trade_count', 'Total trades executed')
 ERROR_COUNT = Counter('error_count', 'Total errors logged')
 RECONNECT_COUNT = Counter('reconnect_attempts', 'Total MT5 reconnection attempts')
+TICK_ANOMALIES = Counter('tick_anomalies', 'Counts of tick data anomalies', ['type'])
 DRIFT_EVENTS = Counter('drift_events', 'Detected data drift events')
 TARGET_RISK = Gauge('target_risk', 'Target risk allocation per trade')
 REALIZED_RISK = Gauge('realized_risk', 'Realized risk from executed trade')
