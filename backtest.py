@@ -17,6 +17,15 @@ from data.history import load_history_parquet, load_history_config
 from data.features import make_features
 from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 
+try:  # optional metrics integration
+    from metrics import (
+        SLIPPAGE_BPS,
+        PARTIAL_FILL_COUNT,
+        SKIPPED_TRADE_COUNT,
+    )
+except Exception:  # pragma: no cover - metrics are optional
+    SLIPPAGE_BPS = PARTIAL_FILL_COUNT = SKIPPED_TRADE_COUNT = None
+
 setup_logging()
 logger = logging.getLogger(__name__)
 
@@ -145,27 +154,50 @@ def backtest_on_df(
 
     threshold = cfg.get("threshold", 0.55)
     distance = cfg.get("trailing_stop_pips", 20) * 1e-4
+    slippage = cfg.get("slippage_bps", 0.0) / 10000.0
+    order_size = cfg.get("order_size", 1.0)
 
     in_position = False
     entry = 0.0
     stop = 0.0
     returns = []
+    skipped_trades = 0
+    partial_fills = 0
 
-    for price, prob in zip(df["mid"], probs):
+    for row, prob in zip(df.itertuples(index=False), probs):
+        price_mid = getattr(row, "mid")
+        bid = getattr(row, "Bid", price_mid)
+        ask = getattr(row, "Ask", price_mid)
+        bid_vol = getattr(row, "BidVolume", np.inf)
+        ask_vol = getattr(row, "AskVolume", np.inf)
+
         if not in_position and prob > threshold:
+            if ask_vol < order_size:
+                skipped_trades += 1
+                continue
             in_position = True
-            entry = price
-            stop = price - distance
+            entry = ask * (1 + slippage)
+            stop = entry - distance
             continue
         if in_position:
-            stop = trailing_stop(entry, price, stop, distance)
-            if price <= stop:
-                returns.append((price - entry) / entry)
+            stop = trailing_stop(entry, price_mid, stop, distance)
+            if price_mid <= stop:
+                fill_frac = min(bid_vol / order_size, 1.0)
+                if fill_frac < 1.0:
+                    partial_fills += 1
+                exit_price = bid * (1 - slippage)
+                returns.append(((exit_price - entry) / entry) * fill_frac)
                 in_position = False
 
     series = pd.Series(returns)
     metrics = compute_metrics(series)
+    metrics["skipped_trades"] = skipped_trades
+    metrics["partial_fills"] = partial_fills
     metrics["sharpe_p_value"] = bootstrap_sharpe_pvalue(series)
+    if SLIPPAGE_BPS is not None:
+        SLIPPAGE_BPS.set(cfg.get("slippage_bps", 0.0))
+        PARTIAL_FILL_COUNT.inc(partial_fills)
+        SKIPPED_TRADE_COUNT.inc(skipped_trades)
     log_backtest_stats(metrics)
     if return_returns:
         return metrics, series
