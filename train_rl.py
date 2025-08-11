@@ -386,6 +386,17 @@ def main(
         algo = "A2C" if size == "lite" else "PPO"
     else:
         algo = algo_cfg
+    cvar_env_penalty = 0.0 if cfg.get("risk_objective") == "cvar" else cfg.get("rl_cvar_penalty", 0.0)
+
+    def maybe_wrap(env: gym.Env) -> gym.Env:
+        if cfg.get("risk_objective") == "cvar":
+            from rl.risk_cvar import CVaRRewardWrapper
+            return CVaRRewardWrapper(
+                env,
+                penalty=cfg.get("rl_cvar_penalty", 0.0),
+                window=cfg.get("rl_cvar_window", 30),
+            )
+        return env
     if algo == "PPO":
         env = TradingEnv(
             df,
@@ -394,9 +405,10 @@ def main(
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_penalty=cvar_env_penalty,
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
+        env = maybe_wrap(env)
         model = PPO(
             "MlpPolicy",
             env,
@@ -414,9 +426,10 @@ def main(
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_penalty=cvar_env_penalty,
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
+        env = maybe_wrap(env)
         model = RecurrentPPO(
             "MlpLstmPolicy",
             env,
@@ -434,9 +447,10 @@ def main(
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_penalty=cvar_env_penalty,
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
+        env = maybe_wrap(env)
         model = A2C(
             "MlpPolicy",
             env,
@@ -451,16 +465,17 @@ def main(
         n_envs = min(n_envs, os.cpu_count() or 1)
 
         def make_env():
-            return TradingEnv(
+            env_i = TradingEnv(
                 df,
                 features,
                 max_position=cfg.get("rl_max_position", 1.0),
                 transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
                 risk_penalty=cfg.get("rl_risk_penalty", 0.1),
                 var_window=cfg.get("rl_var_window", 30),
-                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_penalty=cvar_env_penalty,
                 cvar_window=cfg.get("rl_cvar_window", 30),
             )
+            return maybe_wrap(env_i)
 
         if n_envs == 1:
             env = DummyVecEnv([make_env])
@@ -483,9 +498,10 @@ def main(
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_penalty=cvar_env_penalty,
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
+        env = maybe_wrap(env)
         model = SAC(
             "MlpPolicy",
             env,
@@ -503,9 +519,10 @@ def main(
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_penalty=cvar_env_penalty,
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
+        env = maybe_wrap(env)
         model = TRPO(
             "MlpPolicy",
             env,
@@ -526,9 +543,10 @@ def main(
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_penalty=cvar_env_penalty,
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
+        env = maybe_wrap(env)
         model = HierarchicalPPO(
             "MlpPolicy",
             env,
@@ -546,9 +564,10 @@ def main(
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+            cvar_penalty=cvar_env_penalty,
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
+        env = maybe_wrap(env)
         model = QRDQN(
             "MlpPolicy",
             env,
@@ -573,16 +592,17 @@ def main(
         rllib_algo = cfg.get("rllib_algorithm", "PPO").upper()
 
         def env_creator(env_config=None):
-            return RLLibTradingEnv(
+            env_i = RLLibTradingEnv(
                 df,
                 features,
                 max_position=cfg.get("rl_max_position", 1.0),
                 transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
                 risk_penalty=cfg.get("rl_risk_penalty", 0.1),
                 var_window=cfg.get("rl_var_window", 30),
-                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_penalty=cvar_env_penalty,
                 cvar_window=cfg.get("rl_cvar_window", 30),
             )
+            return maybe_wrap(env_i)
 
         ray.init(ignore_reinit_error=True, include_dashboard=False)
         if rllib_algo == "DDPG":
@@ -685,7 +705,7 @@ def main(
                 transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
                 risk_penalty=cfg.get("rl_risk_penalty", 0.1),
                 var_window=cfg.get("rl_var_window", 30),
-                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_penalty=0.0,
                 cvar_window=cfg.get("rl_cvar_window", 30),
             )
             evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
@@ -703,6 +723,12 @@ def main(
                 mlflow.log_metric("cumulative_return", cumulative_return)
                 mlflow.log_metric("sharpe_ratio", sharpe)
                 mlflow.log_metric("max_drawdown", max_drawdown)
+                var_threshold = np.percentile(eval_returns, 5)
+                if np.any(eval_returns <= var_threshold):
+                    cvar = -float(eval_returns[eval_returns <= var_threshold].mean())
+                else:
+                    cvar = 0.0
+                mlflow.log_metric("cvar", cvar)
 
             # train risk management policy
             returns = df.sort_index()["return"].dropna()
@@ -827,6 +853,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--graph-model", action="store_true", help="Use GraphNet as policy backbone"
     )
+    parser.add_argument(
+        "--risk-objective",
+        choices=["cvar"],
+        help="Apply specified risk objective to rewards",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -837,6 +868,8 @@ if __name__ == "__main__":
         cfg["hierarchical"] = True
     if args.graph_model:
         cfg["graph_model"] = True
+    if args.risk_objective:
+        cfg["risk_objective"] = args.risk_objective
     if args.tune:
         from tuning.hyperopt import tune_rl
 
