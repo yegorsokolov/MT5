@@ -7,11 +7,17 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import TYPE_CHECKING, Dict, List, Tuple
 
 import numpy as np
-import pandas as pd
 from sklearn.decomposition import PCA
+
+from utils.data_backend import get_dataframe_module
+
+pd = get_dataframe_module()
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 from .events import get_events
 from .feature_store import FeatureStore
