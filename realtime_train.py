@@ -34,6 +34,7 @@ from signal_queue import get_signal_backend
 from data.sanitize import sanitize_ticks
 from models import model_store
 from data.trade_log import TradeLog
+from event_store import EventStore
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -113,6 +114,7 @@ async def train_realtime():
     model_path = repo_path / "model.joblib"
     trade_log = TradeLog(repo_path / "data" / "trade_log.db")
     quarantine_path = repo_path / "data" / "anomaly_quarantine.csv"
+    event_store = EventStore(repo_path / "data" / "events.db")
 
     version_id = os.getenv("MODEL_VERSION_ID")
     if version_id:
@@ -255,6 +257,9 @@ async def train_realtime():
         new_features, anomalies = detect_anomalies(
             new_features, quarantine_path=quarantine_path, counter=FEATURE_ANOMALIES
         )
+        for rec in new_features.to_dict("records"):
+            rec = {**rec, "Timestamp": str(rec.get("Timestamp"))}
+            event_store.record("feature", rec)
         feature_df = (
             pd.concat([feature_df, new_features])
             .drop_duplicates(subset=["Timestamp", "Symbol"], keep="last")
@@ -341,8 +346,10 @@ async def train_realtime():
         out = new_features[["Timestamp", "Symbol"]].copy()
         out["prob"] = probs[:, 1]
         await dispatch_signals(queue, out)
-
         for rec in out.to_dict("records"):
+            event_store.record(
+                "prediction", {**rec, "Timestamp": str(rec.get("Timestamp"))}
+            )
             sym_ticks = new_ticks[new_ticks["Symbol"] == rec["Symbol"]]
             if sym_ticks.empty:
                 continue
@@ -356,7 +363,12 @@ async def train_realtime():
                 "price": price,
             }
             order_id = trade_log.record_order(order)
+            event_store.record("order", {**order, "order_id": order_id, "timestamp": str(order["timestamp"])})
             trade_log.record_fill({**order, "order_id": order_id})
+            event_store.record(
+                "fill",
+                {**order, "order_id": order_id, "timestamp": str(order["timestamp"])},
+            )
 
         returns = df["return"].dropna()
         from backtest import compute_metrics
