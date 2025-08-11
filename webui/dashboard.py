@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -102,6 +103,15 @@ def main() -> None:
                     data=log_data.get("logs", ""),
                     file_name=f"{bid}.log"
                 )
+
+        cp_file = Path("reports/change_points/latest.json")
+        if cp_file.exists():
+            try:
+                cp_data = json.loads(cp_file.read_text())
+                if any(cp_data.values()):
+                    st.error(f"Change points detected: {cp_data}")
+            except Exception:
+                pass
 
     # Performance tab
     with tabs[1]:
