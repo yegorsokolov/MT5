@@ -13,6 +13,7 @@ import numpy as np
 from sklearn.decomposition import PCA
 
 from utils.data_backend import get_dataframe_module
+from analysis.garch_vol import garch_volatility
 
 pd = get_dataframe_module()
 
@@ -391,6 +392,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
         # base return and moving averages
         group["return"] = group["mid"].pct_change()
+        # GARCH-based volatility estimate
+        group["garch_vol"] = garch_volatility(group["return"])
         group["ma_5"] = group["mid"].rolling(5).mean()
         group["ma_10"] = group["mid"].rolling(10).mean()
         group["ma_30"] = group["mid"].rolling(30).mean()
