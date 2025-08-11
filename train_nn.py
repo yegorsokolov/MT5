@@ -19,6 +19,7 @@ from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
 from models import model_store
+from models.graph_net import GraphNet
 from analysis.feature_selector import select_features
 
 try:
@@ -340,15 +341,23 @@ def main(
             if "market_regime" in df.columns
             else None
         )
-        model = TransformerModel(
-            len(features),
-            d_model=cfg.get("d_model", 64),
-            nhead=cfg.get("nhead", 4),
-            num_layers=cfg.get("num_layers", 2),
-            num_symbols=num_symbols,
-            num_regimes=num_regimes,
-            use_checkpointing=cfg.get("use_checkpointing", False),
-        ).to(device)
+        if cfg.get("graph_model"):
+            model = GraphNet(
+                len(features),
+                hidden_channels=cfg.get("d_model", 64),
+                out_channels=1,
+                num_layers=cfg.get("num_layers", 2),
+            ).to(device)
+        else:
+            model = TransformerModel(
+                len(features),
+                d_model=cfg.get("d_model", 64),
+                nhead=cfg.get("nhead", 4),
+                num_layers=cfg.get("num_layers", 2),
+                num_symbols=num_symbols,
+                num_regimes=num_regimes,
+                use_checkpointing=cfg.get("use_checkpointing", False),
+            ).to(device)
         if transfer_from:
             state_dict = _load_donor_state_dict(transfer_from)
             if state_dict:
@@ -620,6 +629,11 @@ if __name__ == "__main__":
         type=str,
         help="Initialize model using weights from a donor symbol",
     )
+    parser.add_argument(
+        "--graph-model",
+        action="store_true",
+        help="Use GraphNet instead of the transformer",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -630,6 +644,8 @@ if __name__ == "__main__":
         cfg["resume_online"] = True
     if args.transfer_from:
         cfg["transfer_from"] = args.transfer_from
+    if args.graph_model:
+        cfg["graph_model"] = True
     if args.tune:
         from tuning.hyperopt import tune_transformer
 
