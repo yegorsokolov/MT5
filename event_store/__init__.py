@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import sqlite3
+import json
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional
+import threading
+import datetime as _dt
+
+
+class EventStore:
+    """Simple append-only event store backed by SQLite."""
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        base = Path(__file__).resolve().parent
+        self.path = Path(path) if path else base / "events.db"
+        self.conn = sqlite3.connect(self.path)
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                type TEXT NOT NULL,
+                payload TEXT NOT NULL
+            )
+            """
+        )
+        self.lock = threading.Lock()
+
+    def record(self, event_type: str, payload: Dict[str, Any]) -> None:
+        """Record an event of the given type with the provided payload."""
+        ts = _dt.datetime.utcnow().isoformat()
+        data = json.dumps(payload, default=str)
+        with self.lock:
+            self.conn.execute(
+                "INSERT INTO events(timestamp, type, payload) VALUES (?, ?, ?)",
+                (ts, event_type, data),
+            )
+            self.conn.commit()
+
+    def iter_events(self, event_type: Optional[str] = None) -> Iterable[Dict[str, Any]]:
+        """Yield events in order, optionally filtered by type."""
+        cur = self.conn.cursor()
+        if event_type:
+            cur.execute(
+                "SELECT timestamp, type, payload FROM events WHERE type=? ORDER BY id",
+                (event_type,),
+            )
+        else:
+            cur.execute("SELECT timestamp, type, payload FROM events ORDER BY id")
+        for ts, et, pl in cur.fetchall():
+            yield {"timestamp": ts, "type": et, "payload": json.loads(pl)}
+
+    def close(self) -> None:  # pragma: no cover - trivial
+        self.conn.close()
+
+
+__all__ = ["EventStore"]
