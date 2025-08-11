@@ -78,6 +78,34 @@ def run_drift_detection() -> None:
         logger.exception("Drift detection failed")
 
 
+def run_change_point_detection() -> None:
+    """Run change point detection on recorded feature data."""
+    try:
+        import pandas as pd
+        from analysis.change_point import ChangePointDetector
+        from monitor_drift import DRIFT_METRICS
+    except Exception:  # pragma: no cover - optional dependency
+        logger.exception("Change point detection dependencies unavailable")
+        return
+
+    if not DRIFT_METRICS.exists():
+        logger.info("No feature data for change point detection at %s", DRIFT_METRICS)
+        return
+
+    try:
+        df = pd.read_parquet(DRIFT_METRICS)
+    except Exception:
+        logger.exception("Failed loading feature data from %s", DRIFT_METRICS)
+        return
+
+    detector = ChangePointDetector()
+    cps = detector.record(df)
+    if any(cps.values()):
+        logger.warning("Change points detected: %s", cps)
+    else:
+        logger.info("No change points detected")
+
+
 def run_trade_analysis() -> None:
     """Run trade analysis and persist daily statistics."""
     try:
@@ -118,6 +146,8 @@ def start_scheduler() -> None:
         jobs.append(("resource_reprobe", resource_reprobe))
     if s_cfg.get("drift_detection", True):
         jobs.append(("drift_detection", run_drift_detection))
+    if s_cfg.get("change_point_detection", True):
+        jobs.append(("change_point_detection", run_change_point_detection))
     if s_cfg.get("checkpoint_cleanup", True):
         jobs.append(("checkpoint_cleanup", cleanup_checkpoints))
     if s_cfg.get("trade_stats", True):
@@ -132,5 +162,6 @@ __all__ = [
     "cleanup_checkpoints",
     "resource_reprobe",
     "run_drift_detection",
+    "run_change_point_detection",
     "run_trade_analysis",
 ]
