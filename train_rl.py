@@ -54,6 +54,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
 from data.features import make_features
+from models.graph_net import GraphNet
 try:
     from analysis.regime_detection import periodic_reclassification  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -374,6 +375,10 @@ def main(
         int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
     )
     df = df[df["market_regime"] == current_regime]
+
+    graph_model = None
+    if cfg.get("graph_model"):
+        graph_model = GraphNet(len(features)).to(device)
 
     size = monitor.capabilities.model_size()
     algo_cfg = cfg.get("rl_algorithm", "AUTO").upper()
@@ -819,6 +824,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--hierarchical", action="store_true", help="Use hierarchical agent"
     )
+    parser.add_argument(
+        "--graph-model", action="store_true", help="Use GraphNet as policy backbone"
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -827,6 +835,8 @@ if __name__ == "__main__":
         cfg["export"] = True
     if args.hierarchical:
         cfg["hierarchical"] = True
+    if args.graph_model:
+        cfg["graph_model"] = True
     if args.tune:
         from tuning.hyperopt import tune_rl
 
