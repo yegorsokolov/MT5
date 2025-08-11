@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PositionSizer:
-    """Compute trade sizes using Kelly or volatility targeting."""
+    """Compute trade sizes using Kelly, VaR/ES limits or volatility targeting."""
 
     capital: float
     method: str = "kelly"
@@ -45,6 +45,8 @@ class PositionSizer:
         prob: float,
         symbol: str | None = None,
         volatility: float | None = None,
+        var: float | None = None,
+        es: float | None = None,
         confidence: float = 1.0,
     ) -> float:
         """Return position size based on configured sizing method."""
@@ -58,6 +60,14 @@ class PositionSizer:
             base_size = capital * frac
             target = base_size
             realized = base_size
+        elif self.method == "var" and var is not None:
+            base_size = capital * (self.target_vol / max(var, 1e-12))
+            target = capital * self.target_vol
+            realized = base_size * var
+        elif self.method == "es" and es is not None:
+            base_size = capital * (self.target_vol / max(es, 1e-12))
+            target = capital * self.target_vol
+            realized = base_size * es
         else:
             if volatility is None:
                 return 0.0
