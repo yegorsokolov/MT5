@@ -14,6 +14,16 @@ from sklearn.decomposition import PCA
 
 from utils.data_backend import get_dataframe_module
 from analysis.garch_vol import garch_volatility
+from utils.resource_monitor import monitor
+try:  # optional numba acceleration
+    from utils.numba_accel import (
+        rolling_mean as nb_rolling_mean,
+        rolling_std as nb_rolling_std,
+        atr as nb_atr,
+        rsi as nb_rsi,
+    )
+except Exception:  # pragma: no cover - numba optional
+    nb_rolling_mean = nb_rolling_std = nb_atr = nb_rsi = None
 
 pd = get_dataframe_module()
 
@@ -390,18 +400,32 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         mid = (group["Bid"] + group["Ask"]) / 2
         group = group.assign(mid=mid)
 
-        # base return and moving averages
+        # base return and volatility
         group["return"] = group["mid"].pct_change()
-        # GARCH-based volatility estimate
         group["garch_vol"] = garch_volatility(group["return"])
-        group["ma_5"] = group["mid"].rolling(5).mean()
-        group["ma_10"] = group["mid"].rolling(10).mean()
-        group["ma_30"] = group["mid"].rolling(30).mean()
-        group["ma_60"] = group["mid"].rolling(60).mean()
+
+        use_numba = (
+            monitor.capabilities.cpus <= 4 and nb_rolling_mean is not None and pd.__name__ == "pandas"
+        )
+        mid_arr = group["mid"].to_numpy()
+
+        if use_numba:
+            group["ma_5"] = nb_rolling_mean(mid_arr, 5)
+            group["ma_10"] = nb_rolling_mean(mid_arr, 10)
+            group["ma_30"] = nb_rolling_mean(mid_arr, 30)
+            group["ma_60"] = nb_rolling_mean(mid_arr, 60)
+        else:
+            group["ma_5"] = group["mid"].rolling(5).mean()
+            group["ma_10"] = group["mid"].rolling(10).mean()
+            group["ma_30"] = group["mid"].rolling(30).mean()
+            group["ma_60"] = group["mid"].rolling(60).mean()
 
         if use_atr:
-            tr = group["mid"].diff().abs()
-            group["atr_14"] = tr.rolling(14).mean()
+            if use_numba:
+                group["atr_14"] = nb_atr(mid_arr, 14)
+            else:
+                tr = group["mid"].diff().abs()
+                group["atr_14"] = tr.rolling(14).mean()
             group["atr_stop_long"] = group["mid"] - group["atr_14"] * 3
             group["atr_stop_short"] = group["mid"] + group["atr_14"] * 3
 
@@ -416,9 +440,14 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             group.loc[dc_down, "donchian_break"] = -1
 
         # Bollinger bands (20 period) and breakout signal
-        group["ma_h4"] = group["mid"].rolling(240, min_periods=1).mean()
-        boll_ma = group["mid"].rolling(20).mean()
-        boll_std = group["mid"].rolling(20).std()
+        if use_numba:
+            group["ma_h4"] = nb_rolling_mean(mid_arr, 240)
+            boll_ma = nb_rolling_mean(mid_arr, 20)
+            boll_std = nb_rolling_std(mid_arr, 20)
+        else:
+            group["ma_h4"] = group["mid"].rolling(240, min_periods=1).mean()
+            boll_ma = group["mid"].rolling(20).mean()
+            boll_std = group["mid"].rolling(20).std()
         group["boll_upper"] = boll_ma + 2 * boll_std
         group["boll_lower"] = boll_ma - 2 * boll_std
         break_up = (group["mid"] > group["boll_upper"]) & (
@@ -432,7 +461,10 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         group.loc[break_down, "boll_break"] = -1
 
         # volatility measure and RSI
-        group["volatility_30"] = group["return"].rolling(30).std()
+        if use_numba:
+            group["volatility_30"] = nb_rolling_std(group["return"].to_numpy(), 30)
+        else:
+            group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
 
         return group
@@ -644,6 +676,12 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
 def compute_rsi(series: pd.Series, period: int) -> pd.Series:
     """Relative Strength Index calculation."""
+    use_numba = (
+        monitor.capabilities.cpus <= 4 and nb_rsi is not None and pd.__name__ == "pandas"
+    )
+    if use_numba:
+        arr = np.asarray(series, dtype=float)
+        return pd.Series(nb_rsi(arr, period), index=series.index)
     delta = series.diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
