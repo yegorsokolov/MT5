@@ -27,11 +27,19 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
         __spec__=types.SimpleNamespace(),
     )
     monkeypatch.setitem(sys.modules, "prometheus_client", prom_stub)
+    torch_utils_data_stub = types.SimpleNamespace(DataLoader=object, TensorDataset=object)
+    torch_utils_stub = types.SimpleNamespace(data=torch_utils_data_stub)
+    torch_nn_stub = types.SimpleNamespace(Module=object, functional=types.SimpleNamespace())
     torch_stub = types.SimpleNamespace(
         manual_seed=lambda *a, **k: None,
         cuda=types.SimpleNamespace(is_available=lambda: False, manual_seed_all=lambda *a, **k: None),
+        nn=torch_nn_stub,
     )
     monkeypatch.setitem(sys.modules, "torch", torch_stub)
+    monkeypatch.setitem(sys.modules, "torch.nn", torch_nn_stub)
+    monkeypatch.setitem(sys.modules, "torch.nn.functional", torch_nn_stub.functional)
+    monkeypatch.setitem(sys.modules, "torch.utils", torch_utils_stub)
+    monkeypatch.setitem(sys.modules, "torch.utils.data", torch_utils_data_stub)
     class DummyBox:
         def __init__(self, low, high, shape, dtype=None):
             self.shape = shape
@@ -40,6 +48,12 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "gym", gym_stub)
     monkeypatch.setitem(sys.modules, "utils", types.SimpleNamespace(load_config=lambda: {}))
     monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "joblib", types.SimpleNamespace())
+    state_stub = types.SimpleNamespace(
+        save_checkpoint=lambda *a, **k: None,
+        load_latest_checkpoint=lambda *a, **k: None,
+    )
+    monkeypatch.setitem(sys.modules, "state_manager", state_stub)
     history_stub = types.SimpleNamespace(
         load_history_parquet=lambda *a, **k: None,
         save_history_parquet=lambda *a, **k: None,
@@ -49,10 +63,18 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "data", types.SimpleNamespace())
     monkeypatch.setitem(sys.modules, "data.history", history_stub)
     monkeypatch.setitem(sys.modules, "data.features", features_stub)
+    model_store_stub = types.SimpleNamespace(save_model=lambda *a, **k: "0")
+    graph_net_stub = types.SimpleNamespace(GraphNet=object)
+    monkeypatch.setitem(sys.modules, "models", types.SimpleNamespace(model_store=model_store_stub))
+    monkeypatch.setitem(sys.modules, "models.model_store", model_store_stub)
+    monkeypatch.setitem(sys.modules, "models.graph_net", graph_net_stub)
 
     class DummyAlgo:
         def __init__(self, policy, env, verbose=0, seed=0, **kwargs):
             self.env = env
+            self.policy = types.SimpleNamespace(
+                state_dict=lambda: {}, optimizer=types.SimpleNamespace(state_dict=lambda: {})
+            )
 
         def learn(self, total_timesteps):
             pass

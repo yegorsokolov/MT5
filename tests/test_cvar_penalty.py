@@ -12,6 +12,8 @@ sb3.common = types.SimpleNamespace(vec_env=types.SimpleNamespace(SubprocVecEnv=o
 sys.modules.setdefault("stable_baselines3", sb3)
 sys.modules.setdefault("stable_baselines3.common", sb3.common)
 sys.modules.setdefault("stable_baselines3.common.vec_env", sb3.common.vec_env)
+sb3.common.evaluation = types.SimpleNamespace(evaluate_policy=lambda *a, **k: None)
+sys.modules.setdefault("stable_baselines3.common.evaluation", sb3.common.evaluation)
 contrib = types.SimpleNamespace(TRPO=object, RecurrentPPO=object, HierarchicalPPO=object)
 sys.modules.setdefault("sb3_contrib", contrib)
 sys.modules.setdefault("sb3_contrib.qrdqn", types.SimpleNamespace(QRDQN=object))
@@ -24,11 +26,26 @@ class _Space:
 
 gym_spaces = types.SimpleNamespace(Box=_Space, Dict=_Space, Discrete=_Space)
 sys.modules.setdefault("gym", types.SimpleNamespace(Env=object, spaces=gym_spaces))
+sys.modules.setdefault("torch", types.SimpleNamespace())
 sys.modules.setdefault("mlflow", types.SimpleNamespace(log_param=lambda *a, **k: None, log_artifact=lambda *a, **k: None, end_run=lambda *a, **k: None))
 sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda *a, **k: {}, dump=lambda *a, **k: ""))
 sklearn_stub = types.SimpleNamespace(decomposition=types.SimpleNamespace(PCA=object))
 sys.modules.setdefault("sklearn", sklearn_stub)
 sys.modules.setdefault("sklearn.decomposition", sklearn_stub.decomposition)
+sys.modules.setdefault("utils", types.SimpleNamespace(load_config=lambda: {}))
+sys.modules.setdefault(
+    "state_manager",
+    types.SimpleNamespace(save_checkpoint=lambda *a, **k: None, load_latest_checkpoint=lambda *a, **k: None),
+)
+history_stub = types.SimpleNamespace(
+    load_history_parquet=lambda *a, **k: None,
+    save_history_parquet=lambda *a, **k: None,
+    load_history_config=lambda *a, **k: pd.DataFrame(),
+)
+features_stub = types.SimpleNamespace(make_features=lambda df: df)
+sys.modules.setdefault("data", types.SimpleNamespace())
+sys.modules.setdefault("data.history", history_stub)
+sys.modules.setdefault("data.features", features_stub)
 
 from train_rl import TradingEnv
 
