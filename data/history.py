@@ -6,9 +6,14 @@ import datetime as dt
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict, List
 
-import pandas as pd
+from utils.data_backend import get_dataframe_module
+
+pd = get_dataframe_module()
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 from .versioning import compute_hash
 
