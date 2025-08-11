@@ -22,6 +22,7 @@ from .features import (
     make_sequence_arrays,
 )
 from .multitimeframe import aggregate_timeframes
+from .graph_builder import build_correlation_graph
 
 __all__ = [
     "get_events",
@@ -37,6 +38,7 @@ __all__ = [
     "add_economic_calendar_features",
     "add_news_sentiment_features",
     "aggregate_timeframes",
+    "build_correlation_graph",
     "make_features",
     "compute_rsi",
     "ma_cross_signal",
