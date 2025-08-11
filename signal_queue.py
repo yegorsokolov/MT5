@@ -17,6 +17,10 @@ from risk.position_sizer import PositionSizer
 
 import asyncio
 from proto import signals_pb2
+from event_store import EventStore
+from pathlib import Path
+
+_EVENT_STORE = EventStore(Path(os.getenv("EVENT_STORE_PATH", Path(__file__).resolve().parent / "data" / "events.db")))
 
 _CTX = zmq.Context.instance()
 _ASYNC_CTX = zmq.asyncio.Context.instance()
@@ -149,7 +153,7 @@ async def iter_messages(
                 if sizer
                 else prob * conf
             )
-            yield {
+            payload = {
                 "Timestamp": data.get("Timestamp", ""),
                 "Symbol": symbol,
                 "prob": prob,
@@ -158,6 +162,8 @@ async def iter_messages(
                 "es": es,
                 "size": size,
             }
+            _EVENT_STORE.record("prediction", payload)
+            yield payload
         else:
             raw = await sock.recv()
             sig = signals_pb2.Signal()
@@ -177,7 +183,7 @@ async def iter_messages(
                 if sizer
                 else prob * conf
             )
-            yield {
+            payload = {
                 "Timestamp": sig.timestamp,
                 "Symbol": symbol,
                 "prob": prob,
@@ -186,6 +192,8 @@ async def iter_messages(
                 "es": es,
                 "size": size,
             }
+            _EVENT_STORE.record("prediction", payload)
+            yield payload
 
 
 class KafkaSignalQueue:
@@ -270,7 +278,7 @@ class KafkaSignalQueue:
                     if sizer
                     else prob * conf
                 )
-                yield {
+                payload = {
                     "Timestamp": data.get("Timestamp", ""),
                     "Symbol": symbol,
                     "prob": prob,
@@ -279,6 +287,8 @@ class KafkaSignalQueue:
                     "es": es,
                     "size": size,
                 }
+                _EVENT_STORE.record("prediction", payload)
+                yield payload
             else:
                 sig = signals_pb2.Signal()
                 sig.ParseFromString(msg.value)
@@ -296,7 +306,7 @@ class KafkaSignalQueue:
                     if sizer
                     else prob * conf
                 )
-                yield {
+                payload = {
                     "Timestamp": sig.timestamp,
                     "Symbol": symbol,
                     "prob": prob,
@@ -305,6 +315,8 @@ class KafkaSignalQueue:
                     "es": es,
                     "size": size,
                 }
+                _EVENT_STORE.record("prediction", payload)
+                yield payload
 
 
 class RedisSignalQueue:
@@ -383,7 +395,7 @@ class RedisSignalQueue:
                         if sizer
                         else prob * conf
                     )
-                    yield {
+                    out = {
                         "Timestamp": payload.get("Timestamp", ""),
                         "Symbol": symbol,
                         "prob": prob,
@@ -392,6 +404,8 @@ class RedisSignalQueue:
                         "es": es,
                         "size": size,
                     }
+                    _EVENT_STORE.record("prediction", out)
+                    yield out
                 else:
                     sig = signals_pb2.Signal()
                     sig.ParseFromString(data)
@@ -409,7 +423,7 @@ class RedisSignalQueue:
                         if sizer
                         else prob * conf
                     )
-                    yield {
+                    out = {
                         "Timestamp": sig.timestamp,
                         "Symbol": symbol,
                         "prob": prob,
@@ -418,6 +432,8 @@ class RedisSignalQueue:
                         "es": es,
                         "size": size,
                     }
+                    _EVENT_STORE.record("prediction", out)
+                    yield out
 
 
 def get_signal_backend(cfg: dict | None):
