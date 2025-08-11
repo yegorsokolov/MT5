@@ -84,6 +84,10 @@ def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf")
                 "prob": float(row["prob"]),
                 "confidence": float(row.get("confidence", 1.0)),
             }
+            if "var" in row:
+                payload["var"] = float(row["var"])
+            if "es" in row:
+                payload["es"] = float(row["es"])
             sock.send_json(payload)
         else:
             msg = signals_pb2.Signal(
@@ -109,6 +113,10 @@ async def publish_dataframe_async(
                 "prob": float(row["prob"]),
                 "confidence": float(row.get("confidence", 1.0)),
             }
+            if "var" in row:
+                payload["var"] = float(row["var"])
+            if "es" in row:
+                payload["es"] = float(row["es"])
             await sock.send_json(payload)
         else:
             msg = signals_pb2.Signal(
@@ -134,12 +142,20 @@ async def iter_messages(
             symbol = data.get("Symbol", "")
             prob = float(data.get("prob", 0.0))
             conf = float(data.get("confidence", 1.0))
-            size = sizer.size(prob, symbol, confidence=conf) if sizer else prob * conf
+            var = data.get("var")
+            es = data.get("es")
+            size = (
+                sizer.size(prob, symbol, var=var, es=es, confidence=conf)
+                if sizer
+                else prob * conf
+            )
             yield {
                 "Timestamp": data.get("Timestamp", ""),
                 "Symbol": symbol,
                 "prob": prob,
                 "confidence": conf,
+                "var": var,
+                "es": es,
                 "size": size,
             }
         else:
@@ -150,12 +166,24 @@ async def iter_messages(
             prob = float(sig.probability)
             symbol = sig.symbol
             conf = float(getattr(sig, "confidence", 1.0))
-            size = sizer.size(prob, symbol, confidence=conf) if sizer else prob * conf
+            var = getattr(sig, "var", None)
+            es = getattr(sig, "es", None)
+            if var is not None:
+                var = float(var)
+            if es is not None:
+                es = float(es)
+            size = (
+                sizer.size(prob, symbol, var=var, es=es, confidence=conf)
+                if sizer
+                else prob * conf
+            )
             yield {
                 "Timestamp": sig.timestamp,
                 "Symbol": symbol,
                 "prob": prob,
                 "confidence": conf,
+                "var": var,
+                "es": es,
                 "size": size,
             }
 
@@ -192,14 +220,17 @@ class KafkaSignalQueue:
         fmt = fmt.lower()
         for _, row in df.iterrows():
             if fmt == "json":
-                payload = json.dumps(
-                    {
-                        "Timestamp": str(row["Timestamp"]),
-                        "Symbol": str(row.get("Symbol", "")),
-                        "prob": float(row["prob"]),
-                        "confidence": float(row.get("confidence", 1.0)),
-                    }
-                ).encode()
+                payload_dict = {
+                    "Timestamp": str(row["Timestamp"]),
+                    "Symbol": str(row.get("Symbol", "")),
+                    "prob": float(row["prob"]),
+                    "confidence": float(row.get("confidence", 1.0)),
+                }
+                if "var" in row:
+                    payload_dict["var"] = float(row["var"])
+                if "es" in row:
+                    payload_dict["es"] = float(row["es"])
+                payload = json.dumps(payload_dict).encode()
             else:
                 msg = signals_pb2.Signal(
                     timestamp=str(row["Timestamp"]),
@@ -232,8 +263,10 @@ class KafkaSignalQueue:
                 symbol = data.get("Symbol", "")
                 prob = float(data.get("prob", 0.0))
                 conf = float(data.get("confidence", 1.0))
+                var = data.get("var")
+                es = data.get("es")
                 size = (
-                    sizer.size(prob, symbol, confidence=conf)
+                    sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                     if sizer
                     else prob * conf
                 )
@@ -242,6 +275,8 @@ class KafkaSignalQueue:
                     "Symbol": symbol,
                     "prob": prob,
                     "confidence": conf,
+                    "var": var,
+                    "es": es,
                     "size": size,
                 }
             else:
@@ -250,8 +285,14 @@ class KafkaSignalQueue:
                 prob = float(sig.probability)
                 symbol = sig.symbol
                 conf = float(getattr(sig, "confidence", 1.0))
+                var = getattr(sig, "var", None)
+                es = getattr(sig, "es", None)
+                if var is not None:
+                    var = float(var)
+                if es is not None:
+                    es = float(es)
                 size = (
-                    sizer.size(prob, symbol, confidence=conf)
+                    sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                     if sizer
                     else prob * conf
                 )
@@ -260,6 +301,8 @@ class KafkaSignalQueue:
                     "Symbol": symbol,
                     "prob": prob,
                     "confidence": conf,
+                    "var": var,
+                    "es": es,
                     "size": size,
                 }
 
@@ -283,14 +326,17 @@ class RedisSignalQueue:
         fmt = fmt.lower()
         for _, row in df.iterrows():
             if fmt == "json":
-                payload = json.dumps(
-                    {
-                        "Timestamp": str(row["Timestamp"]),
-                        "Symbol": str(row.get("Symbol", "")),
-                        "prob": float(row["prob"]),
-                        "confidence": float(row.get("confidence", 1.0)),
-                    }
-                ).encode()
+                payload_dict = {
+                    "Timestamp": str(row["Timestamp"]),
+                    "Symbol": str(row.get("Symbol", "")),
+                    "prob": float(row["prob"]),
+                    "confidence": float(row.get("confidence", 1.0)),
+                }
+                if "var" in row:
+                    payload_dict["var"] = float(row["var"])
+                if "es" in row:
+                    payload_dict["es"] = float(row["es"])
+                payload = json.dumps(payload_dict).encode()
             else:
                 msg = signals_pb2.Signal(
                     timestamp=str(row["Timestamp"]),
@@ -330,8 +376,10 @@ class RedisSignalQueue:
                     symbol = payload.get("Symbol", "")
                     prob = float(payload.get("prob", 0.0))
                     conf = float(payload.get("confidence", 1.0))
+                    var = payload.get("var")
+                    es = payload.get("es")
                     size = (
-                        sizer.size(prob, symbol, confidence=conf)
+                        sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                         if sizer
                         else prob * conf
                     )
@@ -340,6 +388,8 @@ class RedisSignalQueue:
                         "Symbol": symbol,
                         "prob": prob,
                         "confidence": conf,
+                        "var": var,
+                        "es": es,
                         "size": size,
                     }
                 else:
@@ -348,8 +398,14 @@ class RedisSignalQueue:
                     prob = float(sig.probability)
                     symbol = sig.symbol
                     conf = float(getattr(sig, "confidence", 1.0))
+                    var = getattr(sig, "var", None)
+                    es = getattr(sig, "es", None)
+                    if var is not None:
+                        var = float(var)
+                    if es is not None:
+                        es = float(es)
                     size = (
-                        sizer.size(prob, symbol, confidence=conf)
+                        sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                         if sizer
                         else prob * conf
                     )
@@ -358,6 +414,8 @@ class RedisSignalQueue:
                         "Symbol": symbol,
                         "prob": prob,
                         "confidence": conf,
+                        "var": var,
+                        "es": es,
                         "size": size,
                     }
 
