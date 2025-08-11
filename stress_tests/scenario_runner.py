@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple, Optional
 
 import pandas as pd
 import numpy as np
@@ -70,8 +70,23 @@ class StressScenarioRunner:
     # ------------------------------------------------------------------
     # Scenario running
     # ------------------------------------------------------------------
-    def run(self) -> Dict[str, List[ScenarioResult]]:
-        """Run all scenarios for all strategies and save reports."""
+    def run(
+        self,
+        synthetic_generator: Optional[object] = None,
+        n_synthetic: int = 0,
+    ) -> Dict[str, List[ScenarioResult]]:
+        """Run all scenarios for all strategies and save reports.
+
+        Parameters
+        ----------
+        synthetic_generator:
+            Optional object exposing a ``generate(length: int) -> ArrayLike`` method.
+            When provided, additional synthetic PnL paths will be generated and
+            evaluated alongside historical scenarios.
+        n_synthetic:
+            Number of synthetic paths to generate for each strategy.  Ignored if
+            ``synthetic_generator`` is ``None``.
+        """
         all_results: Dict[str, List[ScenarioResult]] = {}
         for name, path in self.strategies.items():
             pnl = self._load_pnl(path)
@@ -88,6 +103,13 @@ class StressScenarioRunner:
             if not shocked.empty:
                 shocked.iloc[0] -= shock_size
             results.append(self._evaluate(shocked, "synthetic"))
+
+            # Optional GAN/diffusion generated paths
+            if synthetic_generator is not None and n_synthetic > 0:
+                for i in range(n_synthetic):
+                    synthetic = synthetic_generator.generate(len(pnl))
+                    syn_series = pd.Series(synthetic, index=pnl.index)
+                    results.append(self._evaluate(syn_series, f"synthetic_path_{i}"))
 
             all_results[name] = results
             self._save_report(name, results)
