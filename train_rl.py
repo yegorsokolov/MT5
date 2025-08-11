@@ -81,6 +81,68 @@ from ray_utils import (
     cluster_available,
     submit,
 )
+from rl.offline_dataset import OfflineDataset
+from event_store import EventStore
+
+
+def offline_pretrain(
+    model: object,
+    store_path: str | Path | None = None,
+    epochs: int = 10,
+    batch_size: int = 32,
+    lr: float = 1e-3,
+) -> None:
+    """Pretrain ``model``'s policy using offline experiences.
+
+    The routine performs a simple behaviour cloning update over experiences
+    recorded in the :mod:`event_store`.  If PyTorch is available and the policy
+    exposes parameters, gradient descent is executed with an MSE loss.  In
+    environments without PyTorch the function falls back to a very small
+    implementation that updates ``weight`` and ``bias`` attributes of a linear
+    policy using basic gradient steps.
+    """
+
+    dataset = OfflineDataset(EventStore(store_path) if store_path else EventStore())
+    if len(dataset) == 0:
+        dataset.close()
+        return
+    policy = getattr(model, "policy", model)
+
+    try:  # prefer torch if available
+        import torch  # type: ignore
+
+        if hasattr(policy, "parameters"):
+            optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
+            loss_fn = torch.nn.MSELoss()
+            for _ in range(max(1, epochs)):
+                for obs, actions, _, _, _ in dataset.iter_batches(batch_size):
+                    obs_t = torch.as_tensor(obs, dtype=torch.float32)
+                    act_t = torch.as_tensor(actions, dtype=torch.float32)
+                    pred = policy(obs_t)
+                    loss = loss_fn(pred, act_t)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+            dataset.close()
+            return
+    except Exception:  # pragma: no cover - torch not available
+        pass
+
+    # Fallback: assume simple linear policy with scalar weight and bias
+    w = float(getattr(policy, "weight", 0.0))
+    b = float(getattr(policy, "bias", 0.0))
+    for _ in range(max(1, epochs)):
+        for obs, actions, _, _, _ in dataset.iter_batches(batch_size):
+            for o, a in zip(obs, actions):
+                x = float(o[0] if isinstance(o, (list, tuple)) else o)
+                y = float(a[0] if isinstance(a, (list, tuple)) else a)
+                pred = w * x + b
+                grad = pred - y
+                w -= lr * 2 * grad * x
+                b -= lr * 2 * grad
+    policy.weight = w
+    policy.bias = b
+    dataset.close()
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -663,6 +725,12 @@ def main(
             model.num_timesteps = last_step
             start_step = last_step
             logger.info("Resuming from checkpoint at step %s", last_step)
+        elif cfg.get("offline_pretrain"):
+            try:
+                offline_pretrain(model, cfg.get("event_store_path"))
+                logger.info("Completed offline pretraining using recorded experiences")
+            except Exception:
+                logger.exception("Offline pretraining failed")
         total_steps = int(cfg.get("rl_steps", 5000))
         interval = int(cfg.get("checkpoint_interval", 1000))
         current = start_step
@@ -854,6 +922,11 @@ if __name__ == "__main__":
         "--graph-model", action="store_true", help="Use GraphNet as policy backbone"
     )
     parser.add_argument(
+        "--offline-pretrain",
+        action="store_true",
+        help="Initialize policy using offline data before online fine-tuning",
+    )
+    parser.add_argument(
         "--risk-objective",
         choices=["cvar"],
         help="Apply specified risk objective to rewards",
@@ -870,6 +943,8 @@ if __name__ == "__main__":
         cfg["graph_model"] = True
     if args.risk_objective:
         cfg["risk_objective"] = args.risk_objective
+    if args.offline_pretrain:
+        cfg["offline_pretrain"] = True
     if args.tune:
         from tuning.hyperopt import tune_rl
 
