@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover - optional dependency
 from stable_baselines3.common.evaluation import evaluate_policy
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
+from torch.utils.data import DataLoader, TensorDataset
 
 try:  # optional dependency - hierarchical options
     from sb3_contrib import HierarchicalPPO  # type: ignore
@@ -55,6 +56,7 @@ except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
 from data.features import make_features
 from models.graph_net import GraphNet
+from models.distillation import distill_teacher_student
 try:
     from analysis.regime_detection import periodic_reclassification  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -796,7 +798,7 @@ def main(
                     cvar = -float(eval_returns[eval_returns <= var_threshold].mean())
                 else:
                     cvar = 0.0
-                mlflow.log_metric("cvar", cvar)
+            mlflow.log_metric("cvar", cvar)
 
             # train risk management policy
             returns = df.sort_index()["return"].dropna()
@@ -838,6 +840,49 @@ def main(
                 artifact = root / "model_rllib"
             else:
                 artifact = root / "model_rl.zip"
+            if monitor.capabilities.model_size() == "full":
+                student_model = A2C(
+                    "MlpPolicy",
+                    env,
+                    seed=seed,
+                    device=device,
+                    verbose=0,
+                    learning_rate=cfg.get("rl_learning_rate", 3e-4),
+                )
+                obs_samples = []
+                obs = env.reset()
+                if isinstance(obs, tuple):
+                    obs = obs[0]
+                for _ in range(min(256, len(df))):
+                    obs_samples.append(obs)
+                    action, _ = model.predict(obs, deterministic=True)
+                    obs, _, done, _ = env.step(action)
+                    if isinstance(obs, tuple):
+                        obs = obs[0]
+                    if done:
+                        obs = env.reset()
+                        if isinstance(obs, tuple):
+                            obs = obs[0]
+                obs_tensor = torch.tensor(np.array(obs_samples), dtype=torch.float32)
+                loader = DataLoader(
+                    TensorDataset(obs_tensor, torch.zeros(len(obs_tensor))),
+                    batch_size=32,
+                )
+                distill_teacher_student(
+                    model.policy,
+                    student_model.policy,
+                    loader,
+                    epochs=cfg.get("distill_epochs", 1),
+                )
+                student_model.save(root / "model_rl_distilled")
+                model_store.save_model(
+                    root / "model_rl_distilled.zip",
+                    {**cfg, "distilled_from": str(artifact)},
+                    {"cumulative_return": cumulative_return},
+                )
+                logger.info(
+                    "Distilled RL policy saved to %s", root / "model_rl_distilled.zip"
+                )
             version_id = model_store.save_model(
                 artifact,
                 cfg,
