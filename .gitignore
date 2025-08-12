@@ -17,5 +17,6 @@ models/*
 !models/price_distribution.py
 !models/graph_net.py
 !models/distillation.py
+!models/meta_label.py
 __pycache__/
 logs/
