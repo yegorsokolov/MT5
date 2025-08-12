@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, TYPE_CHECKING
 import asyncio
 import os
@@ -21,6 +21,7 @@ class RiskMetrics:
     var: float = 0.0
     risk_of_ruin: float = 0.0
     trading_halted: bool = False
+    factor_contributions: Dict[str, float] = field(default_factory=dict)
 
 
 class RiskManager:
@@ -40,6 +41,7 @@ class RiskManager:
         self.var_window = var_window
         self.metrics = RiskMetrics()
         self._pnl_history: List[float] = []
+        self._factor_history: List[Dict[str, float]] = []
         self.tail_hedger = tail_hedger
         self.risk_of_ruin_threshold = risk_of_ruin_threshold
         self.initial_capital = initial_capital
@@ -54,19 +56,31 @@ class RiskManager:
         pnl: float,
         exposure: float = 0.0,
         check_hedge: bool = True,
+        factor_returns: Dict[str, float] | None = None,
     ) -> None:
         """Record a trade or PnL update from ``bot_id``."""
         self.metrics.exposure += exposure
         self.metrics.daily_loss += pnl
         self._pnl_history.append(pnl)
+        if factor_returns is not None:
+            self._factor_history.append(factor_returns)
         if len(self._pnl_history) > self.var_window:
             self._pnl_history.pop(0)
+            if self._factor_history:
+                self._factor_history.pop(0)
         if self._pnl_history:
             self.metrics.var = float(-np.percentile(self._pnl_history, 1))
             returns = pd.Series(self._pnl_history) / self.initial_capital
             self.metrics.risk_of_ruin = float(
                 risk_of_ruin(returns, self.initial_capital)
             )
+            if self._factor_history and len(self._factor_history) == len(self._pnl_history):
+                factors_df = pd.DataFrame(self._factor_history)
+                from portfolio.factor_risk import FactorRisk
+
+                fr = FactorRisk(factors_df)
+                contrib = fr.factor_contributions(returns)
+                self.metrics.factor_contributions = contrib.to_dict()
         if (
             self.metrics.daily_loss <= -self.max_drawdown
             or self.metrics.var > self.max_var
@@ -90,6 +104,7 @@ class RiskManager:
             "var": self.metrics.var,
             "risk_of_ruin": self.metrics.risk_of_ruin,
             "trading_halted": self.metrics.trading_halted,
+            "factor_contributions": self.metrics.factor_contributions,
         }
 
     def halt(self) -> None:
@@ -98,6 +113,7 @@ class RiskManager:
     def reset(self) -> None:
         self.metrics = RiskMetrics()
         self._pnl_history.clear()
+        self._factor_history.clear()
 
 
 from risk.tail_hedger import TailHedger
