@@ -20,6 +20,7 @@ from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
 from models import model_store
 from models.graph_net import GraphNet
+from models.distillation import distill_teacher_student
 from analysis.feature_selector import select_features
 
 try:
@@ -560,6 +561,29 @@ def main(
                 {"val_loss": best_val_loss, "test_accuracy": acc},
             )
             logger.info("Registered model version %s", version_id)
+            if monitor.capabilities.model_size() == "full":
+                student = TransformerModel(
+                    len(features),
+                    d_model=max(16, cfg.get("d_model", 64) // 2),
+                    nhead=max(1, cfg.get("nhead", 4) // 2),
+                    num_layers=max(1, cfg.get("num_layers", 2) // 2),
+                    num_symbols=num_symbols,
+                    num_regimes=num_regimes,
+                ).to(device)
+                distill_teacher_student(
+                    model.module if isinstance(model, DDP) else model,
+                    student,
+                    train_loader,
+                    epochs=cfg.get("distill_epochs", 1),
+                )
+                student_path = root / "model_transformer_distilled.pt"
+                joblib.dump(student.state_dict(), student_path)
+                model_store.save_model(
+                    joblib.load(student_path),
+                    {**cfg, "distilled_from": version_id},
+                    {"teacher_accuracy": acc},
+                )
+                logger.info("Distilled student model saved to %s", student_path)
             if cfg.get("feature_importance", False):
                 report_dir = root / "reports"
                 X_sample = X_train[: cfg.get("shap_samples", 100)]
