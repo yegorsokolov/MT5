@@ -6,7 +6,7 @@ import time
 import pandas as pd
 import zmq
 import zmq.asyncio
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Any
 from contextlib import contextmanager, asynccontextmanager
 
 from kafka import KafkaProducer, KafkaConsumer, TopicPartition, errors as kafka_errors
@@ -25,6 +25,22 @@ _EVENT_STORE = EventStore(Path(os.getenv("EVENT_STORE_PATH", Path(__file__).reso
 _CTX = zmq.Context.instance()
 _ASYNC_CTX = zmq.asyncio.Context.instance()
 
+
+def _passes_meta(meta_clf: Any | None, prob: float, conf: float) -> bool:
+    """Return True if a message passes the meta-classifier filter.
+
+    The meta classifier is expected to implement ``predict`` with a
+    signature compatible with scikit-learn estimators.  It receives a
+    dataframe containing the message's probability and confidence.
+    """
+
+    if meta_clf is None:
+        return True
+    try:
+        feats = pd.DataFrame([[prob, conf]], columns=["prob", "confidence"])
+        return bool(meta_clf.predict(feats)[0])
+    except Exception:  # pragma: no cover - safeguard against bad meta_clf
+        return True
 
 @contextmanager
 def get_publisher(bind_address: str | None = None) -> zmq.Socket:
@@ -136,6 +152,7 @@ async def iter_messages(
     sock: zmq.asyncio.Socket,
     fmt: str = "protobuf",
     sizer: PositionSizer | None = None,
+    meta_clf: Any | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield decoded messages from a subscriber socket as they arrive."""
     fmt = fmt.lower()
@@ -162,6 +179,8 @@ async def iter_messages(
                 "es": es,
                 "size": size,
             }
+            if not _passes_meta(meta_clf, prob, conf):
+                continue
             _EVENT_STORE.record("prediction", payload)
             yield payload
         else:
@@ -192,6 +211,8 @@ async def iter_messages(
                 "es": es,
                 "size": size,
             }
+            if not _passes_meta(meta_clf, prob, conf):
+                continue
             _EVENT_STORE.record("prediction", payload)
             yield payload
 
@@ -260,7 +281,12 @@ class KafkaSignalQueue:
                         raise
                     time.sleep(1)
 
-    def iter_messages(self, fmt: str = "protobuf", sizer: PositionSizer | None = None):
+    def iter_messages(
+        self,
+        fmt: str = "protobuf",
+        sizer: PositionSizer | None = None,
+        meta_clf: Any | None = None,
+    ):
         fmt = fmt.lower()
         for msg in self.consumer:
             QUEUE_DEPTH.dec()
@@ -287,6 +313,8 @@ class KafkaSignalQueue:
                     "es": es,
                     "size": size,
                 }
+                if not _passes_meta(meta_clf, prob, conf):
+                    continue
                 _EVENT_STORE.record("prediction", payload)
                 yield payload
             else:
@@ -315,6 +343,8 @@ class KafkaSignalQueue:
                     "es": es,
                     "size": size,
                 }
+                if not _passes_meta(meta_clf, prob, conf):
+                    continue
                 _EVENT_STORE.record("prediction", payload)
                 yield payload
 
@@ -368,7 +398,12 @@ class RedisSignalQueue:
                         raise
                     time.sleep(1)
 
-    def iter_messages(self, fmt: str = "protobuf", sizer: PositionSizer | None = None):
+    def iter_messages(
+        self,
+        fmt: str = "protobuf",
+        sizer: PositionSizer | None = None,
+        meta_clf: Any | None = None,
+    ):
         fmt = fmt.lower()
         while True:
             resp = self.client.xread({self.stream: self.last_id}, count=1, block=1000)
@@ -404,6 +439,8 @@ class RedisSignalQueue:
                         "es": es,
                         "size": size,
                     }
+                    if not _passes_meta(meta_clf, prob, conf):
+                        continue
                     _EVENT_STORE.record("prediction", out)
                     yield out
                 else:
@@ -432,6 +469,8 @@ class RedisSignalQueue:
                         "es": es,
                         "size": size,
                     }
+                    if not _passes_meta(meta_clf, prob, conf):
+                        continue
                     _EVENT_STORE.record("prediction", out)
                     yield out
 
