@@ -2,8 +2,23 @@ import pandas as pd
 import numpy as np
 import sys
 from pathlib import Path
+import types
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+sys.modules.setdefault("mlflow", types.SimpleNamespace(
+    set_tracking_uri=lambda *a, **k: None,
+    set_experiment=lambda *a, **k: None,
+    start_run=lambda *a, **k: types.SimpleNamespace(__enter__=lambda self: None, __exit__=lambda self, *exc: None),
+    log_dict=lambda *a, **k: None,
+))
+sys.modules.setdefault("utils.environment", types.SimpleNamespace(ensure_environment=lambda: None))
+sklearn_stub = types.ModuleType("sklearn")
+sklearn_stub.decomposition = types.SimpleNamespace(PCA=lambda *a, **k: None)
+sys.modules.setdefault("sklearn", sklearn_stub)
+sys.modules.setdefault("sklearn.decomposition", sklearn_stub.decomposition)
+sys.modules.setdefault("duckdb", types.SimpleNamespace(connect=lambda *a, **k: None))
+sys.modules.setdefault("networkx", types.SimpleNamespace())
 
 import dataset
 
@@ -107,6 +122,8 @@ def test_save_load_history_parquet(tmp_path):
     path = tmp_path / "hist.parquet"
     dataset.save_history_parquet(df, path)
     loaded = dataset.load_history_parquet(path)
+    loaded.sort_values("Timestamp", inplace=True)
+    loaded.reset_index(drop=True, inplace=True)
     pd.testing.assert_frame_equal(loaded, df)
 
 

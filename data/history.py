@@ -230,32 +230,46 @@ def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
     """
 
     logger.info("Loading Parquet history from %s", path)
-    df = pd.read_parquet(path)
+    path = Path(path)
+    try:
+        import pyarrow.dataset as ds  # type: ignore
+
+        if path.is_dir():
+            dataset = ds.dataset(path, format="parquet")
+            table = dataset.to_table()
+            df = table.to_pandas()
+        else:
+            df = pd.read_parquet(path)
+    except Exception:
+        df = pd.read_parquet(path)
     if "Timestamp" in df.columns:
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
+    if "date" in df.columns:
+        df.drop(columns=["date"], inplace=True)
 
-    ds = DeltaStore()
-    delta = ds.ingest(path, df)
-    cache_path = path.with_suffix(".cache.csv")
-    if cache_path.exists():
-        cached_df = pd.read_csv(cache_path)
-        if "Timestamp" in cached_df.columns:
-            cached_df["Timestamp"] = pd.to_datetime(
-                cached_df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
-            )
-        if not delta.empty:
-            df = pd.concat([cached_df, delta], ignore_index=True)
-        else:
-            df = cached_df
+    if path.is_file():
+        ds = DeltaStore()
+        delta = ds.ingest(path, df)
+        cache_path = path.with_suffix(".cache.csv")
+        if cache_path.exists():
+            cached_df = pd.read_csv(cache_path)
+            if "Timestamp" in cached_df.columns:
+                cached_df["Timestamp"] = pd.to_datetime(
+                    cached_df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
+                )
+            if not delta.empty:
+                df = pd.concat([cached_df, delta], ignore_index=True)
+            else:
+                df = cached_df
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(cache_path, index=False, date_format="%Y%m%d %H:%M:%S:%f")
+        _record_data_version(path)
 
     if validate:
         from .validators import TICK_SCHEMA
 
         TICK_SCHEMA.validate(df, lazy=True)
     logger.debug("Loaded %d rows from Parquet", len(df))
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(cache_path, index=False, date_format="%Y%m%d %H:%M:%S:%f")
-    _record_data_version(path)
     return df
 
 
@@ -296,13 +310,32 @@ def load_history_iter(path: Path, chunk_size: int):
 
 
 def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
-    """Save tick history to a Parquet file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Save tick history to a partitioned Parquet dataset."""
+    import pyarrow as pa  # type: ignore
+    import pyarrow.dataset as ds  # type: ignore
+
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
     data = df.copy()
     if "Timestamp" in data.columns:
-        data["Timestamp"] = pd.to_datetime(data["Timestamp"], utc=True).dt.tz_localize(None)
+        ts = pd.to_datetime(data["Timestamp"], utc=True)
+        data["date"] = ts.dt.date.astype(str)
+        data["Timestamp"] = ts.dt.tz_localize(None)
     logger.info("Saving history to %s", path)
-    data.to_parquet(path, index=False)
+    table = pa.Table.from_pandas(data, preserve_index=False)
+    partitioning = None
+    if "date" in table.schema.names:
+        partitioning = ds.partitioning(
+            pa.schema([("date", pa.string())]), flavor="hive"
+        )
+    ds.write_dataset(
+        table,
+        base_dir=str(path),
+        format="parquet",
+        partitioning=partitioning,
+        existing_data_behavior="overwrite_or_ignore",
+        file_options=ds.ParquetFileFormat().make_write_options(compression="zstd"),
+    )
 
 
 def load_multiple_histories(paths: Dict[str, Path]) -> pd.DataFrame:

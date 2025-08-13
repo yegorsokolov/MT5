@@ -11,10 +11,15 @@ import datetime as _dt
 class EventStore:
     """Simple append-only event store backed by SQLite."""
 
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(self, path: str | Path | None = None, dataset_dir: str | Path | None = None) -> None:
         base = Path(__file__).resolve().parent
         self.path = Path(path) if path else base / "events.db"
         self.conn = sqlite3.connect(self.path)
+        self.ds_path = Path(dataset_dir) if dataset_dir else self.path.with_suffix(".parquet")
+        try:
+            self.ds_path.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS events (
@@ -37,6 +42,31 @@ class EventStore:
                 (ts, event_type, data),
             )
             self.conn.commit()
+            try:
+                import pyarrow as pa  # type: ignore
+                import pyarrow.dataset as ds  # type: ignore
+
+                ts_dt = _dt.datetime.fromisoformat(ts)
+                table = pa.table(
+                    {
+                        "timestamp": [ts_dt],
+                        "type": [event_type],
+                        "date": [ts_dt.date().isoformat()],
+                        "payload": [data],
+                    }
+                )
+                ds.write_dataset(
+                    table,
+                    base_dir=str(self.ds_path),
+                    format="parquet",
+                    partitioning=["type", "date"],
+                    existing_data_behavior="overwrite_or_ignore",
+                    file_options=ds.ParquetFileFormat().make_write_options(
+                        compression="zstd"
+                    ),
+                )
+            except Exception:
+                pass
 
     def iter_events(self, event_type: Optional[str] = None) -> Iterable[Dict[str, Any]]:
         """Yield events in order, optionally filtered by type."""
