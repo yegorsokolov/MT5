@@ -20,6 +20,7 @@ LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / "app.log"
 TRADE_LOG = LOG_DIR / "trades.csv"
 DECISION_LOG = LOG_DIR / "decisions.parquet"
+TRADE_HISTORY = LOG_DIR / "trade_history.parquet"
 
 
 class JsonFormatter(logging.Formatter):
@@ -89,6 +90,27 @@ def log_trade(event: str, **fields) -> None:
         writer.writerow(row)
     TRADE_COUNT.inc()
     log_decision(pd.DataFrame([row]))
+
+
+def log_trade_history(record: dict) -> None:
+    """Append executed trade with features to the parquet trade history.
+
+    If a trade with the same ``order_id`` is already present in the history the
+    record is not duplicated.
+    """
+
+    df = pd.DataFrame([record])
+    if TRADE_HISTORY.exists():
+        try:
+            if "order_id" in record:
+                existing = pd.read_parquet(TRADE_HISTORY, columns=["order_id"])
+                if record["order_id"] in set(existing["order_id"].tolist()):
+                    return
+            df.to_parquet(TRADE_HISTORY, engine="pyarrow", append=True)
+        except Exception:
+            df.to_parquet(TRADE_HISTORY, engine="pyarrow")
+    else:
+        df.to_parquet(TRADE_HISTORY, engine="pyarrow")
 
 
 def log_decision(df: pd.DataFrame) -> None:

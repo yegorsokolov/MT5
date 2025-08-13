@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - fallback when utils is stubbed
             return
 from data.features import make_features
 import duckdb
-from log_utils import setup_logging, log_exceptions
+from log_utils import setup_logging, log_exceptions, log_trade_history
 from analysis.anomaly_detector import detect_anomalies
 from metrics import RECONNECT_COUNT, FEATURE_ANOMALIES, RESOURCE_RESTARTS
 from signal_queue import get_signal_backend
@@ -363,12 +363,32 @@ async def train_realtime():
                 "price": price,
             }
             order_id = trade_log.record_order(order)
-            event_store.record("order", {**order, "order_id": order_id, "timestamp": str(order["timestamp"])})
+            event_store.record(
+                "order",
+                {**order, "order_id": order_id, "timestamp": str(order["timestamp"])},
+            )
             trade_log.record_fill({**order, "order_id": order_id})
             event_store.record(
                 "fill",
                 {**order, "order_id": order_id, "timestamp": str(order["timestamp"])},
             )
+            feat_row = (
+                new_features[new_features["Symbol"] == rec["Symbol"]]
+                .tail(1)
+                .to_dict("records")[0]
+            )
+            trade_rec = {
+                "Timestamp": order["timestamp"],
+                "Symbol": order["symbol"],
+                "side": side,
+                "volume": order["volume"],
+                "price": order["price"],
+                "order_id": order_id,
+                "prob": rec["prob"],
+            }
+            feat_row.pop("Timestamp", None)
+            feat_row.pop("Symbol", None)
+            log_trade_history({**trade_rec, **feat_row})
 
         returns = df["return"].dropna()
         from backtest import compute_metrics
