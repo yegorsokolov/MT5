@@ -16,6 +16,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
 
 from .versioning import compute_hash
+from .delta_store import DeltaStore
 
 logger = logging.getLogger(__name__)
 DATA_VERSIONS_LOG = Path("logs/data_versions.json")
@@ -189,11 +190,30 @@ def load_history(path: Path, validate: bool = False) -> pd.DataFrame:
     logger.info("Loading CSV history from %s", path)
     df = pd.read_csv(path)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
+
+    ds = DeltaStore()
+    delta = ds.ingest(path, df)
+    cache_path = path.with_suffix(".cache.csv")
+    if cache_path.exists():
+        cached_df = pd.read_csv(cache_path)
+        cached_df["Timestamp"] = pd.to_datetime(
+            cached_df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
+        )
+        if not delta.empty:
+            df = pd.concat([cached_df, delta], ignore_index=True)
+        else:
+            df = cached_df
+    else:
+        # first load, use full df
+        pass
+
     if validate:
         from .validators import TICK_SCHEMA
 
         TICK_SCHEMA.validate(df, lazy=True)
     logger.debug("Loaded %d rows from CSV", len(df))
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(cache_path, index=False, date_format="%Y%m%d %H:%M:%S:%f")
     _record_data_version(path)
     return df
 
@@ -213,11 +233,28 @@ def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
     df = pd.read_parquet(path)
     if "Timestamp" in df.columns:
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
+
+    ds = DeltaStore()
+    delta = ds.ingest(path, df)
+    cache_path = path.with_suffix(".cache.csv")
+    if cache_path.exists():
+        cached_df = pd.read_csv(cache_path)
+        if "Timestamp" in cached_df.columns:
+            cached_df["Timestamp"] = pd.to_datetime(
+                cached_df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
+            )
+        if not delta.empty:
+            df = pd.concat([cached_df, delta], ignore_index=True)
+        else:
+            df = cached_df
+
     if validate:
         from .validators import TICK_SCHEMA
 
         TICK_SCHEMA.validate(df, lazy=True)
     logger.debug("Loaded %d rows from Parquet", len(df))
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(cache_path, index=False, date_format="%Y%m%d %H:%M:%S:%f")
     _record_data_version(path)
     return df
 
