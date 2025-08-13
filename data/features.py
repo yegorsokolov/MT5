@@ -371,27 +371,20 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     adjacency_matrices: dict | None = None
 
     cached_store: FeatureStore | None = None
+    cached_df: pd.DataFrame | None = None
     raw_hash = ""
+    symbol_key = "nosymbol"
+    window_key = 0
+    params_key = {
+        "use_atr": use_atr,
+        "use_donchian": use_donchian,
+        "use_kalman": use_kalman,
+    }
     if use_cache:
         cached_store = FeatureStore()
-        # Hash the raw dataframe via a temporary file using `compute_hash`
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-            df.to_csv(tmp.name, index=False)
-            raw_hash = compute_hash(tmp.name)
-        os.unlink(tmp.name)
-        symbol_key = (
-            "-".join(sorted(df["Symbol"].unique())) if "Symbol" in df.columns else "nosymbol"
-        )
-        window_key = len(df)
-        params_key = {
-            "use_atr": use_atr,
-            "use_donchian": use_donchian,
-            "use_kalman": use_kalman,
-        }
-        cached_df = cached_store.load(symbol_key, window_key, params_key, raw_hash)
-        if cached_df is not None:
-            logger.info("Loading features from cache %s", cached_store.path)
-            return cached_df
+        if "Symbol" in df.columns:
+            symbol_key = "-".join(sorted(df["Symbol"].unique()))
+        cached_df = cached_store.load_any(symbol_key, window_key, params_key)
 
     if use_dask:
         import dask.dataframe as dd  # type: ignore
@@ -692,14 +685,23 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         from .validators import FEATURE_SCHEMA
 
         FEATURE_SCHEMA.validate(df, lazy=True)
+
     if use_cache and cached_store is not None:
-        symbol_key = (
-            "-".join(sorted(df["Symbol"].unique())) if "Symbol" in df.columns else "nosymbol"
-        )
-        window_key = len(df)
-        params_key = {"use_atr": use_atr, "use_donchian": use_donchian}
-        cached_store.save(df, symbol_key, window_key, params_key, raw_hash)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            df.to_csv(tmp.name, index=False)
+            raw_hash = compute_hash(tmp.name)
+        os.unlink(tmp.name)
+
+        if cached_df is not None and len(cached_df) <= len(df):
+            df_to_save = pd.concat(
+                [cached_df, df.iloc[len(cached_df):]], ignore_index=True
+            )
+        else:
+            df_to_save = df
+
+        cached_store.save(df_to_save, symbol_key, window_key, params_key, raw_hash)
         logger.info("Cached features written to %s", cached_store.path)
+        return df_to_save
 
     return df
 
