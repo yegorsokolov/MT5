@@ -67,6 +67,33 @@ class FeatureStore:
         return df
 
     # ------------------------------------------------------------------
+    def load_any(
+        self, symbol: str, window: int, params: Dict[str, Any]
+    ) -> Optional[pd.DataFrame]:
+        """Return cached features ignoring any raw data hash.
+
+        This helper is used by delta-aware feature generation which only
+        appends new feature rows on top of existing cached data.  The caller
+        is responsible for ensuring the underlying raw data has not changed
+        except for new rows appended at the end.
+        """
+
+        if not self.path.exists():
+            return None
+
+        conn = duckdb.connect(self.path.as_posix())
+        key = self._key(symbol, window, params)
+        table_name = f"features_{key}"
+        tables = {t[0] for t in conn.execute("PRAGMA show_tables").fetchall()}
+        if table_name not in tables:
+            conn.close()
+            return None
+
+        df = conn.execute(f'SELECT * FROM "{table_name}"').fetch_df()
+        conn.close()
+        return df
+
+    # ------------------------------------------------------------------
     def save(
         self,
         df: pd.DataFrame,
