@@ -29,6 +29,7 @@ except Exception:  # pragma: no cover - algorithm may not be available
     HierarchicalPPO = None  # type: ignore
 
 from plugins.rl_risk import RiskEnv
+from rl.multi_objective import weighted_sum
 
 try:
     import gymnasium as gymn
@@ -168,6 +169,8 @@ class TradingEnv(gym.Env):
         cvar_window: int = 30,
         slippage_factor: float = 0.0,
         spread_source: str | None = None,
+        objectives: list[str] | None = None,
+        objective_weights: list[float] | None = None,
     ) -> None:
         super().__init__()
 
@@ -190,6 +193,10 @@ class TradingEnv(gym.Env):
         self.cvar_window = cvar_window
         self.slippage_factor = slippage_factor
         self.spread_source = spread_source
+        self.objectives = objectives or ["return"]
+        if objective_weights is None:
+            objective_weights = [1.0] * len(self.objectives)
+        self.objective_weights = np.asarray(objective_weights, dtype=np.float32)
 
         self.price_cols = [f"{sym}_mid" for sym in self.symbols]
         self.feature_cols = []
@@ -269,7 +276,15 @@ class TradingEnv(gym.Env):
         cost_total = costs.sum()
         self.equity *= 1 - cost_total
 
-        reward = portfolio_ret - cost_total
+        reward_components: list[float] = []
+        objective_map: dict[str, float] = {}
+        if "return" in self.objectives:
+            reward_components.append(portfolio_ret)
+            objective_map["return"] = float(portfolio_ret)
+        if "cost" in self.objectives:
+            reward_components.append(-cost_total)
+            objective_map["cost"] = float(-cost_total)
+        reward = 0.0
         self.positions = action
 
         self.i += 1
@@ -291,9 +306,17 @@ class TradingEnv(gym.Env):
             window = np.array(self.portfolio_returns[-self.cvar_window :])
             var_threshold = np.percentile(window, 5)
             cvar = -window[window <= var_threshold].mean()
-            reward -= self.cvar_penalty * cvar
+            risk -= self.cvar_penalty * cvar
 
-        reward += risk
+        if "risk" in self.objectives:
+            reward_components.append(risk)
+            objective_map["risk"] = float(risk)
+
+        if reward_components:
+            reward = weighted_sum(
+                np.asarray(reward_components, dtype=np.float32),
+                self.objective_weights[: len(reward_components)],
+            )
 
         info = {
             "portfolio_return": float(portfolio_ret),
@@ -301,6 +324,8 @@ class TradingEnv(gym.Env):
             "transaction_costs": costs,
             "execution_prices": exec_prices,
         }
+        if objective_map:
+            info["objectives"] = objective_map
 
         return next_obs, reward, done, info
 
@@ -461,17 +486,21 @@ def main(
                 window=cfg.get("rl_cvar_window", 30),
             )
         return env
+    env_kwargs = dict(
+        df=df,
+        features=features,
+        max_position=cfg.get("rl_max_position", 1.0),
+        transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+        risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+        var_window=cfg.get("rl_var_window", 30),
+        cvar_penalty=cvar_env_penalty,
+        cvar_window=cfg.get("rl_cvar_window", 30),
+        objectives=cfg.get("rl_objectives", ["return"]),
+        objective_weights=cfg.get("rl_objective_weights"),
+    )
+
     if algo == "PPO":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cvar_env_penalty,
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
+        env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         model = PPO(
             "MlpPolicy",
@@ -483,16 +512,7 @@ def main(
             gamma=cfg.get("rl_gamma", 0.99),
         )
     elif algo == "RECURRENTPPO":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cvar_env_penalty,
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
+        env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         model = RecurrentPPO(
             "MlpLstmPolicy",
@@ -504,16 +524,7 @@ def main(
             gamma=cfg.get("rl_gamma", 0.99),
         )
     elif algo == "A2C":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cvar_env_penalty,
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
+        env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         model = A2C(
             "MlpPolicy",
@@ -529,16 +540,7 @@ def main(
         n_envs = min(n_envs, os.cpu_count() or 1)
 
         def make_env():
-            env_i = TradingEnv(
-                df,
-                features,
-                max_position=cfg.get("rl_max_position", 1.0),
-                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-                var_window=cfg.get("rl_var_window", 30),
-                cvar_penalty=cvar_env_penalty,
-                cvar_window=cfg.get("rl_cvar_window", 30),
-            )
+            env_i = TradingEnv(**env_kwargs)
             return maybe_wrap(env_i)
 
         if n_envs == 1:
@@ -555,16 +557,7 @@ def main(
             gamma=cfg.get("rl_gamma", 0.99),
         )
     elif algo == "SAC":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cvar_env_penalty,
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
+        env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         model = SAC(
             "MlpPolicy",
@@ -576,16 +569,7 @@ def main(
             gamma=cfg.get("rl_gamma", 0.99),
         )
     elif algo == "TRPO":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cvar_env_penalty,
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
+        env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         model = TRPO(
             "MlpPolicy",
@@ -600,16 +584,7 @@ def main(
     elif algo == "HIERARCHICALPPO":
         if HierarchicalPPO is None:
             raise RuntimeError("sb3-contrib with HierarchicalPPO required")
-        env = HierarchicalTradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cvar_env_penalty,
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
+        env = HierarchicalTradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         model = HierarchicalPPO(
             "MlpPolicy",
@@ -621,16 +596,7 @@ def main(
             gamma=cfg.get("rl_gamma", 0.99),
         )
     elif algo == "QRDQN":
-        env = DiscreteTradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cvar_env_penalty,
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
+        env = DiscreteTradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         model = QRDQN(
             "MlpPolicy",
@@ -656,16 +622,7 @@ def main(
         rllib_algo = cfg.get("rllib_algorithm", "PPO").upper()
 
         def env_creator(env_config=None):
-            env_i = RLLibTradingEnv(
-                df,
-                features,
-                max_position=cfg.get("rl_max_position", 1.0),
-                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-                var_window=cfg.get("rl_var_window", 30),
-                cvar_penalty=cvar_env_penalty,
-                cvar_window=cfg.get("rl_cvar_window", 30),
-            )
+            env_i = RLLibTradingEnv(**env_kwargs)
             return maybe_wrap(env_i)
 
         ray.init(ignore_reinit_error=True, include_dashboard=False)
@@ -777,6 +734,8 @@ def main(
                 var_window=cfg.get("rl_var_window", 30),
                 cvar_penalty=0.0,
                 cvar_window=cfg.get("rl_cvar_window", 30),
+                objectives=cfg.get("rl_objectives", ["return"]),
+                objective_weights=cfg.get("rl_objective_weights"),
             )
             evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
             eval_returns = np.array(eval_env.portfolio_returns)
@@ -976,6 +935,12 @@ if __name__ == "__main__":
         choices=["cvar"],
         help="Apply specified risk objective to rewards",
     )
+    parser.add_argument(
+        "--objectives",
+        nargs="+",
+        default=["return"],
+        help="Objectives to optimise e.g. return risk cost",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -990,6 +955,11 @@ if __name__ == "__main__":
         cfg["risk_objective"] = args.risk_objective
     if args.offline_pretrain:
         cfg["offline_pretrain"] = True
+    if args.objectives:
+        objs = args.objectives
+        if monitor.capabilities.model_size() != "full":
+            objs = objs[:1]
+        cfg["rl_objectives"] = objs
     if args.tune:
         from tuning.hyperopt import tune_rl
 
