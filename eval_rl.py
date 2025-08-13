@@ -17,6 +17,7 @@ from data.history import (
 )
 from data.features import make_features
 from train_rl import TradingEnv, DiscreteTradingEnv
+from rl.multi_objective import pareto_frontier
 from log_utils import setup_logging, log_exceptions
 
 setup_logging()
@@ -88,6 +89,8 @@ def main() -> None:
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            objectives=cfg.get("rl_objectives", ["return"]),
+            objective_weights=cfg.get("rl_objective_weights"),
         )
         model_cls = PPO
     elif algo == "SAC":
@@ -98,6 +101,8 @@ def main() -> None:
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            objectives=cfg.get("rl_objectives", ["return"]),
+            objective_weights=cfg.get("rl_objective_weights"),
         )
         model_cls = SAC
     elif algo == "QRDQN":
@@ -108,6 +113,8 @@ def main() -> None:
             transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
             risk_penalty=cfg.get("rl_risk_penalty", 0.1),
             var_window=cfg.get("rl_var_window", 30),
+            objectives=cfg.get("rl_objectives", ["return"]),
+            objective_weights=cfg.get("rl_objective_weights"),
         )
         model_cls = QRDQN
     else:
@@ -122,12 +129,19 @@ def main() -> None:
     done = False
     equities = [env.equity]
     returns: List[float] = []
+    objective_sums = {name: 0.0 for name in getattr(env, "objectives", [])}
+    reward_vectors: List[List[float]] = []
     while not done:
         action, _ = model.predict(obs, deterministic=True)
         prev_eq = env.equity
-        obs, _reward, done, _info = env.step(action)
+        obs, _reward, done, info = env.step(action)
         returns.append(env.equity / prev_eq - 1)
         equities.append(env.equity)
+        obj = info.get("objectives")
+        if obj:
+            for k, v in obj.items():
+                objective_sums[k] += float(v)
+            reward_vectors.append([obj.get(k, 0.0) for k in env.objectives])
 
     curve = pd.DataFrame({"step": range(len(equities)), "equity": equities})
     curve.to_csv(root / "equity_curve_rl.csv", index=False)
@@ -140,6 +154,13 @@ def main() -> None:
         else:
             logger.info("%s: %.4f", k, v)
     logger.info("Equity curve saved to %s", root / "equity_curve_rl.csv")
+    if objective_sums:
+        logger.info("Objective trade-offs:")
+        for k, v in objective_sums.items():
+            logger.info("%s_total: %.4f", k, v)
+        if reward_vectors:
+            frontier = pareto_frontier(reward_vectors)
+            logger.info("Pareto frontier: %s", frontier.tolist())
 
 
 if __name__ == "__main__":
