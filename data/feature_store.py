@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable
 
 import duckdb
 import pandas as pd
@@ -89,6 +89,29 @@ class FeatureStore:
         conn.register("feat_df", df)
         conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM feat_df')
         conn.close()
+
+    # ------------------------------------------------------------------
+    def get_or_set(
+        self,
+        symbol: str,
+        window: int,
+        params: Dict[str, Any],
+        raw_hash: str,
+        compute_fn: Callable[[], pd.DataFrame],
+    ) -> pd.DataFrame:
+        """Return cached features or compute and cache them.
+
+        This helper avoids repetition when a feature generation step can be
+        cached.  ``compute_fn`` is only executed when no valid cache entry is
+        available.
+        """
+
+        cached = self.load(symbol, window, params, raw_hash)
+        if cached is not None:
+            return cached
+        df = compute_fn()
+        self.save(df, symbol, window, params, raw_hash)
+        return df
 
     # ------------------------------------------------------------------
     def invalidate(self, symbol: str, window: int, params: Dict[str, Any]) -> None:
