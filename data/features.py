@@ -14,6 +14,7 @@ from sklearn.decomposition import PCA
 
 from utils.data_backend import get_dataframe_module
 from analysis.garch_vol import garch_volatility
+from analysis.kalman_filter import kalman_smooth
 from utils.resource_monitor import monitor
 try:  # optional numba acceleration
     from utils.numba_accel import (
@@ -362,6 +363,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     use_atr = cfg.get("use_atr", True)
     use_donchian = cfg.get("use_donchian", True)
+    use_kalman = cfg.get("use_kalman", True)
     use_dask = cfg.get("use_dask", False)
     use_cache = cfg.get("use_feature_cache", False)
     dask_url = cfg.get("dask_cluster_url")
@@ -381,7 +383,11 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             "-".join(sorted(df["Symbol"].unique())) if "Symbol" in df.columns else "nosymbol"
         )
         window_key = len(df)
-        params_key = {"use_atr": use_atr, "use_donchian": use_donchian}
+        params_key = {
+            "use_atr": use_atr,
+            "use_donchian": use_donchian,
+            "use_kalman": use_kalman,
+        }
         cached_df = cached_store.load(symbol_key, window_key, params_key, raw_hash)
         if cached_df is not None:
             logger.info("Loading features from cache %s", cached_store.path)
@@ -397,8 +403,32 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             pass
 
     def _feat(group: pd.DataFrame) -> pd.DataFrame:
-        mid = (group["Bid"] + group["Ask"]) / 2
-        group = group.assign(mid=mid)
+        mid_raw = (group["Bid"] + group["Ask"]) / 2
+
+        if use_kalman:
+            symbol = (
+                group["Symbol"].iloc[0] if "Symbol" in group.columns else "nosymbol"
+            )
+            if use_cache and cached_store is not None:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                    mid_raw.to_csv(tmp.name, index=False)
+                    mid_hash = compute_hash(tmp.name)
+                os.unlink(tmp.name)
+                params = {"feature": "kalman"}
+                filtered = cached_store.get_or_set(
+                    symbol,
+                    len(mid_raw),
+                    params,
+                    mid_hash,
+                    lambda: kalman_smooth(mid_raw),
+                )
+            else:
+                filtered = kalman_smooth(mid_raw)
+            group["mid"] = filtered["price"].to_numpy()
+            group["kf_vol"] = filtered["volatility"].to_numpy()
+        else:
+            group["mid"] = mid_raw
+            group["kf_vol"] = group["mid"].rolling(30).std().to_numpy()
 
         # base return and volatility
         group["return"] = group["mid"].pct_change()
