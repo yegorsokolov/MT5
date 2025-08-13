@@ -1,5 +1,6 @@
 from prometheus_client import Counter, Gauge
 
+BATCH_LATENCY = Gauge('batch_latency', 'Processing latency for tick batches')
 QUEUE_DEPTH = Gauge('queue_depth', 'Number of pending messages in signal queue')
 OFFSET_GAUGE = Gauge('queue_offset', 'Last processed offset in durable signal queue')
 TRADE_COUNT = Counter('trade_count', 'Total trades executed')

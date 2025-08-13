@@ -34,6 +34,8 @@ sys.modules['metrics'] = types.SimpleNamespace(
     TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
     FEATURE_ANOMALIES=types.SimpleNamespace(inc=lambda: None),
     RESOURCE_RESTARTS=types.SimpleNamespace(inc=lambda: None),
+    QUEUE_DEPTH=types.SimpleNamespace(set=lambda v: None),
+    BATCH_LATENCY=types.SimpleNamespace(set=lambda v: None),
 )
 sys.modules['models'] = types.SimpleNamespace(model_store=types.SimpleNamespace(load_model=lambda *a, **k: (None, None)))
 import importlib.machinery
