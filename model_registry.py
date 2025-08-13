@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -40,14 +41,21 @@ class ModelVariant:
 # Registry of task -> model variants ordered from heaviest to lightest
 MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
     "sentiment": [
-        ModelVariant("sentiment_large", ResourceCapabilities(8, 32, True)),
-        ModelVariant("sentiment_medium", ResourceCapabilities(4, 16, True)),
-        ModelVariant("sentiment_small", ResourceCapabilities(2, 4, False)),
+        ModelVariant(
+            "sentiment_large", ResourceCapabilities(8, 32, True, gpu_count=1)
+        ),
+        ModelVariant(
+            "sentiment_medium", ResourceCapabilities(4, 16, True, gpu_count=1)
+        ),
+        ModelVariant(
+            "sentiment_small", ResourceCapabilities(2, 4, False, gpu_count=0)
+        ),
     ],
     "rl_policy": [
-        ModelVariant("rl_large", ResourceCapabilities(16, 64, True)),
-        ModelVariant("rl_medium", ResourceCapabilities(8, 32, True)),
-        ModelVariant("rl_small", ResourceCapabilities(2, 4, False)),
+        ModelVariant("rl_large", ResourceCapabilities(16, 64, True, gpu_count=1)),
+        ModelVariant("rl_medium", ResourceCapabilities(8, 32, True, gpu_count=1)),
+        ModelVariant("rl_small", ResourceCapabilities(2, 4, False, gpu_count=0)),
+        ModelVariant("baseline", ResourceCapabilities(1, 1, False, gpu_count=0)),
     ],
 }
 
@@ -59,6 +67,7 @@ class ModelRegistry:
         self.monitor = monitor
         self.selected: Dict[str, ModelVariant] = {}
         self._task: Optional[asyncio.Task] = None
+        self.logger = logging.getLogger(__name__)
         self._pick_models()
         if auto_refresh:
             self.monitor.start()
@@ -71,12 +80,19 @@ class ModelRegistry:
     def _pick_models(self) -> None:
         caps = self.monitor.capabilities
         for task, variants in MODEL_REGISTRY.items():
+            baseline = variants[-1]
+            chosen = baseline
             for variant in variants:
                 if variant.is_supported(caps):
-                    self.selected[task] = variant
+                    chosen = variant
                     break
-            else:
-                self.selected[task] = variants[-1]
+            prev = self.selected.get(task)
+            if prev != chosen:
+                if chosen is baseline:
+                    self.logger.warning("Falling back to baseline for %s", task)
+                elif prev and prev.name == baseline.name:
+                    self.logger.info("Restored %s for %s", chosen.name, task)
+            self.selected[task] = chosen
 
     async def _watch(self) -> None:
         """Periodically re-evaluate models in case capabilities change."""
@@ -95,3 +111,20 @@ class ModelRegistry:
     def refresh(self) -> None:
         """Manually re-run model selection using current capabilities."""
         self._pick_models()
+
+    def report_failure(self, task: str) -> None:
+        """Report that the active model for ``task`` has crashed.
+
+        Switch to the baseline variant and log the event.
+        """
+
+        variants = MODEL_REGISTRY.get(task)
+        if not variants:
+            return
+        baseline = variants[-1]
+        prev = self.selected.get(task)
+        if prev != baseline:
+            self.logger.error(
+                "Model %s for %s crashed; using baseline", prev.name if prev else "unknown", task
+            )
+            self.selected[task] = baseline
