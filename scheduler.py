@@ -141,6 +141,45 @@ def run_trade_analysis() -> None:
     except Exception:
         logger.exception("Trade analysis failed")
 
+
+def vacuum_history(path: Path | None = None) -> None:
+    """Compact partitioned Parquet datasets by merging small files."""
+    try:
+        import pyarrow.dataset as ds  # type: ignore
+        import pyarrow.parquet as pq  # type: ignore
+    except Exception:  # pragma: no cover - optional dependency
+        logger.exception("Vacuum dependencies unavailable")
+        return
+
+    base = Path(path) if path else Path(os.getenv("HISTORY_DATASET", "data/history.parquet"))
+    if not base.exists():
+        return
+
+    for part in base.rglob("*"):
+        if not part.is_dir():
+            continue
+        files = list(part.glob("*.parquet"))
+        if len(files) <= 1:
+            continue
+        try:
+            dataset = ds.dataset(part, format="parquet")
+            table = dataset.to_table()
+            tmp = part / "_tmp.parquet"
+            pq.write_table(table, tmp, compression="zstd")
+            for f in files:
+                f.unlink(missing_ok=True)  # type: ignore[attr-defined]
+            tmp.rename(part / "part-0.parquet")
+        except Exception:
+            logger.exception("Vacuum failed for %s", part)
+
+    # prune empty directories
+    for d in sorted(base.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if d.is_dir() and not list(d.glob("*.parquet")) and not any(d.iterdir()):
+            try:
+                d.rmdir()
+            except Exception:
+                logger.exception("Failed removing empty partition %s", d)
+
 def start_scheduler() -> None:
     """Start background scheduler based on configuration."""
     global _started
@@ -159,6 +198,8 @@ def start_scheduler() -> None:
         jobs.append(("checkpoint_cleanup", cleanup_checkpoints))
     if s_cfg.get("trade_stats", True):
         jobs.append(("trade_stats", run_trade_analysis))
+    if s_cfg.get("vacuum_history", True):
+        jobs.append(("vacuum_history", vacuum_history))
     if jobs:
         _schedule_jobs(jobs)
     _started = True
@@ -169,6 +210,7 @@ __all__ = [
     "cleanup_checkpoints",
     "resource_reprobe",
     "run_drift_detection",
-    "run_change_point_detection",
-    "run_trade_analysis",
+  "run_change_point_detection",
+  "run_trade_analysis",
+  "vacuum_history",
 ]
