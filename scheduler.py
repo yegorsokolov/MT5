@@ -66,6 +66,13 @@ def resource_reprobe() -> None:
         logger.info("Refreshed resource capabilities: %s", monitor.capabilities)
     except Exception:
         logger.exception("Resource reprobe failed")
+    try:
+        from analysis.reprocess_trades import reprocess_trades
+
+        reprocess_trades()
+        logger.info("Trade reprocessing completed")
+    except Exception:
+        logger.exception("Trade reprocessing failed")
 
 def run_drift_detection() -> None:
     """Run model/data drift comparison."""
