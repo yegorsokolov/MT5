@@ -35,6 +35,7 @@ from .events import get_events
 from .feature_store import FeatureStore
 from .versioning import compute_hash
 from .macro_features import load_macro_series
+from .history import load_history_memmap
 
 try:  # optional plugin system
     from plugins import FEATURE_PLUGINS  # type: ignore
@@ -396,6 +397,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             pass
 
     def _feat(group: pd.DataFrame) -> pd.DataFrame:
+        # basic microstructure measures
+        group["spread"] = group["Ask"] - group["Bid"]
         mid_raw = (group["Bid"] + group["Ask"]) / 2
 
         if use_kalman:
@@ -423,6 +426,15 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             group["mid"] = mid_raw
             group["kf_vol"] = group["mid"].rolling(30).std().to_numpy()
 
+        # derive short-term dynamics
+        group["mid_change"] = group["mid"].diff()
+        group["spread_change"] = group["spread"].diff()
+        group["trade_rate"] = group["mid_change"].abs()
+        group["quote_revision"] = group["spread_change"].abs()
+        group["hour"] = group["Timestamp"].dt.hour
+        group["hour_sin"] = np.sin(2 * np.pi * group["hour"] / 24)
+        group["hour_cos"] = np.cos(2 * np.pi * group["hour"] / 24)
+
         # base return and volatility
         group["return"] = group["mid"].pct_change()
         group["garch_vol"] = garch_volatility(group["return"])
@@ -442,6 +454,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             group["ma_10"] = group["mid"].rolling(10).mean()
             group["ma_30"] = group["mid"].rolling(30).mean()
             group["ma_60"] = group["mid"].rolling(60).mean()
+
+        group["ma_cross"] = np.where(group["ma_10"] > group["ma_30"], 1, -1)
 
         if use_atr:
             if use_numba:
@@ -706,6 +720,52 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     return df
 
 
+def make_features_memmap(
+    source: Path | str,
+    chunk_size: int = 100_000,
+    validate: bool = False,
+) -> pd.DataFrame:
+    """Stream tick data from a memory mapped Parquet file and build features.
+
+    Parameters
+    ----------
+    source : Path or str
+        Path to a Parquet file containing tick history.
+    chunk_size : int, default 100_000
+        Number of rows to process per block.
+    validate : bool, default False
+        Whether to validate the resulting features against ``FEATURE_SCHEMA``.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing engineered features for the entire dataset.
+    """
+
+    pf = load_history_memmap(Path(source))
+    overlap = 240
+    prev = pd.DataFrame()
+    parts: List[pd.DataFrame] = []
+    for batch in pf.iter_batches(batch_size=chunk_size):
+        df = batch.to_pandas()
+        if "Timestamp" in df.columns:
+            df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
+        if not prev.empty:
+            df = pd.concat([prev, df], ignore_index=True)
+        feats = make_features(df, validate=False)
+        if not prev.empty:
+            feats = feats.iloc[len(prev) :]
+        prev = df.tail(overlap)
+        parts.append(feats)
+
+    result = pd.concat(parts, ignore_index=True)
+    if validate:
+        from .validators import FEATURE_SCHEMA
+
+        FEATURE_SCHEMA.validate(result, lazy=True)
+    return result
+
+
 def compute_rsi(series: pd.Series, period: int) -> pd.Series:
     """Relative Strength Index calculation."""
     use_numba = (
@@ -804,6 +864,7 @@ __all__ = [
     "add_news_sentiment_features",
     "add_cross_asset_features",
     "make_features",
+    "make_features_memmap",
     "compute_rsi",
     "ma_cross_signal",
     "train_test_split",

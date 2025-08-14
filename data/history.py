@@ -309,6 +309,39 @@ def load_history_iter(path: Path, chunk_size: int):
         yield df
 
 
+def load_history_memmap(path: Path):
+    """Memory map a Parquet history file for efficient streaming.
+
+    This returns a :class:`pyarrow.parquet.ParquetFile` object backed by a
+    memory-mapped file so that columns can be read on demand or iterated in
+    batches without loading the entire dataset into memory.  It falls back to a
+    basic ``numpy.memmap`` if ``pyarrow`` is unavailable.
+
+    Parameters
+    ----------
+    path : Path
+        Path to a Parquet history file.
+
+    Returns
+    -------
+    pyarrow.parquet.ParquetFile or numpy.memmap
+        Object representing the memory mapped file.
+    """
+
+    logger.info("Memory mapping history from %s", path)
+    path = Path(path)
+    try:  # Prefer pyarrow for columnar access
+        import pyarrow as pa  # type: ignore
+        import pyarrow.parquet as pq  # type: ignore
+
+        mm = pa.memory_map(str(path), "r")
+        return pq.ParquetFile(mm)
+    except Exception:  # pragma: no cover - fallback when pyarrow missing
+        import numpy as np
+
+        return np.memmap(path, mode="r")
+
+
 def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
     """Save tick history to a partitioned Parquet dataset."""
     import pyarrow as pa  # type: ignore
@@ -360,6 +393,7 @@ __all__ = [
     "load_history",
     "load_history_parquet",
     "load_history_iter",
+    "load_history_memmap",
     "save_history_parquet",
     "load_multiple_histories",
 ]
