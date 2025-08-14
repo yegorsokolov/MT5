@@ -9,6 +9,11 @@ import numpy as np
 import pandas as pd
 from scheduler import start_scheduler
 from risk import risk_of_ruin
+try:
+    from utils.alerting import send_alert
+except Exception:  # pragma: no cover - utils may be stubbed in tests
+    def send_alert(msg: str) -> None:  # type: ignore
+        return
 
 if TYPE_CHECKING:  # pragma: no cover - used only for typing
     from risk.tail_hedger import TailHedger
@@ -81,12 +86,24 @@ class RiskManager:
                 fr = FactorRisk(factors_df)
                 contrib = fr.factor_contributions(returns)
                 self.metrics.factor_contributions = contrib.to_dict()
-        if (
-            self.metrics.daily_loss <= -self.max_drawdown
-            or self.metrics.var > self.max_var
-            or self.metrics.risk_of_ruin > self.risk_of_ruin_threshold
-        ):
+        breach_reason = None
+        if self.metrics.daily_loss <= -self.max_drawdown:
+            breach_reason = (
+                f"max drawdown exceeded: {self.metrics.daily_loss:.2f}"
+                f" <= {-self.max_drawdown}"
+            )
+        elif self.metrics.var > self.max_var:
+            breach_reason = (
+                f"VaR limit exceeded: {self.metrics.var:.2f} > {self.max_var}"
+            )
+        elif self.metrics.risk_of_ruin > self.risk_of_ruin_threshold:
+            breach_reason = (
+                "risk of ruin exceeded: "
+                f"{self.metrics.risk_of_ruin:.2f} > {self.risk_of_ruin_threshold}"
+            )
+        if breach_reason:
             self.metrics.trading_halted = True
+            send_alert(f"Risk limit breached: {breach_reason}")
         if check_hedge and self.tail_hedger is not None:
             self.tail_hedger.evaluate()
 
