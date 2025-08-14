@@ -27,17 +27,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-core.txt
           pip install .
+          pip install "dvc[s3]"
+
+      - name: Pull data from DVC
+        run: dvc pull
 
       - name: Run training
         run: |
           python train.py
           python train_nn.py
 
+      - name: Push data to DVC remote
+        run: dvc push
+
       - name: Commit models
         run: |
           git config --global user.email "github-actions@users.noreply.github.com"
           git config --global user.name "github-actions"
-          git add model.joblib model_transformer.pt || true
+          git add model.joblib model_transformer.pt data/*.dvc || true
           git commit -m "CI: update models" || echo "No changes to commit"
           git push
         env:

@@ -2,6 +2,9 @@
 
 To keep models responsive to market changes, schedule periodic online updates.
 
+- Run `dvc pull` before training to sync the latest raw/history data.
+- After generating new data, run `dvc add` and `dvc push` to version it.
+
 - **LightGBM**: run `python train.py --resume-online` whenever new feature data is
   available. Training state is saved after each mini‑batch using LightGBM's
   `init_model` support.
