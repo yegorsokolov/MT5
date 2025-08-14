@@ -1,3 +1,14 @@
+"""Hidden Markov Model regime feature plugin.
+
+min_cpus: 1
+min_mem_gb: 0.5
+requires_gpu: false
+"""
+
+MIN_CPUS = 1
+MIN_MEM_GB = 0.5
+REQUIRES_GPU = False
+
 from . import register_feature
 from utils import load_config
 from regime import label_regimes

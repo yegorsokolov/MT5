@@ -1,3 +1,14 @@
+"""Qlib technical factor feature plugin.
+
+min_cpus: 2
+min_mem_gb: 2
+requires_gpu: false
+"""
+
+MIN_CPUS = 2
+MIN_MEM_GB = 2.0
+REQUIRES_GPU = False
+
 from . import register_feature
 from utils import load_config
 import pandas as pd

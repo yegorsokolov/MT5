@@ -1,4 +1,15 @@
+"""Deep learning regime feature plugin.
+
+min_cpus: 2
+min_mem_gb: 4
+requires_gpu: true
+"""
+
 from __future__ import annotations
+
+MIN_CPUS = 2
+MIN_MEM_GB = 4.0
+REQUIRES_GPU = True
 
 import numpy as np
 import pandas as pd
