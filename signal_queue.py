@@ -15,6 +15,18 @@ import redis
 from metrics import QUEUE_DEPTH, OFFSET_GAUGE
 from risk.position_sizer import PositionSizer
 
+# Lazy registry to avoid heavy initialization at import time
+_REGISTRY = None
+
+
+def _get_registry():  # pragma: no cover - simple accessor
+    global _REGISTRY
+    if _REGISTRY is None:
+        from model_registry import ModelRegistry
+
+        _REGISTRY = ModelRegistry(auto_refresh=False)
+    return _REGISTRY
+
 import asyncio
 from proto import signals_pb2
 from event_store import EventStore
@@ -27,17 +39,34 @@ _ASYNC_CTX = zmq.asyncio.Context.instance()
 
 
 def _passes_meta(meta_clf: Any | None, prob: float, conf: float) -> bool:
-    """Return True if a message passes the meta-classifier filter.
+    """Return ``True`` if a message passes the meta-classifier filter.
 
-    The meta classifier is expected to implement ``predict`` with a
-    signature compatible with scikit-learn estimators.  It receives a
-    dataframe containing the message's probability and confidence.
+    ``meta_clf`` may be a model instance or a string identifying a model in
+    :mod:`model_registry`.  When a string is supplied and the optimal variant
+    requires more resources than available locally, predictions are delegated to
+    the remote model server via :mod:`models.remote_client`.
     """
 
     if meta_clf is None:
         return True
+    feats = pd.DataFrame([[prob, conf]], columns=["prob", "confidence"])
     try:
-        feats = pd.DataFrame([[prob, conf]], columns=["prob", "confidence"])
+        if isinstance(meta_clf, str):
+            registry = _get_registry()
+            from models.remote_client import predict_remote
+
+            if registry.requires_remote(meta_clf):
+                preds = predict_remote(meta_clf, feats)
+                return bool(preds[0]) if preds else True
+            # attempt local load
+            try:  # pragma: no cover - optional dependency path
+                from models import model_store
+
+                model, _ = model_store.load_model(meta_clf)
+                return bool(model.predict(feats)[0])
+            except Exception:
+                preds = predict_remote(meta_clf, feats)
+                return bool(preds[0]) if preds else True
         return bool(meta_clf.predict(feats)[0])
     except Exception:  # pragma: no cover - safeguard against bad meta_clf
         return True
