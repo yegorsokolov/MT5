@@ -122,6 +122,24 @@ each trial to pick up where it left off if terminated mid‑run.
 
 Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `max_var`, `max_stress_loss`, `max_cvar` and `var_decay`, which controls the exponential weighting for the filtered VaR calculation.  A portfolio level risk manager aggregates exposure and PnL across bots. Configure its limits with `max_portfolio_drawdown` and `max_var` (or set the environment variables `MAX_PORTFOLIO_DRAWDOWN` and `MAX_VAR`).
 
+### Alerting
+
+Alerts are raised for resource watchdog breaches, risk limit violations and data
+drift. Configure a Slack webhook URL or SMTP credentials in `config.yaml` under
+the `alerting` key:
+
+```yaml
+alerting:
+  slack_webhook: https://hooks.slack.com/services/...
+  smtp:
+    host: smtp.example.com
+    port: 587
+    username: myuser
+    password: mypass
+    from: bot@example.com
+    to: ops@example.com
+```
+
 The feature engineering step now includes additional indicators such as
 lower/higher timeframe moving averages (e.g. the `ma_60` one‑hour average), a volatility measure and basic
  order-book statistics (spread and volume imbalance) and microstructure cues
