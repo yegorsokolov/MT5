@@ -1,0 +1,12 @@
+[Unit]
+Description=MT5 Bot Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mt5bot
+ExecStart=/usr/bin/python3 /opt/mt5bot/generate_signals.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
