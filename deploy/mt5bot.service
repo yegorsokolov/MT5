@@ -1,0 +1,15 @@
+[Unit]
+Description=MT5 trading bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{REPO_PATH}}
+ExecStart=/usr/bin/env python3 {{REPO_PATH}}/realtime_train.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
