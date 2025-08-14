@@ -87,6 +87,11 @@ python train.py
 Set `WITH_CUDA=1` before running the script to install CUDA drivers when an
 NVIDIA GPU is present.
 
+For cloud deployments (EC2, Proxmox or other Ubuntu instances) supply
+`deploy/cloud-init.yaml` as the user-data script. It installs apt
+dependencies, runs `pip install -r requirements-core.txt` and enables the
+`mt5bot.service` on first boot.
+
 macOS:
 
 ```bash
