@@ -18,5 +18,7 @@ models/*
 !models/graph_net.py
 !models/distillation.py
 !models/meta_label.py
+!models/remote_client.py
+!models/remote_server.py
 __pycache__/
 logs/

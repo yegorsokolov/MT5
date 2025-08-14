@@ -5,7 +5,7 @@ import importlib.util
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # ``utils.resource_monitor`` lives inside a package whose ``__init__`` pulls in
 # heavy optional dependencies. Import the module directly from its file path to
@@ -128,3 +128,34 @@ class ModelRegistry:
                 "Model %s for %s crashed; using baseline", prev.name if prev else "unknown", task
             )
             self.selected[task] = baseline
+
+    def requires_remote(self, task: str) -> bool:
+        """Return ``True`` if the optimal variant for ``task`` exceeds local capabilities."""
+        variants = MODEL_REGISTRY.get(task)
+        if not variants:
+            return False
+        top = variants[0]
+        chosen = self.selected.get(task, top)
+        return chosen.name != top.name
+
+    def predict(self, task: str, features: Any, loader) -> Any:
+        """Return predictions for ``task`` using local or remote models.
+
+        Parameters
+        ----------
+        task:
+            Name of the task as defined in :data:`MODEL_REGISTRY`.
+        features:
+            Feature matrix passed to the model's ``predict`` or ``predict_proba``.
+        loader:
+            Callable taking a model name and returning the local model instance.
+        """
+        model_name = self.get(task)
+        if self.requires_remote(task):
+            from models.remote_client import predict_remote
+
+            return predict_remote(model_name, features)
+        model = loader(model_name)
+        if hasattr(model, "predict_proba"):
+            return model.predict_proba(features)
+        return model.predict(features)
