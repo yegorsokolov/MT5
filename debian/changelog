@@ -1,0 +1,5 @@
+mt5bot (0.1.0) unstable; urgency=medium
+
+  * Initial Debian package.
+
+ -- MT5 Bot Maintainers <maintainers@example.com>  Thu, 14 Aug 2025 04:03:15 +0000

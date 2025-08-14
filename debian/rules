@@ -1,0 +1,8 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	mkdir -p debian/mt5bot/opt/mt5bot
+	rsync -a --exclude debian --exclude ".git*" ./ debian/mt5bot/opt/mt5bot/

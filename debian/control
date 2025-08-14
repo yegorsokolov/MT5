@@ -1,0 +1,13 @@
+Source: mt5bot
+Section: misc
+Priority: optional
+Maintainer: MT5 Bot Maintainers <maintainers@example.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Rules-Requires-Root: no
+
+Package: mt5bot
+Architecture: all
+Depends: python3, systemd
+Description: MT5 trading bot
+ Installs the MT5 bot under /opt/mt5bot and provides a systemd service.
