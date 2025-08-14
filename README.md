@@ -57,6 +57,20 @@ python -m utils.environment
 
 This command raises an error if required packages are missing.
 
+### CPU Feature Detection and Acceleration
+
+At startup the resource monitor inspects `/proc/cpuinfo` for CPU flags such as
+`avx2` and `fma`. When present, optional acceleration libraries are enabled
+automatically. `numexpr` is used for fast array operations and pandas switches
+to the PyArrow engine:
+
+```python
+pd.options.mode.dtype_backend = "pyarrow"
+```
+
+If the required flags or libraries are absent the project seamlessly falls back
+to the standard code paths.
+
 ### Example deployment
 
 Ubuntu:
