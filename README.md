@@ -842,6 +842,17 @@ to configure a secure channel.
 When deploying, mount these certificate files into the `certs/` directory
 so the service can load them on startup.
 
+## Debian package installation
+
+Download the prebuilt .deb from releases and install:
+
+```bash
+sudo dpkg -i mt5bot_<ver>.deb
+sudo systemctl start mt5bot
+sudo systemctl status mt5bot
+sudo systemctl stop mt5bot
+```
+
 ## Quality Checks
 
 Run the placeholder check before committing or tagging a release:
