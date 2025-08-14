@@ -53,6 +53,16 @@ watchdog = ResourceMonitor(
     max_rss_mb=MAX_RSS_MB or None, max_cpu_pct=MAX_CPU_PCT or None
 )
 
+if os.name != "nt" and getattr(watchdog, "capabilities", None):
+    if watchdog.capabilities.cpus > 1:  # pragma: no cover - depends on host
+        try:
+            import uvloop  # type: ignore
+
+            uvloop.install()
+            logger.info("uvloop installed")
+        except Exception:  # pragma: no cover - uvloop optional
+            logger.info("uvloop not available; using default event loop")
+
 
 async def _handle_resource_breach(reason: str) -> None:
     logger.error("Resource watchdog triggered: %s", reason)
