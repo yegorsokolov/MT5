@@ -13,6 +13,11 @@ from brokers import connection_manager as conn_mgr
 import MetaTrader5 as mt5  # type: ignore
 
 from utils import load_config
+try:
+    from utils.alerting import send_alert
+except Exception:  # pragma: no cover - utils may be stubbed in tests
+    def send_alert(msg: str) -> None:  # type: ignore
+        return
 try:  # allow tests to stub out utils
     from utils.resource_monitor import ResourceMonitor
 except Exception:  # pragma: no cover - fallback when utils is stubbed
@@ -52,6 +57,7 @@ watchdog = ResourceMonitor(
 async def _handle_resource_breach(reason: str) -> None:
     logger.error("Resource watchdog triggered: %s", reason)
     RESOURCE_RESTARTS.inc()
+    send_alert(f"Resource watchdog triggered: {reason}")
     os._exit(1)
 
 
