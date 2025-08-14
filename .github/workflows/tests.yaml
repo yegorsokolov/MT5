@@ -23,10 +23,9 @@ jobs:
           with:
             python-version: '3.10'
 
-        - name: Install core and RL dependencies
+        - name: Run Ubuntu setup script and install RL extras
           run: |
-            python -m pip install --upgrade pip
-            pip install -r requirements-core.txt
+            bash scripts/setup_ubuntu.sh
             pip install .[rl]
 
         - name: Verify pinned requirements

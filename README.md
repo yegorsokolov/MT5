@@ -59,7 +59,21 @@ This command raises an error if required packages are missing.
 
 ### Example deployment
 
-Linux/macOS:
+Ubuntu:
+
+```bash
+git clone https://github.com/USERNAME/MT5.git
+cd MT5
+./scripts/setup_ubuntu.sh  # install system packages and core Python deps
+dvc pull  # fetch raw/history data
+python -m utils.environment  # verify deps and adjust config
+python train.py
+```
+
+Set `WITH_CUDA=1` before running the script to install CUDA drivers when an
+NVIDIA GPU is present.
+
+macOS:
 
 ```bash
 git clone https://github.com/USERNAME/MT5.git
