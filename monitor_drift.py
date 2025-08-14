@@ -9,6 +9,11 @@ import pandas as pd
 from scipy.stats import ks_2samp
 
 import metrics
+try:
+    from utils.alerting import send_alert
+except Exception:  # pragma: no cover - utils may be stubbed in tests
+    def send_alert(msg: str) -> None:  # type: ignore
+        return
 
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -56,6 +61,9 @@ class DriftMonitor:
                     "Data drift detected for %s (p=%.4f)", col, pval
                 )
                 metrics.DRIFT_EVENTS.inc()
+                send_alert(
+                    f"Data drift detected for {col} (p={pval:.4f})"
+                )
 
     async def _periodic_check(self) -> None:
         while True:

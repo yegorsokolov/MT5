@@ -16,13 +16,27 @@ import os
 from pathlib import Path
 import uvicorn
 from utils import update_config
+try:
+    from utils.alerting import send_alert
+except Exception:  # pragma: no cover - utils may be stubbed in tests
+    def send_alert(msg: str) -> None:  # type: ignore
+        return
 from log_utils import LOG_FILE, setup_logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 from dataclasses import dataclass
 from risk_manager import risk_manager
 from scheduler import start_scheduler
-from utils.resource_monitor import ResourceMonitor
+try:
+    from utils.resource_monitor import ResourceMonitor
+except Exception:  # pragma: no cover - utils may be stubbed in tests
+    class ResourceMonitor:  # type: ignore
+        def __init__(self, *a, **k):
+            self.max_rss_mb = None
+            self.max_cpu_pct = None
+
+        def start(self) -> None:
+            return
 from metrics import RESOURCE_RESTARTS
 
 
@@ -45,6 +59,7 @@ resource_watchdog = ResourceMonitor(
 async def _handle_resource_breach(reason: str) -> None:
     logger.error("Resource watchdog triggered: %s", reason)
     RESOURCE_RESTARTS.inc()
+    send_alert(f"Resource watchdog triggered: {reason}")
     os._exit(1)
 
 API_KEY = os.getenv("API_KEY")
