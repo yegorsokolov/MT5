@@ -38,6 +38,7 @@ from data.history import (
     load_history_iter,
 )
 from data.features import make_features
+from data.labels import triple_barrier
 from state_manager import save_checkpoint, load_latest_checkpoint
 from analysis.regime_detection import periodic_reclassification
 from models import model_store
@@ -186,7 +187,13 @@ def main(
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
 
-    y = (df["return"].shift(-1) > 0).astype(int)
+    df["tb_label"] = triple_barrier(
+        df["mid"],
+        cfg.get("pt_mult", 0.01),
+        cfg.get("sl_mult", 0.01),
+        cfg.get("max_horizon", 10),
+    )
+    y = df["tb_label"]
     features = select_features(df[features], y)
     feat_path = root / "selected_features.json"
     feat_path.write_text(json.dumps(features))

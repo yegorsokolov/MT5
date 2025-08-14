@@ -756,9 +756,25 @@ def train_test_split(
 
 
 def make_sequence_arrays(
-    df: pd.DataFrame, features: List[str], seq_len: int
+    df: pd.DataFrame, features: List[str], seq_len: int, label_col: str = "return"
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Convert a dataframe to sequences suitable for neural network models."""
+    """Convert a dataframe to sequences suitable for neural network models.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing feature columns and target labels.
+    features : list[str]
+        Feature column names to include in sequences.
+    seq_len : int
+        Length of the rolling window for each sample.
+    label_col : str, default "return"
+        Column providing precomputed labels. When set to ``"return"`` the
+        label for position ``i`` is ``1`` if the next return is positive,
+        mimicking the original behaviour. Otherwise the value from
+        ``label_col`` is used directly for each position ``i``.
+    """
+
     X_list: List[np.ndarray] = []
     y_list: List[int] = []
 
@@ -768,8 +784,13 @@ def make_sequence_arrays(
 
     for g in groups:
         values = g[features].values
-        targets = (g["return"].shift(-1) > 0).astype(int).values
-        for i in range(seq_len, len(g) - 1):
+        if label_col == "return":
+            targets = (g["return"].shift(-1) > 0).astype(int).values
+            limit = len(g) - 1
+        else:
+            targets = g[label_col].values
+            limit = len(g)
+        for i in range(seq_len, limit):
             X_list.append(values[i - seq_len : i])
             y_list.append(targets[i])
 
