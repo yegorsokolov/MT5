@@ -4,6 +4,7 @@ model_lstm.pt
 signals.csv
 data/*
 !data/*.py
+!data/*.dvc
 !data/graphs/
 !data/graphs/.gitkeep
 models/*
