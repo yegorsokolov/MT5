@@ -65,6 +65,7 @@ Linux/macOS:
 git clone https://github.com/USERNAME/MT5.git
 cd MT5
 pip install -r requirements-core.txt
+dvc pull  # fetch raw/history data
 python -m utils.environment  # verify deps and adjust config
 python train.py
 ```
@@ -75,6 +76,7 @@ Windows PowerShell:
 git clone https://github.com/USERNAME/MT5.git
 Set-Location MT5
 pip install -r requirements-core.txt
+dvc pull  # fetch raw/history data
 python -m utils.environment
 python train.py
 ```
@@ -83,6 +85,9 @@ These commands download the repository, install required packages, verify the
 environment and start a training run. Adjust the final command for backtesting
 or signal generation as needed. Optional components can be installed via
 extras, for example `pip install .[rl]` or `pip install .[heavy]`.
+
+After adding new data, track it with `dvc add` and upload it to the configured
+remote using `dvc push`.
 
 ### Reproducibility
 
