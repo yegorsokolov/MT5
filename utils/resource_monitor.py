@@ -1,7 +1,7 @@
 import asyncio
 import logging
-from dataclasses import dataclass
-from typing import Optional, Callable, Awaitable
+from dataclasses import dataclass, field
+from typing import Optional, Callable, Awaitable, Set
 
 import psutil
 try:
@@ -18,6 +18,7 @@ class ResourceCapabilities:
     memory_gb: float
     has_gpu: bool
     gpu_count: int
+    cpu_flags: Set[str] = field(default_factory=set)
 
     def model_size(self) -> str:
         """Return "full" for capable machines else "lite"."""
@@ -43,6 +44,7 @@ class ResourceMonitor:
     ) -> None:
         self.logger = logging.getLogger(__name__)
         self.capabilities = self._probe()
+        self._enable_accelerated_libraries()
         self._task: Optional[asyncio.Task] = None
         self._watch_task: Optional[asyncio.Task] = None
         self.max_rss_mb = max_rss_mb
@@ -52,14 +54,58 @@ class ResourceMonitor:
         self._breach_threshold = int(max(breach_duration / sample_interval, 1))
         self.alert_callback = alert_callback
 
+    def _parse_cpu_flags(self) -> Set[str]:
+        flags: Set[str] = set()
+        try:
+            with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.lower().startswith("flags"):
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            flags.update(parts[1].strip().split())
+                        break
+        except OSError:
+            self.logger.debug("/proc/cpuinfo not available for flag detection")
+        return flags
+
     def _probe(self) -> ResourceCapabilities:
         cpus = psutil.cpu_count(logical=True) or 1
         memory_gb = psutil.virtual_memory().total / (1024**3)
         gpu_count = int(torch.cuda.device_count()) if torch and torch.cuda else 0
         has_gpu = gpu_count > 0
+        flags = self._parse_cpu_flags()
         return ResourceCapabilities(
-            cpus=cpus, memory_gb=memory_gb, has_gpu=has_gpu, gpu_count=gpu_count
+            cpus=cpus,
+            memory_gb=memory_gb,
+            has_gpu=has_gpu,
+            gpu_count=gpu_count,
+            cpu_flags=flags,
         )
+
+    def _enable_accelerated_libraries(self) -> None:
+        flags = self.capabilities.cpu_flags
+        if not ({"avx2", "fma"} & flags):
+            self.logger.info("AVX2/FMA not detected; using default libraries")
+            return
+        try:  # pragma: no cover - optional dependency
+            import numexpr
+
+            numexpr.set_num_threads(self.capabilities.cpus)
+            self.logger.info("Enabled numexpr with %s threads", self.capabilities.cpus)
+        except Exception:
+            self.logger.debug("numexpr unavailable; skipping acceleration")
+        try:
+            import pandas as pd
+
+            try:
+                import pyarrow  # noqa: F401
+
+                pd.options.mode.dtype_backend = "pyarrow"
+                self.logger.info("Enabled pandas PyArrow backend")
+            except Exception:
+                self.logger.debug("pyarrow unavailable; using default pandas backend")
+        except Exception:
+            self.logger.debug("pandas not installed; cannot set dtype backend")
 
     async def _periodic_probe(self) -> None:
         while True:
