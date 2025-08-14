@@ -1,4 +1,15 @@
+"""FRED economic data feature plugin.
+
+min_cpus: 1
+min_mem_gb: 1
+requires_gpu: false
+"""
+
 from __future__ import annotations
+
+MIN_CPUS = 1
+MIN_MEM_GB = 1.0
+REQUIRES_GPU = False
 
 import logging
 import pandas as pd

@@ -1,4 +1,15 @@
+"""Reinforcement learning based risk control plugin.
+
+min_cpus: 2
+min_mem_gb: 2
+requires_gpu: false
+"""
+
 from __future__ import annotations
+
+MIN_CPUS = 2
+MIN_MEM_GB = 2.0
+REQUIRES_GPU = False
 
 import numpy as np
 from pathlib import Path

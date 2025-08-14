@@ -1,3 +1,14 @@
+"""FinBERT sentiment analysis feature plugin.
+
+min_cpus: 2
+min_mem_gb: 4
+requires_gpu: false
+"""
+
+MIN_CPUS = 2
+MIN_MEM_GB = 4.0
+REQUIRES_GPU = False
+
 from . import register_feature
 import pandas as pd
 import functools
