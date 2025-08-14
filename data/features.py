@@ -15,6 +15,10 @@ from sklearn.decomposition import PCA
 from utils.data_backend import get_dataframe_module
 from analysis.garch_vol import garch_volatility
 from analysis.kalman_filter import kalman_smooth
+from analysis.frequency_features import (
+    rolling_fft_features,
+    rolling_wavelet_features,
+)
 from utils.resource_monitor import monitor
 try:  # optional numba acceleration
     from utils.numba_accel import (
@@ -503,6 +507,13 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         else:
             group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
+
+        if monitor.capabilities.cpus >= 8 and monitor.capabilities.memory_gb >= 16:
+            fft_feats = rolling_fft_features(group["mid"], window=128, freqs=[0.01])
+            wave_feats = rolling_wavelet_features(
+                group["mid"], window=128, wavelet="db4", level=2
+            )
+            group = pd.concat([group, fft_feats, wave_feats], axis=1)
 
         return group
 
