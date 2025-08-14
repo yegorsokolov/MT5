@@ -1,3 +1,14 @@
+"""FinGPT sentiment analysis feature plugin.
+
+min_cpus: 4
+min_mem_gb: 8
+requires_gpu: true
+"""
+
+MIN_CPUS = 4
+MIN_MEM_GB = 8.0
+REQUIRES_GPU = True
+
 from . import register_feature
 import pandas as pd
 import functools

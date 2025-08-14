@@ -1,3 +1,14 @@
+"""Spread risk check plugin.
+
+min_cpus: 1
+min_mem_gb: 0.1
+requires_gpu: false
+"""
+
+MIN_CPUS = 1
+MIN_MEM_GB = 0.1
+REQUIRES_GPU = False
+
 from . import register_risk_check
 from utils import load_config
 
