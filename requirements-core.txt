@@ -37,3 +37,4 @@ grpcio==1.74.0
 grpcio-tools==1.74.0
 backtrader==1.9.78.123
 freqtrade==2025.6
+PyWavelets==1.6.0
