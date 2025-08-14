@@ -36,6 +36,11 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     gymn = None
 
+try:
+    from rl.per import PrioritizedReplayBuffer  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    PrioritizedReplayBuffer = None  # type: ignore
+
 import mlflow
 from utils import load_config
 from state_manager import save_checkpoint, load_latest_checkpoint
@@ -559,15 +564,35 @@ def main(
     elif algo == "SAC":
         env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
-        model = SAC(
-            "MlpPolicy",
-            env,
-            verbose=0,
-            seed=seed,
-            device=device,
-            learning_rate=cfg.get("rl_learning_rate", 3e-4),
-            gamma=cfg.get("rl_gamma", 0.99),
-        )
+        per_kwargs = {}
+        if monitor.capabilities.model_size() == "full" and PrioritizedReplayBuffer:
+            per_kwargs = {
+                "replay_buffer_class": PrioritizedReplayBuffer,
+                "replay_buffer_kwargs": {
+                    "capacity": int(cfg.get("rl_buffer_size", 100000))
+                },
+            }
+        try:
+            model = SAC(
+                "MlpPolicy",
+                env,
+                verbose=0,
+                seed=seed,
+                device=device,
+                learning_rate=cfg.get("rl_learning_rate", 3e-4),
+                gamma=cfg.get("rl_gamma", 0.99),
+                **per_kwargs,
+            )
+        except TypeError:  # pragma: no cover - algorithm may not support PER kwargs
+            model = SAC(
+                "MlpPolicy",
+                env,
+                verbose=0,
+                seed=seed,
+                device=device,
+                learning_rate=cfg.get("rl_learning_rate", 3e-4),
+                gamma=cfg.get("rl_gamma", 0.99),
+            )
     elif algo == "TRPO":
         env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
@@ -598,15 +623,35 @@ def main(
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(**env_kwargs)
         env = maybe_wrap(env)
-        model = QRDQN(
-            "MlpPolicy",
-            env,
-            verbose=0,
-            seed=seed,
-            device=device,
-            learning_rate=cfg.get("rl_learning_rate", 3e-4),
-            gamma=cfg.get("rl_gamma", 0.99),
-        )
+        per_kwargs = {}
+        if monitor.capabilities.model_size() == "full" and PrioritizedReplayBuffer:
+            per_kwargs = {
+                "replay_buffer_class": PrioritizedReplayBuffer,
+                "replay_buffer_kwargs": {
+                    "capacity": int(cfg.get("rl_buffer_size", 100000))
+                },
+            }
+        try:
+            model = QRDQN(
+                "MlpPolicy",
+                env,
+                verbose=0,
+                seed=seed,
+                device=device,
+                learning_rate=cfg.get("rl_learning_rate", 3e-4),
+                gamma=cfg.get("rl_gamma", 0.99),
+                **per_kwargs,
+            )
+        except TypeError:  # pragma: no cover - algorithm may not support PER kwargs
+            model = QRDQN(
+                "MlpPolicy",
+                env,
+                verbose=0,
+                seed=seed,
+                device=device,
+                learning_rate=cfg.get("rl_learning_rate", 3e-4),
+                gamma=cfg.get("rl_gamma", 0.99),
+            )
     elif algo == "RLLIB":
         if gymn is None:
             raise RuntimeError("gymnasium is required for RLlib")
