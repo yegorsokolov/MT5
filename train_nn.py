@@ -42,6 +42,7 @@ from data.features import (
     train_test_split,
     make_sequence_arrays,
 )
+from data.labels import triple_barrier
 import argparse
 from ray_utils import (
     init as ray_init,
@@ -278,6 +279,13 @@ def main(
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
+        df["tb_label"] = triple_barrier(
+            df["mid"],
+            cfg.get("pt_mult", 0.01),
+            cfg.get("sl_mult", 0.01),
+            cfg.get("max_horizon", 10),
+        )
+
         train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
 
         features = [
@@ -304,14 +312,18 @@ def main(
         if "SymbolCode" in df.columns:
             features.append("SymbolCode")
 
-        y_full = (df["return"].shift(-1) > 0).astype(int)
+        y_full = df["tb_label"]
         features = select_features(df[features], y_full)
         feat_path = root / "selected_features.json"
         feat_path.write_text(json.dumps(features))
 
         seq_len = cfg.get("sequence_length", 50)
-        X_train, y_train = make_sequence_arrays(train_df, features, seq_len)
-        X_test, y_test = make_sequence_arrays(test_df, features, seq_len)
+        X_train, y_train = make_sequence_arrays(
+            train_df, features, seq_len, label_col="tb_label"
+        )
+        X_test, y_test = make_sequence_arrays(
+            test_df, features, seq_len, label_col="tb_label"
+        )
 
         X_train, X_val, y_train, y_val = sk_train_test_split(
             X_train,
