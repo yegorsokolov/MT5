@@ -103,6 +103,27 @@ extras, for example `pip install .[rl]` or `pip install .[heavy]`.
 After adding new data, track it with `dvc add` and upload it to the configured
 remote using `dvc push`.
 
+### Systemd service
+
+To run the realtime trainer on boot, install the systemd unit:
+
+```bash
+sudo ./scripts/install_service.sh
+```
+
+This copies the service file to `/etc/systemd/system` and enables the service.
+
+Common commands:
+
+```bash
+sudo systemctl status mt5bot    # check service status
+sudo systemctl restart mt5bot   # restart after updates
+sudo systemctl stop mt5bot      # stop the service
+journalctl -u mt5bot -f         # view logs
+```
+
+Edit `deploy/mt5bot.service` to run `remote_api.py` instead of `realtime_train.py` if desired.
+
 ### Reproducibility
 
 Set the `seed` value in `config.yaml` to reproduce training runs. The
