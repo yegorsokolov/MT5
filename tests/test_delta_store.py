@@ -7,6 +7,7 @@ from pathlib import Path
 def _setup_feature_env(monkeypatch, tmp_path):
     """Prepare stub modules so `make_features` can run in isolation."""
     stub_utils = types.ModuleType("utils")
+    stub_utils.__path__ = []
     stub_utils.load_config = lambda: {
         "use_feature_cache": True,
         "use_atr": False,
@@ -18,13 +19,14 @@ def _setup_feature_env(monkeypatch, tmp_path):
     class _Mon:
         def start(self):
             pass
+        capability_tier = "lite"
 
         class capabilities:
             cpus = 1
 
             @staticmethod
-            def model_size():
-                return "small"
+            def capability_tier():
+                return "lite"
 
     stub_utils.resource_monitor = types.SimpleNamespace(monitor=_Mon())
     stub_utils.data_backend = types.SimpleNamespace(get_dataframe_module=lambda: pd)

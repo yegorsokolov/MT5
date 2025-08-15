@@ -222,10 +222,10 @@ def main(
         cfg = load_config()
     if world_size is None:
         world_size = 1
-    size = cfg.get("model_size", "auto")
-    if size == "auto":
-        size = monitor.capabilities.model_size()
-    if size == "lite":
+    tier = cfg.get("capability_tier", "auto")
+    if tier == "auto":
+        tier = monitor.capabilities.capability_tier()
+    if tier == "lite":
         cfg.setdefault("d_model", 32)
         cfg.setdefault("num_layers", 1)
     else:
@@ -573,7 +573,7 @@ def main(
                 {"val_loss": best_val_loss, "test_accuracy": acc},
             )
             logger.info("Registered model version %s", version_id)
-            if monitor.capabilities.model_size() == "full":
+            if monitor.capabilities.capability_tier() == "full":
                 student = TransformerModel(
                     len(features),
                     d_model=max(16, cfg.get("d_model", 64) // 2),

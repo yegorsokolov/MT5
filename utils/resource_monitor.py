@@ -20,11 +20,15 @@ class ResourceCapabilities:
     gpu_count: int
     cpu_flags: Set[str] = field(default_factory=set)
 
-    def model_size(self) -> str:
-        """Return "full" for capable machines else "lite"."""
+    def capability_tier(self) -> str:
+        """Return ``"full"`` for capable machines else ``"lite"``."""
         if self.cpus >= 4 and self.memory_gb >= 16 and self.has_gpu:
             return "full"
         return "lite"
+
+    # Backwards compatibility
+    def model_size(self) -> str:  # pragma: no cover - legacy alias
+        return self.capability_tier()
 
     def ddp(self) -> bool:
         """Return True if DistributedDataParallel should be enabled."""
@@ -44,6 +48,7 @@ class ResourceMonitor:
     ) -> None:
         self.logger = logging.getLogger(__name__)
         self.capabilities = self._probe()
+        self.capability_tier = self.capabilities.capability_tier()
         self._enable_accelerated_libraries()
         self._task: Optional[asyncio.Task] = None
         self._watch_task: Optional[asyncio.Task] = None
@@ -111,7 +116,12 @@ class ResourceMonitor:
         while True:
             await asyncio.sleep(24 * 60 * 60)
             self.capabilities = self._probe()
-            self.logger.info("Refreshed resource capabilities: %s", self.capabilities)
+            self.capability_tier = self.capabilities.capability_tier()
+            self.logger.info(
+                "Refreshed resource capabilities: %s (tier=%s)",
+                self.capabilities,
+                self.capability_tier,
+            )
 
     async def _watch_usage(self) -> None:
         if not (self.max_rss_mb or self.max_cpu_pct):
