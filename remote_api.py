@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import uvicorn
 from utils import update_config
+import socket
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -54,6 +55,30 @@ MAX_CPU_PCT = float(os.getenv("MAX_CPU_PCT", "0") or 0)
 resource_watchdog = ResourceMonitor(
     max_rss_mb=MAX_RSS_MB or None, max_cpu_pct=MAX_CPU_PCT or None
 )
+
+WATCHDOG_USEC = int(os.getenv("WATCHDOG_USEC", "0") or 0)
+
+
+def _sd_notify(msg: str) -> None:
+    """Send a notification to systemd if the notify socket is available."""
+    sock_path = os.getenv("NOTIFY_SOCKET")
+    if not sock_path:
+        return
+    if sock_path.startswith("@"):
+        sock_path = "\0" + sock_path[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.connect(sock_path)
+            s.send(msg.encode())
+    except Exception:  # pragma: no cover - best effort only
+        pass
+
+
+async def _systemd_watchdog(interval: float) -> None:
+    """Periodically notify systemd that the service is healthy."""
+    while True:
+        await asyncio.sleep(interval)
+        _sd_notify("WATCHDOG=1")
 
 if os.name != "nt" and getattr(resource_watchdog, "capabilities", None):
     if resource_watchdog.capabilities.cpus > 1:  # pragma: no cover - host dependent
@@ -146,6 +171,10 @@ async def _start_watcher() -> None:
     if resource_watchdog.max_rss_mb or resource_watchdog.max_cpu_pct:
         resource_watchdog.alert_callback = _handle_resource_breach
         resource_watchdog.start()
+    _sd_notify("READY=1")
+    if WATCHDOG_USEC:
+        interval = WATCHDOG_USEC / 2 / 1_000_000
+        asyncio.create_task(_systemd_watchdog(interval))
 
 @app.get("/bots")
 async def list_bots(_: None = Depends(authorize)):
@@ -233,6 +262,12 @@ async def update_configuration(change: ConfigUpdate, _: None = Depends(authorize
     """Update a configuration variable."""
     update_config(change.key, change.value, change.reason)
     return {"status": "updated", change.key: change.value}
+
+
+@app.get("/healthz")
+async def healthz() -> Dict[str, str]:
+    """Liveness probe for systemd or external monitors."""
+    return {"status": "ok"}
 
 
 @app.get("/health")
