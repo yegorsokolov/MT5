@@ -5,6 +5,7 @@ import random
 import json
 import logging
 import argparse
+import asyncio
 import joblib
 import pandas as pd
 import math
@@ -31,6 +32,7 @@ except Exception:  # noqa: E722
     shap = None
 
 from utils import load_config, mlflow_run
+from utils.resource_monitor import monitor
 from data.history import (
     load_history_parquet,
     save_history_parquet,
@@ -46,6 +48,36 @@ from analysis.feature_selector import select_features
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# start capability monitoring
+monitor.start()
+
+# Track active classifiers for dynamic resizing
+_ACTIVE_CLFS: list[LGBMClassifier] = []
+
+
+def _register_clf(clf: LGBMClassifier) -> None:
+    """Keep reference to classifier for dynamic n_jobs updates."""
+    _ACTIVE_CLFS.append(clf)
+
+
+def _subscribe_cpu_updates(cfg: dict) -> None:
+    async def _watch() -> None:
+        q = monitor.subscribe()
+        while True:
+            await q.get()
+            n_jobs = cfg.get("n_jobs") or monitor.capabilities.cpus
+            for c in list(_ACTIVE_CLFS):
+                try:
+                    c.set_params(n_jobs=n_jobs)
+                except Exception:
+                    logger.debug("Failed to update n_jobs for classifier")
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    loop.create_task(_watch())
 
 
 def _load_donor_booster(symbol: str):
@@ -115,6 +147,7 @@ def main(
     """Train LightGBM model and return weighted F1 score."""
     if cfg is None:
         cfg = load_config()
+    _subscribe_cpu_updates(cfg)
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
@@ -216,13 +249,14 @@ def main(
                     "clf",
                     LGBMClassifier(
                         n_estimators=200,
-                        n_jobs=cfg.get("n_jobs", 1),
+                        n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
                         random_state=seed,
                         keep_training_booster=True,
                     ),
                 )
             )
             pipe = Pipeline(steps)
+        _register_clf(pipe.named_steps["clf"])
         n_batches = math.ceil(len(X) / batch_size)
         for batch_idx in range(start_batch, n_batches):
             start = batch_idx * batch_size
@@ -299,12 +333,13 @@ def main(
                 "clf",
                 LGBMClassifier(
                     n_estimators=200,
-                    n_jobs=cfg.get("n_jobs", 1),
+                    n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
                     random_state=seed,
                 ),
             )
         )
         pipe = Pipeline(steps)
+        _register_clf(pipe.named_steps["clf"])
 
         fit_params = {
             "clf__eval_set": [(X_val, y_val)],
@@ -374,12 +409,13 @@ def main(
                 "clf",
                 LGBMClassifier(
                     n_estimators=200,
-                    n_jobs=cfg.get("n_jobs", 1),
+                    n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
                     random_state=seed,
                 ),
             )
         )
         pipe_reg = Pipeline(steps_reg)
+        _register_clf(pipe_reg.named_steps["clf"])
         pipe_reg.fit(X_reg, y_reg)
         regime_models[int(regime)] = pipe_reg
         logger.info("Trained regime-specific model for regime %s", regime)
