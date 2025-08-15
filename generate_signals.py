@@ -7,6 +7,7 @@ import os
 import logging
 import joblib
 import pandas as pd
+from state_manager import load_runtime_state, save_runtime_state
 
 import numpy as np
 
@@ -304,6 +305,14 @@ def main():
 
     cfg = load_config()
 
+    # Reload previous runtime state if available
+    state = load_runtime_state()
+    last_ts = None
+    prev_models: list[str] = []
+    if state:
+        last_ts = state.get("last_timestamp")
+        prev_models = state.get("model_versions", [])
+
     if args.simulate_closed_market or not is_market_open():
         logger.info("Market closed - running backtest and using historical data")
         backtest.run_rolling_backtest(cfg)
@@ -317,6 +326,16 @@ def main():
     models = load_models(model_paths, model_versions)
     if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
+
+    # Replay past trades through any newly enabled model versions
+    new_versions = [v for v in model_versions if v not in prev_models]
+    if new_versions:
+        try:
+            from analysis.replay_trades import replay_trades
+
+            replay_trades(new_versions)
+        except Exception:
+            logger.exception("Trade replay for new models failed")
 
     online_model = None
     online_path = Path(__file__).resolve().parent / "models" / "online.joblib"
@@ -335,6 +354,14 @@ def main():
         df = load_history_config(sym, cfg, cfg_root)
         df.to_parquet(hist_path_pq, index=False)
     df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+
+    # Catch up on any missed ticks since last processed timestamp
+    if last_ts is not None and "Timestamp" in df.columns:
+        try:
+            df = df[pd.to_datetime(df["Timestamp"]) > pd.to_datetime(last_ts)]
+        except Exception:
+            pass
+
     df = make_features(df)
 
     # optional macro indicators merged on timestamp
@@ -389,7 +416,7 @@ def main():
         predictor = TabularPredictor.load(str(ag_path))
         probs = predictor.predict_proba(df[features])[1].values
     else:
-    base_models = {}
+        base_models = {}
     if models:
         def _gbm_predict(data: pd.DataFrame) -> np.ndarray:
             return np.mean([m.predict_proba(data[features])[:, 1] for m in models], axis=0)
@@ -483,6 +510,25 @@ def main():
         queue.publish_dataframe(out, fmt=fmt)
         queue.close()
         logger.info("Signals published via %s (%s)", backend, fmt)
+
+    # Persist runtime state for recovery on next startup
+    try:
+        from data.trade_log import TradeLog
+
+        open_positions = []
+        tl_path = Path("/var/lib/mt5bot/trades.db")
+        if tl_path.exists():
+            open_positions = TradeLog(tl_path).get_open_positions()
+    except Exception:
+        open_positions = []
+
+    try:
+        last_processed = (
+            pd.to_datetime(df["Timestamp"]).max().isoformat() if not df.empty else ""
+        )
+        save_runtime_state(last_processed, open_positions, model_versions)
+    except Exception:
+        logger.exception("Failed to persist runtime state")
 
 
 if __name__ == "__main__":
