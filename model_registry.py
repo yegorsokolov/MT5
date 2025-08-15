@@ -3,9 +3,27 @@
 import asyncio
 import importlib.util
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# ``models.mixture_of_experts`` depends on no heavy libraries but importing the
+# ``models`` package would trigger optional imports like ``torch``. Import the
+# module directly from its file path to keep tests lightweight.
+_moe_spec = importlib.util.spec_from_file_location(
+    "mixture_of_experts", Path(__file__).with_name("models") / "mixture_of_experts.py"
+)
+_moe = importlib.util.module_from_spec(_moe_spec)
+assert _moe_spec and _moe_spec.loader
+sys.modules["mixture_of_experts"] = _moe
+_moe_spec.loader.exec_module(_moe)  # type: ignore
+
+ExpertSpec = _moe.ExpertSpec
+GatingNetwork = _moe.GatingNetwork
+MacroExpert = _moe.MacroExpert
+MeanReversionExpert = _moe.MeanReversionExpert
+TrendExpert = _moe.TrendExpert
 
 # ``utils.resource_monitor`` lives inside a package whose ``__init__`` pulls in
 # heavy optional dependencies. Import the module directly from its file path to
@@ -68,6 +86,15 @@ class ModelRegistry:
         self.selected: Dict[str, ModelVariant] = {}
         self._task: Optional[asyncio.Task] = None
         self.logger = logging.getLogger(__name__)
+        self.moe = GatingNetwork(
+            [
+                ExpertSpec(TrendExpert(), ResourceCapabilities(2, 4, False, gpu_count=0)),
+                ExpertSpec(
+                    MeanReversionExpert(), ResourceCapabilities(1, 2, False, gpu_count=0)
+                ),
+                ExpertSpec(MacroExpert(), ResourceCapabilities(1, 1, False, gpu_count=0)),
+            ]
+        )
         self._pick_models()
         if auto_refresh:
             self.monitor.start()
@@ -137,6 +164,11 @@ class ModelRegistry:
         top = variants[0]
         chosen = self.selected.get(task, top)
         return chosen.name != top.name
+
+    def predict_mixture(self, history: Any, regime: float) -> float:
+        """Predict using the mixture-of-experts gating network."""
+
+        return self.moe.predict(history, regime, self.monitor.capabilities)
 
     def predict(self, task: str, features: Any, loader) -> Any:
         """Return predictions for ``task`` using local or remote models.
