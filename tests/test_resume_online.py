@@ -8,6 +8,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 import types
+import contextlib
 
 env_mod = types.ModuleType("utils.environment")
 env_mod.ensure_environment = lambda: None
@@ -17,6 +18,11 @@ hist_mod.load_history_parquet = lambda *a, **k: None
 hist_mod.save_history_parquet = lambda *a, **k: None
 hist_mod.load_history_config = lambda *a, **k: None
 hist_mod.load_history_iter = lambda *a, **k: []
+hist_mod.load_history_from_urls = lambda *a, **k: None
+hist_mod.load_history_mt5 = lambda *a, **k: None
+hist_mod.load_history = lambda *a, **k: None
+hist_mod.load_multiple_histories = lambda *a, **k: []
+hist_mod.load_history_memmap = lambda *a, **k: None
 sys.modules.setdefault("data.history", hist_mod)
 feat_mod = types.ModuleType("data.features")
 feat_mod.make_features = lambda df, validate=False: df
@@ -30,10 +36,21 @@ mon_mod = types.ModuleType("utils.resource_monitor")
 class _DummyMonitor:
     def start(self):
         pass
-    capabilities = types.SimpleNamespace(ddp=lambda: False, model_size=lambda: "lite")
+    capability_tier = "lite"
+    capabilities = types.SimpleNamespace(ddp=lambda: False, capability_tier=lambda: "lite")
 
 mon_mod.monitor = _DummyMonitor()
 sys.modules.setdefault("utils.resource_monitor", mon_mod)
+mlflow_mod = types.SimpleNamespace(
+    set_tracking_uri=lambda *a, **k: None,
+    set_experiment=lambda *a, **k: None,
+    start_run=lambda *a, **k: contextlib.nullcontext(),
+    log_dict=lambda *a, **k: None,
+    log_metric=lambda *a, **k: None,
+    log_param=lambda *a, **k: None,
+    log_artifact=lambda *a, **k: None,
+)
+sys.modules.setdefault("mlflow", mlflow_mod)
 from state_manager import load_latest_checkpoint
 import train
 import train_nn
