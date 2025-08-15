@@ -23,12 +23,29 @@ class ResourceCapabilities:
     memory_gb: float
     has_gpu: bool
     gpu_count: int
+    gpu_model: str = ""
     cpu_flags: Set[str] = field(default_factory=set)
 
     def capability_tier(self) -> str:
-        """Return ``"full"`` for capable machines else ``"lite"``."""
-        if self.cpus >= 4 and self.memory_gb >= 16 and self.has_gpu:
-            return "full"
+        """Classify the machine into capability tiers.
+
+        ``lite`` machines have limited resources. ``standard`` machines have
+        reasonable CPU and memory but no GPU. ``gpu`` machines have at least
+        one GPU, while ``hpc`` represents multi-GPU or data-centre class
+        hardware (A100/V100/H100 etc. or very high CPU/RAM).
+        """
+
+        gpu_name = self.gpu_model.lower()
+        if self.has_gpu:
+            if (
+                self.gpu_count > 1
+                or any(t in gpu_name for t in ["a100", "h100", "v100", "a40", "a30"])
+                or (self.cpus >= 16 and self.memory_gb >= 64)
+            ):
+                return "hpc"
+            return "gpu"
+        if self.cpus >= 4 and self.memory_gb >= 16:
+            return "standard"
         return "lite"
 
     # Backwards compatibility
@@ -57,6 +74,7 @@ class ResourceMonitor:
         self._enable_accelerated_libraries()
         self._task: Optional[asyncio.Task] = None
         self._watch_task: Optional[asyncio.Task] = None
+        self._subscribers: Set[asyncio.Queue[str]] = set()
         self.max_rss_mb = max_rss_mb
         self.max_cpu_pct = max_cpu_pct
         self.sample_interval = sample_interval
@@ -83,12 +101,19 @@ class ResourceMonitor:
         memory_gb = psutil.virtual_memory().total / (1024**3)
         gpu_count = int(torch.cuda.device_count()) if torch and torch.cuda else 0
         has_gpu = gpu_count > 0
+        gpu_model = ""
+        if has_gpu and torch and torch.cuda:
+            try:
+                gpu_model = torch.cuda.get_device_name(0)
+            except Exception:
+                gpu_model = ""
         flags = self._parse_cpu_flags()
         return ResourceCapabilities(
             cpus=cpus,
             memory_gb=memory_gb,
             has_gpu=has_gpu,
             gpu_count=gpu_count,
+            gpu_model=gpu_model,
             cpu_flags=flags,
         )
 
@@ -121,7 +146,10 @@ class ResourceMonitor:
         while True:
             await asyncio.sleep(24 * 60 * 60)
             self.capabilities = self._probe()
-            self.capability_tier = self.capabilities.capability_tier()
+            new_tier = self.capabilities.capability_tier()
+            if new_tier != self.capability_tier:
+                self.capability_tier = new_tier
+                await self._notify(new_tier)
             self.logger.info(
                 "Refreshed resource capabilities: %s (tier=%s)",
                 self.capabilities,
@@ -177,6 +205,19 @@ class ResourceMonitor:
         self._task = loop.create_task(self._periodic_probe())
         if self._watch_task is None:
             self._watch_task = loop.create_task(self._watch_usage())
+
+    def subscribe(self) -> asyncio.Queue[str]:
+        """Return a queue that receives capability tier updates."""
+        q: asyncio.Queue[str] = asyncio.Queue()
+        self._subscribers.add(q)
+        return q
+
+    async def _notify(self, tier: str) -> None:
+        for q in list(self._subscribers):
+            try:
+                await q.put(tier)
+            except Exception:
+                self._subscribers.discard(q)
 
     def stop(self) -> None:
         for attr in ("_task", "_watch_task"):

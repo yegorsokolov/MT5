@@ -7,7 +7,10 @@ and continue.
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import logging
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 import inspect
@@ -44,10 +47,12 @@ FEATURE_PLUGINS: List[PluginSpec] = []
 MODEL_PLUGINS: List[PluginSpec] = []
 RISK_CHECKS: List[PluginSpec] = []
 
+TIERS = {"lite": 0, "standard": 1, "gpu": 2, "full": 2, "hpc": 3}
+
 
 def _meets_requirements(spec: PluginSpec) -> bool:
     caps = monitor.capabilities
-    if monitor.capability_tier == "lite" and spec.tier == "full":
+    if TIERS.get(monitor.capability_tier, 0) < TIERS.get(spec.tier, 0):
         return False
     if caps.cpus < spec.min_cpus:
         return False
@@ -79,10 +84,9 @@ def _register_plugin(spec: PluginSpec, registry: List[PluginSpec]) -> None:
     if not _meets_requirements(spec):
         logger.info("Skipping %s plugin %s due to insufficient resources", spec.tier, spec.name)
         return
-    tiers = {"lite": 0, "full": 1}
     for i, existing in enumerate(registry):
         if existing.name == spec.name:
-            if tiers.get(spec.tier, 0) >= tiers.get(existing.tier, 0):
+            if TIERS.get(spec.tier, 0) >= TIERS.get(existing.tier, 0):
                 registry[i] = spec
             return
     registry.append(spec)
@@ -128,8 +132,7 @@ def register_risk_check(func: Callable[..., Any]) -> Callable[..., Any]:
         logger.info("Skipping risk plugin %s due to insufficient resources", spec.name)
     return func
 
-# Import built-in plugins so registration side effects occur
-for _mod in [
+PLUGIN_MODULES = [
     'atr',
     'donchian',
     'keltner',
@@ -147,11 +150,46 @@ for _mod in [
     'pair_trading',
     'rl_risk',
     'graph_features',
-]:
+]
+
+
+def _import_plugins(reload: bool = False) -> None:
+    for _mod in PLUGIN_MODULES:
+        try:
+            name = f"{__name__}.{_mod}"
+            if reload and name in sys.modules:
+                importlib.reload(sys.modules[name])
+            else:
+                __import__(name)
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to load plugin '%s'", _mod, exc_info=True)
+
+
+def _setup_watcher() -> None:
+    async def _watch() -> None:
+        q = monitor.subscribe()
+        current = monitor.capability_tier
+        while True:
+            tier = await q.get()
+            if TIERS.get(tier, 0) > TIERS.get(current, 0):
+                logger.info("Capability tier upgraded to %s; reloading plugins", tier)
+                FEATURE_PLUGINS.clear()
+                MODEL_PLUGINS.clear()
+                RISK_CHECKS.clear()
+                _import_plugins(reload=True)
+                current = tier
+
+    monitor.start()
     try:
-        __import__(f"{__name__}.{_mod}")
-    except Exception:  # pragma: no cover - defensive
-        logger.warning("Failed to load plugin '%s'", _mod, exc_info=True)
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    loop.create_task(_watch())
+
+
+# Import built-in plugins so registration side effects occur
+_import_plugins()
+_setup_watcher()
 
 
 __all__ = [
