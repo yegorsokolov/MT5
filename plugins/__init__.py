@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 import inspect
 
 from log_utils import setup_logging
@@ -34,6 +34,7 @@ class PluginSpec:
     min_cpus: int = 0
     min_mem_gb: float = 0.0
     requires_gpu: bool = False
+    tier: str = "lite"
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - thin wrapper
         return self.plugin(*args, **kwargs)
@@ -46,6 +47,8 @@ RISK_CHECKS: List[PluginSpec] = []
 
 def _meets_requirements(spec: PluginSpec) -> bool:
     caps = monitor.capabilities
+    if monitor.capability_tier == "lite" and spec.tier == "full":
+        return False
     if caps.cpus < spec.min_cpus:
         return False
     if caps.memory_gb < spec.min_mem_gb:
@@ -55,36 +58,66 @@ def _meets_requirements(spec: PluginSpec) -> bool:
     return True
 
 
-def _build_spec(func: Callable[..., Any]) -> PluginSpec:
+def _build_spec(
+    func: Callable[..., Any], *, name: Optional[str] = None, tier: str = "lite"
+) -> PluginSpec:
     module = inspect.getmodule(func)
     min_cpus = getattr(module, "MIN_CPUS", 0)
     min_mem_gb = getattr(module, "MIN_MEM_GB", 0.0)
     requires_gpu = getattr(module, "REQUIRES_GPU", False)
     return PluginSpec(
-        name=getattr(func, "__name__", str(func)),
+        name=name or getattr(func, "__name__", str(func)),
         plugin=func,
         min_cpus=min_cpus,
         min_mem_gb=min_mem_gb,
         requires_gpu=requires_gpu,
+        tier=tier,
     )
 
 
-def register_feature(func: Callable[..., Any]) -> Callable[..., Any]:
-    spec = _build_spec(func)
-    if _meets_requirements(spec):
-        FEATURE_PLUGINS.append(spec)
-    else:  # pragma: no cover - logging only
-        logger.info("Skipping feature plugin %s due to insufficient resources", spec.name)
-    return func
+def _register_plugin(spec: PluginSpec, registry: List[PluginSpec]) -> None:
+    if not _meets_requirements(spec):
+        logger.info("Skipping %s plugin %s due to insufficient resources", spec.tier, spec.name)
+        return
+    tiers = {"lite": 0, "full": 1}
+    for i, existing in enumerate(registry):
+        if existing.name == spec.name:
+            if tiers.get(spec.tier, 0) >= tiers.get(existing.tier, 0):
+                registry[i] = spec
+            return
+    registry.append(spec)
 
 
-def register_model(obj: Callable[..., Any]) -> Callable[..., Any]:
-    spec = _build_spec(obj)
-    if _meets_requirements(spec):
-        MODEL_PLUGINS.append(spec)
-    else:  # pragma: no cover - logging only
-        logger.info("Skipping model plugin %s due to insufficient resources", spec.name)
-    return obj
+def register_feature(
+    func: Optional[Callable[..., Any]] = None,
+    *,
+    tier: str = "lite",
+    name: Optional[str] = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+        spec = _build_spec(f, name=name, tier=tier)
+        _register_plugin(spec, FEATURE_PLUGINS)
+        return f
+
+    if func is None:
+        return decorator
+    return decorator(func)
+
+
+def register_model(
+    obj: Optional[Callable[..., Any]] = None,
+    *,
+    tier: str = "lite",
+    name: Optional[str] = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+        spec = _build_spec(f, name=name, tier=tier)
+        _register_plugin(spec, MODEL_PLUGINS)
+        return f
+
+    if obj is None:
+        return decorator
+    return decorator(obj)
 
 
 def register_risk_check(func: Callable[..., Any]) -> Callable[..., Any]:

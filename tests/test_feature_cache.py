@@ -8,6 +8,7 @@ from pathlib import Path
 
 def test_make_features_uses_cache(monkeypatch, tmp_path):
     stub_utils = types.ModuleType("utils")
+    stub_utils.__path__ = []
     stub_utils.load_config = lambda: {
         "use_feature_cache": True,
         "use_atr": False,
@@ -19,15 +20,21 @@ def test_make_features_uses_cache(monkeypatch, tmp_path):
     class _Mon:
         def start(self):
             pass
+        capability_tier = "lite"
 
         class capabilities:
+            cpus = 1
+            memory_gb = 1
+            has_gpu = False
             @staticmethod
-            def model_size():
-                return "small"
+            def capability_tier():
+                return "lite"
 
     stub_utils.resource_monitor = types.SimpleNamespace(monitor=_Mon())
+    stub_utils.data_backend = types.SimpleNamespace(get_dataframe_module=lambda: pd)
     sys.modules["utils"] = stub_utils
     sys.modules["utils.resource_monitor"] = stub_utils.resource_monitor
+    sys.modules["utils.data_backend"] = stub_utils.data_backend
     sklearn_stub = types.SimpleNamespace(
         decomposition=types.SimpleNamespace(PCA=lambda *a, **k: None)
     )
@@ -111,6 +118,7 @@ def test_make_features_uses_cache(monkeypatch, tmp_path):
 
 def test_cross_asset_features_cached(monkeypatch, tmp_path):
     stub_utils = types.ModuleType("utils")
+    stub_utils.__path__ = []
     stub_utils.load_config = lambda: {
         "use_feature_cache": True,
         "use_atr": False,
@@ -121,15 +129,21 @@ def test_cross_asset_features_cached(monkeypatch, tmp_path):
     class _Mon:
         def start(self):
             pass
+        capability_tier = "lite"
 
         class capabilities:
+            cpus = 1
+            memory_gb = 1
+            has_gpu = False
             @staticmethod
-            def model_size():
-                return "small"
+            def capability_tier():
+                return "lite"
 
     stub_utils.resource_monitor = types.SimpleNamespace(monitor=_Mon())
+    stub_utils.data_backend = types.SimpleNamespace(get_dataframe_module=lambda: pd)
     sys.modules["utils"] = stub_utils
     sys.modules["utils.resource_monitor"] = stub_utils.resource_monitor
+    sys.modules["utils.data_backend"] = stub_utils.data_backend
 
     class _PCA:
         def __init__(self, *a, **k):

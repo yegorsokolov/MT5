@@ -39,7 +39,7 @@ def _get_pipeline(mode: str | None):
     if pipeline is None:
         return None
     if mode in (None, "auto"):
-        mode = monitor.capabilities.model_size()
+        mode = monitor.capabilities.capability_tier()
     try:
         model_name = (
             "distilbert-base-uncased-finetuned-sst-2-english"
