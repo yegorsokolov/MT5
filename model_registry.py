@@ -39,6 +39,8 @@ ResourceCapabilities = _rm.ResourceCapabilities
 ResourceMonitor = _rm.ResourceMonitor
 monitor = _rm.monitor
 
+TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+
 
 @dataclass
 class ModelVariant:
@@ -102,7 +104,8 @@ class ModelRegistry:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 loop = asyncio.get_event_loop()
-            self._task = loop.create_task(self._watch())
+            queue = self.monitor.subscribe()
+            self._task = loop.create_task(self._watch(queue))
 
     def _pick_models(self) -> None:
         caps = self.monitor.capabilities
@@ -121,15 +124,15 @@ class ModelRegistry:
                     self.logger.info("Restored %s for %s", chosen.name, task)
             self.selected[task] = chosen
 
-    async def _watch(self) -> None:
-        """Periodically re-evaluate models in case capabilities change."""
-        prev_caps = self.monitor.capabilities
+    async def _watch(self, queue: asyncio.Queue[str]) -> None:
+        """Re-evaluate models when capability tier increases."""
+        prev = self.monitor.capability_tier
         while True:
-            await asyncio.sleep(24 * 60 * 60)
-            caps = self.monitor.capabilities
-            if caps != prev_caps:
-                prev_caps = caps
+            tier = await queue.get()
+            if TIERS.get(tier, 0) > TIERS.get(prev, 0):
+                self.logger.info("Capability tier upgraded to %s; re-evaluating models", tier)
                 self._pick_models()
+            prev = tier
 
     def get(self, task: str) -> str:
         """Return the chosen model variant for the given task."""

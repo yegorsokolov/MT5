@@ -1,5 +1,6 @@
 """Train a Transformer model on tick data sequences."""
 
+import asyncio
 import logging
 from log_utils import setup_logging, log_exceptions
 
@@ -42,6 +43,29 @@ from data.features import (
     train_test_split,
     make_sequence_arrays,
 )
+
+TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+
+
+def _subscribe_for_upgrades(cfg: dict) -> None:
+    async def _watch() -> None:
+        q = monitor.subscribe()
+        current = monitor.capability_tier
+        while True:
+            tier = await q.get()
+            if TIERS.get(tier, 0) > TIERS.get(current, 0):
+                logging.getLogger(__name__).info(
+                    "Capability tier upgraded to %s; using larger model", tier
+                )
+                cfg["d_model"] = max(cfg.get("d_model", 32), 128)
+                cfg["num_layers"] = max(cfg.get("num_layers", 1), 4)
+                current = tier
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    loop.create_task(_watch())
 from data.labels import triple_barrier
 import argparse
 from ray_utils import (
@@ -225,7 +249,9 @@ def main(
     tier = cfg.get("capability_tier", "auto")
     if tier == "auto":
         tier = monitor.capabilities.capability_tier()
-    if tier == "lite":
+    monitor.start()
+    _subscribe_for_upgrades(cfg)
+    if tier in ("lite", "standard"):
         cfg.setdefault("d_model", 32)
         cfg.setdefault("num_layers", 1)
     else:
@@ -573,7 +599,7 @@ def main(
                 {"val_loss": best_val_loss, "test_accuracy": acc},
             )
             logger.info("Registered model version %s", version_id)
-            if monitor.capabilities.capability_tier() == "full":
+            if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]:
                 student = TransformerModel(
                     len(features),
                     d_model=max(16, cfg.get("d_model", 64) // 2),
