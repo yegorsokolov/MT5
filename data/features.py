@@ -213,7 +213,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
         from utils.resource_monitor import monitor
 
         monitor.start()
-        mode = monitor.capabilities.model_size()
+        mode = monitor.capabilities.capability_tier()
     api_url = cfg.get("sentiment_api_url")
 
     if cfg.get("use_fingpt_sentiment", False):

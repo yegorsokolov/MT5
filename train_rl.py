@@ -49,7 +49,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     monitor = SimpleNamespace(
         start=lambda: None,
-        capabilities=SimpleNamespace(model_size=lambda: 0, ddp=lambda: False),
+        capability_tier="lite",
+        capabilities=SimpleNamespace(capability_tier=lambda: "lite", ddp=lambda: False),
     )
 from data.history import (
     load_history_parquet,
@@ -474,7 +475,7 @@ def main(
     if cfg.get("graph_model"):
         graph_model = GraphNet(len(features)).to(device)
 
-    size = monitor.capabilities.model_size()
+    size = monitor.capabilities.capability_tier()
     algo_cfg = cfg.get("rl_algorithm", "AUTO").upper()
     if algo_cfg == "AUTO":
         algo = "A2C" if size == "lite" else "PPO"
@@ -565,7 +566,7 @@ def main(
         env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         per_kwargs = {}
-        if monitor.capabilities.model_size() == "full" and PrioritizedReplayBuffer:
+        if monitor.capabilities.capability_tier() == "full" and PrioritizedReplayBuffer:
             per_kwargs = {
                 "replay_buffer_class": PrioritizedReplayBuffer,
                 "replay_buffer_kwargs": {
@@ -624,7 +625,7 @@ def main(
         env = DiscreteTradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         per_kwargs = {}
-        if monitor.capabilities.model_size() == "full" and PrioritizedReplayBuffer:
+        if monitor.capabilities.capability_tier() == "full" and PrioritizedReplayBuffer:
             per_kwargs = {
                 "replay_buffer_class": PrioritizedReplayBuffer,
                 "replay_buffer_kwargs": {
@@ -844,7 +845,7 @@ def main(
                 artifact = root / "model_rllib"
             else:
                 artifact = root / "model_rl.zip"
-            if monitor.capabilities.model_size() == "full":
+            if monitor.capabilities.capability_tier() == "full":
                 student_model = A2C(
                     "MlpPolicy",
                     env,
@@ -1002,7 +1003,7 @@ if __name__ == "__main__":
         cfg["offline_pretrain"] = True
     if args.objectives:
         objs = args.objectives
-        if monitor.capabilities.model_size() != "full":
+        if monitor.capabilities.capability_tier() != "full":
             objs = objs[:1]
         cfg["rl_objectives"] = objs
     if args.tune:
