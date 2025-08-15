@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 import json
+import psutil
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.checkpoint import checkpoint
 from torch.cuda.amp import autocast, GradScaler
@@ -475,6 +476,30 @@ def main(
             loop = asyncio.get_event_loop()
         loop.create_task(_watch_cpus())
 
+        accumulate_steps = cfg.get("accumulate_steps")
+        free_mem_mb = 0.0
+        if not accumulate_steps:
+            try:
+                sample_x, _ = next(iter(train_loader))
+                batch_mem_mb = sample_x.element_size() * sample_x.nelement() / (1024**2)
+                if monitor.capabilities.has_gpu and device.type == "cuda":
+                    free_mem_mb = torch.cuda.mem_get_info()[0] / (1024**2)
+                else:
+                    free_mem_mb = psutil.virtual_memory().available / (1024**2)
+                accumulate_steps = max(1, int(free_mem_mb / (batch_mem_mb * 2)))
+            except Exception:
+                accumulate_steps = 1
+        cfg["accumulate_steps"] = accumulate_steps
+        effective_bs = batch_size * accumulate_steps
+        rss_mb = psutil.Process().memory_info().rss / (1024**2)
+        logger.info(
+            "accumulate_steps=%s effective_batch_size=%s rss=%.1fMB free_mem=%.1fMB",
+            accumulate_steps,
+            effective_bs,
+            rss_mb,
+            free_mem_mb,
+        )
+
         patience = cfg.get("patience", 3)
         best_val_loss = float("inf")
         epochs_no_improve = 0
@@ -507,40 +532,45 @@ def main(
             if train_sampler is not None:
                 train_sampler.set_epoch(epoch)
             model.train()
+            optim.zero_grad()
             pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}", disable=rank != 0)
             for batch_idx, (xb, yb) in enumerate(pbar):
                 if epoch == start_epoch and batch_idx < start_batch:
                     continue
                 xb = xb.to(device)
                 yb = yb.to(device)
-                optim.zero_grad()
                 if use_amp:
                     with autocast():
                         preds = model(xb)
-                        loss = loss_fn(preds, yb)
+                        raw_loss = loss_fn(preds, yb)
+                    loss = raw_loss / accumulate_steps
                     scaler.scale(loss).backward()
-                    scaler.step(optim)
-                    scaler.update()
                 else:
                     preds = model(xb)
-                    loss = loss_fn(preds, yb)
-                    loss.backward()
-                    optim.step()
-                if rank == 0:
-                    global_step = epoch * steps_per_epoch + batch_idx
-                    save_checkpoint(
-                        {
-                            "model": (
-                                model.module.state_dict()
-                                if isinstance(model, DDP)
-                                else model.state_dict()
-                            ),
-                            "optimizer": optim.state_dict(),
-                        },
-                        global_step + 1,
-                        cfg.get("checkpoint_dir"),
-                    )
-                    pbar.set_postfix(loss=loss.item())
+                    raw_loss = loss_fn(preds, yb)
+                    (raw_loss / accumulate_steps).backward()
+                if (batch_idx + 1) % accumulate_steps == 0 or (batch_idx + 1) == len(train_loader):
+                    if use_amp:
+                        scaler.step(optim)
+                        scaler.update()
+                    else:
+                        optim.step()
+                    optim.zero_grad()
+                    if rank == 0:
+                        global_step = epoch * steps_per_epoch + batch_idx
+                        save_checkpoint(
+                            {
+                                "model": (
+                                    model.module.state_dict()
+                                    if isinstance(model, DDP)
+                                    else model.state_dict()
+                                ),
+                                "optimizer": optim.state_dict(),
+                            },
+                            global_step + 1,
+                            cfg.get("checkpoint_dir"),
+                        )
+                        pbar.set_postfix(loss=raw_loss.item())
 
             if rank == 0:
                 model.eval()
