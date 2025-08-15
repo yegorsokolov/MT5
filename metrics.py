@@ -19,3 +19,6 @@ PARTIAL_FILL_COUNT = Counter('partial_fill_count', 'Trades partially filled due 
 SKIPPED_TRADE_COUNT = Counter('skipped_trade_count', 'Trades skipped due to insufficient liquidity')
 FEATURE_ANOMALIES = Counter('feature_anomalies', 'Detected feature anomalies')
 RESOURCE_RESTARTS = Counter('resource_restarts', 'Graceful restarts triggered by resource watchdog')
+# Resource utilization metrics
+CPU_USAGE = Gauge('cpu_usage_pct', 'Process CPU utilization percentage')
+RSS_USAGE = Gauge('rss_usage_mb', 'Process resident set size in megabytes')

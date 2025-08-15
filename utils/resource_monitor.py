@@ -9,6 +9,11 @@ try:
 except Exception:  # pragma: no cover - torch optional
     torch = None  # type: ignore
 
+try:
+    from metrics import CPU_USAGE, RSS_USAGE
+except Exception:  # pragma: no cover - metrics may be stubbed in tests
+    CPU_USAGE = RSS_USAGE = None  # type: ignore
+
 
 @dataclass
 class ResourceCapabilities:
@@ -124,14 +129,22 @@ class ResourceMonitor:
             )
 
     async def _watch_usage(self) -> None:
-        if not (self.max_rss_mb or self.max_cpu_pct):
-            return
         proc = psutil.Process()
         proc.cpu_percent()
         while True:
             await asyncio.sleep(self.sample_interval)
             rss = proc.memory_info().rss / (1024**2)
             cpu = proc.cpu_percent()
+            if RSS_USAGE:
+                try:
+                    RSS_USAGE.set(rss)
+                except Exception:
+                    pass
+            if CPU_USAGE:
+                try:
+                    CPU_USAGE.set(cpu)
+                except Exception:
+                    pass
             reasons = []
             if self.max_rss_mb and rss > self.max_rss_mb:
                 reasons.append(f"rss {rss:.1f}MB>{self.max_rss_mb}")
@@ -162,7 +175,7 @@ class ResourceMonitor:
         except RuntimeError:
             loop = asyncio.get_event_loop()
         self._task = loop.create_task(self._periodic_probe())
-        if (self.max_rss_mb or self.max_cpu_pct) and self._watch_task is None:
+        if self._watch_task is None:
             self._watch_task = loop.create_task(self._watch_usage())
 
     def stop(self) -> None:
