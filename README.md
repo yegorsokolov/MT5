@@ -736,9 +736,9 @@ from the secret or environment.
 ### Monitoring and Dashboard
 
 The API now exposes Prometheus metrics at `/metrics`. Deploying Prometheus and
-Grafana lets you monitor queue depth, trade counts and error rates in real time.
-Add the following scrape annotations to the deployment so Prometheus discovers
-the service:
+Grafana lets you monitor CPU/RAM usage, queue depth, trade counts and drift events
+in real time. Add the following scrape annotations to the deployment so
+Prometheus discovers the service:
 
 ```yaml
     annotations:
@@ -749,7 +749,9 @@ the service:
 ```
 
 Import the provided Grafana dashboard JSON in the `grafana/` folder to visualise
-these metrics.
+these metrics. Sample Prometheus and alerting configurations are available in
+`deploy/`. See `docs/monitoring.md` for details on enabling optional Alertmanager
+rules.
 
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.

@@ -55,6 +55,15 @@ def setup_logging() -> logging.Logger:
     sh.setFormatter(fmt)
     logger.addHandler(sh)
 
+    try:  # pragma: no cover - systemd optional
+        from systemd.journal import JournalHandler
+
+        jh = JournalHandler(SYSLOG_IDENTIFIER="mt5bot")
+        jh.setFormatter(fmt)
+        logger.addHandler(jh)
+    except Exception:
+        pass
+
     return logger
 
 

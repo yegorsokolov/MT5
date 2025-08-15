@@ -1,0 +1,16 @@
+groups:
+  - name: mt5bot
+    rules:
+      - alert: HighCPUUsage
+        expr: cpu_usage_pct > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          description: CPU usage above 90% for 5 minutes
+      - alert: BrokerDisconnected
+        expr: increase(reconnect_attempts[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          description: MT5 broker connection lost
