@@ -21,5 +21,6 @@ models/*
 !models/meta_label.py
 !models/remote_client.py
 !models/remote_server.py
+!models/mixture_of_experts.py
 __pycache__/
 logs/
