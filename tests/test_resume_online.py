@@ -37,7 +37,9 @@ class _DummyMonitor:
     def start(self):
         pass
     capability_tier = "lite"
-    capabilities = types.SimpleNamespace(ddp=lambda: False, capability_tier=lambda: "lite")
+    capabilities = types.SimpleNamespace(
+        cpus=1, ddp=lambda: False, capability_tier=lambda: "lite"
+    )
 
 mon_mod.monitor = _DummyMonitor()
 sys.modules.setdefault("utils.resource_monitor", mon_mod)
