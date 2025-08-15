@@ -263,7 +263,7 @@ def main(
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    torch.set_num_threads(cfg.get("num_threads", 1))
+    torch.set_num_threads(cfg.get("num_threads") or monitor.capabilities.cpus)
     use_cuda = torch.cuda.is_available()
     if world_size > 1:
         backend = "nccl" if use_cuda else "gloo"
@@ -430,15 +430,50 @@ def main(
         )
         batch_size = cfg.get("batch_size", 128)
         eval_batch_size = cfg.get("eval_batch_size", 256)
+        workers = cfg.get("num_workers") or monitor.capabilities.cpus
+
         train_loader = DataLoader(
             train_ds,
             batch_size=batch_size,
             shuffle=train_sampler is None,
             sampler=train_sampler,
+            num_workers=workers,
         )
         if rank == 0:
-            val_loader = DataLoader(val_ds, batch_size=eval_batch_size)
-            test_loader = DataLoader(test_ds, batch_size=eval_batch_size)
+            val_loader = DataLoader(val_ds, batch_size=eval_batch_size, num_workers=workers)
+            test_loader = DataLoader(test_ds, batch_size=eval_batch_size, num_workers=workers)
+
+        def _reload_loaders(num_workers: int) -> None:
+            nonlocal train_loader, val_loader, test_loader
+            train_loader = DataLoader(
+                train_ds,
+                batch_size=batch_size,
+                shuffle=train_sampler is None,
+                sampler=train_sampler,
+                num_workers=num_workers,
+            )
+            if rank == 0:
+                val_loader = DataLoader(
+                    val_ds, batch_size=eval_batch_size, num_workers=num_workers
+                )
+                test_loader = DataLoader(
+                    test_ds, batch_size=eval_batch_size, num_workers=num_workers
+                )
+
+        async def _watch_cpus() -> None:
+            q = monitor.subscribe()
+            while True:
+                await q.get()
+                nw = cfg.get("num_workers") or monitor.capabilities.cpus
+                if cfg.get("num_threads") is None:
+                    torch.set_num_threads(nw)
+                _reload_loaders(nw)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        loop.create_task(_watch_cpus())
 
         patience = cfg.get("patience", 3)
         best_val_loss = float("inf")

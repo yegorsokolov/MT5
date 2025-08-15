@@ -47,7 +47,8 @@ def _adjust_config_for_low_spec() -> None:
     if cfg.get("batch_size", 64) > 32:
         cfg["batch_size"] = 32
         changed = True
-    if cfg.get("n_jobs", 2) > 1:
+    n_jobs = cfg.get("n_jobs")
+    if n_jobs is not None and n_jobs > 1:
         cfg["n_jobs"] = 1
         changed = True
     if changed:
