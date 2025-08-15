@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from log_utils import setup_logging, log_exceptions
 
@@ -92,6 +93,28 @@ from ray_utils import (
 )
 from rl.offline_dataset import OfflineDataset
 from event_store import EventStore
+
+TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+
+
+def _subscribe_for_upgrades(cfg: dict) -> None:
+    async def _watch() -> None:
+        q = monitor.subscribe()
+        current = monitor.capability_tier
+        while True:
+            tier = await q.get()
+            if TIERS.get(tier, 0) > TIERS.get(current, 0):
+                logging.getLogger(__name__).info(
+                    "Capability tier upgraded to %s; enabling advanced features", tier
+                )
+                cfg["rl_objectives"] = cfg.get("rl_objectives_full", cfg.get("rl_objectives", []))
+                current = tier
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    loop.create_task(_watch())
 
 
 def offline_pretrain(
@@ -566,7 +589,7 @@ def main(
         env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         per_kwargs = {}
-        if monitor.capabilities.capability_tier() == "full" and PrioritizedReplayBuffer:
+        if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"] and PrioritizedReplayBuffer:
             per_kwargs = {
                 "replay_buffer_class": PrioritizedReplayBuffer,
                 "replay_buffer_kwargs": {
@@ -625,7 +648,7 @@ def main(
         env = DiscreteTradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         per_kwargs = {}
-        if monitor.capabilities.capability_tier() == "full" and PrioritizedReplayBuffer:
+        if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"] and PrioritizedReplayBuffer:
             per_kwargs = {
                 "replay_buffer_class": PrioritizedReplayBuffer,
                 "replay_buffer_kwargs": {
@@ -845,7 +868,7 @@ def main(
                 artifact = root / "model_rllib"
             else:
                 artifact = root / "model_rl.zip"
-            if monitor.capabilities.capability_tier() == "full":
+            if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]:
                 student_model = A2C(
                     "MlpPolicy",
                     env,
@@ -989,6 +1012,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     cfg = load_config()
+    monitor.start()
+    _subscribe_for_upgrades(cfg)
     if args.ddp:
         cfg["ddp"] = True
     if args.export:
@@ -1003,7 +1028,7 @@ if __name__ == "__main__":
         cfg["offline_pretrain"] = True
     if args.objectives:
         objs = args.objectives
-        if monitor.capabilities.capability_tier() != "full":
+        if TIERS.get(monitor.capabilities.capability_tier(), 0) < TIERS["gpu"]:
             objs = objs[:1]
         cfg["rl_objectives"] = objs
     if args.tune:

@@ -13,6 +13,7 @@ from . import register_feature
 import pandas as pd
 import functools
 import logging
+import asyncio
 from typing import Optional
 
 from utils.resource_monitor import monitor
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Periodically refresh hardware capabilities
 monitor.start()
+TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 
 try:
     from transformers import pipeline
@@ -43,7 +45,7 @@ def _get_pipeline(mode: str | None):
     try:
         model_name = (
             "distilbert-base-uncased-finetuned-sst-2-english"
-            if mode == "lite"
+            if mode in ("lite", "standard")
             else "FinGPT/fingpt-sentiment_llama2-13b_lora"
         )
         return pipeline("sentiment-analysis", model=model_name)
@@ -61,6 +63,24 @@ def _get_summary_pipeline():
     except Exception as e:  # pragma: no cover - download/initialization may fail
         logger.warning("Failed to load summarization model: %s", e)
         return None
+
+
+async def _watch() -> None:
+    q = monitor.subscribe()
+    current = monitor.capability_tier
+    while True:
+        tier = await q.get()
+        if TIERS.get(tier, 0) > TIERS.get(current, 0):
+            _get_pipeline.cache_clear()
+            _get_summary_pipeline.cache_clear()
+            current = tier
+
+
+try:
+    loop = asyncio.get_running_loop()
+except RuntimeError:
+    loop = asyncio.get_event_loop()
+loop.create_task(_watch())
 
 
 @register_feature
