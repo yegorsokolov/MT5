@@ -5,9 +5,11 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory={{REPO_PATH}}
-ExecStart=/usr/bin/env python3 {{REPO_PATH}}/realtime_train.py
+ExecStartPre={{REPO_PATH}}/deploy/prestart.sh
+ExecStart=/usr/bin/env python3 {{REPO_PATH}}/remote_api.py
 Restart=on-failure
 RestartSec=5
+WatchdogSec=30
 StandardOutput=journal
 StandardError=journal
 

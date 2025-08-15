@@ -131,14 +131,20 @@ sudo ./scripts/install_service.sh
 ```
 
 This copies the service file to `/etc/systemd/system` and enables the service.
-
-Common commands:
+Common `systemctl` commands:
 
 ```bash
-sudo systemctl status mt5bot    # check service status
-sudo systemctl restart mt5bot   # restart after updates
+sudo systemctl start mt5bot     # start the service
 sudo systemctl stop mt5bot      # stop the service
-journalctl -u mt5bot -f         # view logs
+sudo systemctl restart mt5bot   # restart after updates
+sudo systemctl status mt5bot    # check service status
+journalctl -u mt5bot -f         # follow service logs
+```
+
+Application logs are also written to `logs/app.log` within the repository:
+
+```bash
+tail -f logs/app.log
 ```
 
 Edit `deploy/mt5bot.service` to run `remote_api.py` instead of `realtime_train.py` if desired.
