@@ -8,12 +8,18 @@ import pandas as pd
 from log_utils import DECISION_LOG
 from generate_signals import load_models
 from utils import load_config
+try:  # optional if backend not configured
+    from core import state_sync
+except Exception:  # pragma: no cover - optional dependency
+    state_sync = None
 
 REPORT_DIR = Path(__file__).resolve().parent.parent / "reports"
 REPORT_DIR.mkdir(exist_ok=True)
 
 
 def main() -> None:
+    if state_sync:
+        state_sync.pull_decisions()
     if not DECISION_LOG.exists():
         print("No decisions log found")
         return
