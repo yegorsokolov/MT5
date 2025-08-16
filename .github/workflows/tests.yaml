@@ -55,5 +55,12 @@ jobs:
             python scripts/check_skeletons.py
             pytest -q
 
+        - name: Run resource tier smoke tests
+          run: |
+            for tier in lite standard gpu; do
+              echo "Running tier $tier"
+              RESOURCE_TIER=$tier pytest -q tests/resource_tiers
+            done
+
         - name: Check data version hashes
           run: python scripts/check_data_versions.py
