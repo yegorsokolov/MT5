@@ -1,4 +1,5 @@
 import asyncio
+import asyncio
 import logging
 from log_utils import setup_logging, log_exceptions
 
@@ -13,6 +14,7 @@ import random
 import torch
 import gym
 from gym import spaces
+from datetime import datetime
 from stable_baselines3 import PPO, SAC, A2C
 
 try:
@@ -63,8 +65,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
 from data.features import make_features
-from models.graph_net import GraphNet
 from models.distillation import distill_teacher_student
+from models.build_model import build_model, compute_scale_factor
 try:
     from analysis.regime_detection import periodic_reclassification  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -95,26 +97,6 @@ from rl.offline_dataset import OfflineDataset
 from event_store import EventStore
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
-
-
-def _subscribe_for_upgrades(cfg: dict) -> None:
-    async def _watch() -> None:
-        q = monitor.subscribe()
-        current = monitor.capability_tier
-        while True:
-            tier = await q.get()
-            if TIERS.get(tier, 0) > TIERS.get(current, 0):
-                logging.getLogger(__name__).info(
-                    "Capability tier upgraded to %s; enabling advanced features", tier
-                )
-                cfg["rl_objectives"] = cfg.get("rl_objectives_full", cfg.get("rl_objectives", []))
-                current = tier
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-    loop.create_task(_watch())
 
 
 def offline_pretrain(
@@ -495,8 +477,12 @@ def main(
     df = df[df["market_regime"] == current_regime]
 
     graph_model = None
+    scale_factor = compute_scale_factor()
+    architecture_history = [
+        {"timestamp": datetime.utcnow().isoformat(), "scale_factor": scale_factor}
+    ]
     if cfg.get("graph_model"):
-        graph_model = GraphNet(len(features)).to(device)
+        graph_model = build_model(len(features), cfg, scale_factor).to(device)
 
     size = monitor.capabilities.capability_tier()
     algo_cfg = cfg.get("rl_algorithm", "AUTO").upper()
@@ -528,41 +514,54 @@ def main(
         objective_weights=cfg.get("rl_objective_weights"),
     )
 
+    def _policy_kwargs(scale: float) -> dict:
+        width = max(4, int(64 * scale))
+        return {"net_arch": [width, width]}
+
     if algo == "PPO":
         env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
-        model = PPO(
-            "MlpPolicy",
+        algo_class = PPO
+        policy_type = "MlpPolicy"
+        model = algo_class(
+            policy_type,
             env,
             verbose=0,
             seed=seed,
             device=device,
             learning_rate=cfg.get("rl_learning_rate", 3e-4),
             gamma=cfg.get("rl_gamma", 0.99),
+            policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "RECURRENTPPO":
         env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
-        model = RecurrentPPO(
-            "MlpLstmPolicy",
+        algo_class = RecurrentPPO
+        policy_type = "MlpLstmPolicy"
+        model = algo_class(
+            policy_type,
             env,
             verbose=0,
             seed=seed,
             device=device,
             learning_rate=cfg.get("rl_learning_rate", 3e-4),
             gamma=cfg.get("rl_gamma", 0.99),
+            policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "A2C":
         env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
-        model = A2C(
-            "MlpPolicy",
+        algo_class = A2C
+        policy_type = "MlpPolicy"
+        model = algo_class(
+            policy_type,
             env,
             verbose=0,
             seed=seed,
             device=device,
             learning_rate=cfg.get("rl_learning_rate", 3e-4),
             gamma=cfg.get("rl_gamma", 0.99),
+            policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "A3C":
         n_envs = int(cfg.get("rl_num_envs", 4))
@@ -576,14 +575,17 @@ def main(
             env = DummyVecEnv([make_env])
         else:
             env = SubprocVecEnv([make_env for _ in range(n_envs)])
-        model = A2C(
-            "MlpPolicy",
+        algo_class = A2C
+        policy_type = "MlpPolicy"
+        model = algo_class(
+            policy_type,
             env,
             verbose=0,
             seed=seed,
             device=device,
             learning_rate=cfg.get("rl_learning_rate", 3e-4),
             gamma=cfg.get("rl_gamma", 0.99),
+            policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "SAC":
         env = TradingEnv(**env_kwargs)
@@ -596,32 +598,38 @@ def main(
                     "capacity": int(cfg.get("rl_buffer_size", 100000))
                 },
             }
+        algo_class = SAC
+        policy_type = "MlpPolicy"
         try:
-            model = SAC(
-                "MlpPolicy",
+            model = algo_class(
+                policy_type,
                 env,
                 verbose=0,
                 seed=seed,
                 device=device,
                 learning_rate=cfg.get("rl_learning_rate", 3e-4),
                 gamma=cfg.get("rl_gamma", 0.99),
+                policy_kwargs=_policy_kwargs(scale_factor),
                 **per_kwargs,
             )
         except TypeError:  # pragma: no cover - algorithm may not support PER kwargs
-            model = SAC(
-                "MlpPolicy",
+            model = algo_class(
+                policy_type,
                 env,
                 verbose=0,
                 seed=seed,
                 device=device,
                 learning_rate=cfg.get("rl_learning_rate", 3e-4),
                 gamma=cfg.get("rl_gamma", 0.99),
+                policy_kwargs=_policy_kwargs(scale_factor),
             )
     elif algo == "TRPO":
         env = TradingEnv(**env_kwargs)
         env = maybe_wrap(env)
-        model = TRPO(
-            "MlpPolicy",
+        algo_class = TRPO
+        policy_type = "MlpPolicy"
+        model = algo_class(
+            policy_type,
             env,
             verbose=0,
             max_kl=cfg.get("rl_max_kl", 0.01),
@@ -629,20 +637,24 @@ def main(
             device=device,
             learning_rate=cfg.get("rl_learning_rate", 3e-4),
             gamma=cfg.get("rl_gamma", 0.99),
+            policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "HIERARCHICALPPO":
         if HierarchicalPPO is None:
             raise RuntimeError("sb3-contrib with HierarchicalPPO required")
         env = HierarchicalTradingEnv(**env_kwargs)
         env = maybe_wrap(env)
-        model = HierarchicalPPO(
-            "MlpPolicy",
+        algo_class = HierarchicalPPO
+        policy_type = "MlpPolicy"
+        model = algo_class(
+            policy_type,
             env,
             verbose=0,
             seed=seed,
             device=device,
             learning_rate=cfg.get("rl_learning_rate", 3e-4),
             gamma=cfg.get("rl_gamma", 0.99),
+            policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "QRDQN":
         env = DiscreteTradingEnv(**env_kwargs)
@@ -655,26 +667,30 @@ def main(
                     "capacity": int(cfg.get("rl_buffer_size", 100000))
                 },
             }
+        algo_class = QRDQN
+        policy_type = "MlpPolicy"
         try:
-            model = QRDQN(
-                "MlpPolicy",
+            model = algo_class(
+                policy_type,
                 env,
                 verbose=0,
                 seed=seed,
                 device=device,
                 learning_rate=cfg.get("rl_learning_rate", 3e-4),
                 gamma=cfg.get("rl_gamma", 0.99),
+                policy_kwargs=_policy_kwargs(scale_factor),
                 **per_kwargs,
             )
         except TypeError:  # pragma: no cover - algorithm may not support PER kwargs
-            model = QRDQN(
-                "MlpPolicy",
+            model = algo_class(
+                policy_type,
                 env,
                 verbose=0,
                 seed=seed,
                 device=device,
                 learning_rate=cfg.get("rl_learning_rate", 3e-4),
                 gamma=cfg.get("rl_gamma", 0.99),
+                policy_kwargs=_policy_kwargs(scale_factor),
             )
     elif algo == "RLLIB":
         if gymn is None:
@@ -722,6 +738,44 @@ def main(
     else:
         raise ValueError(f"Unknown rl_algorithm {algo}")
 
+    if algo != "RLLIB":
+        def _watch_model() -> None:
+            async def _watch() -> None:
+                q = monitor.subscribe()
+                nonlocal model, scale_factor
+                while True:
+                    await q.get()
+                    new_scale = compute_scale_factor()
+                    if new_scale != scale_factor:
+                        params = model.get_parameters()
+                        model_new = algo_class(
+                            policy_type,
+                            env,
+                            verbose=0,
+                            seed=seed,
+                            device=device,
+                            learning_rate=cfg.get("rl_learning_rate", 3e-4),
+                            gamma=cfg.get("rl_gamma", 0.99),
+                            policy_kwargs=_policy_kwargs(new_scale),
+                        )
+                        model_new.set_parameters(params, exact_match=False)
+                        model = model_new
+                        scale_factor = new_scale
+                        architecture_history.append(
+                            {"timestamp": datetime.utcnow().isoformat(), "scale_factor": scale_factor}
+                        )
+                        logger.info(
+                            "Hot-reloaded RL model with scale factor %s", scale_factor
+                        )
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+            loop.create_task(_watch())
+
+        _watch_model()
+
     if world_size > 1 and algo != "RLLIB":
         model.policy = DDP(model.policy, device_ids=[rank] if use_cuda else None)
 
@@ -754,7 +808,9 @@ def main(
             save_checkpoint({"model_path": ckpt_path}, i, cfg.get("checkpoint_dir"))
         checkpoint = model.save(str(root / "model_rllib"))
         logger.info("RLlib model saved to %s", checkpoint)
-        version_id = model_store.save_model(Path(checkpoint), cfg, {})
+        version_id = model_store.save_model(
+            Path(checkpoint), cfg, {}, architecture_history=architecture_history
+        )
         logger.info("Registered model version %s", version_id)
         ray.shutdown()
     else:
@@ -777,28 +833,28 @@ def main(
         interval = int(cfg.get("checkpoint_interval", 1000))
         current = start_step
         while current < total_steps:
-                learn_steps = min(interval, total_steps - current)
-                try:
-                    model.learn(total_timesteps=learn_steps, reset_num_timesteps=False)
-                except TypeError:  # pragma: no cover - stub algos may not support kwarg
-                    model.learn(total_timesteps=learn_steps)
-                current += learn_steps
-                  save_checkpoint(
-                      {
-                          "model": model.policy.state_dict(),
-                          "optimizer": model.policy.optimizer.state_dict(),
-                          "metrics": {"timesteps": current},
-                  },
-                  current,
-                  cfg.get("checkpoint_dir"),
-              )
-              if rank == 0 and federated_client is not None:
-                  federated_client.push_update()
-      cumulative_return = 0.0
-      if rank == 0:
-          if algo == "RECURRENTPPO":
-              rec_dir = root / "models" / "recurrent_rl"
-              rec_dir.mkdir(parents=True, exist_ok=True)
+            learn_steps = min(interval, total_steps - current)
+            try:
+                model.learn(total_timesteps=learn_steps, reset_num_timesteps=False)
+            except TypeError:  # pragma: no cover - stub algos may not support kwarg
+                model.learn(total_timesteps=learn_steps)
+            current += learn_steps
+            save_checkpoint(
+                {
+                    "model": model.policy.state_dict(),
+                    "optimizer": model.policy.optimizer.state_dict(),
+                    "metrics": {"timesteps": current},
+                },
+                current,
+                cfg.get("checkpoint_dir"),
+            )
+            if rank == 0 and federated_client is not None:
+                federated_client.push_update()
+        cumulative_return = 0.0
+        if rank == 0:
+            if algo == "RECURRENTPPO":
+                rec_dir = root / "models" / "recurrent_rl"
+                rec_dir.mkdir(parents=True, exist_ok=True)
                 model.save(rec_dir / "recurrent_model")
                 logger.info("RL model saved to %s", rec_dir / "recurrent_model.zip")
             elif algo == "HIERARCHICALPPO":
@@ -923,6 +979,7 @@ def main(
                     root / "model_rl_distilled.zip",
                     {**cfg, "distilled_from": str(artifact)},
                     {"cumulative_return": cumulative_return},
+                    architecture_history=architecture_history,
                 )
                 logger.info(
                     "Distilled RL policy saved to %s", root / "model_rl_distilled.zip"
@@ -931,6 +988,7 @@ def main(
                 artifact,
                 cfg,
                 {"cumulative_return": cumulative_return},
+                architecture_history=architecture_history,
             )
             logger.info("Registered model version %s", version_id)
             mlflow.end_run()
@@ -1029,7 +1087,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     cfg = load_config()
     monitor.start()
-    _subscribe_for_upgrades(cfg)
     if args.ddp:
         cfg["ddp"] = True
     if args.export:

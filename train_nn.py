@@ -15,15 +15,15 @@ import pandas as pd
 import torch
 import json
 import psutil
+from datetime import datetime
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.checkpoint import checkpoint
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split as sk_train_test_split
 from tqdm import tqdm
 from models import model_store
-from models.graph_net import GraphNet
 from models.distillation import distill_teacher_student
-from models.multi_head import MultiHeadTransformer
+from models.build_model import build_model, compute_scale_factor
 from analysis.feature_selector import select_features
 
 try:
@@ -47,27 +47,6 @@ from data.features import (
 )
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
-
-
-def _subscribe_for_upgrades(cfg: dict) -> None:
-    async def _watch() -> None:
-        q = monitor.subscribe()
-        current = monitor.capability_tier
-        while True:
-            tier = await q.get()
-            if TIERS.get(tier, 0) > TIERS.get(current, 0):
-                logging.getLogger(__name__).info(
-                    "Capability tier upgraded to %s; using larger model", tier
-                )
-                cfg["d_model"] = max(cfg.get("d_model", 32), 128)
-                cfg["num_layers"] = max(cfg.get("num_layers", 1), 4)
-                current = tier
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-    loop.create_task(_watch())
 from data.labels import triple_barrier
 import argparse
 from ray_utils import (
@@ -252,7 +231,6 @@ def main(
     if tier == "auto":
         tier = monitor.capabilities.capability_tier()
     monitor.start()
-    _subscribe_for_upgrades(cfg)
     if tier in ("lite", "standard"):
         cfg.setdefault("d_model", 32)
         cfg.setdefault("num_layers", 1)
@@ -419,23 +397,50 @@ def main(
             if "market_regime" in df.columns
             else None
         )
-        if cfg.get("graph_model"):
-            model = GraphNet(
-                len(features),
-                hidden_channels=cfg.get("d_model", 64),
-                out_channels=1,
-                num_layers=cfg.get("num_layers", 2),
-            ).to(device)
-        else:
-            model = MultiHeadTransformer(
-                len(features),
-                num_symbols=num_symbols,
-                d_model=cfg.get("d_model", 64),
-                nhead=cfg.get("nhead", 4),
-                num_layers=cfg.get("num_layers", 2),
-                num_regimes=num_regimes,
-                use_checkpointing=cfg.get("use_checkpointing", False),
-            ).to(device)
+        scale_factor = compute_scale_factor()
+        architecture_history = [
+            {"timestamp": datetime.utcnow().isoformat(), "scale_factor": scale_factor}
+        ]
+        model = build_model(
+            len(features),
+            cfg,
+            scale_factor,
+            num_symbols=num_symbols,
+            num_regimes=num_regimes,
+        ).to(device)
+
+        def _watch_model() -> None:
+            async def _watch() -> None:
+                q = monitor.subscribe()
+                nonlocal model, scale_factor
+                while True:
+                    await q.get()
+                    new_scale = compute_scale_factor()
+                    if new_scale != scale_factor:
+                        state = model.state_dict()
+                        model = build_model(
+                            len(features),
+                            cfg,
+                            new_scale,
+                            num_symbols=num_symbols,
+                            num_regimes=num_regimes,
+                        ).to(device)
+                        model.load_state_dict(state, strict=False)
+                        scale_factor = new_scale
+                        architecture_history.append(
+                            {"timestamp": datetime.utcnow().isoformat(), "scale_factor": scale_factor}
+                        )
+                        logger.info(
+                            "Hot-reloaded model with scale factor %s", scale_factor
+                        )
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+            loop.create_task(_watch())
+
+        _watch_model()
         if transfer_from:
             state_dict = _load_donor_state_dict(transfer_from)
             if state_dict:
@@ -659,6 +664,7 @@ def main(
                 joblib.load(model_path),
                 cfg,
                 {"val_loss": best_val_loss, "test_accuracy": acc},
+                architecture_history=architecture_history,
             )
             logger.info("Registered model version %s", version_id)
             if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]:
@@ -683,6 +689,7 @@ def main(
                     joblib.load(student_path),
                     {**cfg, "distilled_from": version_id},
                     {"teacher_accuracy": acc},
+                    architecture_history=architecture_history,
                 )
                 logger.info("Distilled student model saved to %s", student_path)
             if cfg.get("feature_importance", False):
