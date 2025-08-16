@@ -2,13 +2,13 @@ import asyncio
 import pandas as pd
 import zmq
 import pytest
-from prometheus_client import Gauge
 from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import signal_queue
+import risk.position_sizer as ps
 from risk.position_sizer import PositionSizer
 import importlib.util
 
@@ -22,8 +22,11 @@ EnsembleModel = ensemble_mod.EnsembleModel
 
 
 def test_publish_and_receive(monkeypatch):
-    gauge = Gauge("qd_test", "queue")
-    monkeypatch.setattr(signal_queue, "QUEUE_DEPTH", gauge)
+    calls = []
+    def fake_record(name, val, tags=None):
+        calls.append((name, val, tags))
+    monkeypatch.setattr(signal_queue, "record_metric", fake_record)
+    monkeypatch.setattr(ps, "record_metric", fake_record)
     with signal_queue.get_publisher("tcp://127.0.0.1:6000") as pub, signal_queue.get_subscriber(
         "tcp://127.0.0.1:6000"
     ) as sub:
@@ -34,14 +37,16 @@ def test_publish_and_receive(monkeypatch):
         msg.ParseFromString(raw)
         assert float(msg.probability) == 0.8
         assert pytest.approx(msg.confidence) == 0.9
-        assert gauge._value.get() == 1
+        assert any(c[0] == "queue_depth" for c in calls)
     assert pub.closed
     assert sub.closed
 
 
 def test_publish_and_receive_json(monkeypatch):
-    gauge = Gauge("qd_json", "queue")
-    monkeypatch.setattr(signal_queue, "QUEUE_DEPTH", gauge)
+    def fake_record(name, val, tags=None):
+        pass
+    monkeypatch.setattr(signal_queue, "record_metric", fake_record)
+    monkeypatch.setattr(ps, "record_metric", fake_record)
     with signal_queue.get_publisher("tcp://127.0.0.1:6002") as pub, signal_queue.get_subscriber(
         "tcp://127.0.0.1:6002"
     ) as sub:
@@ -56,8 +61,11 @@ def test_publish_and_receive_json(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_async_publish_and_iter(monkeypatch):
-    gauge = Gauge("qd_test2", "queue")
-    monkeypatch.setattr(signal_queue, "QUEUE_DEPTH", gauge)
+    calls = []
+    def fake_record(name, val, tags=None):
+        calls.append((name, val, tags))
+    monkeypatch.setattr(signal_queue, "record_metric", fake_record)
+    monkeypatch.setattr(ps, "record_metric", fake_record)
     async with signal_queue.get_async_publisher(
         "tcp://127.0.0.1:6001"
     ) as pub, signal_queue.get_async_subscriber("tcp://127.0.0.1:6001") as sub:
@@ -81,15 +89,17 @@ async def test_async_publish_and_iter(monkeypatch):
         ens = EnsembleModel({"a": _Const(out["prob"]), "b": _Const(0.5)})
         preds = ens.predict(pd.DataFrame({"x": [0]}))
         assert pytest.approx(preds["ensemble"][0]) == (out["prob"] + 0.5) / 2
-        assert gauge._value.get() == 0
+        assert any(c[0] == "queue_depth" for c in calls)
     assert pub.closed
     assert sub.closed
 
 
 @pytest.mark.asyncio
 async def test_async_publish_and_iter_json(monkeypatch):
-    gauge = Gauge("qd_json_async", "queue")
-    monkeypatch.setattr(signal_queue, "QUEUE_DEPTH", gauge)
+    def fake_record(name, val, tags=None):
+        pass
+    monkeypatch.setattr(signal_queue, "record_metric", fake_record)
+    monkeypatch.setattr(ps, "record_metric", fake_record)
     async with signal_queue.get_async_publisher(
         "tcp://127.0.0.1:6003"
     ) as pub, signal_queue.get_async_subscriber("tcp://127.0.0.1:6003") as sub:
@@ -106,8 +116,10 @@ async def test_async_publish_and_iter_json(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_iter_with_position_sizer(monkeypatch):
-    gauge = Gauge("qd_ps", "queue")
-    monkeypatch.setattr(signal_queue, "QUEUE_DEPTH", gauge)
+    def fake_record(name, val, tags=None):
+        pass
+    monkeypatch.setattr(signal_queue, "record_metric", fake_record)
+    monkeypatch.setattr(ps, "record_metric", fake_record)
     sizer = PositionSizer(capital=1000.0)
     async with signal_queue.get_async_publisher(
         "tcp://127.0.0.1:6004"

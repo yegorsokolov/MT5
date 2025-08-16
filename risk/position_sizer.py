@@ -5,12 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 
-from metrics import (
-    TARGET_RISK,
-    REALIZED_RISK,
-    ADJ_TARGET_RISK,
-    ADJ_REALIZED_RISK,
-)
+from analytics.metrics_store import record_metric
 
 
 logger = logging.getLogger(__name__)
@@ -75,10 +70,13 @@ class PositionSizer:
             target = capital * self.target_vol
             realized = base_size * volatility
         size = base_size * confidence
-        TARGET_RISK.set(target)
-        REALIZED_RISK.set(realized)
-        ADJ_TARGET_RISK.set(target * confidence)
-        ADJ_REALIZED_RISK.set(realized * confidence)
+        try:
+            record_metric("target_risk", target)
+            record_metric("realized_risk", realized)
+            record_metric("adj_target_risk", target * confidence)
+            record_metric("adj_realized_risk", realized * confidence)
+        except Exception:
+            pass
         logger.info(
             "Position size computed: base=%.4f adjusted=%.4f target=%.4f adj_target=%.4f conf=%.2f",
             base_size,

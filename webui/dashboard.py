@@ -7,7 +7,7 @@ import requests
 import streamlit as st
 import yaml
 
-from analytics.metrics_store import MetricsStore
+from analytics.metrics_store import MetricsStore, query_metrics
 
 from config_schema import ConfigSchema
 
@@ -117,24 +117,33 @@ def main() -> None:
     with tabs[1]:
         store = MetricsStore()
         df = store.load()
-        if df.empty:
-            st.info("No performance metrics available")
-        else:
+        if not df.empty:
             st.subheader("Daily Metrics")
             st.line_chart(df["return"], height=150)
             st.line_chart(df["sharpe"], height=150)
             st.line_chart(df["drawdown"], height=150)
 
-            if "regime" in df.columns and df["regime"].notna().any():
-                st.subheader("Average Performance by Regime")
-                st.table(df.groupby("regime")[ ["return", "sharpe", "drawdown"] ].mean())
+        pnl = query_metrics("pnl", tags={"summary": "daily"})
+        if not pnl.empty:
+            st.subheader("PnL")
+            st.line_chart(pnl.set_index("timestamp")["value"], height=150)
 
-            latest = df.iloc[-1]
-            for col in ["return", "sharpe", "drawdown"]:
-                mean = df[col].mean()
-                std = df[col].std()
-                if std and abs(latest[col] - mean) > 2 * std:
-                    st.warning(f"{col.capitalize()} deviates significantly: {latest[col]:.2f}")
+        latency = query_metrics("queue_depth")
+        if not latency.empty:
+            st.subheader("Queue Depth")
+            st.line_chart(latency.set_index("timestamp")["value"], height=150)
+
+        cpu = query_metrics("cpu_usage_pct")
+        rss = query_metrics("rss_usage_mb")
+        if not cpu.empty and not rss.empty:
+            st.subheader("Resource Usage")
+            st.line_chart(cpu.set_index("timestamp")["value"], height=150)
+            st.line_chart(rss.set_index("timestamp")["value"], height=150)
+
+        drift = query_metrics("drift_events")
+        if not drift.empty:
+            st.subheader("Drift Events")
+            st.line_chart(drift.set_index("timestamp")["value"], height=150)
 
     # Config Explorer tab
     with tabs[2]:
