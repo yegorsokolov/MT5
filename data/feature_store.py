@@ -11,19 +11,37 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Any, Dict, Optional, Callable
+import os
 
 import duckdb
 import pandas as pd
+import requests
 
 
 class FeatureStore:
-    """Persist and retrieve feature DataFrames using DuckDB."""
+    """Persist and retrieve feature DataFrames using DuckDB.
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    When ``service_url`` is provided, the store will attempt to fetch feature
+    data from that remote service before falling back to the local DuckDB cache.
+    Any locally computed features are uploaded back to the service. This allows
+    sharing feature computations across workers while still operating if the
+    service becomes unavailable.
+    """
+
+    def __init__(
+        self,
+        path: Optional[Path] = None,
+        service_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        tls_cert: Optional[str] = None,
+    ) -> None:
         if path is None:
             path = Path(__file__).resolve().parent / "data" / "feature_store.duckdb"
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.service_url = service_url or os.getenv("FEATURE_SERVICE_URL")
+        self.api_key = api_key or os.getenv("FEATURE_SERVICE_API_KEY")
+        self.tls_cert = tls_cert or os.getenv("FEATURE_SERVICE_CA_CERT")
 
     # ------------------------------------------------------------------
     def _key(self, symbol: str, window: int, params: Dict[str, Any]) -> str:
@@ -155,6 +173,84 @@ class FeatureStore:
         conn.execute("DELETE FROM metadata WHERE key = ?", [key])
         conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
         conn.close()
+
+    # ------------------------------------------------------------------
+    def fetch_remote(self, symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
+        """Try retrieving features from the remote service.
+
+        Parameters are passed directly as query arguments to the service. If the
+        service is unreachable or returns a non-200 status code, ``None`` is
+        returned so callers can fallback to local computation.
+        """
+
+        if not self.service_url:
+            return None
+        url = f"{self.service_url.rstrip('/')}/features/{symbol}"
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            resp = requests.get(
+                url,
+                params={"start": start, "end": end},
+                headers=headers,
+                timeout=10,
+                verify=self.tls_cert or True,
+            )
+            if resp.status_code == 200:
+                return pd.DataFrame(resp.json())
+        except Exception:
+            pass
+        return None
+
+    # ------------------------------------------------------------------
+    def upload_remote(self, df: pd.DataFrame, symbol: str, start: str, end: str) -> None:
+        """Upload locally computed features to the remote service.
+
+        Failures are silently ignored so that training can continue even if the
+        service is temporarily unavailable.
+        """
+
+        if not self.service_url:
+            return
+        url = f"{self.service_url.rstrip('/')}/features/{symbol}"
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            requests.post(
+                url,
+                params={"start": start, "end": end},
+                headers=headers,
+                json=df.to_dict(orient="records"),
+                timeout=10,
+                verify=self.tls_cert or True,
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    def get_features(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        compute_fn: Callable[[], pd.DataFrame],
+    ) -> pd.DataFrame:
+        """Fetch features from the service or compute locally.
+
+        The remote service is queried first; if it responds with a valid
+        DataFrame the result is cached locally and returned. Otherwise
+        ``compute_fn`` is executed and the resulting features are saved both
+        locally and uploaded to the service. This provides a transparent
+        fallback to local computation when the service cannot be reached.
+        """
+
+        params = {"start": start, "end": end}
+        df = self.fetch_remote(symbol, start, end)
+        if df is not None:
+            self.save(df, symbol, 0, params, raw_hash="remote")
+            return df
+        df = compute_fn()
+        self.save(df, symbol, 0, params, raw_hash="remote")
+        self.upload_remote(df, symbol, start, end)
+        return df
 
 
 __all__ = ["FeatureStore"]
