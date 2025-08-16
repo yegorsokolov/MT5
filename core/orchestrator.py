@@ -10,6 +10,7 @@ from analysis import replay
 from . import state_sync
 from analytics.metrics_store import record_metric
 from risk_manager import risk_manager
+from deployment.canary import CanaryManager
 
 
 class Orchestrator:
@@ -20,6 +21,7 @@ class Orchestrator:
         self.monitor = mon
         # Disable automatic refresh; orchestrator controls timing
         self.registry = model_registry.ModelRegistry(monitor=self.monitor, auto_refresh=False)
+        self.canary = CanaryManager(self.registry)
         self.checkpoint = None
 
     async def _watch(self) -> None:
@@ -91,6 +93,8 @@ class Orchestrator:
                 for key, val in status.items():
                     if isinstance(val, (int, float)):
                         record_metric(key, val, {"summary": "daily"})
+                # Evaluate any active canary deployments daily
+                self.canary.evaluate_all()
             except Exception:
                 self.logger.exception("Failed to push daily summary")
             await asyncio.sleep(24 * 60 * 60)
