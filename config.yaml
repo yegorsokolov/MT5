@@ -5,6 +5,8 @@ seed: 42
 n_jobs: null
 num_threads: null
 num_workers: null
+pred_cache_size: 256
+pred_cache_policy: lru
 alerting:
   slack_webhook: ""
   smtp:

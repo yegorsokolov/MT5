@@ -15,6 +15,12 @@ class ConfigSchema(BaseModel):
     ddp: bool | None = Field(
         None, description="Enable DistributedDataParallel if true, auto-detect if null"
     )
+    pred_cache_size: int = Field(
+        256, ge=0, description="Maximum entries for prediction cache"
+    )
+    pred_cache_policy: str = Field(
+        "lru", description="Eviction policy for prediction cache (lru or fifo)"
+    )
 
     model_config = ConfigDict(extra="allow")
 
