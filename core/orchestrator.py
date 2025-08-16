@@ -8,6 +8,8 @@ import plugins  # noqa: F401 - imported for side effects
 import state_manager
 from analysis import replay
 from . import state_sync
+from analytics.metrics_store import record_metric
+from risk_manager import risk_manager
 
 
 class Orchestrator:
@@ -64,6 +66,7 @@ class Orchestrator:
             loop = asyncio.get_event_loop()
         loop.create_task(self._watch())
         loop.create_task(self._sync_monitor())
+        loop.create_task(self._daily_summary())
 
     @classmethod
     def start(cls) -> "Orchestrator":
@@ -79,3 +82,15 @@ class Orchestrator:
             if not state_sync.check_health(max_lag):
                 self.logger.warning("State replication lag exceeds %s seconds", max_lag)
             await asyncio.sleep(interval)
+
+    async def _daily_summary(self) -> None:
+        """Record daily aggregated metrics to the store."""
+        while True:
+            try:
+                status = risk_manager.status()
+                for key, val in status.items():
+                    if isinstance(val, (int, float)):
+                        record_metric(key, val, {"summary": "daily"})
+            except Exception:
+                self.logger.exception("Failed to push daily summary")
+            await asyncio.sleep(24 * 60 * 60)
