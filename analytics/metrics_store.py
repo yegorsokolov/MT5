@@ -9,11 +9,13 @@ loaded as a time–series for analysis or reporting.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
 DEFAULT_PATH = Path("analytics/metrics.parquet")
+# Separate store for generic time-series metrics
+TS_PATH = Path("analytics/metrics_timeseries.parquet")
 
 
 @dataclass
@@ -79,3 +81,75 @@ class MetricsStore:
         if end:
             df = df[df.index <= pd.Timestamp(end)]
         return df.copy()
+
+
+# ---------------------------------------------------------------------------
+def _ts_load(path: Path = TS_PATH) -> pd.DataFrame:
+    """Load the time-series metrics dataframe."""
+
+    if path.exists():
+        df = pd.read_parquet(path)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
+    return pd.DataFrame(columns=["timestamp", "name", "value"])
+
+
+def record_metric(name: str, value: float, tags: Optional[Dict[str, Any]] = None, *, path: Path = TS_PATH) -> None:
+    """Persist a single metric observation.
+
+    Parameters
+    ----------
+    name:
+        Metric name.
+    value:
+        Metric value.  Stored as ``float``.
+    tags:
+        Optional dictionary of additional columns to persist.
+    path:
+        Destination Parquet file.  Defaults to ``TS_PATH``.
+    """
+
+    tags = tags or {}
+    row: Dict[str, Any] = {
+        "timestamp": pd.Timestamp.utcnow(),
+        "name": name,
+        "value": float(value),
+    }
+    row.update(tags)
+    df = _ts_load(path)
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False)
+
+
+def query_metrics(
+    name: str | None = None,
+    *,
+    start: str | pd.Timestamp | None = None,
+    end: str | pd.Timestamp | None = None,
+    tags: Optional[Dict[str, Any]] = None,
+    path: Path = TS_PATH,
+) -> pd.DataFrame:
+    """Return metrics from the time-series store.
+
+    Filters by name, time range and optional tags.  The returned dataframe
+    always includes ``timestamp``, ``name`` and ``value`` columns.
+    """
+
+    df = _ts_load(path)
+    if name:
+        df = df[df["name"] == name]
+    if start:
+        df = df[df["timestamp"] >= pd.Timestamp(start)]
+    if end:
+        df = df[df["timestamp"] <= pd.Timestamp(end)]
+    if tags:
+        for k, v in tags.items():
+            if k in df.columns:
+                df = df[df[k] == v]
+            else:
+                # No matching tag column implies no rows
+                df = df.iloc[0:0]
+                break
+    return df.reset_index(drop=True)
+

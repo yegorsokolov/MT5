@@ -8,7 +8,7 @@ from typing import Optional
 import pandas as pd
 from scipy.stats import ks_2samp
 
-import metrics
+from analytics.metrics_store import record_metric
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -60,7 +60,10 @@ class DriftMonitor:
                 self.logger.warning(
                     "Data drift detected for %s (p=%.4f)", col, pval
                 )
-                metrics.DRIFT_EVENTS.inc()
+                try:
+                    record_metric("drift_events", 1)
+                except Exception:
+                    pass
                 send_alert(
                     f"Data drift detected for {col} (p={pval:.4f})"
                 )

@@ -8,7 +8,7 @@ from typing import Sequence
 
 import numpy as np
 
-import metrics
+from analytics.metrics_store import record_metric
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +77,11 @@ class PortfolioRebalancer:
         if self.step % self.rebalance_interval == 0:
             weights = self.optimizer.compute_weights(expected_returns, cov_matrix)
             drawdown = self._compute_drawdown()
-            metrics.PORTFOLIO_DRAWDOWN.set(drawdown)
-            metrics.DIVERSIFICATION_RATIO.set(self.optimizer.diversification_ratio())
+            try:
+                record_metric("portfolio_drawdown", drawdown)
+                record_metric("diversification_ratio", self.optimizer.diversification_ratio())
+            except Exception:
+                pass
             logger.info(
                 "Rebalanced portfolio: drawdown=%.4f diversification=%.4f",
                 drawdown,
