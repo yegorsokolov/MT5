@@ -8,6 +8,7 @@ data/*
 !data/graphs/
 !data/graphs/.gitkeep
 models/*
+!models/multi_head.py
 !models/autoencoders/
 !models/autoencoders/.gitkeep
 !models/ensemble.py
