@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
 import threading
 from pathlib import Path
 from typing import Callable, Iterable
@@ -142,6 +143,15 @@ def run_trade_analysis() -> None:
         logger.exception("Trade analysis failed")
 
 
+def run_diagnostics() -> None:
+    """Run system diagnostics and dependency checks."""
+    try:
+        subprocess.run(["bash", "scripts/diagnostics.sh"], check=True)
+        logger.info("Diagnostics completed")
+    except Exception:
+        logger.exception("Diagnostics failed")
+
+
 def vacuum_history(path: Path | None = None) -> None:
     """Compact partitioned Parquet datasets by merging small files."""
     try:
@@ -200,6 +210,8 @@ def start_scheduler() -> None:
         jobs.append(("trade_stats", run_trade_analysis))
     if s_cfg.get("vacuum_history", True):
         jobs.append(("vacuum_history", vacuum_history))
+    if s_cfg.get("diagnostics", True):
+        jobs.append(("diagnostics", run_diagnostics))
     if jobs:
         _schedule_jobs(jobs)
     _started = True
@@ -210,7 +222,8 @@ __all__ = [
     "cleanup_checkpoints",
     "resource_reprobe",
     "run_drift_detection",
-  "run_change_point_detection",
-  "run_trade_analysis",
-  "vacuum_history",
+    "run_change_point_detection",
+    "run_trade_analysis",
+    "run_diagnostics",
+    "vacuum_history",
 ]

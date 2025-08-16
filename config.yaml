@@ -159,4 +159,5 @@ scheduler:
   resource_reprobe: true
   drift_detection: true
   checkpoint_cleanup: true
+  diagnostics: true
 
