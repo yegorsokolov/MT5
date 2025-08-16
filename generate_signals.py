@@ -12,6 +12,8 @@ from state_manager import load_runtime_state, save_runtime_state
 import numpy as np
 
 from utils import load_config
+from prediction_cache import PredictionCache
+from typing import Any
 from utils.market_hours import is_market_open
 import argparse
 import backtest
@@ -304,6 +306,9 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config()
+    cache = PredictionCache(
+        cfg.get("pred_cache_size", 256), cfg.get("pred_cache_policy", "lru")
+    )
 
     # Reload previous runtime state if available
     state = load_runtime_state()
@@ -414,37 +419,61 @@ def main():
 
         ag_path = Path(__file__).resolve().parent / "models" / "autogluon"
         predictor = TabularPredictor.load(str(ag_path))
-        probs = predictor.predict_proba(df[features])[1].values
+
+        def _predict(data: pd.DataFrame) -> np.ndarray:
+            return predictor.predict_proba(data[features])[1].values
+
     else:
-        base_models = {}
-    if models:
-        def _gbm_predict(data: pd.DataFrame) -> np.ndarray:
-            return np.mean([m.predict_proba(data[features])[:, 1] for m in models], axis=0)
+        base_models: dict[str, Any] = {}
+        if models:
+            def _gbm_predict(data: pd.DataFrame) -> np.ndarray:
+                return np.mean(
+                    [m.predict_proba(data[features])[:, 1] for m in models], axis=0
+                )
 
-        base_models["lightgbm"] = _gbm_predict
+            base_models["lightgbm"] = _gbm_predict
 
-    if cfg.get("use_meta_model", False):
-        base_models["transformer"] = lambda d: meta_transformer_signals(d, features, cfg)
+        if cfg.get("use_meta_model", False):
+            base_models["transformer"] = lambda d: meta_transformer_signals(
+                d, features, cfg
+            )
 
-    if online_model is not None:
-        def _online_predict(data: pd.DataFrame) -> np.ndarray:
-            return np.array([
-                online_model.predict_proba_one(row).get(1, 0.0)
-                for row in data[features].to_dict("records")
-            ])
+        if online_model is not None:
+            def _online_predict(data: pd.DataFrame) -> np.ndarray:
+                return np.array([
+                    online_model.predict_proba_one(row).get(1, 0.0)
+                    for row in data[features].to_dict("records")
+                ])
 
-        base_models["online"] = _online_predict
+            base_models["online"] = _online_predict
 
-    if cfg.get("blend_with_rl", False):
-        base_models["rl"] = lambda d: rl_signals(d, features, cfg)
+        if cfg.get("blend_with_rl", False):
+            base_models["rl"] = lambda d: rl_signals(d, features, cfg)
 
+        ensemble = EnsembleModel(base_models) if base_models else None
+
+        def _predict(data: pd.DataFrame) -> np.ndarray:
+            if ensemble is None:
+                return np.zeros(len(data))
+            return ensemble.predict(data)["ensemble"]
+
+    hashes = pd.util.hash_pandas_object(df[features], index=False).values
     probs = np.zeros(len(df))
-    if base_models:
-        ensemble = EnsembleModel(base_models)
-        pred_dict = ensemble.predict(df)
-        probs = pred_dict["ensemble"]
-    else:
-        pred_dict = {"ensemble": probs}
+    pred_dict = {"ensemble": probs}
+    miss_idx: list[int] = []
+    for i, h in enumerate(hashes):
+        val = cache.get(int(h))
+        if val is not None:
+            probs[i] = val
+        else:
+            miss_idx.append(i)
+    if miss_idx:
+        sub_df = df.iloc[miss_idx]
+        new_probs = _predict(sub_df)
+        for j, idx in enumerate(miss_idx):
+            prob = float(new_probs[j])
+            probs[idx] = prob
+            cache.set(int(hashes[idx]), prob)
 
     ma_ok = df["ma_cross"] == 1
     rsi_ok = df["rsi_14"] > cfg.get("rsi_buy", 55)
