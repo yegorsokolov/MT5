@@ -22,6 +22,7 @@ def save_model(
     model: Any | str | Path,
     training_config: Dict,
     performance: Dict,
+    architecture_history: List[Dict] | None = None,
     store_dir: Path | None = None,
 ) -> str:
     """Persist a model artifact with associated metadata.
@@ -74,6 +75,8 @@ def save_model(
         "timestamp": datetime.utcnow().isoformat(),
         "artifact": artifact_name,
     }
+    if architecture_history:
+        metadata["architecture_history"] = architecture_history
     with open(version_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
     return version_id
