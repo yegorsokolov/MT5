@@ -13,6 +13,10 @@ try:  # optional dependency
 except Exception:  # pragma: no cover - torch may be missing
     PriceDistributionModel = None
 from .meta_learner import MetaLearner
+try:  # optional torch dependency
+    from .multi_head import MultiHeadTransformer
+except Exception:  # pragma: no cover - torch may be missing
+    MultiHeadTransformer = None
 
 __all__ = [
     "EnsembleModel",
@@ -20,4 +24,5 @@ __all__ = [
     "export_pytorch",
     "MetaLearner",
     "PriceDistributionModel",
+    "MultiHeadTransformer",
 ]
