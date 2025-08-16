@@ -86,6 +86,8 @@ class ModelRegistry:
     def __init__(self, monitor: ResourceMonitor = monitor, auto_refresh: bool = True) -> None:
         self.monitor = monitor
         self.selected: Dict[str, ModelVariant] = {}
+        # Keep track of previous variants so we can rollback if a canary fails
+        self._previous: Dict[str, ModelVariant] = {}
         self._task: Optional[asyncio.Task] = None
         self.logger = logging.getLogger(__name__)
         self.moe = GatingNetwork(
@@ -194,3 +196,25 @@ class ModelRegistry:
         if hasattr(model, "predict_proba"):
             return model.predict_proba(features)
         return model.predict(features)
+
+    # ------------------------------------------------------------------
+    def promote(self, task: str, model_name: str) -> None:
+        """Promote a candidate model to production for ``task``."""
+
+        prev = self.selected.get(task)
+        if prev:
+            self._previous[task] = prev
+            requirements = prev.requirements
+        else:
+            requirements = ResourceCapabilities(0, 0, False, gpu_count=0)
+        self.selected[task] = ModelVariant(model_name, requirements)
+
+    # ------------------------------------------------------------------
+    def rollback(self, task: str) -> None:
+        """Rollback to the previously selected model for ``task``."""
+
+        prev = self._previous.get(task)
+        if prev:
+            self.logger.info("Reverting to previous model %s for %s", prev.name, task)
+            self.selected[task] = prev
+            del self._previous[task]
