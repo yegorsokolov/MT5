@@ -19,6 +19,7 @@ from analysis.frequency_features import (
     rolling_fft_features,
     rolling_wavelet_features,
 )
+from analysis.session_features import add_session_features
 from utils.resource_monitor import monitor
 try:  # optional numba acceleration
     from utils.numba_accel import (
@@ -665,6 +666,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         agg_df = aggregate_timeframes(df, timeframes)
         df = df.merge(agg_df, on="Timestamp", how="left")
 
+    df = add_session_features(df)
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
     df = add_index_features(df)
@@ -894,6 +896,7 @@ def make_sequence_arrays(
     return X, y
 
 __all__ = [
+    "add_session_features",
     "add_index_features",
     "add_economic_calendar_features",
     "add_news_sentiment_features",
