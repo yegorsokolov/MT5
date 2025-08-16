@@ -37,3 +37,11 @@ aggregator such as ELK or Datadog. HTTP endpoints and `syslog://host:port`
 targets are supported. The bot verifies connectivity on startup and falls
 back to local file logging if unreachable. Handlers buffer messages and retry
 so temporary network outages do not drop logs.
+
+## Diagnostics
+
+Nightly diagnostics record the Python environment and dataset hashes. The
+scheduler invokes `scripts/diagnostics.sh`, which writes reports to
+`logs/diagnostics/`. Any dependency or data mismatches trigger alerts with
+instructions for syncing via `pip install -r requirements.txt` or `python
+scripts/check_data_versions.py`.
