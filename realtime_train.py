@@ -18,16 +18,6 @@ try:
 except Exception:  # pragma: no cover - utils may be stubbed in tests
     def send_alert(msg: str) -> None:  # type: ignore
         return
-try:  # allow tests to stub out utils
-    from utils.resource_monitor import ResourceMonitor
-except Exception:  # pragma: no cover - fallback when utils is stubbed
-    class ResourceMonitor:  # type: ignore
-        def __init__(self, *a, **k):
-            self.max_rss_mb = None
-            self.max_cpu_pct = None
-
-        def start(self) -> None:
-            return
 
 from data.features import make_features
 from log_utils import setup_logging, log_exceptions
@@ -41,17 +31,16 @@ from metrics import (
     BATCH_LATENCY,
 )
 
+from core.orchestrator import Orchestrator
+
 setup_logging()
 logger = logging.getLogger(__name__)
 
 # initialize connection manager with primary MetaTrader5 broker
 conn_mgr.init([mt5])
 
-MAX_RSS_MB = float(os.getenv("MAX_RSS_MB", "0") or 0)
-MAX_CPU_PCT = float(os.getenv("MAX_CPU_PCT", "0") or 0)
-watchdog = ResourceMonitor(
-    max_rss_mb=MAX_RSS_MB or None, max_cpu_pct=MAX_CPU_PCT or None
-)
+orchestrator = Orchestrator.start()
+watchdog = orchestrator.monitor
 
 if os.name != "nt" and getattr(watchdog, "capabilities", None):
     if watchdog.capabilities.cpus > 1:  # pragma: no cover - depends on host
@@ -181,7 +170,6 @@ async def train_realtime():
         watchdog.alert_callback = lambda msg: asyncio.create_task(
             _handle_resource_breach(msg)
         )
-        watchdog.start()
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
