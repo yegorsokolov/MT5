@@ -353,8 +353,11 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    The MT5 history center provides free tick data once you have logged in to a broker through the terminal.
 3. The realtime trainer stores ticks in a DuckDB database located at `data/realtime.duckdb`. The database is created automatically the first time you run the script and old rows beyond the `realtime_window` setting are pruned on each update.
 4. Set `use_feature_cache: true` in `config.yaml` to cache engineered features in `data/features.duckdb`. The cache is reused when the input history hasn't changed.
-5. Adjust settings in `config.yaml` if needed. The `symbols` list controls which instruments are used for training.
-6. Train the model and run a backtest:
+5. Optionally configure `feature_service_url` and `feature_service_api_key` to
+   pull pre-computed features from a remote service over TLS. When the service
+   cannot be reached the pipeline falls back to local feature engineering.
+6. Adjust settings in `config.yaml` if needed. The `symbols` list controls which instruments are used for training.
+7. Train the model and run a backtest:
 
    ```bash
    python train.py
