@@ -95,6 +95,7 @@ from ray_utils import (
 )
 from rl.offline_dataset import OfflineDataset
 from event_store import EventStore
+from core.orchestrator import Orchestrator
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 
@@ -160,9 +161,7 @@ def offline_pretrain(
 
 setup_logging()
 logger = logging.getLogger(__name__)
-
-# Periodically refresh hardware capabilities
-monitor.start()
+Orchestrator.start()
 
 
 class TradingEnv(gym.Env):
@@ -1086,7 +1085,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     cfg = load_config()
-    monitor.start()
     if args.ddp:
         cfg["ddp"] = True
     if args.export:
