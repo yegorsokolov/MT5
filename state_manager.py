@@ -4,6 +4,10 @@ from pathlib import Path
 import os
 from typing import Any, Tuple
 import joblib
+try:  # optional during tests
+    from core import state_sync
+except Exception:  # pragma: no cover - optional dependency
+    state_sync = None
 
 
 def _checkpoint_dir(directory: str | None = None) -> Path:
@@ -26,6 +30,8 @@ def save_checkpoint(state: dict[str, Any], step: int, directory: str | None = No
     ckpt_dir = _checkpoint_dir(directory)
     path = ckpt_dir / f"checkpoint_{step}.pkl"
     joblib.dump(state, path)
+    if state_sync:
+        state_sync.sync_checkpoints()
     return path
 
 
@@ -35,6 +41,8 @@ def load_latest_checkpoint(directory: str | None = None) -> Tuple[int, dict[str,
     Returns ``None`` if no checkpoints are present. Otherwise returns a
     tuple of ``(step, state)``.
     """
+    if state_sync:
+        state_sync.pull_checkpoints()
     ckpt_dir = Path(directory or os.getenv("CHECKPOINT_DIR", "checkpoints"))
     if not ckpt_dir.exists():
         return None

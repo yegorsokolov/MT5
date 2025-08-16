@@ -7,6 +7,7 @@ import model_registry
 import plugins  # noqa: F401 - imported for side effects
 import state_manager
 from analysis import replay
+from . import state_sync
 
 
 class Orchestrator:
@@ -62,9 +63,19 @@ class Orchestrator:
         except RuntimeError:
             loop = asyncio.get_event_loop()
         loop.create_task(self._watch())
+        loop.create_task(self._sync_monitor())
 
     @classmethod
     def start(cls) -> "Orchestrator":
         orchestrator = cls()
         orchestrator._start()
         return orchestrator
+
+    async def _sync_monitor(self) -> None:
+        """Periodically verify that state replication is healthy."""
+        interval = int(os.getenv("SYNC_CHECK_INTERVAL", "60"))
+        max_lag = int(os.getenv("MAX_SYNC_LAG", "300"))
+        while True:
+            if not state_sync.check_health(max_lag):
+                self.logger.warning("State replication lag exceeds %s seconds", max_lag)
+            await asyncio.sleep(interval)
