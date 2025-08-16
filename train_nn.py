@@ -23,6 +23,7 @@ from tqdm import tqdm
 from models import model_store
 from models.graph_net import GraphNet
 from models.distillation import distill_teacher_student
+from models.multi_head import MultiHeadTransformer
 from analysis.feature_selector import select_features
 
 try:
@@ -341,41 +342,78 @@ def main(
 
         y_full = df["tb_label"]
         features = select_features(df[features], y_full)
+        if "SymbolCode" in features:
+            features.remove("SymbolCode")
         feat_path = root / "selected_features.json"
         feat_path.write_text(json.dumps(features))
 
         seq_len = cfg.get("sequence_length", 50)
-        X_train, y_train = make_sequence_arrays(
-            train_df, features, seq_len, label_col="tb_label"
+        symbol_codes = (
+            sorted(df["SymbolCode"].dropna().unique().astype(int))
+            if "SymbolCode" in df.columns
+            else [0]
         )
-        X_test, y_test = make_sequence_arrays(
-            test_df, features, seq_len, label_col="tb_label"
-        )
-
-        X_train, X_val, y_train, y_val = sk_train_test_split(
-            X_train,
-            y_train,
-            test_size=cfg.get("val_size", 0.2),
-            random_state=seed,
-        )
-
-        if cfg.get("use_data_augmentation", False) or cfg.get(
-            "use_diffusion_aug", False
-        ):
-            fname = (
-                "synthetic_sequences_diffusion.npz"
-                if cfg.get("use_diffusion_aug", False)
-                else "synthetic_sequences.npz"
+        train_loaders: dict[int, DataLoader] = {}
+        val_loaders: dict[int, DataLoader] = {}
+        test_loaders: dict[int, DataLoader] = {}
+        train_samplers: dict[int, DistributedSampler | None] = {}
+        X_sample = None
+        batch_size = cfg.get("batch_size", 128)
+        eval_batch_size = cfg.get("eval_batch_size", 256)
+        workers = cfg.get("num_workers") or monitor.capabilities.cpus
+        for code in symbol_codes:
+            train_sym = (
+                train_df[train_df["SymbolCode"] == code]
+                if "SymbolCode" in train_df.columns
+                else train_df
             )
-            aug_path = root / "data" / "augmented" / fname
-            if aug_path.exists():
-                data = np.load(aug_path)
-                X_aug = data["X"]
-                y_aug = data["y"]
-                X_train = np.concatenate([X_train, X_aug])
-                y_train = np.concatenate([y_train, y_aug])
+            test_sym = (
+                test_df[test_df["SymbolCode"] == code]
+                if "SymbolCode" in test_df.columns
+                else test_df
+            )
+            X_tr, y_tr = make_sequence_arrays(train_sym, features, seq_len, label_col="tb_label")
+            X_te, y_te = make_sequence_arrays(test_sym, features, seq_len, label_col="tb_label")
+            if len(X_tr) == 0 or len(X_te) == 0:
+                continue
+            X_tr, X_va, y_tr, y_va = sk_train_test_split(
+                X_tr, y_tr, test_size=cfg.get("val_size", 0.2), random_state=seed
+            )
+            if X_sample is None and len(X_tr) > 0:
+                X_sample = X_tr
+            train_ds = TensorDataset(
+                torch.tensor(X_tr, dtype=torch.float32),
+                torch.tensor(y_tr, dtype=torch.float32),
+            )
+            val_ds = TensorDataset(
+                torch.tensor(X_va, dtype=torch.float32),
+                torch.tensor(y_va, dtype=torch.float32),
+            )
+            test_ds = TensorDataset(
+                torch.tensor(X_te, dtype=torch.float32),
+                torch.tensor(y_te, dtype=torch.float32),
+            )
+            sampler = (
+                DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
+                if world_size > 1
+                else None
+            )
+            train_loaders[code] = DataLoader(
+                train_ds,
+                batch_size=batch_size,
+                shuffle=sampler is None,
+                sampler=sampler,
+                num_workers=workers,
+            )
+            val_loaders[code] = DataLoader(
+                val_ds, batch_size=eval_batch_size, shuffle=False, num_workers=workers
+            )
+            test_loaders[code] = DataLoader(
+                test_ds, batch_size=eval_batch_size, shuffle=False, num_workers=workers
+            )
+            train_samplers[code] = sampler
 
-        num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
+        num_symbols = len(symbol_codes)
         num_regimes = (
             int(df["market_regime"].nunique())
             if "market_regime" in df.columns
@@ -389,12 +427,12 @@ def main(
                 num_layers=cfg.get("num_layers", 2),
             ).to(device)
         else:
-            model = TransformerModel(
+            model = MultiHeadTransformer(
                 len(features),
+                num_symbols=num_symbols,
                 d_model=cfg.get("d_model", 64),
                 nhead=cfg.get("nhead", 4),
                 num_layers=cfg.get("num_layers", 2),
-                num_symbols=num_symbols,
                 num_regimes=num_regimes,
                 use_checkpointing=cfg.get("use_checkpointing", False),
             ).to(device)
@@ -410,77 +448,12 @@ def main(
         use_amp = cfg.get("use_amp", False)
         scaler = GradScaler() if use_amp else None
 
-        train_ds = TensorDataset(
-            torch.tensor(X_train, dtype=torch.float32),
-            torch.tensor(y_train, dtype=torch.float32),
-        )
-        val_ds = TensorDataset(
-            torch.tensor(X_val, dtype=torch.float32),
-            torch.tensor(y_val, dtype=torch.float32),
-        )
-        test_ds = TensorDataset(
-            torch.tensor(X_test, dtype=torch.float32),
-            torch.tensor(y_test, dtype=torch.float32),
-        )
-        train_sampler = (
-            DistributedSampler(
-                train_ds, num_replicas=world_size, rank=rank, shuffle=True
-            )
-            if world_size > 1
-            else None
-        )
-        batch_size = cfg.get("batch_size", 128)
-        eval_batch_size = cfg.get("eval_batch_size", 256)
-        workers = cfg.get("num_workers") or monitor.capabilities.cpus
-
-        train_loader = DataLoader(
-            train_ds,
-            batch_size=batch_size,
-            shuffle=train_sampler is None,
-            sampler=train_sampler,
-            num_workers=workers,
-        )
-        if rank == 0:
-            val_loader = DataLoader(val_ds, batch_size=eval_batch_size, num_workers=workers)
-            test_loader = DataLoader(test_ds, batch_size=eval_batch_size, num_workers=workers)
-
-        def _reload_loaders(num_workers: int) -> None:
-            nonlocal train_loader, val_loader, test_loader
-            train_loader = DataLoader(
-                train_ds,
-                batch_size=batch_size,
-                shuffle=train_sampler is None,
-                sampler=train_sampler,
-                num_workers=num_workers,
-            )
-            if rank == 0:
-                val_loader = DataLoader(
-                    val_ds, batch_size=eval_batch_size, num_workers=num_workers
-                )
-                test_loader = DataLoader(
-                    test_ds, batch_size=eval_batch_size, num_workers=num_workers
-                )
-
-        async def _watch_cpus() -> None:
-            q = monitor.subscribe()
-            while True:
-                await q.get()
-                nw = cfg.get("num_workers") or monitor.capabilities.cpus
-                if cfg.get("num_threads") is None:
-                    torch.set_num_threads(nw)
-                _reload_loaders(nw)
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.get_event_loop()
-        loop.create_task(_watch_cpus())
-
         accumulate_steps = cfg.get("accumulate_steps")
         free_mem_mb = 0.0
         if not accumulate_steps:
             try:
-                sample_x, _ = next(iter(train_loader))
+                first_loader = next(iter(train_loaders.values()))
+                sample_x, _ = next(iter(first_loader))
                 batch_mem_mb = sample_x.element_size() * sample_x.nelement() / (1024**2)
                 if monitor.capabilities.has_gpu and device.type == "cuda":
                     free_mem_mb = torch.cuda.mem_get_info()[0] / (1024**2)
@@ -505,7 +478,6 @@ def main(
         epochs_no_improve = 0
         model_path = root / "model_transformer.pt"
 
-        steps_per_epoch = math.ceil(len(train_loader.dataset) / batch_size)
         start_epoch = 0
         start_batch = 0
         ckpt = (
@@ -529,27 +501,36 @@ def main(
             )
 
         for epoch in range(start_epoch, cfg.get("epochs", 5)):
-            if train_sampler is not None:
-                train_sampler.set_epoch(epoch)
+            for sampler in train_samplers.values():
+                if sampler is not None:
+                    sampler.set_epoch(epoch)
             model.train()
             optim.zero_grad()
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}", disable=rank != 0)
-            for batch_idx, (xb, yb) in enumerate(pbar):
-                if epoch == start_epoch and batch_idx < start_batch:
-                    continue
-                xb = xb.to(device)
-                yb = yb.to(device)
+            iterators = _iter_loaders()
+            pbar = tqdm(range(steps_per_epoch), desc=f"Epoch {epoch+1}", disable=rank != 0)
+            for step in pbar:
+                losses = []
+                for code, it in iterators.items():
+                    try:
+                        xb, yb = next(it)
+                    except StopIteration:
+                        iterators[code] = iter(train_loaders[code])
+                        xb, yb = next(iterators[code])
+                    xb = xb.to(device)
+                    yb = yb.to(device)
+                    if use_amp:
+                        with autocast():
+                            preds = model(xb, code)
+                            losses.append(loss_fn(preds, yb))
+                    else:
+                        preds = model(xb, code)
+                        losses.append(loss_fn(preds, yb))
+                raw_loss = sum(losses) / len(losses)
                 if use_amp:
-                    with autocast():
-                        preds = model(xb)
-                        raw_loss = loss_fn(preds, yb)
-                    loss = raw_loss / accumulate_steps
-                    scaler.scale(loss).backward()
+                    scaler.scale(raw_loss / accumulate_steps).backward()
                 else:
-                    preds = model(xb)
-                    raw_loss = loss_fn(preds, yb)
                     (raw_loss / accumulate_steps).backward()
-                if (batch_idx + 1) % accumulate_steps == 0 or (batch_idx + 1) == len(train_loader):
+                if (step + 1) % accumulate_steps == 0 or (step + 1) == steps_per_epoch:
                     if use_amp:
                         scaler.step(optim)
                         scaler.update()
@@ -557,7 +538,7 @@ def main(
                         optim.step()
                     optim.zero_grad()
                     if rank == 0:
-                        global_step = epoch * steps_per_epoch + batch_idx
+                        global_step = epoch * steps_per_epoch + step
                         save_checkpoint(
                             {
                                 "model": (
@@ -578,17 +559,18 @@ def main(
                 correct = 0
                 total = 0
                 with torch.no_grad():
-                    for xb, yb in val_loader:
-                        xb = xb.to(device)
-                        yb = yb.to(device)
-                        with autocast(enabled=use_amp):
-                            preds = model(xb)
-                            loss = loss_fn(preds, yb)
-                        val_loss += loss.item() * xb.size(0)
-                        pred_labels = (preds > 0.5).int()
-                        correct += (pred_labels == yb.int()).sum().item()
-                        total += yb.size(0)
-                val_loss /= len(val_loader.dataset)
+                    for code, loader in val_loaders.items():
+                        for xb, yb in loader:
+                            xb = xb.to(device)
+                            yb = yb.to(device)
+                            with autocast(enabled=use_amp):
+                                preds = model(xb, code)
+                                loss = loss_fn(preds, yb)
+                            val_loss += loss.item() * xb.size(0)
+                            pred_labels = (preds > 0.5).int()
+                            correct += (pred_labels == yb.int()).sum().item()
+                            total += yb.size(0)
+                val_loss /= total if total else 1
                 val_acc = correct / total if total else 0.0
                 mlflow.log_metric("val_loss", val_loss, step=epoch)
                 mlflow.log_metric("val_accuracy", val_acc, step=epoch)
@@ -637,14 +619,15 @@ def main(
             correct = 0
             total = 0
             with torch.no_grad():
-                for xb, yb in test_loader:
-                    xb = xb.to(device)
-                    yb = yb.to(device)
-                    with autocast(enabled=use_amp):
-                        preds = model(xb)
-                    pred_labels = (preds > 0.5).int()
-                    correct += (pred_labels == yb.int()).sum().item()
-                    total += yb.size(0)
+                for code, loader in test_loaders.items():
+                    for xb, yb in loader:
+                        xb = xb.to(device)
+                        yb = yb.to(device)
+                        with autocast(enabled=use_amp):
+                            preds = model(xb, code)
+                        pred_labels = (preds > 0.5).int()
+                        correct += (pred_labels == yb.int()).sum().item()
+                        total += yb.size(0)
             acc = correct / total if total else 0.0
             logger.info("Test accuracy: %s", acc)
             logger.info("Best validation loss: %s", best_val_loss)
@@ -673,10 +656,11 @@ def main(
                     num_symbols=num_symbols,
                     num_regimes=num_regimes,
                 ).to(device)
+                first_loader = next(iter(train_loaders.values()))
                 distill_teacher_student(
                     model.module if isinstance(model, DDP) else model,
                     student,
-                    train_loader,
+                    first_loader,
                     epochs=cfg.get("distill_epochs", 1),
                 )
                 student_path = root / "model_transformer_distilled.pt"
@@ -689,14 +673,16 @@ def main(
                 logger.info("Distilled student model saved to %s", student_path)
             if cfg.get("feature_importance", False):
                 report_dir = root / "reports"
-                X_sample = X_train[: cfg.get("shap_samples", 100)]
-                log_shap_importance(model, X_sample, features, report_dir, device)
+                X_sample_np = X_sample[: cfg.get("shap_samples", 100)] if X_sample is not None else None
+                if X_sample_np is not None:
+                    log_shap_importance(model, X_sample_np, features, report_dir, device)
 
     if cfg.get("export"):
         from models.export import export_pytorch
 
-        sample = torch.tensor(X_train[:1], dtype=torch.float32)
-        export_pytorch(model, sample)
+        if X_sample is not None:
+            sample = torch.tensor(X_sample[:1], dtype=torch.float32)
+            export_pytorch(model, sample)
 
     if world_size > 1:
         dist.destroy_process_group()
