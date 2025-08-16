@@ -9,10 +9,7 @@ try:
 except Exception:  # pragma: no cover - torch optional
     torch = None  # type: ignore
 
-try:
-    from metrics import CPU_USAGE, RSS_USAGE
-except Exception:  # pragma: no cover - metrics may be stubbed in tests
-    CPU_USAGE = RSS_USAGE = None  # type: ignore
+from analytics.metrics_store import record_metric
 
 
 @dataclass
@@ -163,16 +160,11 @@ class ResourceMonitor:
             await asyncio.sleep(self.sample_interval)
             rss = proc.memory_info().rss / (1024**2)
             cpu = proc.cpu_percent()
-            if RSS_USAGE:
-                try:
-                    RSS_USAGE.set(rss)
-                except Exception:
-                    pass
-            if CPU_USAGE:
-                try:
-                    CPU_USAGE.set(cpu)
-                except Exception:
-                    pass
+            try:
+                record_metric("rss_usage_mb", rss)
+                record_metric("cpu_usage_pct", cpu)
+            except Exception:
+                pass
             reasons = []
             if self.max_rss_mb and rss > self.max_rss_mb:
                 reasons.append(f"rss {rss:.1f}MB>{self.max_rss_mb}")

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scheduler import start_scheduler
 from risk import risk_of_ruin
+from analytics.metrics_store import record_metric
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -106,6 +107,14 @@ class RiskManager:
             send_alert(f"Risk limit breached: {breach_reason}")
         if check_hedge and self.tail_hedger is not None:
             self.tail_hedger.evaluate()
+        # Record metrics for analytics
+        try:
+            record_metric("pnl", pnl, {"bot_id": bot_id})
+            record_metric("exposure", self.metrics.exposure)
+            record_metric("var", self.metrics.var)
+            record_metric("risk_of_ruin", self.metrics.risk_of_ruin)
+        except Exception:
+            pass
 
     async def monitor(self, queue: "asyncio.Queue[tuple[str, float, float]]") -> None:
         """Consume trade/PnL events from ``queue`` and update metrics."""

@@ -2,10 +2,14 @@ import asyncio
 import importlib.util
 from pathlib import Path
 
-import psutil
-from prometheus_client import Counter, CollectorRegistry
-import pytest
+import sys
+from pathlib import Path
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+import psutil
+import pytest
+import analytics.metrics_store as ms
 
 spec = importlib.util.spec_from_file_location(
     "resource_monitor", Path(__file__).resolve().parents[1] / "utils" / "resource_monitor.py"
@@ -13,12 +17,6 @@ spec = importlib.util.spec_from_file_location(
 rm_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rm_mod)
 ResourceMonitor = rm_mod.ResourceMonitor
-
-spec = importlib.util.spec_from_file_location(
-    "metrics", Path(__file__).resolve().parents[1] / "metrics.py"
-)
-metrics = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(metrics)
 
 
 @pytest.mark.asyncio
@@ -35,14 +33,16 @@ async def test_watchdog_triggers(monkeypatch):
 
     monkeypatch.setattr(psutil, "Process", lambda: FakeProc())
 
-    registry = CollectorRegistry()
-    rr = Counter("resource_restarts", "x", registry=registry)
-    monkeypatch.setattr(metrics, "RESOURCE_RESTARTS", rr, raising=False)
+    calls = []
+    def fake_record(name, value, tags=None):
+        calls.append((name, value))
+    monkeypatch.setattr(ms, "record_metric", fake_record)
+    monkeypatch.setattr(rm_mod, "record_metric", fake_record)
 
     triggered = asyncio.Event()
 
     async def on_breach(reason: str):
-        metrics.RESOURCE_RESTARTS.inc()
+        fake_record("resource_restarts", 1)
         triggered.set()
 
     monitor = ResourceMonitor(
@@ -55,5 +55,5 @@ async def test_watchdog_triggers(monkeypatch):
     monitor.start()
     await asyncio.wait_for(triggered.wait(), timeout=1)
     monitor.stop()
-    assert rr._value.get() == 1
+    assert any(c[0] == "resource_restarts" for c in calls)
 

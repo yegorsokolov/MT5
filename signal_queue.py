@@ -12,7 +12,7 @@ from contextlib import contextmanager, asynccontextmanager
 from kafka import KafkaProducer, KafkaConsumer, TopicPartition, errors as kafka_errors
 import redis
 
-from metrics import QUEUE_DEPTH, OFFSET_GAUGE
+from analytics.metrics_store import record_metric
 from risk.position_sizer import PositionSizer
 
 # Lazy registry to avoid heavy initialization at import time
@@ -36,6 +36,8 @@ _EVENT_STORE = EventStore(Path(os.getenv("EVENT_STORE_PATH", Path(__file__).reso
 
 _CTX = zmq.Context.instance()
 _ASYNC_CTX = zmq.asyncio.Context.instance()
+
+_QUEUE_DEPTH = 0
 
 
 def _passes_meta(meta_clf: Any | None, prob: float, conf: float) -> bool:
@@ -123,9 +125,14 @@ async def get_async_subscriber(connect_address: str | None = None, topic: str = 
 
 def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf") -> None:
     """Publish rows of a dataframe as JSON or Protobuf messages."""
+    global _QUEUE_DEPTH
     fmt = fmt.lower()
     for _, row in df.iterrows():
-        QUEUE_DEPTH.inc()
+        _QUEUE_DEPTH += 1
+        try:
+            record_metric("queue_depth", _QUEUE_DEPTH)
+        except Exception:
+            pass
         if fmt == "json":
             payload = {
                 "Timestamp": str(row["Timestamp"]),
@@ -152,9 +159,14 @@ async def publish_dataframe_async(
     sock: zmq.asyncio.Socket, df: pd.DataFrame, fmt: str = "protobuf"
 ) -> None:
     """Asynchronously publish rows of a dataframe as JSON or Protobuf messages."""
+    global _QUEUE_DEPTH
     fmt = fmt.lower()
     for _, row in df.iterrows():
-        QUEUE_DEPTH.inc()
+        _QUEUE_DEPTH += 1
+        try:
+            record_metric("queue_depth", _QUEUE_DEPTH)
+        except Exception:
+            pass
         if fmt == "json":
             payload = {
                 "Timestamp": str(row["Timestamp"]),
@@ -184,11 +196,16 @@ async def iter_messages(
     meta_clf: Any | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield decoded messages from a subscriber socket as they arrive."""
+    global _QUEUE_DEPTH
     fmt = fmt.lower()
     while True:
         if fmt == "json":
             data = await sock.recv_json()
-            QUEUE_DEPTH.dec()
+            _QUEUE_DEPTH = max(0, _QUEUE_DEPTH - 1)
+            try:
+                record_metric("queue_depth", _QUEUE_DEPTH)
+            except Exception:
+                pass
             symbol = data.get("Symbol", "")
             prob = float(data.get("prob", 0.0))
             conf = float(data.get("confidence", 1.0))
@@ -216,7 +233,11 @@ async def iter_messages(
             raw = await sock.recv()
             sig = signals_pb2.Signal()
             sig.ParseFromString(raw)
-            QUEUE_DEPTH.dec()
+            _QUEUE_DEPTH = max(0, _QUEUE_DEPTH - 1)
+            try:
+                record_metric("queue_depth", _QUEUE_DEPTH)
+            except Exception:
+                pass
             prob = float(sig.probability)
             symbol = sig.symbol
             conf = float(getattr(sig, "confidence", 1.0))
@@ -299,11 +320,19 @@ class KafkaSignalQueue:
                 payload = msg.SerializeToString()
             for attempt in range(retries):
                 try:
-                    QUEUE_DEPTH.inc()
+                    global _QUEUE_DEPTH
+                    _QUEUE_DEPTH += 1
+                    try:
+                        record_metric("queue_depth", _QUEUE_DEPTH)
+                    except Exception:
+                        pass
                     future = self.producer.send(self.topic, payload)
                     meta = future.get(timeout=10)
                     self.offset = meta.offset
-                    OFFSET_GAUGE.set(self.offset)
+                    try:
+                        record_metric("queue_offset", self.offset)
+                    except Exception:
+                        pass
                     break
                 except kafka_errors.KafkaError:
                     if attempt + 1 == retries:
@@ -318,9 +347,17 @@ class KafkaSignalQueue:
     ):
         fmt = fmt.lower()
         for msg in self.consumer:
-            QUEUE_DEPTH.dec()
+            global _QUEUE_DEPTH
+            _QUEUE_DEPTH = max(0, _QUEUE_DEPTH - 1)
+            try:
+                record_metric("queue_depth", _QUEUE_DEPTH)
+            except Exception:
+                pass
             self.offset = msg.offset
-            OFFSET_GAUGE.set(self.offset)
+            try:
+                record_metric("queue_offset", self.offset)
+            except Exception:
+                pass
             if fmt == "json":
                 data = json.loads(msg.value.decode())
                 symbol = data.get("Symbol", "")
@@ -418,9 +455,17 @@ class RedisSignalQueue:
                 payload = msg.SerializeToString()
             for attempt in range(retries):
                 try:
-                    QUEUE_DEPTH.inc()
+                    global _QUEUE_DEPTH
+                    _QUEUE_DEPTH += 1
+                    try:
+                        record_metric("queue_depth", _QUEUE_DEPTH)
+                    except Exception:
+                        pass
                     self.client.xadd(self.stream, {"data": payload})
-                    OFFSET_GAUGE.set(self.client.xlen(self.stream))
+                    try:
+                        record_metric("queue_offset", self.client.xlen(self.stream))
+                    except Exception:
+                        pass
                     break
                 except redis.exceptions.RedisError:
                     if attempt + 1 == retries:
@@ -441,10 +486,18 @@ class RedisSignalQueue:
             _, messages = resp[0]
             for msg_id, fields in messages:
                 data = fields[b"data"] if b"data" in fields else fields["data"]
-                QUEUE_DEPTH.dec()
+                global _QUEUE_DEPTH
+                _QUEUE_DEPTH = max(0, _QUEUE_DEPTH - 1)
+                try:
+                    record_metric("queue_depth", _QUEUE_DEPTH)
+                except Exception:
+                    pass
                 self.last_id = msg_id
                 try:
-                    OFFSET_GAUGE.set(int(msg_id.split(b"-")[0]))
+                    try:
+                        record_metric("queue_offset", int(msg_id.split(b"-")[0]))
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 if fmt == "json":
