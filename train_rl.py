@@ -725,6 +725,20 @@ def main(
     if world_size > 1 and algo != "RLLIB":
         model.policy = DDP(model.policy, device_ids=[rank] if use_cuda else None)
 
+    federated_cfg = cfg.get("federated", {})
+    federated_client = None
+    if federated_cfg.get("enabled") and algo != "RLLIB":
+        from federated.client import FederatedClient
+
+        target = model.policy if hasattr(model, "policy") else model
+        federated_client = FederatedClient(
+            federated_cfg["server_url"],
+            federated_cfg["api_key"],
+            target,
+            cfg.get("checkpoint_dir"),
+        )
+        federated_client.fetch_global()
+
     if algo == "RLLIB":
         ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
         start_iter = 0
@@ -769,20 +783,22 @@ def main(
                 except TypeError:  # pragma: no cover - stub algos may not support kwarg
                     model.learn(total_timesteps=learn_steps)
                 current += learn_steps
-                save_checkpoint(
-                    {
-                        "model": model.policy.state_dict(),
-                        "optimizer": model.policy.optimizer.state_dict(),
-                    "metrics": {"timesteps": current},
-                },
-                current,
-                cfg.get("checkpoint_dir"),
-            )
-        cumulative_return = 0.0
-        if rank == 0:
-            if algo == "RECURRENTPPO":
-                rec_dir = root / "models" / "recurrent_rl"
-                rec_dir.mkdir(parents=True, exist_ok=True)
+                  save_checkpoint(
+                      {
+                          "model": model.policy.state_dict(),
+                          "optimizer": model.policy.optimizer.state_dict(),
+                          "metrics": {"timesteps": current},
+                  },
+                  current,
+                  cfg.get("checkpoint_dir"),
+              )
+              if rank == 0 and federated_client is not None:
+                  federated_client.push_update()
+      cumulative_return = 0.0
+      if rank == 0:
+          if algo == "RECURRENTPPO":
+              rec_dir = root / "models" / "recurrent_rl"
+              rec_dir.mkdir(parents=True, exist_ok=True)
                 model.save(rec_dir / "recurrent_model")
                 logger.info("RL model saved to %s", rec_dir / "recurrent_model.zip")
             elif algo == "HIERARCHICALPPO":
