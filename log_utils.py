@@ -5,7 +5,13 @@ from __future__ import annotations
 import csv
 import json
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, SysLogHandler
+from urllib.parse import urlparse
+import os
+import socket
+
+import yaml
+import requests
 from functools import wraps
 from pathlib import Path
 from datetime import datetime, UTC
@@ -38,6 +44,79 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(log_record)
 
 
+class ResilientHTTPHandler(logging.Handler):
+    """HTTP log handler with simple retry buffer."""
+
+    def __init__(self, url: str):
+        super().__init__()
+        self.url = url
+        self.session = requests.Session()
+        self.buffer: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - network
+        msg = self.format(record)
+        self.buffer.append(msg)
+        self.flush()
+
+    def flush(self) -> None:  # pragma: no cover - network
+        while self.buffer:
+            payload = self.buffer[0]
+            try:
+                self.session.post(
+                    self.url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=5,
+                )
+                self.buffer.pop(0)
+            except Exception:
+                break
+
+
+class ResilientSysLogHandler(logging.Handler):
+    """Wrapper around ``SysLogHandler`` that reconnects on failure."""
+
+    def __init__(self, address: tuple[str, int]):
+        super().__init__()
+        self.address = address
+        self._connect()
+
+    def _connect(self) -> None:  # pragma: no cover - system specific
+        self.handler = SysLogHandler(address=self.address)
+
+    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - network
+        try:
+            self.handler.emit(record)
+        except Exception:
+            try:
+                self.handler.close()
+            except Exception:
+                pass
+            try:
+                self._connect()
+                self.handler.emit(record)
+            except Exception:
+                pass
+
+
+def _is_reachable(url: str) -> bool:  # pragma: no cover - network
+    parsed = urlparse(url)
+    if parsed.scheme in {"http", "https"}:
+        try:
+            requests.head(url, timeout=5)
+            return True
+        except Exception:
+            return False
+    if parsed.scheme == "syslog":
+        port = parsed.port or 514
+        try:
+            with socket.create_connection((parsed.hostname or "", port), timeout=5):
+                return True
+        except OSError:
+            return False
+    return False
+
+
 def setup_logging() -> logging.Logger:
     """Configure and return the root logger."""
     logger = logging.getLogger()
@@ -54,6 +133,30 @@ def setup_logging() -> logging.Logger:
     sh = logging.StreamHandler()
     sh.setFormatter(fmt)
     logger.addHandler(sh)
+
+    cfg_path = os.getenv("CONFIG_FILE")
+    if cfg_path:
+        cfg_file = Path(cfg_path)
+    else:
+        cfg_file = Path(__file__).resolve().parent / "config.yaml"
+    try:
+        with open(cfg_file, "r") as f:
+            cfg = yaml.safe_load(f) or {}
+    except Exception:
+        cfg = {}
+
+    url = cfg.get("log_forward", {}).get("url") if isinstance(cfg.get("log_forward"), dict) else None
+    if url and _is_reachable(url):  # pragma: no branch - simple check
+        parsed = urlparse(url)
+        handler: logging.Handler | None = None
+        if parsed.scheme in {"http", "https"}:
+            handler = ResilientHTTPHandler(url)
+        elif parsed.scheme == "syslog":
+            address = (parsed.hostname or "localhost", parsed.port or 514)
+            handler = ResilientSysLogHandler(address)
+        if handler:
+            handler.setFormatter(fmt)
+            logger.addHandler(handler)
 
     try:  # pragma: no cover - systemd optional
         from systemd.journal import JournalHandler
