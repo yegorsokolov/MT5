@@ -442,6 +442,18 @@ def main(
                 model.load_state_dict(state_dict, strict=False)
         if world_size > 1:
             model = DDP(model, device_ids=[rank] if use_cuda else None)
+        federated_cfg = cfg.get("federated", {})
+        federated_client = None
+        if federated_cfg.get("enabled"):
+            from federated.client import FederatedClient
+
+            federated_client = FederatedClient(
+                federated_cfg["server_url"],
+                federated_cfg["api_key"],
+                model,
+                cfg.get("checkpoint_dir"),
+            )
+            federated_client.fetch_global()
         optim = torch.optim.Adam(model.parameters(), lr=1e-3)
         loss_fn = torch.nn.BCELoss()
 
@@ -605,6 +617,8 @@ def main(
                     (epoch + 1) * steps_per_epoch,
                     cfg.get("checkpoint_dir"),
                 )
+                if federated_client is not None:
+                    federated_client.push_update()
 
             if world_size > 1:
                 dist.barrier()
