@@ -7,6 +7,8 @@ num_threads: null
 num_workers: null
 pred_cache_size: 256
 pred_cache_policy: lru
+log_forward:
+  url: ""
 alerting:
   slack_webhook: ""
   smtp:

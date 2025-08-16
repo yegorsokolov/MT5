@@ -21,6 +21,10 @@ class ConfigSchema(BaseModel):
     pred_cache_policy: str = Field(
         "lru", description="Eviction policy for prediction cache (lru or fifo)"
     )
+    log_forward: dict | None = Field(
+        None,
+        description="Remote log forwarding configuration, e.g. {'url': 'http://host'}",
+    )
 
     model_config = ConfigDict(extra="allow")
 
