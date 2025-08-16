@@ -19,6 +19,10 @@ from datetime import datetime, UTC
 import pandas as pd
 
 from metrics import ERROR_COUNT, TRADE_COUNT
+try:  # optional during tests
+    from core import state_sync
+except Exception:  # pragma: no cover - optional dependency
+    state_sync = None
 
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -231,6 +235,8 @@ def log_decision(df: pd.DataFrame) -> None:
         df.to_parquet(DECISION_LOG, engine="pyarrow", append=True)
     else:
         df.to_parquet(DECISION_LOG, engine="pyarrow")
+    if state_sync:
+        state_sync.sync_decisions()
 
 
 def log_predictions(df: pd.DataFrame) -> None:
