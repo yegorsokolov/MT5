@@ -6,7 +6,7 @@ averages over a stream of prices and produces trading signals when the
 short average crosses the long average.
 """
 from collections import deque
-from typing import Deque, List
+from typing import Deque, Dict, Optional
 
 
 class BaselineStrategy:
@@ -20,7 +20,13 @@ class BaselineStrategy:
         Number of recent prices for the slow moving average.
     """
 
-    def __init__(self, short_window: int = 5, long_window: int = 20) -> None:
+    def __init__(
+        self,
+        short_window: int = 5,
+        long_window: int = 20,
+        session_position_limits: Optional[Dict[str, int]] = None,
+        default_position_limit: int = 1,
+    ) -> None:
         if short_window >= long_window:
             raise ValueError("short_window must be < long_window")
         self.short_window = short_window
@@ -29,8 +35,21 @@ class BaselineStrategy:
         self._long: Deque[float] = deque(maxlen=long_window)
         self._prev_short = 0.0
         self._prev_long = 0.0
+        self.session_position_limits = session_position_limits or {}
+        self.default_position_limit = default_position_limit
+        self.current_position_limit = default_position_limit
 
-    def update(self, price: float) -> int:
+    def set_session(self, session: Optional[str]) -> None:
+        """Update position limits based on the active session."""
+
+        if session is None:
+            self.current_position_limit = self.default_position_limit
+        else:
+            self.current_position_limit = self.session_position_limits.get(
+                session, self.default_position_limit
+            )
+
+    def update(self, price: float, session: Optional[str] = None) -> int:
         """Process a new price and return a trading signal.
 
         Returns
@@ -38,6 +57,9 @@ class BaselineStrategy:
         int
             1 for buy, -1 for sell, 0 for hold.
         """
+
+        if session is not None:
+            self.set_session(session)
 
         self._short.append(price)
         self._long.append(price)
@@ -55,4 +77,7 @@ class BaselineStrategy:
             signal = -1
 
         self._prev_short, self._prev_long = short_ma, long_ma
+        # Enforce session-specific position limit
+        limit = self.current_position_limit
+        signal = max(min(signal, limit), -limit)
         return signal
