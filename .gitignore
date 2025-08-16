@@ -23,5 +23,6 @@ models/*
 !models/remote_client.py
 !models/remote_server.py
 !models/mixture_of_experts.py
+!models/build_model.py
 __pycache__/
 logs/
