@@ -71,38 +71,45 @@ def bayesian_average(prob_arrays):
 
 
 def meta_transformer_signals(df, features, cfg):
-    """Return probabilities from the meta-trained transformer if available."""
+    """Return probabilities from the multi-head transformer if available."""
     if not cfg.get("use_meta_model", False):
         return np.zeros(len(df))
     try:  # optional torch dependency
         import torch
     except Exception:
         return np.zeros(len(df))
-    from meta_train_nn import TransformerModel
+    from models.multi_head import MultiHeadTransformer
+    from utils.resource_monitor import monitor
 
-    model_path = Path(__file__).resolve().parent / "models" / "meta_transformer.pth"
+    model_path = Path(__file__).resolve().parent / "model_transformer.pt"
     if not model_path.exists():
         return np.zeros(len(df))
 
     seq_len = cfg.get("sequence_length", 50)
-    X, _ = make_sequence_arrays(df, features, seq_len)
+    feat = [f for f in features if f != "SymbolCode"]
+    X, _ = make_sequence_arrays(df, feat, seq_len)
     if len(X) == 0:
         return np.zeros(len(df))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else None
+    num_symbols = int(df["Symbol"].nunique()) if "Symbol" in df.columns else 1
     num_regimes = (
         int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
     )
-    model = TransformerModel(len(features), num_symbols=num_symbols, num_regimes=num_regimes).to(device)
+    model = MultiHeadTransformer(len(feat), num_symbols=num_symbols, num_regimes=num_regimes).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
+    tier = monitor.capabilities.capability_tier()
+    TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+    sym_code = int(df.get("SymbolCode", pd.Series([0])).iloc[0]) if "SymbolCode" in df.columns else 0
+    if TIERS.get(tier, 0) < TIERS["gpu"]:
+        model.prune_heads([sym_code])
     model.eval()
 
     preds = []
     with torch.no_grad():
         for i in range(0, len(X), 256):
             xb = torch.tensor(X[i : i + 256], dtype=torch.float32).to(device)
-            preds.append(model(xb).cpu().numpy())
+            preds.append(model(xb, sym_code).cpu().numpy())
     probs = np.concatenate(preds)
     if len(probs) < len(df):
         probs = np.pad(probs, (0, len(df) - len(probs)), "edge")
