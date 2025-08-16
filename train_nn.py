@@ -59,12 +59,12 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
+from core.orchestrator import Orchestrator
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Periodically refresh hardware capabilities
-monitor.start()
+Orchestrator.start()
 
 
 def _load_donor_state_dict(symbol: str):
@@ -230,7 +230,6 @@ def main(
     tier = cfg.get("capability_tier", "auto")
     if tier == "auto":
         tier = monitor.capabilities.capability_tier()
-    monitor.start()
     if tier in ("lite", "standard"):
         cfg.setdefault("d_model", 32)
         cfg.setdefault("num_layers", 1)
