@@ -372,6 +372,23 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     use_dask = cfg.get("use_dask", False)
     use_cache = cfg.get("use_feature_cache", False)
     dask_url = cfg.get("dask_cluster_url")
+    service_url = cfg.get("feature_service_url")
+    service_api_key = cfg.get("feature_service_api_key")
+    service_cert = cfg.get("feature_service_ca_cert")
+
+    if service_url:
+        remote_store = FeatureStore(
+            service_url=service_url, api_key=service_api_key, tls_cert=service_cert
+        )
+        start_ts = pd.to_datetime(df["Timestamp"]).min().isoformat()
+        end_ts = pd.to_datetime(df["Timestamp"]).max().isoformat()
+        symbol_remote = (
+            "-".join(sorted(df["Symbol"].unique())) if "Symbol" in df.columns else "nosymbol"
+        )
+        remote_df = remote_store.fetch_remote(symbol_remote, start_ts, end_ts)
+        if remote_df is not None and len(remote_df):
+            logger.info("Loaded features from remote service")
+            return remote_df
 
     adjacency_matrices: dict | None = None
 
@@ -390,6 +407,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         if "Symbol" in df.columns:
             symbol_key = "-".join(sorted(df["Symbol"].unique()))
         cached_df = cached_store.load_any(symbol_key, window_key, params_key)
+        if cached_df is not None and len(cached_df) == len(df):
+            logger.info("Loading features from cache")
+            return cached_df
 
     if use_dask:
         import dask.dataframe as dd  # type: ignore
@@ -726,8 +746,12 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
         cached_store.save(df_to_save, symbol_key, window_key, params_key, raw_hash)
         logger.info("Cached features written to %s", cached_store.path)
+        if service_url:
+            remote_store.upload_remote(df_to_save, symbol_remote, start_ts, end_ts)
         return df_to_save
 
+    if service_url:
+        remote_store.upload_remote(df, symbol_remote, start_ts, end_ts)
     return df
 
 
