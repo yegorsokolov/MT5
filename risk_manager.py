@@ -11,6 +11,7 @@ from scheduler import start_scheduler
 from risk import risk_of_ruin
 from risk.budget_allocator import BudgetAllocator
 from analytics.metrics_store import record_metric
+from portfolio.robust_optimizer import RobustOptimizer
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -42,6 +43,7 @@ class RiskManager:
         tail_hedger: "TailHedger" | None = None,
         risk_of_ruin_threshold: float = 1.0,
         initial_capital: float = 1.0,
+        optimizer: RobustOptimizer | None = None,
     ) -> None:
         self.max_drawdown = max_drawdown
         self.max_var = max_var
@@ -54,6 +56,9 @@ class RiskManager:
         self.tail_hedger = tail_hedger
         self.risk_of_ruin_threshold = risk_of_ruin_threshold
         self.initial_capital = initial_capital
+        self.robust_optimizer = optimizer or RobustOptimizer()
+        self._regime_pnl_history: Dict[int, Dict[str, List[float]]] = {}
+        self._last_regime: int | None = None
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""
@@ -73,8 +78,17 @@ class RiskManager:
         self._pnl_history.append(pnl)
         bot_hist = self._bot_pnl_history.setdefault(bot_id, [])
         bot_hist.append(pnl)
+        regime = None
         if factor_returns is not None:
             self._factor_history.append(factor_returns)
+            regime = factor_returns.get("regime")
+            if regime is None:
+                regime = factor_returns.get("market_regime")
+            if regime is not None:
+                reg = int(regime)
+                self._last_regime = reg
+                reg_hist = self._regime_pnl_history.setdefault(reg, {})
+                reg_hist.setdefault(bot_id, []).append(pnl)
         if len(self._pnl_history) > self.var_window:
             self._pnl_history.pop(0)
             if self._factor_history:
@@ -149,16 +163,49 @@ class RiskManager:
         self._factor_history.clear()
         self._bot_pnl_history.clear()
         self.budget_allocator.budgets.clear()
+        self._regime_pnl_history.clear()
+        self._last_regime = None
 
     # Risk budgets ----------------------------------------------------
-    def rebalance_budgets(self) -> Dict[str, float]:
-        """Recompute risk budgets from per-bot PnL history."""
+    def rebalance_budgets(self, regime: int | None = None) -> Dict[str, float]:
+        """Recompute risk budgets using a robust optimiser.
+
+        When ``regime`` is provided (or inferred from the most recent update) the
+        allocation is computed from returns observed in that market regime using a
+        :class:`~portfolio.robust_optimizer.RobustOptimizer` to guard against
+        estimation error.  If insufficient data is available the allocator falls
+        back to the naive :class:`~risk.budget_allocator.BudgetAllocator` weights.
+        """
+
         returns = {
             bot: pd.Series(hist) / self.initial_capital
             for bot, hist in self._bot_pnl_history.items()
             if hist
         }
-        return self.budget_allocator.allocate(returns)
+        budgets = self.budget_allocator.allocate(returns)
+
+        reg = regime if regime is not None else self._last_regime
+        if reg is None or reg not in self._regime_pnl_history:
+            return budgets
+
+        reg_hist = {
+            bot: pd.Series(hist) / self.initial_capital
+            for bot, hist in self._regime_pnl_history[reg].items()
+            if len(hist) >= 2
+        }
+        if len(reg_hist) < 2:
+            return budgets
+
+        min_len = min(len(s) for s in reg_hist.values())
+        data = np.vstack([s.tail(min_len).to_numpy() for s in reg_hist.values()])
+        mu = data.mean(axis=1)
+        cov = np.cov(data)
+        weights = self.robust_optimizer.compute_weights(mu, cov)
+        total = sum(budgets.values()) or self.budget_allocator.capital
+        self.budget_allocator.budgets = {
+            bot: total * w for bot, w in zip(reg_hist.keys(), weights)
+        }
+        return self.budget_allocator.budgets
 
     def adjust_position_size(self, bot_id: str, size: float) -> float:
         """Scale ``size`` by the risk budget for ``bot_id``."""
