@@ -16,6 +16,7 @@ import os
 import duckdb
 import pandas as pd
 import requests
+from utils.secret_manager import SecretManager
 
 
 class FeatureStore:
@@ -40,7 +41,8 @@ class FeatureStore:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.service_url = service_url or os.getenv("FEATURE_SERVICE_URL")
-        self.api_key = api_key or os.getenv("FEATURE_SERVICE_API_KEY")
+        sm = SecretManager()
+        self.api_key = api_key or sm.get_secret("FEATURE_SERVICE_API_KEY")
         self.tls_cert = tls_cert or os.getenv("FEATURE_SERVICE_CA_CERT")
 
     # ------------------------------------------------------------------

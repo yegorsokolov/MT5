@@ -13,6 +13,7 @@ from typing import Dict, Any, Set, Optional
 import asyncio
 from pydantic import BaseModel
 import os
+from utils.secret_manager import SecretManager
 from pathlib import Path
 import uvicorn
 from utils import update_config
@@ -97,9 +98,9 @@ async def _handle_resource_breach(reason: str) -> None:
     send_alert(f"Resource watchdog triggered: {reason}")
     os._exit(1)
 
-API_KEY = os.getenv("API_KEY")
+API_KEY = SecretManager().get_secret("API_KEY")
 if not API_KEY:
-    raise RuntimeError("API_KEY environment variable is required")
+    raise RuntimeError("API_KEY secret is required")
 
 CERT_FILE = Path("certs/api.crt")
 KEY_FILE = Path("certs/api.key")
