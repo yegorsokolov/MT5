@@ -33,6 +33,7 @@ from metrics import (
 )
 
 from telemetry import get_tracer, get_meter
+from analytics.metrics_store import record_metric, TS_PATH
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -117,6 +118,35 @@ async def generate_features(context: pd.DataFrame) -> pd.DataFrame:
             return pd.DataFrame()
         df = await asyncio.to_thread(make_features, context)
         return df
+
+
+def apply_liquidity_adjustment(
+    df: pd.DataFrame, metrics_path: Path | None = None
+) -> pd.DataFrame:
+    """Append simulated fill prices based on liquidity metrics.
+
+    The function also records aggregate slippage and liquidity usage metrics
+    using :func:`record_metric`.
+    """
+    if metrics_path is None:
+        metrics_path = TS_PATH
+    if {"mid", "vw_spread", "market_impact"}.issubset(df.columns):
+        buy = df["mid"] + df["vw_spread"] / 2 + df["market_impact"]
+        sell = df["mid"] - df["vw_spread"] / 2 - df["market_impact"]
+        df = df.copy()
+        df["buy_fill"] = buy
+        df["sell_fill"] = sell
+        record_metric(
+            "slippage",
+            float((buy - df["mid"]).abs().mean()),
+            path=metrics_path,
+        )
+        record_metric(
+            "liquidity_usage",
+            float(df.get("depth_imbalance", pd.Series(0, index=df.index)).abs().mean()),
+            path=metrics_path,
+        )
+    return df
 
 
 async def dispatch_signals(queue, df: pd.DataFrame) -> None:
@@ -217,6 +247,7 @@ async def train_realtime():
             feats = await generate_features(batch)
             if feats.empty:
                 return
+            feats = apply_liquidity_adjustment(feats)
             num_cols = feats.select_dtypes(np.number).columns
             if len(num_cols) > 0:
                 scaler.partial_fit(feats[num_cols])
