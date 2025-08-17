@@ -1,0 +1,43 @@
+version: "3.8"
+services:
+  remote-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    command: ["python", "remote_api.py"]
+    environment:
+      - RESOURCE_TIER=${RESOURCE_TIER:-cpu}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./checkpoints:/app/checkpoints
+      - ./logs:/app/logs
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    command: ["streamlit", "run", "webui/dashboard.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    environment:
+      - REMOTE_API_URL=http://remote-api:8000
+      - RESOURCE_TIER=${RESOURCE_TIER:-cpu}
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./checkpoints:/app/checkpoints
+      - ./logs:/app/logs
+    depends_on:
+      - remote-api
+
+  risk-manager:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    command: ["python", "risk_manager.py"]
+    environment:
+      - RESOURCE_TIER=${RESOURCE_TIER:-cpu}
+    volumes:
+      - ./checkpoints:/app/checkpoints
+      - ./logs:/app/logs
+    depends_on:
+      - remote-api

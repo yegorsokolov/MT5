@@ -863,6 +863,26 @@ upload logs periodically, schedule the script with cron, for example:
 0 * * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/upload_logs.py
 ```
 
+## Docker images
+
+The `docker/` directory contains separate CPU and GPU Dockerfiles. Each sets a
+default `RESOURCE_TIER` so software inside the container automatically adjusts
+to the available resources. Build the images with:
+
+```bash
+docker build -f docker/Dockerfile.cpu -t mt5:cpu .
+docker build -f docker/Dockerfile.gpu -t mt5:gpu .
+```
+
+Run the full stack with docker compose:
+
+```bash
+docker-compose up --build
+```
+
+The compose file launches the remote API, Streamlit dashboard and risk manager
+services with `./checkpoints` and `./logs` mounted for persistent storage.
+
 ## gRPC Management API
 
 The gRPC management API is served over TLS. Place the server certificate
