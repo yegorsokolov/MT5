@@ -884,7 +884,7 @@ def main(
         checkpoint = model.save(str(root / "model_rllib"))
         logger.info("RLlib model saved to %s", checkpoint)
         version_id = model_store.save_model(
-            Path(checkpoint), cfg, {}, architecture_history=architecture_history
+            Path(checkpoint), cfg, {}, architecture_history=architecture_history, features=features
         )
         logger.info("Registered model version %s", version_id)
         ray.shutdown()
@@ -1085,6 +1085,7 @@ def main(
                     {**cfg, "distilled_from": str(artifact)},
                     {"cumulative_return": cumulative_return},
                     architecture_history=architecture_history,
+                    features=features,
                 )
                 logger.info(
                     "Distilled RL policy saved to %s", root / "model_rl_distilled.zip"
@@ -1094,6 +1095,7 @@ def main(
                 cfg,
                 {"cumulative_return": cumulative_return},
                 architecture_history=architecture_history,
+                features=features,
             )
             logger.info("Registered model version %s", version_id)
             if cfg.get("quantize"):
@@ -1106,6 +1108,7 @@ def main(
                     {**cfg, "quantized": True},
                     {"cumulative_return": cumulative_return},
                     architecture_history=architecture_history,
+                    features=features,
                 )
                 logger.info("Quantized RL policy saved to %s", q_artifact)
             mlflow.end_run()

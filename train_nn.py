@@ -780,6 +780,7 @@ def main(
                 cfg,
                 {"val_loss": best_val_loss, "test_accuracy": acc},
                 architecture_history=architecture_history,
+                features=features,
             )
             logger.info("Registered model version %s", version_id)
             if use_tft:
@@ -814,6 +815,7 @@ def main(
                     {**cfg, "quantized": True},
                     {"val_loss": best_val_loss, "test_accuracy": acc},
                     architecture_history=architecture_history,
+                    features=features,
                 )
                 logger.info("Quantized model saved to %s", q_path)
             if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]:
@@ -839,6 +841,7 @@ def main(
                     {**cfg, "distilled_from": version_id},
                     {"teacher_accuracy": acc},
                     architecture_history=architecture_history,
+                    features=features,
                 )
                 logger.info("Distilled student model saved to %s", student_path)
             if cfg.get("feature_importance", False):
