@@ -27,6 +27,7 @@ from models.distillation import distill_teacher_student
 from models.build_model import build_model, compute_scale_factor
 from models.quantize import apply_quantization
 from analysis.feature_selector import select_features
+from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 
 try:
     import shap
@@ -457,13 +458,28 @@ def main(
         architecture_history = [
             {"timestamp": datetime.utcnow().isoformat(), "scale_factor": scale_factor}
         ]
-        model = build_model(
-            len(features),
-            cfg,
-            scale_factor,
-            num_symbols=num_symbols,
-            num_regimes=num_regimes,
-        ).to(device)
+
+        quantiles = cfg.get("quantiles", [0.1, 0.5, 0.9])
+        use_tft = cfg.get("use_tft", False) and TIERS.get(tier, 0) >= TIERS["gpu"]
+
+        if use_tft:
+            tft_cfg = TFTConfig(
+                static_size=0,
+                known_size=len(features),
+                observed_size=0,
+                hidden_size=cfg.get("d_model", 64),
+                num_heads=cfg.get("nhead", 4),
+                quantiles=quantiles,
+            )
+            model = TemporalFusionTransformer(tft_cfg).to(device)
+        else:
+            model = build_model(
+                len(features),
+                cfg,
+                scale_factor,
+                num_symbols=num_symbols,
+                num_regimes=num_regimes,
+            ).to(device)
 
         def _watch_model() -> None:
             async def _watch() -> None:
@@ -516,7 +532,7 @@ def main(
             )
             federated_client.fetch_global()
         optim = torch.optim.Adam(model.parameters(), lr=1e-3)
-        loss_fn = torch.nn.BCELoss()
+        loss_fn = QuantileLoss(quantiles) if use_tft else torch.nn.BCELoss()
 
         use_amp = cfg.get("use_amp", False)
         scaler = GradScaler() if use_amp else None
@@ -593,11 +609,11 @@ def main(
                     yb = yb.to(device)
                     if use_amp:
                         with autocast():
-                            preds = model(xb, code)
-                            losses.append(loss_fn(preds, yb))
+                            preds = model(xb) if use_tft else model(xb, code)
+                            losses.append(loss_fn(preds, yb.float() if use_tft else yb))
                     else:
-                        preds = model(xb, code)
-                        losses.append(loss_fn(preds, yb))
+                        preds = model(xb) if use_tft else model(xb, code)
+                        losses.append(loss_fn(preds, yb.float() if use_tft else yb))
                 raw_loss = sum(losses) / len(losses)
                 if use_amp:
                     scaler.scale(raw_loss / accumulate_steps).backward()
@@ -637,10 +653,14 @@ def main(
                             xb = xb.to(device)
                             yb = yb.to(device)
                             with autocast(enabled=use_amp):
-                                preds = model(xb, code)
-                                loss = loss_fn(preds, yb)
+                                preds = model(xb) if use_tft else model(xb, code)
+                                loss = loss_fn(preds, yb.float() if use_tft else yb)
                             val_loss += loss.item() * xb.size(0)
-                            pred_labels = (preds > 0.5).int()
+                            pred_labels = (
+                                (preds[:, len(quantiles) // 2] > 0.5).int()
+                                if use_tft
+                                else (preds > 0.5).int()
+                            )
                             correct += (pred_labels == yb.int()).sum().item()
                             total += yb.size(0)
                 val_loss /= total if total else 1
@@ -699,8 +719,12 @@ def main(
                         xb = xb.to(device)
                         yb = yb.to(device)
                         with autocast(enabled=use_amp):
-                            preds = model(xb, code)
-                        pred_labels = (preds > 0.5).int()
+                            preds = model(xb) if use_tft else model(xb, code)
+                        pred_labels = (
+                            (preds[:, len(quantiles) // 2] > 0.5).int()
+                            if use_tft
+                            else (preds > 0.5).int()
+                        )
                         correct += (pred_labels == yb.int()).sum().item()
                         total += yb.size(0)
             acc = correct / total if total else 0.0
@@ -723,6 +747,27 @@ def main(
                 architecture_history=architecture_history,
             )
             logger.info("Registered model version %s", version_id)
+            if use_tft:
+                quantile_preds = []
+                for _code, loader in test_loaders.items():
+                    for xb, _ in loader:
+                        xb = xb.to(device)
+                        with torch.no_grad():
+                            quantile_preds.append(model(xb).cpu())
+                if quantile_preds:
+                    q_pred = torch.cat(quantile_preds).numpy()
+                    q_cols = [f"q{int(q*100)}" for q in quantiles]
+                    q_df = pd.DataFrame(q_pred, columns=q_cols)
+                    q_path = root / "tft_quantiles.csv"
+                    q_df.to_csv(q_path, index=False)
+                    mlflow.log_artifact(str(q_path))
+                    logger.info("Saved quantile forecasts to %s", q_path)
+                logger.info("TFT variable importance: %s", model.variable_importance())
+                if model.last_attention is not None:
+                    attn_path = root / "tft_attention.pt"
+                    torch.save(model.last_attention.cpu(), attn_path)
+                    mlflow.log_artifact(str(attn_path))
+                    logger.info("TFT attention weights logged to %s", attn_path)
             if cfg.get("quantize"):
                 qmodel = apply_quantization(
                     model.module if isinstance(model, DDP) else model
