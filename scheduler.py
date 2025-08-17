@@ -190,6 +190,17 @@ def vacuum_history(path: Path | None = None) -> None:
             except Exception:
                 logger.exception("Failed removing empty partition %s", d)
 
+
+def run_backups() -> None:
+    """Invoke the backup manager to archive checkpoints and logs."""
+    try:
+        from core.backup_manager import BackupManager
+
+        BackupManager().run()
+        logger.info("Backup manager completed")
+    except Exception:
+        logger.exception("Backup manager failed")
+
 def start_scheduler() -> None:
     """Start background scheduler based on configuration."""
     global _started
@@ -212,6 +223,8 @@ def start_scheduler() -> None:
         jobs.append(("vacuum_history", vacuum_history))
     if s_cfg.get("diagnostics", True):
         jobs.append(("diagnostics", run_diagnostics))
+    if s_cfg.get("backups", True):
+        jobs.append(("backups", run_backups))
     if jobs:
         _schedule_jobs(jobs)
     _started = True
@@ -226,4 +239,5 @@ __all__ = [
     "run_trade_analysis",
     "run_diagnostics",
     "vacuum_history",
+    "run_backups",
 ]
