@@ -501,12 +501,36 @@ def main(
     ]
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
+    from analysis import meta_learning
+    if cfg.get("meta_train"):
+        X_all = df[features].values.astype(np.float32)
+        y_all = (df["return"].shift(-1) > 0).astype(np.float32).values[:-1]
+        tasks = meta_learning._split_by_regime(
+            X_all[:-1], y_all, df["market_regime"].iloc[:-1]
+        )
+        state = meta_learning.meta_train_policy(
+            tasks, lambda: meta_learning._LinearModel(len(features))
+        )
+        meta_learning.save_meta_weights(state, "rl_policy")
+        return 0.0
 
     # focus training on the most recent regime
     current_regime = (
         int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
     )
     df = df[df["market_regime"] == current_regime]
+    if cfg.get("fine_tune"):
+        X_reg = torch.tensor(df[features].values, dtype=torch.float32)
+        y_reg = torch.tensor(
+            (df["return"].shift(-1) > 0).astype(float).values[:-1], dtype=torch.float32
+        )
+        dataset = TensorDataset(X_reg[:-1], y_reg)
+        state = meta_learning.load_meta_weights("rl_policy")
+        new_state, _ = meta_learning.fine_tune_model(
+            state, dataset, lambda: meta_learning._LinearModel(len(features))
+        )
+        meta_learning.save_meta_weights(new_state, "rl_policy", regime=f"regime_{current_regime}")
+        return 0.0
 
     graph_model = None
     scale_factor = compute_scale_factor()
@@ -1165,6 +1189,16 @@ if __name__ == "__main__":
         default=["return"],
         help="Objectives to optimise e.g. return risk cost",
     )
+    parser.add_argument(
+        "--meta-train",
+        action="store_true",
+        help="Run meta-training to produce meta-initialised RL policy",
+    )
+    parser.add_argument(
+        "--fine-tune",
+        action="store_true",
+        help="Fine-tune from meta weights when regime shifts",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -1188,6 +1222,10 @@ if __name__ == "__main__":
         if TIERS.get(monitor.capabilities.capability_tier(), 0) < TIERS["gpu"]:
             objs = objs[:1]
         cfg["rl_objectives"] = objs
+    if args.meta_train:
+        cfg["meta_train"] = True
+    if args.fine_tune:
+        cfg["fine_tune"] = True
     if args.tune:
         from tuning.hyperopt import tune_rl
 
