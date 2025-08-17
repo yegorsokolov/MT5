@@ -1,6 +1,5 @@
 import sys
 from pathlib import Path
-import os
 
 import types
 import importlib
@@ -11,8 +10,8 @@ import contextlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-def load_api(tmp_log):
-    os.environ['API_KEY'] = 'token'
+def load_api(tmp_log, monkeypatch):
+    monkeypatch.patch('utils.secret_manager.SecretManager.get_secret', return_value='token')
     logs = []
     logger = types.SimpleNamespace(warning=lambda msg, *a: logs.append(msg % a if a else msg))
     sys.modules['log_utils'] = types.SimpleNamespace(
@@ -59,14 +58,14 @@ class DummyProc:
     def terminate(self):
         self.terminated = True
 
-def setup_client(tmp_path):
-    api = load_api(tmp_path / "app.log")
+def setup_client(tmp_path, monkeypatch):
+    api = load_api(tmp_path / "app.log", monkeypatch)
     api.bots.clear()
     Path(api.LOG_FILE).write_text("line1\nline2\n")
     return api, TestClient(api.app)
 
-def test_health_auth(tmp_path):
-    api, client = setup_client(tmp_path)
+def test_health_auth(tmp_path, monkeypatch):
+    api, client = setup_client(tmp_path, monkeypatch)
     resp = client.get("/health")
     assert resp.status_code == 401
     resp = client.get("/health", headers={"x-api-key": "token"})
@@ -76,8 +75,8 @@ def test_health_auth(tmp_path):
     assert "line2" in data["logs"]
     assert isinstance(data["bots"], dict)
 
-def test_bot_status(tmp_path):
-    api, client = setup_client(tmp_path)
+def test_bot_status(tmp_path, monkeypatch):
+    api, client = setup_client(tmp_path, monkeypatch)
     api.bots["bot1"] = api.BotInfo(proc=DummyProc())
     resp = client.get("/bots/bot1/status", headers={"x-api-key": "token"})
     assert resp.status_code == 200
@@ -88,8 +87,8 @@ def test_bot_status(tmp_path):
     assert resp.status_code == 404
 
 
-def test_bot_logs(tmp_path):
-    api, client = setup_client(tmp_path)
+def test_bot_logs(tmp_path, monkeypatch):
+    api, client = setup_client(tmp_path, monkeypatch)
     api.bots["bot1"] = api.BotInfo(proc=DummyProc())
     resp = client.get("/bots/bot1/logs", headers={"x-api-key": "token"})
     assert resp.status_code == 200
@@ -98,8 +97,8 @@ def test_bot_logs(tmp_path):
     assert resp.status_code == 404
 
 
-def test_metrics_websocket(tmp_path):
-    api, client = setup_client(tmp_path)
+def test_metrics_websocket(tmp_path, monkeypatch):
+    api, client = setup_client(tmp_path, monkeypatch)
 
     with pytest.raises(Exception):
         with client.websocket_connect("/ws/metrics") as ws:
@@ -114,14 +113,14 @@ def test_metrics_websocket(tmp_path):
         assert data["metrics"]["sharpe"] == 1.0
 
 
-def test_metrics_endpoint(tmp_path):
-    api, client = setup_client(tmp_path)
+def test_metrics_endpoint(tmp_path, monkeypatch):
+    api, client = setup_client(tmp_path, monkeypatch)
     resp = client.get("/metrics")
     assert resp.status_code == 200
 
 
-def test_bot_restart_and_health(tmp_path):
-    api, client = setup_client(tmp_path)
+def test_bot_restart_and_health(tmp_path, monkeypatch):
+    api, client = setup_client(tmp_path, monkeypatch)
 
     class CrashProc(DummyProc):
         def __init__(self, code=1):
@@ -147,8 +146,8 @@ def test_bot_restart_and_health(tmp_path):
     assert "Bot bot1 exited with code 1" in api._logs[0]
 
 
-def test_bot_removed_on_restart_failure(tmp_path):
-    api, client = setup_client(tmp_path)
+def test_bot_removed_on_restart_failure(tmp_path, monkeypatch):
+    api, client = setup_client(tmp_path, monkeypatch)
 
     class CrashProc(DummyProc):
         def __init__(self):

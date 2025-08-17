@@ -18,9 +18,10 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import APIKeyHeader
 
 from .feature_store import FeatureStore
+from utils.secret_manager import SecretManager
 
 API_KEY_NAME = "X-API-Key"
-API_KEY = os.getenv("FEATURE_SERVICE_API_KEY", "")
+API_KEY = SecretManager().get_secret("FEATURE_SERVICE_API_KEY", "")
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 

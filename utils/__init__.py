@@ -10,8 +10,21 @@ import log_utils
 from pydantic import ValidationError
 from filelock import FileLock
 from config_schema import ConfigSchema
+from .secret_manager import SecretManager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _resolve_secrets(val):
+    """Recursively replace ``secret://`` references with actual values."""
+
+    if isinstance(val, dict):
+        return {k: _resolve_secrets(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_resolve_secrets(v) for v in val]
+    if isinstance(val, str) and val.startswith("secret://"):
+        return SecretManager().get_secret(val) or ""
+    return val
 
 
 def load_config() -> dict:
@@ -23,6 +36,9 @@ def load_config() -> dict:
         path = PROJECT_ROOT / 'config.yaml'
     with open(path, 'r') as f:
         data = yaml.safe_load(f)
+
+    data = _resolve_secrets(data)
+
     try:
         cfg = ConfigSchema(**data)
     except ValidationError as e:

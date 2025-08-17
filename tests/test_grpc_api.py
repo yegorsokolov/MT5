@@ -3,7 +3,6 @@ import types
 import importlib
 import asyncio
 from pathlib import Path
-import os
 
 import pytest
 import grpc
@@ -26,8 +25,8 @@ class DummyProc:
         self.terminated = True
 
 
-def load_grpc(tmp_log):
-    os.environ['API_KEY'] = 'token'
+def load_grpc(tmp_log, monkeypatch):
+    monkeypatch.patch('utils.secret_manager.SecretManager.get_secret', return_value='token')
     sys.modules['mlflow'] = types.SimpleNamespace()
     sys.modules['log_utils'] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
@@ -61,8 +60,8 @@ async def start_server(grpc_mod):
 
 
 @pytest.mark.asyncio
-async def test_list_and_update(tmp_path):
-    ra, grpc_mod, updates = load_grpc(tmp_path / 'app.log')
+async def test_list_and_update(tmp_path, monkeypatch):
+    ra, grpc_mod, updates = load_grpc(tmp_path / 'app.log', monkeypatch)
     server, port = await start_server(grpc_mod)
 
     cert_dir = Path(__file__).resolve().parents[1] / 'certs'
@@ -90,8 +89,8 @@ async def test_list_and_update(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_start_stop(tmp_path):
-    ra, grpc_mod, _ = load_grpc(tmp_path / 'app.log')
+async def test_start_stop(tmp_path, monkeypatch):
+    ra, grpc_mod, _ = load_grpc(tmp_path / 'app.log', monkeypatch)
     server, port = await start_server(grpc_mod)
 
     cert_dir = Path(__file__).resolve().parents[1] / 'certs'
@@ -112,8 +111,8 @@ async def test_start_stop(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_status_and_logs(tmp_path):
-    ra, grpc_mod, _ = load_grpc(tmp_path / 'app.log')
+async def test_status_and_logs(tmp_path, monkeypatch):
+    ra, grpc_mod, _ = load_grpc(tmp_path / 'app.log', monkeypatch)
     server, port = await start_server(grpc_mod)
 
     cert_dir = Path(__file__).resolve().parents[1] / 'certs'
@@ -150,7 +149,7 @@ async def test_status_and_logs(tmp_path):
 @pytest.mark.asyncio
 async def test_get_risk_status(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_PORTFOLIO_DRAWDOWN", "100")
-    ra, grpc_mod, _ = load_grpc(tmp_path / "app.log")
+    ra, grpc_mod, _ = load_grpc(tmp_path / "app.log", monkeypatch)
     import risk_manager as rm_mod
     rm_mod.risk_manager.reset()
     rm_mod.risk_manager.update("b1", -60)
