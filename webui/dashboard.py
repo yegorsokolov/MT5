@@ -73,7 +73,7 @@ def main() -> None:
         st.info("Enter API key to connect")
         return
 
-    tabs = st.tabs(["Overview", "Performance", "Config Explorer", "Logs"])
+    tabs = st.tabs(["Overview", "Performance", "Config Explorer", "Logs", "Traces"])
 
     # Overview tab
     with tabs[0]:
@@ -162,6 +162,31 @@ def main() -> None:
         logs = st.session_state.get("logs", fetch_json("/logs", api_key))
         st.text_area("Recent Logs", logs.get("logs", ""), height=300)
         st.download_button("Download Logs", logs.get("logs", ""), file_name="system.log")
+
+    # Traces tab
+    with tabs[4]:
+        jaeger = os.getenv("JAEGER_QUERY_URL", "http://localhost:16686")
+        service = st.text_input("Service", "mt5")
+        if st.button("Load Traces"):
+            try:
+                resp = requests.get(f"{jaeger}/api/traces", params={"service": service, "limit": 20})
+                resp.raise_for_status()
+                st.session_state["trace_data"] = resp.json().get("data", [])
+            except Exception:
+                st.session_state["trace_data"] = []
+        traces = st.session_state.get("trace_data", [])
+        for tr in traces:
+            tid = tr.get("traceID")
+            st.write(f"Trace {tid}")
+            if st.button("Show Logs", key=f"tlog-{tid}"):
+                log_path = Path("logs/app.log")
+                if log_path.exists():
+                    lines = [
+                        line for line in log_path.read_text().splitlines() if tid and tid in line
+                    ]
+                    st.text("\n".join(lines))
+                else:
+                    st.write("No logs available")
 
 
 if __name__ == "__main__":

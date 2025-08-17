@@ -38,3 +38,8 @@ grpcio-tools==1.74.0
 backtrader==1.9.78.123
 freqtrade==2025.6
 PyWavelets==1.6.0
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-exporter-jaeger==1.21.0
+opentelemetry-exporter-prometheus==0.41b0
+opentelemetry-instrumentation-logging==0.41b0
