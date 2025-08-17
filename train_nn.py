@@ -26,6 +26,7 @@ from models import model_store
 from models.distillation import distill_teacher_student
 from models.build_model import build_model, compute_scale_factor
 from models.quantize import apply_quantization
+from models.contrastive_encoder import initialize_model_with_contrastive
 from analysis.feature_selector import select_features
 from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 
@@ -480,7 +481,7 @@ def main(
                 num_symbols=num_symbols,
                 num_regimes=num_regimes,
             ).to(device)
-
+        model = initialize_model_with_contrastive(model)
         def _watch_model() -> None:
             async def _watch() -> None:
                 q = monitor.subscribe()
