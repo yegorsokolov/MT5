@@ -44,6 +44,58 @@ sys.modules.setdefault("requests", requests_stub)
 duckdb_stub = types.ModuleType("duckdb")
 sys.modules.setdefault("duckdb", duckdb_stub)
 
+# Stub analytics.metrics_store used in resource_monitor
+analytics_stub = types.ModuleType("analytics")
+metrics_store_stub = types.ModuleType("analytics.metrics_store")
+
+def _record_metric(name, value):
+    return None
+
+metrics_store_stub.record_metric = _record_metric
+analytics_stub.metrics_store = metrics_store_stub
+sys.modules.setdefault("analytics", analytics_stub)
+sys.modules.setdefault("analytics.metrics_store", metrics_store_stub)
+
+# Stub analysis modules used in features
+analysis_stub = types.ModuleType("analysis")
+garch_stub = types.ModuleType("analysis.garch_vol")
+
+def garch_volatility(*args, **kwargs):
+    return pd.Series([0])
+
+garch_stub.garch_volatility = garch_volatility
+kalman_stub = types.ModuleType("analysis.kalman_filter")
+
+def kalman_smooth(*args, **kwargs):
+    return pd.Series([0])
+
+kalman_stub.kalman_smooth = kalman_smooth
+freq_stub = types.ModuleType("analysis.frequency_features")
+
+def rolling_fft_features(*args, **kwargs):
+    return pd.DataFrame()
+
+def rolling_wavelet_features(*args, **kwargs):
+    return pd.DataFrame()
+
+freq_stub.rolling_fft_features = rolling_fft_features
+freq_stub.rolling_wavelet_features = rolling_wavelet_features
+session_stub = types.ModuleType("analysis.session_features")
+
+def add_session_features(df):
+    return df
+
+session_stub.add_session_features = add_session_features
+analysis_stub.garch_vol = garch_stub
+analysis_stub.kalman_filter = kalman_stub
+analysis_stub.frequency_features = freq_stub
+analysis_stub.session_features = session_stub
+sys.modules.setdefault("analysis", analysis_stub)
+sys.modules.setdefault("analysis.garch_vol", garch_stub)
+sys.modules.setdefault("analysis.kalman_filter", kalman_stub)
+sys.modules.setdefault("analysis.frequency_features", freq_stub)
+sys.modules.setdefault("analysis.session_features", session_stub)
+
 spec = importlib.util.spec_from_file_location(
     "utils.resource_monitor", utils_path / "resource_monitor.py"
 )
@@ -70,12 +122,24 @@ def _install_stubs():
     polars_stub = types.ModuleType("polars")
     dask_stub = types.ModuleType("dask")
     dask_df_stub = types.ModuleType("dask.dataframe")
-    for mod in (polars_stub, dask_df_stub):
-        for attr in ["DataFrame", "Series"]:
-            setattr(mod, attr, getattr(pd, attr))
+    cudf_stub = types.ModuleType("cudf")
+    for mod in (polars_stub, dask_df_stub, cudf_stub):
+        for attr in [
+            "DataFrame",
+            "Series",
+            "concat",
+            "read_csv",
+            "read_parquet",
+            "merge_asof",
+            "to_numeric",
+            "to_datetime",
+        ]:
+            if hasattr(pd, attr):
+                setattr(mod, attr, getattr(pd, attr))
     sys.modules.setdefault("polars", polars_stub)
     sys.modules.setdefault("dask", dask_stub)
     sys.modules.setdefault("dask.dataframe", dask_df_stub)
+    sys.modules.setdefault("cudf", cudf_stub)
 
 
 @pytest.fixture(autouse=True)
@@ -110,6 +174,15 @@ def test_backend_selection(monkeypatch):
     )
     mod = get_dataframe_module()
     assert mod.__name__ == "dask.dataframe"
+
+    # Switch to cuDF when GPU is available
+    monkeypatch.setattr(
+        monitor,
+        "capabilities",
+        ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=True, gpu_count=1),
+    )
+    mod = get_dataframe_module()
+    assert mod.__name__ == "cudf"
 
 
 def test_feature_consistency_across_backends(monkeypatch):
@@ -154,7 +227,28 @@ def test_feature_consistency_across_backends(monkeypatch):
     rsi_dd = features.compute_rsi(df_dd["close"], period=2).fillna(0)
     sig_dd = features.ma_cross_signal(df_dd, "ma_10", "ma_30")
 
+    # cuDF backend
+    monkeypatch.setattr(
+        monitor,
+        "capabilities",
+        ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=True, gpu_count=1),
+    )
+    cd_mod = get_dataframe_module()
+    df_cd = cd_mod.DataFrame({
+        "close": [1, 2, 3, 4, 5],
+        "ma_10": [1, 2, 3, 4, 5],
+        "ma_30": [2, 2, 2, 2, 2],
+    })
+    rsi_cd = features.compute_rsi(df_cd["close"], period=2).fillna(0)
+    sig_cd = features.ma_cross_signal(df_cd, "ma_10", "ma_30")
+    rsi_cd_vals = (
+        rsi_cd.to_pandas().values if hasattr(rsi_cd, "to_pandas") else rsi_cd.values
+    )
+    sig_cd_df = sig_cd.to_pandas() if hasattr(sig_cd, "to_pandas") else sig_cd
+
     assert np.allclose(rsi_base.values, rsi_pl.values)
     assert np.allclose(rsi_base.values, rsi_dd.values)
+    assert np.allclose(rsi_base.values, rsi_cd_vals)
     assert sig_base.equals(sig_pl)
     assert sig_base.equals(sig_dd)
+    assert sig_base.equals(sig_cd_df)

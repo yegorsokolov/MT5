@@ -32,6 +32,8 @@ except Exception:  # pragma: no cover - numba optional
     nb_rolling_mean = nb_rolling_std = nb_atr = nb_rsi = None
 
 pd = get_dataframe_module()
+import pandas as _pd
+IS_CUDF = pd.__name__ == "cudf"
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -51,6 +53,15 @@ except Exception:  # pragma: no cover - plugins optional
 logger = logging.getLogger(__name__)
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+
+
+def _merge_asof(left: pd.DataFrame, right: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    if hasattr(pd, "merge_asof"):
+        return pd.merge_asof(left, right, **kwargs)
+    left_pd = left.to_pandas() if IS_CUDF else left
+    right_pd = right.to_pandas() if IS_CUDF else right
+    merged = _pd.merge_asof(left_pd, right_pd, **kwargs)
+    return pd.DataFrame(merged) if IS_CUDF else merged
 
 
 def _has_resources(obj: object) -> bool:
@@ -81,11 +92,12 @@ def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """
 
     df = df.copy()
+    to_numeric = getattr(pd, "to_numeric", _pd.to_numeric)
     for col in df.select_dtypes(include=["int", "float"]).columns:
-        if pd.api.types.is_float_dtype(df[col]):
-            df[col] = pd.to_numeric(df[col], downcast="float")
+        if np.issubdtype(df[col].dtype, np.floating):
+            df[col] = to_numeric(df[col], downcast="float")
         else:
-            df[col] = pd.to_numeric(df[col], downcast="integer")
+            df[col] = to_numeric(df[col], downcast="integer")
     return df
 
 
@@ -132,7 +144,7 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
                     "vol": f"{name}_vol",
                 }
             )
-            df = pd.merge_asof(
+            df = _merge_asof(
                 df,
                 idx_df,
                 left_on="Timestamp",
@@ -179,14 +191,14 @@ def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True)
     df = df.sort_values("Timestamp")
 
-    fwd = pd.merge_asof(
+    fwd = _merge_asof(
         df[["Timestamp"]],
         events_df[["date"]].rename(columns={"date": "event_time"}),
         left_on="Timestamp",
         right_on="event_time",
         direction="forward",
     )
-    bwd = pd.merge_asof(
+    bwd = _merge_asof(
         df[["Timestamp"]],
         events_df[["date"]].rename(columns={"date": "event_time"}),
         left_on="Timestamp",
@@ -249,7 +261,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
                 news_df = news_df.sort_values("Timestamp")[keep_cols]
                 df["Timestamp"] = pd.to_datetime(df["Timestamp"])
                 df = df.sort_values("Timestamp")
-                df = pd.merge_asof(df, news_df, on="Timestamp", direction="backward")
+                df = _merge_asof(df, news_df, on="Timestamp", direction="backward")
                 df["news_sentiment"] = df["sentiment"].fillna(0.0)
                 if "summary" in news_df.columns:
                     df["news_summary"] = df["summary"].fillna("")
@@ -272,7 +284,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
                 news_df = news_df.sort_values("Timestamp")[["Timestamp", "sentiment"]]
                 df["Timestamp"] = pd.to_datetime(df["Timestamp"])
                 df = df.sort_values("Timestamp")
-                df = pd.merge_asof(df, news_df, on="Timestamp", direction="backward")
+                df = _merge_asof(df, news_df, on="Timestamp", direction="backward")
                 df["news_sentiment"] = df["sentiment"].fillna(0.0)
                 df["news_summary"] = ""
                 df = df.drop(columns=["sentiment"], errors="ignore")
@@ -297,7 +309,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     df["Timestamp"] = pd.to_datetime(df["Timestamp"])
     news = news.sort_values("Timestamp")
     df = df.sort_values("Timestamp")
-    df = pd.merge_asof(df, news, on="Timestamp", direction="backward")
+    df = _merge_asof(df, news, on="Timestamp", direction="backward")
     df["news_sentiment"] = df["sentiment"].fillna(0.0)
     if "summary" in news.columns:
         df["news_summary"] = df["summary"].fillna("")
@@ -722,7 +734,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         if not macro_df.empty:
             macro_df = macro_df.sort_values("Date").rename(columns={"Date": "macro_date"})
             df = df.sort_values("Timestamp")
-            df = pd.merge_asof(
+            df = _merge_asof(
                 df,
                 macro_df,
                 left_on="Timestamp",
