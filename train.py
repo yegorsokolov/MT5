@@ -47,6 +47,11 @@ from state_manager import save_checkpoint, load_latest_checkpoint
 from analysis.regime_detection import periodic_reclassification
 from models import model_store
 from analysis.feature_selector import select_features
+from analysis.prob_calibration import (
+    ProbabilityCalibrator,
+    CalibratedModel,
+    log_reliability,
+)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -327,6 +332,8 @@ def main(
     all_true: list[int] = []
     final_pipe: Pipeline | None = None
     X_train_final: pd.DataFrame | None = None
+    last_val_y: np.ndarray | None = None
+    last_val_probs: np.ndarray | None = None
     start_fold = 0
     ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
     if ckpt:
@@ -398,6 +405,7 @@ def main(
 
         preds = pipe.predict(X_val)
         probs = pipe.predict_proba(X_val)[:, 1]
+        last_val_y, last_val_probs = y_val, probs
         conf = np.abs(probs - 0.5) * 2
         sizer = PositionSizer(capital=cfg.get("eval_capital", 1000.0))
         for p, c in zip(probs, conf):
@@ -423,6 +431,23 @@ def main(
         if fold == tscv.n_splits - 1:
             final_pipe = pipe
             X_train_final = X_train
+
+    calibrator = None
+    calib_method = cfg.get("calibration")
+    if calib_method and final_pipe is not None:
+        calibrator = ProbabilityCalibrator(method=calib_method).fit(
+            last_val_y, last_val_probs
+        )
+        calibrated_probs = calibrator.predict(last_val_probs)
+        log_reliability(
+            last_val_y,
+            last_val_probs,
+            calibrated_probs,
+            root / "reports" / "calibration",
+            "lgbm",
+            calib_method,
+        )
+        final_pipe = CalibratedModel(final_pipe, calibrator)
 
     aggregate_report = classification_report(all_true, all_preds, output_dict=True)
     logger.info("\n%s", classification_report(all_true, all_preds))
