@@ -52,6 +52,7 @@ from analysis.prob_calibration import (
     CalibratedModel,
     log_reliability,
 )
+from analysis.active_learning import ActiveLearningQueue, merge_labels
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -519,6 +520,19 @@ def main(
             sample = final_pipe.named_steps["scaler"].transform(sample)
         clf = final_pipe.named_steps.get("clf", final_pipe)
         export_lightgbm(clf, sample)
+
+    # Active learning: queue uncertain samples and integrate new labels
+    try:
+        if final_pipe is not None:
+            al_queue = ActiveLearningQueue()
+            probs = final_pipe.predict_proba(X)
+            al_queue.push(X.index, probs, k=cfg.get("al_queue_size", 10))
+            new_labels = al_queue.pop_labeled()
+            if not new_labels.empty and "tb_label" in df.columns:
+                df = merge_labels(df, new_labels, "tb_label")
+                save_history_parquet(df, root / "data" / "history.parquet")
+    except Exception as e:  # pragma: no cover - fail safe
+        logger.warning("Active learning step failed: %s", e)
 
     return float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
 
