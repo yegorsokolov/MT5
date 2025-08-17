@@ -10,9 +10,11 @@ gradually shifts toward the best-performing algorithm in the current regime.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Tuple
 
 import numpy as np
+import pandas as pd
 
 FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
@@ -35,6 +37,7 @@ class StrategyRouter:
 
     algorithms: Dict[str, Algorithm] = field(default_factory=dict)
     alpha: float = 0.1
+    scoreboard_path: Path | str = Path("reports/scoreboard.parquet")
 
     def __post_init__(self) -> None:
         if not self.algorithms:
@@ -54,6 +57,8 @@ class StrategyRouter:
             name: np.zeros((self.dim, 1)) for name in self.algorithms
         }
         self.history: List[Tuple[FeatureDict, float, str]] = []
+        self.scoreboard_path = Path(self.scoreboard_path)
+        self.scoreboard = self._load_scoreboard()
 
     # Registration -----------------------------------------------------
     def register(self, name: str, algorithm: Algorithm) -> None:
@@ -66,6 +71,7 @@ class StrategyRouter:
     def select(self, features: FeatureDict) -> str:
         """Return the algorithm name with the highest UCB score."""
         x = _feature_vector(features)
+        regime = features.get("regime")
         best_name = None
         best_score = -np.inf
         for name in self.algorithms:
@@ -73,7 +79,7 @@ class StrategyRouter:
             theta = A_inv @ self.b[name]
             mean = float((theta.T @ x).item())
             bonus = float(self.alpha * np.sqrt((x.T @ A_inv @ x).item()))
-            score = mean + bonus
+            score = mean + bonus + self._scoreboard_weight(regime, name)
             if score > best_score:
                 best_score = score
                 best_name = name
@@ -93,11 +99,40 @@ class StrategyRouter:
         self.A[algorithm] += x @ x.T
         self.b[algorithm] += reward * x
         self.history.append((features, reward, algorithm))
+        self._update_scoreboard(features.get("regime"), algorithm)
 
     # Convenience ------------------------------------------------------
     def log_reward(self, features: FeatureDict, reward: float, algorithm: str) -> None:
         """Alias for :meth:`update` for semantic clarity."""
         self.update(features, reward, algorithm)
+
+    # Scoreboard -------------------------------------------------------
+    def _load_scoreboard(self) -> pd.DataFrame:
+        if self.scoreboard_path.exists():
+            return pd.read_parquet(self.scoreboard_path)
+        return pd.DataFrame(columns=["sharpe", "drawdown"], index=pd.MultiIndex.from_tuples([], names=["regime", "algorithm"]))
+
+    def _scoreboard_weight(self, regime: float | None, algorithm: str) -> float:
+        if regime is None or self.scoreboard.empty:
+            return 0.0
+        try:
+            return float(self.scoreboard.loc[(regime, algorithm), "sharpe"])
+        except KeyError:
+            return 0.0
+
+    def _update_scoreboard(self, regime: float | None, algorithm: str) -> None:
+        if regime is None:
+            return
+        rewards = [r for f, r, a in self.history if a == algorithm and f.get("regime") == regime]
+        if len(rewards) < 2:
+            return
+        arr = np.asarray(rewards)
+        sharpe = float(arr.mean() / (arr.std() + 1e-9))
+        cumulative = (1 + arr).cumprod()
+        drawdown = float((np.maximum.accumulate(cumulative) - cumulative).max())
+        self.scoreboard.loc[(regime, algorithm), ["sharpe", "drawdown"]] = [sharpe, drawdown]
+        self.scoreboard_path.parent.mkdir(parents=True, exist_ok=True)
+        self.scoreboard.to_parquet(self.scoreboard_path)
 
 
 __all__ = ["StrategyRouter"]
