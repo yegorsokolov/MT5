@@ -93,13 +93,27 @@ class StrategyRouter:
         return name, action
 
     # Learning ---------------------------------------------------------
-    def update(self, features: FeatureDict, reward: float, algorithm: str) -> None:
-        """Update bandit parameters with observed ``reward``."""
+    def update(
+        self,
+        features: FeatureDict,
+        reward: float,
+        algorithm: str,
+        *,
+        smooth: float = 0.1,
+    ) -> None:
+        """Update bandit parameters with observed ``reward``.
+
+        ``smooth`` controls the exponential smoothing factor applied when
+        updating risk-adjusted scoreboard metrics.  A value of ``0`` keeps the
+        previous offline metric, while ``1`` replaces it entirely with the
+        latest observation.
+        """
+
         x = _feature_vector(features)
         self.A[algorithm] += x @ x.T
         self.b[algorithm] += reward * x
         self.history.append((features, reward, algorithm))
-        self._update_scoreboard(features.get("regime"), algorithm)
+        self._update_scoreboard(features.get("regime"), algorithm, smooth)
 
     # Convenience ------------------------------------------------------
     def log_reward(self, features: FeatureDict, reward: float, algorithm: str) -> None:
@@ -120,19 +134,36 @@ class StrategyRouter:
         except KeyError:
             return 0.0
 
-    def _update_scoreboard(self, regime: float | None, algorithm: str) -> None:
+    def _update_scoreboard(self, regime: float | None, algorithm: str, smooth: float) -> None:
+        """Blend offline metrics with live PnL using exponential smoothing."""
         if regime is None:
             return
-        rewards = [r for f, r, a in self.history if a == algorithm and f.get("regime") == regime]
-        if len(rewards) < 2:
+        rewards = [
+            r
+            for f, r, a in self.history
+            if a == algorithm and f.get("regime") == regime
+        ]
+        if not rewards:
             return
         arr = np.asarray(rewards)
-        sharpe = float(arr.mean() / (arr.std() + 1e-9))
+        live_sharpe = float(arr.mean() / (arr.std() + 1e-9))
+        prev = 0.0
+        try:
+            prev = float(self.scoreboard.loc[(regime, algorithm), "sharpe"])
+        except KeyError:
+            pass
+        sharpe = smooth * live_sharpe + (1.0 - smooth) * prev
         cumulative = (1 + arr).cumprod()
         drawdown = float((np.maximum.accumulate(cumulative) - cumulative).max())
-        self.scoreboard.loc[(regime, algorithm), ["sharpe", "drawdown"]] = [sharpe, drawdown]
-        self.scoreboard_path.parent.mkdir(parents=True, exist_ok=True)
-        self.scoreboard.to_parquet(self.scoreboard_path)
+        self.scoreboard.loc[(regime, algorithm), ["sharpe", "drawdown"]] = [
+            sharpe,
+            drawdown,
+        ]
+        try:
+            self.scoreboard_path.parent.mkdir(parents=True, exist_ok=True)
+            self.scoreboard.to_parquet(self.scoreboard_path)
+        except Exception:
+            pass
 
 
 __all__ = ["StrategyRouter"]
