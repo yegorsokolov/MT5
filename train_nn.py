@@ -6,6 +6,7 @@ from log_utils import setup_logging, log_exceptions
 
 from pathlib import Path
 import random
+from typing import Callable, TypeVar, Any
 
 import joblib
 import math
@@ -48,6 +49,7 @@ from data.features import (
 )
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+T = TypeVar("T")
 from data.labels import triple_barrier
 import argparse
 from ray_utils import (
@@ -82,6 +84,55 @@ def _load_donor_state_dict(symbol: str):
             if isinstance(state, dict):
                 return state
     return None
+
+
+def batch_size_backoff(cfg: dict, train_step: Callable[[int, int], T]) -> T:
+    """Run ``train_step`` with automatic batch size backoff.
+
+    The ``train_step`` callable is invoked with ``(batch_size, eval_batch_size)``
+    and should raise ``RuntimeError`` or ``torch.cuda.OutOfMemoryError`` on
+    memory exhaustion. Batch sizes are halved on OOM until training succeeds or
+    ``min_batch_size`` is reached.
+    """
+
+    mem_gb = monitor.capabilities.memory_gb
+    batch_size = cfg.get("batch_size") or int(mem_gb * 64)
+    eval_batch_size = cfg.get("eval_batch_size") or batch_size
+    min_batch_size = cfg.get("min_batch_size", 8)
+    while True:
+        try:
+            rss_mb = psutil.Process().memory_info().rss / (1024**2)
+            logger.info(
+                "Attempting batch_size=%s eval_batch_size=%s rss=%.1fMB mem_gb=%.1f",
+                batch_size,
+                eval_batch_size,
+                rss_mb,
+                mem_gb,
+            )
+            cfg["batch_size"] = batch_size
+            cfg["eval_batch_size"] = eval_batch_size
+            result = train_step(batch_size, eval_batch_size)
+            rss_mb = psutil.Process().memory_info().rss / (1024**2)
+            logger.info(
+                "Training succeeded with batch_size=%s rss=%.1fMB",
+                batch_size,
+                rss_mb,
+            )
+            return result
+        except (RuntimeError, torch.cuda.OutOfMemoryError) as exc:
+            msg = str(exc).lower()
+            if "out of memory" in msg and batch_size > min_batch_size:
+                rss_mb = psutil.Process().memory_info().rss / (1024**2)
+                batch_size = max(batch_size // 2, min_batch_size)
+                eval_batch_size = max(eval_batch_size // 2, 1)
+                logger.warning(
+                    "OOM encountered; reducing batch size to %s (rss=%.1fMB)",
+                    batch_size,
+                    rss_mb,
+                )
+                torch.cuda.empty_cache()
+            else:
+                raise
 
 
 class PositionalEncoding(torch.nn.Module):
@@ -331,14 +382,19 @@ def main(
             if "SymbolCode" in df.columns
             else [0]
         )
+        workers = cfg.get("num_workers") or monitor.capabilities.cpus
+
+        def _preflight(bs: int, _ebs: int) -> None:
+            torch.empty((bs, seq_len, len(features)), dtype=torch.float32, device=device)
+
+        batch_size_backoff(cfg, _preflight)
+        batch_size = cfg["batch_size"]
+        eval_batch_size = cfg["eval_batch_size"]
         train_loaders: dict[int, DataLoader] = {}
         val_loaders: dict[int, DataLoader] = {}
         test_loaders: dict[int, DataLoader] = {}
         train_samplers: dict[int, DistributedSampler | None] = {}
         X_sample = None
-        batch_size = cfg.get("batch_size", 128)
-        eval_batch_size = cfg.get("eval_batch_size", 256)
-        workers = cfg.get("num_workers") or monitor.capabilities.cpus
         for code in symbol_codes:
             train_sym = (
                 train_df[train_df["SymbolCode"] == code]
