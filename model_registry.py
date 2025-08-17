@@ -39,6 +39,14 @@ ResourceCapabilities = _rm.ResourceCapabilities
 ResourceMonitor = _rm.ResourceMonitor
 monitor = _rm.monitor
 
+from telemetry import get_tracer, get_meter
+
+tracer = get_tracer(__name__)
+meter = get_meter(__name__)
+_refresh_counter = meter.create_counter(
+    "model_refreshes", description="Number of model refresh operations"
+)
+
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 
 
@@ -110,21 +118,23 @@ class ModelRegistry:
             self._task = loop.create_task(self._watch(queue))
 
     def _pick_models(self) -> None:
-        caps = self.monitor.capabilities
-        for task, variants in MODEL_REGISTRY.items():
-            baseline = variants[-1]
-            chosen = baseline
-            for variant in variants:
-                if variant.is_supported(caps):
-                    chosen = variant
-                    break
-            prev = self.selected.get(task)
-            if prev != chosen:
-                if chosen is baseline:
-                    self.logger.warning("Falling back to baseline for %s", task)
-                elif prev and prev.name == baseline.name:
-                    self.logger.info("Restored %s for %s", chosen.name, task)
-            self.selected[task] = chosen
+        with tracer.start_as_current_span("pick_models"):
+            caps = self.monitor.capabilities
+            for task, variants in MODEL_REGISTRY.items():
+                baseline = variants[-1]
+                chosen = baseline
+                for variant in variants:
+                    if variant.is_supported(caps):
+                        chosen = variant
+                        break
+                prev = self.selected.get(task)
+                if prev != chosen:
+                    if chosen is baseline:
+                        self.logger.warning("Falling back to baseline for %s", task)
+                    elif prev and prev.name == baseline.name:
+                        self.logger.info("Restored %s for %s", chosen.name, task)
+                self.selected[task] = chosen
+            _refresh_counter.add(1)
 
     async def _watch(self, queue: asyncio.Queue[str]) -> None:
         """Re-evaluate models when capability tier increases."""
@@ -142,7 +152,8 @@ class ModelRegistry:
 
     def refresh(self) -> None:
         """Manually re-run model selection using current capabilities."""
-        self._pick_models()
+        with tracer.start_as_current_span("refresh_models"):
+            self._pick_models()
 
     def report_failure(self, task: str) -> None:
         """Report that the active model for ``task`` has crashed.
@@ -172,8 +183,8 @@ class ModelRegistry:
 
     def predict_mixture(self, history: Any, regime: float) -> float:
         """Predict using the mixture-of-experts gating network."""
-
-        return self.moe.predict(history, regime, self.monitor.capabilities)
+        with tracer.start_as_current_span("predict_mixture"):
+            return self.moe.predict(history, regime, self.monitor.capabilities)
 
     def predict(self, task: str, features: Any, loader) -> Any:
         """Return predictions for ``task`` using local or remote models.
@@ -188,14 +199,15 @@ class ModelRegistry:
             Callable taking a model name and returning the local model instance.
         """
         model_name = self.get(task)
-        if self.requires_remote(task):
-            from models.remote_client import predict_remote
+        with tracer.start_as_current_span("predict"):
+            if self.requires_remote(task):
+                from models.remote_client import predict_remote
 
-            return predict_remote(model_name, features)
-        model = loader(model_name)
-        if hasattr(model, "predict_proba"):
-            return model.predict_proba(features)
-        return model.predict(features)
+                return predict_remote(model_name, features)
+            model = loader(model_name)
+            if hasattr(model, "predict_proba"):
+                return model.predict_proba(features)
+            return model.predict(features)
 
     # ------------------------------------------------------------------
     def promote(self, task: str, model_name: str) -> None:

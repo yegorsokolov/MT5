@@ -43,6 +43,11 @@ class JsonFormatter(logging.Formatter):
             "name": record.name,
             "message": record.getMessage(),
         }
+        trace_id = getattr(record, "otelTraceID", None)
+        span_id = getattr(record, "otelSpanID", None)
+        if trace_id:
+            log_record["trace_id"] = trace_id
+            log_record["span_id"] = span_id
         if record.exc_info:
             log_record["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_record)
