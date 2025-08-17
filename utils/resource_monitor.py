@@ -152,6 +152,12 @@ class ResourceMonitor:
                 self.capabilities,
                 self.capability_tier,
             )
+            try:
+                from risk_manager import risk_manager
+
+                risk_manager.rebalance_budgets()
+            except Exception:
+                self.logger.debug("Risk budget rebalance failed", exc_info=True)
 
     async def _watch_usage(self) -> None:
         proc = psutil.Process()
