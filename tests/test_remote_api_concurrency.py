@@ -1,6 +1,5 @@
 import sys
 from pathlib import Path
-import os
 import types
 import importlib
 import contextlib
@@ -11,8 +10,8 @@ from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-def load_api(tmp_log):
-    os.environ['API_KEY'] = 'token'
+def load_api(tmp_log, monkeypatch):
+    monkeypatch.patch('utils.secret_manager.SecretManager.get_secret', return_value='token')
     logs = []
     logger = types.SimpleNamespace(warning=lambda msg, *a: logs.append(msg % a if a else msg))
     sys.modules['log_utils'] = types.SimpleNamespace(
@@ -59,8 +58,8 @@ class DummyProc:
     def terminate(self):
         self.terminated = True
 
-def test_concurrent_start(tmp_path):
-    api = load_api(tmp_path / "app.log")
+def test_concurrent_start(tmp_path, monkeypatch):
+    api = load_api(tmp_path / "app.log", monkeypatch)
     api.bots.clear()
 
     count = 0
@@ -85,8 +84,8 @@ def test_concurrent_start(tmp_path):
     assert count == 1
     assert list(api.bots.keys()) == ["bot1"]
 
-def test_concurrent_stop(tmp_path):
-    api = load_api(tmp_path / "app.log")
+def test_concurrent_stop(tmp_path, monkeypatch):
+    api = load_api(tmp_path / "app.log", monkeypatch)
     api.bots.clear()
     api.bots["bot1"] = api.BotInfo(proc=DummyProc())
 
@@ -104,8 +103,8 @@ def test_concurrent_stop(tmp_path):
     assert any(r == 404 for r in res)
     assert "bot1" not in api.bots
 
-def test_status_during_stop(tmp_path):
-    api = load_api(tmp_path / "app.log")
+def test_status_during_stop(tmp_path, monkeypatch):
+    api = load_api(tmp_path / "app.log", monkeypatch)
     api.bots.clear()
     api.bots["bot1"] = api.BotInfo(proc=DummyProc())
 

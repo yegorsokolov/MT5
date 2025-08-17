@@ -10,12 +10,12 @@ pred_cache_policy: lru
 log_forward:
   url: ""
 alerting:
-  slack_webhook: ""
+  slack_webhook: "secret://SLACK_WEBHOOK"
   smtp:
     host: ""
     port: 587
-    username: ""
-    password: ""
+    username: "secret://SMTP_USERNAME"
+    password: "secret://SMTP_PASSWORD"
     from: ""
     to: ""
 data_urls:
