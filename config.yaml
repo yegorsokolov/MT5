@@ -148,6 +148,11 @@ inner_lr: 0.01
 inner_steps: 1
 finetune_steps: 3
 
+# training batch sizes
+batch_size: null
+eval_batch_size: null
+min_batch_size: 8
+
 # mixed precision training
 use_amp: false
 
