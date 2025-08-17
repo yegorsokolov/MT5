@@ -20,6 +20,10 @@ try:  # optional torch dependency
     from .multi_head import MultiHeadTransformer
 except Exception:  # pragma: no cover - torch may be missing
     MultiHeadTransformer = None
+try:  # optional torch dependency
+    from .tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
+except Exception:  # pragma: no cover - torch may be missing
+    TemporalFusionTransformer = TFTConfig = QuantileLoss = None
 from . import conformal
 
 __all__ = [
@@ -29,5 +33,8 @@ __all__ = [
     "MetaLearner",
     "PriceDistributionModel",
     "MultiHeadTransformer",
+    "TemporalFusionTransformer",
+    "TFTConfig",
+    "QuantileLoss",
     "conformal",
 ]

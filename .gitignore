@@ -27,5 +27,6 @@ models/*
 !models/conformal.py
 !models/quantize.py
 !models/hot_reload.py
+!models/tft.py
 __pycache__/
 logs/
