@@ -4,9 +4,9 @@ from __future__ import annotations
 
 This module implements a lightweight LinUCB contextual bandit that chooses
 between different trading algorithms based on regime features such as market
-volatility and trend strength.  After each trade the realised profit and loss
-is fed back to the bandit so allocation gradually shifts toward the
-best-performing algorithm in the current regime.
+volatility, trend strength and a numeric market regime indicator.  After each
+trade the realised profit and loss is fed back to the bandit so allocation
+gradually shifts toward the best-performing algorithm in the current regime.
 """
 
 from dataclasses import dataclass, field
@@ -19,9 +19,13 @@ Algorithm = Callable[[FeatureDict], float]
 
 
 def _feature_vector(features: FeatureDict) -> np.ndarray:
-    """Return a 2x1 feature vector of volatility and trend strength."""
+    """Return a 3x1 feature vector of volatility, trend strength and regime."""
     return np.array(
-        [features.get("volatility", 0.0), features.get("trend_strength", 0.0)]
+        [
+            features.get("volatility", 0.0),
+            features.get("trend_strength", 0.0),
+            features.get("regime", 0.0),
+        ]
     ).reshape(-1, 1)
 
 
@@ -41,7 +45,8 @@ class StrategyRouter:
                 "trend_following": lambda _: 1.0,
                 "rl_policy": lambda _: 0.0,
             }
-        self.dim = 2
+        # include regime dimension alongside volatility and trend strength
+        self.dim = 3
         self.A: Dict[str, np.ndarray] = {
             name: np.identity(self.dim) for name in self.algorithms
         }
