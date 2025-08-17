@@ -9,6 +9,7 @@ import asyncio
 import joblib
 import pandas as pd
 import math
+import torch
 from sklearn.metrics import classification_report
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import TimeSeriesSplit
@@ -234,6 +235,37 @@ def main(
     feat_path.write_text(json.dumps(features))
 
     X = df[features]
+
+    if cfg.get("meta_train"):
+        from analysis.meta_learning import meta_train_lgbm, save_meta_weights
+
+        state = meta_train_lgbm(df, features)
+        save_meta_weights(state, "lgbm")
+        return 0.0
+
+    if cfg.get("fine_tune"):
+        from analysis.meta_learning import (
+            _LinearModel,
+            fine_tune_model,
+            load_meta_weights,
+            save_meta_weights,
+        )
+        from torch.utils.data import TensorDataset
+
+        regime = int(df["market_regime"].iloc[-1])
+        mask = df["market_regime"] == regime
+        X_reg = torch.tensor(df.loc[mask, features].values, dtype=torch.float32)
+        y_reg = torch.tensor(
+            (df.loc[mask, "return"].shift(-1) > 0).astype(float).values[:-1],
+            dtype=torch.float32,
+        )
+        dataset = TensorDataset(X_reg[:-1], y_reg)
+        state = load_meta_weights("lgbm")
+        new_state, _ = fine_tune_model(
+            state, dataset, lambda: _LinearModel(len(features)), steps=5
+        )
+        save_meta_weights(new_state, "lgbm", regime=f"regime_{regime}")
+        return 0.0
 
     if resume_online:
         batch_size = cfg.get("online_batch_size", 1000)
@@ -514,6 +546,16 @@ if __name__ == "__main__":
         type=str,
         help="Initialize model using weights from a donor symbol",
     )
+    parser.add_argument(
+        "--meta-train",
+        action="store_true",
+        help="Run meta-training to produce meta-initialised weights",
+    )
+    parser.add_argument(
+        "--fine-tune",
+        action="store_true",
+        help="Fine-tune from meta weights on the latest regime",
+    )
     args = parser.parse_args()
     ray_init()
     try:
@@ -523,7 +565,13 @@ if __name__ == "__main__":
             cfg = load_config()
             tune_lgbm(cfg)
         else:
+            cfg = load_config()
+            if args.meta_train:
+                cfg["meta_train"] = True
+            if args.fine_tune:
+                cfg["fine_tune"] = True
             launch(
+                cfg,
                 export=args.export,
                 resume_online=args.resume_online,
                 transfer_from=args.transfer_from,

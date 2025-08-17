@@ -397,6 +397,7 @@ def main(
         test_loaders: dict[int, DataLoader] = {}
         train_samplers: dict[int, DistributedSampler | None] = {}
         X_sample = None
+        tasks_list: list[tuple[TensorDataset, TensorDataset]] = []
         for code in symbol_codes:
             train_sym = (
                 train_df[train_df["SymbolCode"] == code]
@@ -448,6 +449,39 @@ def main(
                 test_ds, batch_size=eval_batch_size, shuffle=False, num_workers=workers
             )
             train_samplers[code] = sampler
+            tasks_list.append((train_ds, val_ds))
+
+        from analysis import meta_learning
+        if cfg.get("meta_train"):
+            state = meta_learning.meta_train_transformer(
+                tasks_list, lambda: meta_learning._LinearModel(len(features))
+            )
+            meta_learning.save_meta_weights(state, "transformer")
+            return 0.0
+        if cfg.get("fine_tune"):
+            from torch.utils.data import TensorDataset
+
+            regime = int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
+            mask = (
+                df["market_regime"] == regime
+                if "market_regime" in df.columns
+                else np.ones(len(df), dtype=bool)
+            )
+            X_reg = torch.tensor(df.loc[mask, features].values, dtype=torch.float32)
+            y_reg = torch.tensor(
+                (df.loc[mask, "tb_label"].values).astype(float), dtype=torch.float32
+            )
+            dataset = TensorDataset(X_reg, y_reg)
+            state = meta_learning.load_meta_weights("transformer")
+            new_state, _ = meta_learning.fine_tune_model(
+                state,
+                dataset,
+                lambda: meta_learning._LinearModel(len(features)),
+            )
+            meta_learning.save_meta_weights(
+                new_state, "transformer", regime=f"regime_{regime}"
+            )
+            return 0.0
 
         num_symbols = len(symbol_codes)
         num_regimes = (
@@ -884,6 +918,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Use GraphNet instead of the transformer",
     )
+    parser.add_argument(
+        "--meta-train",
+        action="store_true",
+        help="Run meta-training to produce meta-initialised weights",
+    )
+    parser.add_argument(
+        "--fine-tune",
+        action="store_true",
+        help="Fine-tune from meta weights on latest regime",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -898,6 +942,10 @@ if __name__ == "__main__":
         cfg["transfer_from"] = args.transfer_from
     if args.graph_model:
         cfg["graph_model"] = True
+    if args.meta_train:
+        cfg["meta_train"] = True
+    if args.fine_tune:
+        cfg["fine_tune"] = True
     if args.tune:
         from tuning.hyperopt import tune_transformer
 
