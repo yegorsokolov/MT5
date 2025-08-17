@@ -23,6 +23,7 @@ from data.features import make_features
 from log_utils import setup_logging, log_exceptions
 from signal_queue import get_signal_backend
 from data.sanitize import sanitize_ticks
+from data.feature_scaler import FeatureScaler
 from metrics import (
     RECONNECT_COUNT,
     FEATURE_ANOMALIES,
@@ -200,6 +201,9 @@ async def train_realtime():
         seed = cfg.get("seed", 42)
         random.seed(seed)
         np.random.seed(seed)
+        root = Path(__file__).resolve().parent
+        scaler_path = root / "scaler.pkl"
+        scaler = FeatureScaler.load(scaler_path)
 
         symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
@@ -211,6 +215,13 @@ async def train_realtime():
 
         async def process_batch(batch: pd.DataFrame) -> None:
             feats = await generate_features(batch)
+            if feats.empty:
+                return
+            num_cols = feats.select_dtypes(np.number).columns
+            if len(num_cols) > 0:
+                scaler.partial_fit(feats[num_cols])
+                feats[num_cols] = scaler.transform(feats[num_cols])
+                scaler.save(scaler_path)
             await dispatch_signals(queue, feats)
 
         tick_queue: asyncio.Queue = asyncio.Queue()
