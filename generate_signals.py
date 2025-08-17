@@ -49,18 +49,23 @@ logger = logging.getLogger(__name__)
 def load_models(paths, versions=None):
     """Load multiple models from paths or version identifiers."""
     models = []
+    feature_list = None
     versions = versions or []
     for vid in versions:
         try:
-            m, _ = model_store.load_model(vid)
+            m, meta = model_store.load_model(vid)
             models.append(m)
+            if feature_list is None:
+                feature_list = meta.get("features") or meta.get("training_config", {}).get(
+                    "features"
+                )
         except FileNotFoundError:
             logger.warning("Model version %s not found", vid)
     for p in paths:
         mp = Path(__file__).resolve().parent / p
         if mp.exists():
             models.append(joblib.load(mp))
-    return models
+    return models, feature_list
 
 
 def bayesian_average(prob_arrays):
@@ -335,7 +340,7 @@ def main():
     env_version = os.getenv("MODEL_VERSION_ID")
     if env_version:
         model_versions.append(env_version)
-    models = load_models(model_paths, model_versions)
+    models, stored_features = load_models(model_paths, model_versions)
     if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
 
@@ -385,41 +390,44 @@ def main():
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
-    features = [
-        "return",
-        "ma_5",
-        "ma_10",
-        "ma_30",
-        "ma_60",
-        "ma_h4",
-        "volatility_30",
-        "spread",
-        "rsi_14",
-        "hour_sin",
-        "hour_cos",
-        "news_sentiment",
-    ]
-    for col in [
-        "atr_14",
-        "atr_stop_long",
-        "atr_stop_short",
-        "donchian_high",
-        "donchian_low",
-        "donchian_break",
-    ]:
-        if col in df.columns:
-            features.append(col)
-    features += [
-        c
-        for c in df.columns
-        if c.startswith("cross_corr_")
-        or c.startswith("factor_")
-        or c.startswith("cross_mom_")
-    ]
-    if "volume_ratio" in df.columns:
-        features.extend(["volume_ratio", "volume_imbalance"])
-    if "SymbolCode" in df.columns:
-        features.append("SymbolCode")
+    if stored_features:
+        features = stored_features
+    else:
+        features = [
+            "return",
+            "ma_5",
+            "ma_10",
+            "ma_30",
+            "ma_60",
+            "ma_h4",
+            "volatility_30",
+            "spread",
+            "rsi_14",
+            "hour_sin",
+            "hour_cos",
+            "news_sentiment",
+        ]
+        for col in [
+            "atr_14",
+            "atr_stop_long",
+            "atr_stop_short",
+            "donchian_high",
+            "donchian_low",
+            "donchian_break",
+        ]:
+            if col in df.columns:
+                features.append(col)
+        features += [
+            c
+            for c in df.columns
+            if c.startswith("cross_corr_")
+            or c.startswith("factor_")
+            or c.startswith("cross_mom_")
+        ]
+        if "volume_ratio" in df.columns:
+            features.extend(["volume_ratio", "volume_imbalance"])
+        if "SymbolCode" in df.columns:
+            features.append("SymbolCode")
 
     if model_type == "autogluon":
         from autogluon.tabular import TabularPredictor
