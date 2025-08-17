@@ -49,7 +49,7 @@ def cleanup_checkpoints() -> None:
     if not path.exists():
         return
     checkpoints = sorted(
-        path.glob("checkpoint_*.pkl"), key=lambda p: p.stat().st_mtime, reverse=True
+        path.glob("checkpoint_*.pkl.enc"), key=lambda p: p.stat().st_mtime, reverse=True
     )
     for ckpt in checkpoints[keep:]:
         try:

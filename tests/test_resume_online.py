@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import os
+import base64
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 import types
 import contextlib
@@ -54,6 +56,8 @@ mlflow_mod = types.SimpleNamespace(
 )
 sys.modules.setdefault("mlflow", mlflow_mod)
 from state_manager import load_latest_checkpoint
+
+os.environ.setdefault("CHECKPOINT_AES_KEY", base64.b64encode(b"0" * 32).decode())
 import train
 import train_nn
 

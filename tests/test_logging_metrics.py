@@ -5,10 +5,24 @@ import types
 from pathlib import Path
 import sys
 
+import os
+import base64
 import pytest
 from prometheus_client import Counter, Gauge
 import pandas as pd
+import contextlib
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+mlflow_stub = types.SimpleNamespace(
+    set_tracking_uri=lambda *a, **k: None,
+    set_experiment=lambda *a, **k: None,
+    start_run=lambda *a, **k: contextlib.nullcontext(),
+    log_dict=lambda *a, **k: None,
+)
+sys.modules.setdefault("mlflow", mlflow_stub)
+sys.modules.setdefault(
+    "utils.environment", types.SimpleNamespace(ensure_environment=lambda: None)
+)
 spec = importlib.util.spec_from_file_location(
     "metrics", Path(__file__).resolve().parents[1] / "metrics.py"
 )
@@ -35,7 +49,8 @@ def setup_tmp_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(log_mod, "LOG_DIR", tmp_path, raising=False)
     monkeypatch.setattr(log_mod, "LOG_FILE", tmp_path / "app.log", raising=False)
     monkeypatch.setattr(log_mod, "TRADE_LOG", tmp_path / "trades.csv", raising=False)
-    monkeypatch.setattr(log_mod, "DECISION_LOG", tmp_path / "decisions.parquet", raising=False)
+    monkeypatch.setattr(log_mod, "DECISION_LOG", tmp_path / "decisions.parquet.enc", raising=False)
+    os.environ["DECISION_AES_KEY"] = base64.b64encode(b"0" * 32).decode()
     from prometheus_client import CollectorRegistry
 
     registry = CollectorRegistry()
@@ -77,7 +92,7 @@ def test_log_trade_and_exception(monkeypatch, tmp_path):
     assert rows[0]["symbol"] == "XAUUSD"
     dpath = log_mod.DECISION_LOG
     assert dpath.exists()
-    df = pd.read_parquet(dpath)
+    df = log_mod.read_decisions()
     assert df.loc[0, "event"] == "buy"
 
 
@@ -91,7 +106,7 @@ def test_log_predictions(monkeypatch, tmp_path):
     log_mod.log_predictions(df)
     dpath = log_mod.DECISION_LOG
     assert dpath.exists()
-    out = pd.read_parquet(dpath)
+    out = log_mod.read_decisions()
     assert out.loc[0, "prob"] == 0.3
     assert out.loc[0, "event"] == "prediction"
 

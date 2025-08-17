@@ -9,6 +9,7 @@ from logging.handlers import RotatingFileHandler, SysLogHandler
 from urllib.parse import urlparse
 import os
 import socket
+import io
 
 import yaml
 import requests
@@ -23,13 +24,14 @@ try:  # optional during tests
     from core import state_sync
 except Exception:  # pragma: no cover - optional dependency
     state_sync = None
+from crypto_utils import _load_key, encrypt, decrypt
 
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 LOG_FILE = LOG_DIR / "app.log"
 TRADE_LOG = LOG_DIR / "trades.csv"
-DECISION_LOG = LOG_DIR / "decisions.parquet"
+DECISION_LOG = LOG_DIR / "decisions.parquet.enc"
 TRADE_HISTORY = LOG_DIR / "trade_history.parquet"
 
 
@@ -235,13 +237,25 @@ def log_trade_history(record: dict) -> None:
 
 
 def log_decision(df: pd.DataFrame) -> None:
-    """Append rows describing decisions to the parquet log."""
+    """Append rows describing decisions to the encrypted parquet log."""
+    key = _load_key("DECISION_AES_KEY")
     if DECISION_LOG.exists():
-        df.to_parquet(DECISION_LOG, engine="pyarrow", append=True)
-    else:
-        df.to_parquet(DECISION_LOG, engine="pyarrow")
+        existing = read_decisions()
+        df = pd.concat([existing, df], ignore_index=True)
+    buf = io.BytesIO()
+    df.to_parquet(buf, engine="pyarrow")
+    DECISION_LOG.write_bytes(encrypt(buf.getvalue(), key))
     if state_sync:
         state_sync.sync_decisions()
+
+
+def read_decisions() -> pd.DataFrame:
+    """Return decrypted decisions DataFrame."""
+    if not DECISION_LOG.exists():
+        return pd.DataFrame()
+    key = _load_key("DECISION_AES_KEY")
+    data = decrypt(DECISION_LOG.read_bytes(), key)
+    return pd.read_parquet(io.BytesIO(data))
 
 
 def log_predictions(df: pd.DataFrame) -> None:

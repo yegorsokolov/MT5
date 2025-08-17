@@ -13,7 +13,7 @@ from typing import List
 
 import pandas as pd
 
-from log_utils import DECISION_LOG
+from log_utils import read_decisions
 from utils import load_config
 
 REPLAY_DIR = Path(__file__).resolve().parent.parent / "reports" / "replay"
@@ -31,10 +31,9 @@ def replay_trades(model_versions: List[str]) -> None:
 
     if not model_versions:
         return
-    if not DECISION_LOG.exists():
+    decisions = read_decisions()
+    if decisions.empty:
         return
-
-    decisions = pd.read_parquet(DECISION_LOG)
     preds = decisions[decisions["event"] == "prediction"].copy()
     if preds.empty:
         return
