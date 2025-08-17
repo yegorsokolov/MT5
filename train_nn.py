@@ -29,6 +29,7 @@ from models.quantize import apply_quantization
 from models.contrastive_encoder import initialize_model_with_contrastive
 from analysis.feature_selector import select_features
 from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
+from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
 
 try:
     import shap
@@ -746,6 +747,41 @@ def main(
         if rank == 0:
             model.load_state_dict(joblib.load(model_path))
             model.eval()
+            calibrator = None
+            calib_method = cfg.get("calibration")
+            if calib_method:
+                val_probs: list[np.ndarray] = []
+                val_true: list[np.ndarray] = []
+                with torch.no_grad():
+                    for code, loader in val_loaders.items():
+                        for xb, yb in loader:
+                            xb = xb.to(device)
+                            yb = yb.to(device)
+                            with autocast(enabled=use_amp):
+                                preds = model(xb) if use_tft else model(xb, code)
+                            prob = (
+                                preds[:, len(quantiles) // 2]
+                                if use_tft
+                                else preds.squeeze()
+                            )
+                            val_probs.append(prob.cpu().numpy())
+                            val_true.append(yb.cpu().numpy())
+                if val_probs:
+                    val_probs_arr = np.concatenate(val_probs)
+                    val_true_arr = np.concatenate(val_true)
+                    calibrator = ProbabilityCalibrator(method=calib_method).fit(
+                        val_true_arr, val_probs_arr
+                    )
+                    calibrated = calibrator.predict(val_probs_arr)
+                    log_reliability(
+                        val_true_arr,
+                        val_probs_arr,
+                        calibrated,
+                        root / "reports" / "calibration",
+                        "nn",
+                        calib_method,
+                    )
+
             correct = 0
             total = 0
             with torch.no_grad():
@@ -755,11 +791,17 @@ def main(
                         yb = yb.to(device)
                         with autocast(enabled=use_amp):
                             preds = model(xb) if use_tft else model(xb, code)
-                        pred_labels = (
-                            (preds[:, len(quantiles) // 2] > 0.5).int()
+                        prob = (
+                            preds[:, len(quantiles) // 2]
                             if use_tft
-                            else (preds > 0.5).int()
+                            else preds.squeeze()
                         )
+                        if calibrator is not None:
+                            prob_np = prob.cpu().numpy()
+                            prob = torch.tensor(
+                                calibrator.predict(prob_np), device=prob.device
+                            )
+                        pred_labels = (prob > 0.5).int()
                         correct += (pred_labels == yb.int()).sum().item()
                         total += yb.size(0)
             acc = correct / total if total else 0.0
