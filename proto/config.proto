@@ -1,0 +1,31 @@
+syntax = "proto3";
+package config;
+import "google/protobuf/empty.proto";
+
+message KeyRequest {
+  string key = 1;
+}
+
+message ConfigEntry {
+  string key = 1;
+  string value = 2;
+  int32 version = 3;
+}
+
+message UpdateRequest {
+  string key = 1;
+  string value = 2;
+  string user = 3;
+  string reason = 4;
+}
+
+message UpdateResponse {
+  bool success = 1;
+  int32 version = 2;
+}
+
+service ConfigService {
+  rpc GetConfig(KeyRequest) returns (ConfigEntry);
+  rpc UpdateConfig(UpdateRequest) returns (UpdateResponse);
+  rpc WatchConfig(google.protobuf.Empty) returns (stream ConfigEntry);
+}
