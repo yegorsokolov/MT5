@@ -113,6 +113,18 @@ def main() -> None:
             except Exception:
                 pass
 
+        st.subheader("Backup Status")
+        bstatus = Path("reports/backup_status.json")
+        if bstatus.exists():
+            try:
+                data = json.loads(bstatus.read_text())
+                st.write(f"Last Run: {data.get('last_run', 'n/a')}")
+                st.write(f"Success: {data.get('last_success', False)}")
+            except Exception:
+                st.write("Failed to load status")
+        else:
+            st.write("No backup information available")
+
     # Performance tab
     with tabs[1]:
         store = MetricsStore()
