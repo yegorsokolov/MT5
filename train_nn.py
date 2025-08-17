@@ -30,6 +30,7 @@ from models.contrastive_encoder import initialize_model_with_contrastive
 from analysis.feature_selector import select_features
 from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
+from analysis.active_learning import ActiveLearningQueue, merge_labels
 
 try:
     import shap
@@ -891,6 +892,24 @@ def main(
                 X_sample_np = X_sample[: cfg.get("shap_samples", 100)] if X_sample is not None else None
                 if X_sample_np is not None:
                     log_shap_importance(model, X_sample_np, features, report_dir, device)
+
+    # Active learning: queue uncertain samples and merge any returned labels
+    try:
+        al_queue = ActiveLearningQueue()
+        model.eval()
+        with torch.no_grad():
+            X_tensor = torch.tensor(
+                train_df[features].values, dtype=torch.float32, device=device
+            )
+            probs = model(X_tensor).cpu().numpy()
+        probs = np.column_stack([1 - probs, probs])
+        al_queue.push(train_df.index, probs, k=cfg.get("al_queue_size", 10))
+        new_labels = al_queue.pop_labeled()
+        if not new_labels.empty:
+            train_df = merge_labels(train_df, new_labels, "tb_label")
+            save_history_parquet(train_df, root / "data" / "history.parquet")
+    except Exception as e:  # pragma: no cover - safety
+        logger.warning("Active learning step failed: %s", e)
 
     if cfg.get("export"):
         from models.export import export_pytorch
