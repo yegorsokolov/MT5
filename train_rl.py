@@ -68,6 +68,7 @@ from data.features import make_features
 from models.distillation import distill_teacher_student
 from models.build_model import build_model, compute_scale_factor
 from models.quantize import apply_quantization
+from models.contrastive_encoder import initialize_model_with_contrastive
 try:
     from analysis.regime_detection import periodic_reclassification  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -483,6 +484,7 @@ def main(
     ]
     if cfg.get("graph_model"):
         graph_model = build_model(len(features), cfg, scale_factor).to(device)
+        graph_model = initialize_model_with_contrastive(graph_model)
 
     size = monitor.capabilities.capability_tier()
     algo_cfg = cfg.get("rl_algorithm", "AUTO").upper()
