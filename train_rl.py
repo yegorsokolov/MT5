@@ -24,7 +24,10 @@ except Exception:  # pragma: no cover - optional dependency
 from stable_baselines3.common.evaluation import evaluate_policy
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
-from torch.utils.data import DataLoader, TensorDataset
+try:  # optional dependency
+    from torch.utils.data import DataLoader, TensorDataset
+except Exception:  # pragma: no cover - torch not available
+    DataLoader = TensorDataset = object  # type: ignore
 
 try:  # optional dependency - hierarchical options
     from sb3_contrib import HierarchicalPPO  # type: ignore
@@ -65,10 +68,32 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
 from data.features import make_features
-from models.distillation import distill_teacher_student
-from models.build_model import build_model, compute_scale_factor
-from models.quantize import apply_quantization
-from models.contrastive_encoder import initialize_model_with_contrastive
+try:  # optional dependency
+    from models.distillation import distill_teacher_student
+except Exception:  # pragma: no cover
+    def distill_teacher_student(*a, **k):  # type: ignore
+        return None
+
+try:  # optional dependency
+    from models.build_model import build_model, compute_scale_factor
+except Exception:  # pragma: no cover
+    def build_model(*a, **k):  # type: ignore
+        return object()
+
+    def compute_scale_factor() -> float:  # type: ignore
+        return 1.0
+
+try:  # optional dependency
+    from models.quantize import apply_quantization
+except Exception:  # pragma: no cover
+    def apply_quantization(model, *a, **k):  # type: ignore
+        return model
+
+try:  # optional dependency
+    from models.contrastive_encoder import initialize_model_with_contrastive
+except Exception:  # pragma: no cover
+    def initialize_model_with_contrastive(model):  # type: ignore
+        return model
 try:
     from analysis.regime_detection import periodic_reclassification  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -97,7 +122,13 @@ from ray_utils import (
 )
 from rl.offline_dataset import OfflineDataset
 from event_store import EventStore
-from core.orchestrator import Orchestrator
+try:  # optional dependency
+    from core.orchestrator import Orchestrator
+except Exception:  # pragma: no cover
+    class Orchestrator:  # type: ignore
+        @staticmethod
+        def start() -> None:  # pragma: no cover - simple stub
+            return None
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 
@@ -831,6 +862,36 @@ def main(
                 logger.info("Completed offline pretraining using recorded experiences")
             except Exception:
                 logger.exception("Offline pretraining failed")
+        if cfg.get("world_model"):
+            try:
+                from rl.world_model import WorldModel, WorldModelEnv, Transition
+
+                dataset = OfflineDataset(cfg.get("event_store_path"))
+                transitions = [
+                    Transition(s.obs, s.action, s.next_obs, s.reward)
+                    for s in dataset.samples
+                ]
+                if transitions:
+                    wm = WorldModel(
+                        env.observation_space.shape[0], env.action_space.shape[0]
+                    )
+                    wm.train(transitions)
+                    sim_env = WorldModelEnv(wm, env.observation_space, env.action_space)
+                    if hasattr(model, "set_env"):
+                        model.set_env(sim_env)
+                    try:
+                        model.learn(
+                            total_timesteps=int(cfg.get("world_model_steps", 1000)),
+                            reset_num_timesteps=False,
+                        )
+                    except TypeError:  # pragma: no cover - stub algos
+                        model.learn(total_timesteps=int(cfg.get("world_model_steps", 1000)))
+                    if hasattr(model, "set_env"):
+                        model.set_env(env)
+                dataset.close()
+                logger.info("Completed world model pretraining")
+            except Exception:  # pragma: no cover - optional path
+                logger.exception("World model pretraining failed")
         total_steps = int(cfg.get("rl_steps", 5000))
         interval = int(cfg.get("checkpoint_interval", 1000))
         current = start_step
@@ -1089,6 +1150,11 @@ if __name__ == "__main__":
         help="Initialize policy using offline data before online fine-tuning",
     )
     parser.add_argument(
+        "--world-model",
+        action="store_true",
+        help="Use a learned world model for model-based pretraining",
+    )
+    parser.add_argument(
         "--risk-objective",
         choices=["cvar"],
         help="Apply specified risk objective to rewards",
@@ -1115,6 +1181,8 @@ if __name__ == "__main__":
         cfg["risk_objective"] = args.risk_objective
     if args.offline_pretrain:
         cfg["offline_pretrain"] = True
+    if args.world_model:
+        cfg["world_model"] = True
     if args.objectives:
         objs = args.objectives
         if TIERS.get(monitor.capabilities.capability_tier(), 0) < TIERS["gpu"]:
