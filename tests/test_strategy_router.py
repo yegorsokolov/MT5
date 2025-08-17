@@ -18,8 +18,12 @@ def test_algorithm_switching_across_regimes():
     )
 
     # Regime with strong positive trend should favour trend-following strategy.
-    features_trend = {"volatility": 0.2, "trend_strength": 1.0}
-    reward_map_trend = {"trend_following": 1.0, "mean_reversion": -1.0, "rl_policy": 0.0}
+    features_trend = {"volatility": 0.2, "trend_strength": 1.0, "regime": 1.0}
+    reward_map_trend = {
+        "trend_following": 1.0,
+        "mean_reversion": -1.0,
+        "rl_policy": 0.0,
+    }
     for _ in range(20):
         name = router.select(features_trend)
         reward = reward_map_trend[name]
@@ -27,8 +31,12 @@ def test_algorithm_switching_across_regimes():
     assert router.select(features_trend) == "trend_following"
 
     # Switch to mean-reverting regime.
-    features_revert = {"volatility": 0.2, "trend_strength": -1.0}
-    reward_map_revert = {"trend_following": -1.0, "mean_reversion": 1.0, "rl_policy": 0.0}
+    features_revert = {"volatility": 0.2, "trend_strength": -1.0, "regime": -1.0}
+    reward_map_revert = {
+        "trend_following": -1.0,
+        "mean_reversion": 1.0,
+        "rl_policy": 0.0,
+    }
     for _ in range(20):
         name = router.select(features_revert)
         reward = reward_map_revert[name]
