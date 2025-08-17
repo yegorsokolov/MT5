@@ -63,7 +63,7 @@ def sync_decisions() -> bool:
     """Replicate the decision log to the backend."""
     if not BACKEND:
         return True
-    dec_log = Path("logs/decisions.parquet")
+    dec_log = Path("logs/decisions.parquet.enc")
     if not dec_log.exists():
         return True
     ok = _sync_file(dec_log, f"{BACKEND.rstrip('/')}/logs/decisions.parquet")
@@ -92,11 +92,11 @@ def pull_decisions() -> None:
         return
     dst = Path("logs")
     dst.mkdir(exist_ok=True)
-    src = f"{BACKEND.rstrip('/')}/logs/decisions.parquet"
+    src = f"{BACKEND.rstrip('/')}/logs/decisions.parquet.enc"
     if BACKEND.startswith("s3://"):
-        _run(["aws", "s3", "cp", src, str(dst / 'decisions.parquet')])
+        _run(["aws", "s3", "cp", src, str(dst / 'decisions.parquet.enc')])
     else:
-        _run(["rsync", "-az", src, str(dst / 'decisions.parquet')])
+        _run(["rsync", "-az", src, str(dst / 'decisions.parquet.enc')])
 
 
 def check_health(max_lag: int = 300) -> bool:
