@@ -56,6 +56,7 @@ class ModelVariant:
 
     name: str
     requirements: ResourceCapabilities
+    quantized: Optional[str] = None
 
     def is_supported(self, capabilities: ResourceCapabilities) -> bool:
         """Return True if system capabilities meet this variant's needs."""
@@ -70,19 +71,37 @@ class ModelVariant:
 MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
     "sentiment": [
         ModelVariant(
-            "sentiment_large", ResourceCapabilities(8, 32, True, gpu_count=1)
+            "sentiment_large",
+            ResourceCapabilities(8, 32, True, gpu_count=1),
+            "sentiment_large_quantized",
         ),
         ModelVariant(
-            "sentiment_medium", ResourceCapabilities(4, 16, True, gpu_count=1)
+            "sentiment_medium",
+            ResourceCapabilities(4, 16, True, gpu_count=1),
+            "sentiment_medium_quantized",
         ),
         ModelVariant(
-            "sentiment_small", ResourceCapabilities(2, 4, False, gpu_count=0)
+            "sentiment_small",
+            ResourceCapabilities(2, 4, False, gpu_count=0),
+            "sentiment_small_quantized",
         ),
     ],
     "rl_policy": [
-        ModelVariant("rl_large", ResourceCapabilities(16, 64, True, gpu_count=1)),
-        ModelVariant("rl_medium", ResourceCapabilities(8, 32, True, gpu_count=1)),
-        ModelVariant("rl_small", ResourceCapabilities(2, 4, False, gpu_count=0)),
+        ModelVariant(
+            "rl_large",
+            ResourceCapabilities(16, 64, True, gpu_count=1),
+            "rl_large_quantized",
+        ),
+        ModelVariant(
+            "rl_medium",
+            ResourceCapabilities(8, 32, True, gpu_count=1),
+            "rl_medium_quantized",
+        ),
+        ModelVariant(
+            "rl_small",
+            ResourceCapabilities(2, 4, False, gpu_count=0),
+            "rl_small_quantized",
+        ),
         ModelVariant("baseline", ResourceCapabilities(1, 1, False, gpu_count=0)),
     ],
 }
@@ -148,7 +167,11 @@ class ModelRegistry:
 
     def get(self, task: str) -> str:
         """Return the chosen model variant for the given task."""
-        return self.selected[task].name
+        variant = self.selected[task]
+        tier = self.monitor.capability_tier
+        if TIERS.get(tier, 0) <= TIERS["lite"] and variant.quantized:
+            return variant.quantized
+        return variant.name
 
     def refresh(self) -> None:
         """Manually re-run model selection using current capabilities."""
