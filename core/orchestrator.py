@@ -95,6 +95,12 @@ class Orchestrator:
                         record_metric(key, val, {"summary": "daily"})
                 # Evaluate any active canary deployments daily
                 self.canary.evaluate_all()
+                try:
+                    from analysis.strategy_evaluator import StrategyEvaluator
+
+                    StrategyEvaluator().run()
+                except Exception:
+                    self.logger.exception("Strategy evaluation failed")
             except Exception:
                 self.logger.exception("Failed to push daily summary")
             await asyncio.sleep(24 * 60 * 60)
