@@ -25,5 +25,6 @@ models/*
 !models/mixture_of_experts.py
 !models/build_model.py
 !models/conformal.py
+!models/quantize.py
 __pycache__/
 logs/
