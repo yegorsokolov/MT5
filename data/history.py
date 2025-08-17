@@ -11,6 +11,22 @@ from typing import TYPE_CHECKING, Dict, List
 from utils.data_backend import get_dataframe_module
 
 pd = get_dataframe_module()
+import pandas as _pd
+IS_CUDF = pd.__name__ == "cudf"
+
+
+def _to_datetime(arg, *args, **kwargs):
+    func = getattr(pd, "to_datetime", _pd.to_datetime)
+    result = func(arg, *args, **kwargs)
+    if IS_CUDF and isinstance(result, _pd.Series):
+        return pd.Series(result)
+    return result
+
+
+def _tz_localize_none(series):
+    if IS_CUDF:
+        return pd.Series(series.to_pandas().dt.tz_localize(None))
+    return series.dt.tz_localize(None)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -60,7 +76,9 @@ def load_history_from_urls(urls: List[str]) -> pd.DataFrame:
             dfs.append(pd.read_csv(dest))
 
     df = pd.concat(dfs, ignore_index=True)
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
+    df["Timestamp"] = _to_datetime(
+        df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
+    )
     logger.info("Loaded %d rows from URLs", len(df))
     return df
 
@@ -119,7 +137,9 @@ def load_history_mt5(symbol: str, start: dt.datetime, end: dt.datetime) -> pd.Da
         return pd.DataFrame()
 
     df = pd.DataFrame(ticks)
-    df["Timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_localize(None)
+    df["Timestamp"] = _tz_localize_none(
+        _to_datetime(df["time"], unit="s", utc=True)
+    )
     df.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
     df = df[["Timestamp", "Bid", "Ask", "Volume"]]
     df["BidVolume"] = df["Volume"]
@@ -146,8 +166,8 @@ def load_history_config(
     api_cfg = (cfg.get("api_history") or {}).get(sym)
     if api_cfg:
         provider = api_cfg.get("provider", "mt5")
-        start = pd.to_datetime(api_cfg.get("start"))
-        end = pd.to_datetime(api_cfg.get("end"))
+        start = _pd.to_datetime(api_cfg.get("start"))
+        end = _pd.to_datetime(api_cfg.get("end"))
         if provider == "mt5":
             logger.info("Downloading history for %s from MetaTrader5", sym)
             df = load_history_mt5(sym, start, end)
@@ -189,14 +209,16 @@ def load_history(path: Path, validate: bool = False) -> pd.DataFrame:
 
     logger.info("Loading CSV history from %s", path)
     df = pd.read_csv(path)
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
+    df["Timestamp"] = _to_datetime(
+        df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
+    )
 
     ds = DeltaStore()
     delta = ds.ingest(path, df)
     cache_path = path.with_suffix(".cache.csv")
     if cache_path.exists():
         cached_df = pd.read_csv(cache_path)
-        cached_df["Timestamp"] = pd.to_datetime(
+        cached_df["Timestamp"] = _to_datetime(
             cached_df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
         )
         if not delta.empty:
@@ -242,8 +264,12 @@ def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
             df = pd.read_parquet(path)
     except Exception:
         df = pd.read_parquet(path)
+    if IS_CUDF and isinstance(df, _pd.DataFrame):
+        df = pd.DataFrame(df)
     if "Timestamp" in df.columns:
-        df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(None)
+        df["Timestamp"] = _tz_localize_none(
+            _to_datetime(df["Timestamp"], utc=True)
+        )
     if "date" in df.columns:
         df.drop(columns=["date"], inplace=True)
 
@@ -254,7 +280,7 @@ def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
         if cache_path.exists():
             cached_df = pd.read_csv(cache_path)
             if "Timestamp" in cached_df.columns:
-                cached_df["Timestamp"] = pd.to_datetime(
+                cached_df["Timestamp"] = _to_datetime(
                     cached_df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
                 )
             if not delta.empty:
@@ -292,21 +318,21 @@ def load_history_iter(path: Path, chunk_size: int):
         for batch in dataset.to_batches(batch_size=chunk_size):
             df = batch.to_pandas()
             if "Timestamp" in df.columns:
-                df["Timestamp"] = pd.to_datetime(
-                    df["Timestamp"], utc=True
-                ).dt.tz_localize(None)
-            yield df
+                df["Timestamp"] = _tz_localize_none(
+                    _to_datetime(df["Timestamp"], utc=True)
+                )
+            yield pd.DataFrame(df) if IS_CUDF else df
         return
     except Exception:  # pragma: no cover - pyarrow.dataset may be unavailable
         pass
 
     # Fallback to pandas iterator which also yields chunks
-    for df in pd.read_parquet(path, chunksize=chunk_size):
+    for df in _pd.read_parquet(path, chunksize=chunk_size):
         if "Timestamp" in df.columns:
-            df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True).dt.tz_localize(
-                None
+            df["Timestamp"] = _tz_localize_none(
+                _to_datetime(df["Timestamp"], utc=True)
             )
-        yield df
+        yield pd.DataFrame(df) if IS_CUDF else df
 
 
 def load_history_memmap(path: Path):
@@ -351,9 +377,9 @@ def save_history_parquet(df: pd.DataFrame, path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     data = df.copy()
     if "Timestamp" in data.columns:
-        ts = pd.to_datetime(data["Timestamp"], utc=True)
+        ts = _to_datetime(data["Timestamp"], utc=True)
         data["date"] = ts.dt.date.astype(str)
-        data["Timestamp"] = ts.dt.tz_localize(None)
+        data["Timestamp"] = _tz_localize_none(ts)
     logger.info("Saving history to %s", path)
     table = pa.Table.from_pandas(data, preserve_index=False)
     partitioning = None
