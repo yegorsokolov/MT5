@@ -46,6 +46,7 @@ dependencies = [
     "onnxruntime",
     "skl2onnx",
     "onnxmltools",
+    "gplearn",
 ]
 
 [project.scripts]

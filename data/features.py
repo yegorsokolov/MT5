@@ -725,6 +725,16 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         df = label_regimes(df)
     except Exception:  # pragma: no cover - optional dependency
         df["market_regime"] = 0
+
+    # integrate any evolved features and trigger new evolution on regime change
+    try:
+        from analysis.feature_evolver import FeatureEvolver
+
+        evolver = FeatureEvolver()
+        df = evolver.apply_stored_features(df)
+        df = evolver.maybe_evolve(df, target_col="return", regime_col="market_regime")
+    except Exception:  # pragma: no cover - optional dependency
+        logger.debug("Feature evolution skipped", exc_info=True)
     logger.info("Finished feature engineering")
 
     df = optimize_dtypes(df)
