@@ -12,11 +12,15 @@ try:  # optional dependency
     from .price_distribution import PriceDistributionModel
 except Exception:  # pragma: no cover - torch may be missing
     PriceDistributionModel = None
-from .meta_learner import MetaLearner
+try:  # optional torch dependency
+    from .meta_learner import MetaLearner
+except Exception:  # pragma: no cover - torch may be missing
+    MetaLearner = None
 try:  # optional torch dependency
     from .multi_head import MultiHeadTransformer
 except Exception:  # pragma: no cover - torch may be missing
     MultiHeadTransformer = None
+from . import conformal
 
 __all__ = [
     "EnsembleModel",
@@ -25,4 +29,5 @@ __all__ = [
     "MetaLearner",
     "PriceDistributionModel",
     "MultiHeadTransformer",
+    "conformal",
 ]
