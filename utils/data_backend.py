@@ -7,6 +7,14 @@ from .resource_monitor import monitor, ResourceCapabilities
 
 def _choose_module(caps: ResourceCapabilities) -> Any:
     """Return the most suitable dataframe backend for ``caps``."""
+    # Prefer cuDF when a GPU is available
+    if getattr(caps, "gpu", getattr(caps, "has_gpu", False)):
+        try:
+            import cudf
+
+            return cudf
+        except Exception:  # pragma: no cover - optional dep
+            pass
     # Prefer Dask on very capable machines
     if caps.cpus >= 16 or caps.memory_gb >= 32:
         try:
