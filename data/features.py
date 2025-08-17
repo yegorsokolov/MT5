@@ -41,6 +41,7 @@ from .feature_store import FeatureStore
 from .versioning import compute_hash
 from .macro_features import load_macro_series
 from .history import load_history_memmap
+from .order_book import compute_order_book_features
 
 try:  # optional plugin system
     from plugins import FEATURE_PLUGINS  # type: ignore
@@ -425,6 +426,25 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         # basic microstructure measures
         group["spread"] = group["Ask"] - group["Bid"]
         mid_raw = (group["Bid"] + group["Ask"]) / 2
+
+        # incorporate order book based liquidity metrics when available
+        if any(col.startswith("BidPrice") for col in group.columns):
+            ob = compute_order_book_features(group)
+            group["depth_imbalance"] = ob["depth_imbalance"]
+            group["vw_spread"] = ob["vw_spread"]
+            group["market_impact"] = ob["market_impact"]
+        else:
+            if {"BidVolume", "AskVolume"}.issubset(group.columns):
+                bid_depth = group.get("BidVolume", 0)
+                ask_depth = group.get("AskVolume", 0)
+                total = bid_depth + ask_depth
+                group["depth_imbalance"] = np.where(
+                    total > 0, (bid_depth - ask_depth) / total, 0
+                )
+            else:
+                group["depth_imbalance"] = 0.0
+            group["vw_spread"] = group["spread"]
+            group["market_impact"] = group["vw_spread"] * group["depth_imbalance"]
 
         if use_kalman:
             symbol = (

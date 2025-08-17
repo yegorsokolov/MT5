@@ -68,6 +68,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
 from data.features import make_features
+from analytics.metrics_store import record_metric, TS_PATH
 try:  # optional dependency
     from models.distillation import distill_teacher_student
 except Exception:  # pragma: no cover
@@ -245,8 +246,16 @@ class TradingEnv(gym.Env):
         self.feature_cols = []
         for feat in features:
             self.feature_cols.extend([f"{sym}_{feat}" for sym in self.symbols])
-
-        self.spread_cols = [f"{sym}_spread" for sym in self.symbols]
+        self.spread_cols = []
+        self.market_impact_cols: list[str | None] = []
+        for sym in self.symbols:
+            if f"{sym}_vw_spread" in self.df.columns:
+                self.spread_cols.append(f"{sym}_vw_spread")
+            else:
+                self.spread_cols.append(f"{sym}_spread")
+            self.market_impact_cols.append(
+                f"{sym}_market_impact" if f"{sym}_market_impact" in self.df.columns else None
+            )
 
         self.n_symbols = len(self.symbols)
         self.action_space = spaces.Box(
@@ -298,8 +307,15 @@ class TradingEnv(gym.Env):
                 spreads = self.df.loc[self.i, self.spread_cols].values
             except KeyError:
                 spreads = np.zeros(self.n_symbols, dtype=np.float32)
-            bids = prices - spreads / 2
-            asks = prices + spreads / 2
+            market_impacts = np.array(
+                [
+                    self.df.loc[self.i, col] if col is not None else 0.0
+                    for col in self.market_impact_cols
+                ],
+                dtype=np.float32,
+            )
+            bids = prices - spreads / 2 - market_impacts
+            asks = prices + spreads / 2 + market_impacts
             exec_prices = np.where(deltas > 0, asks, bids)
 
         slippage = np.zeros(self.n_symbols, dtype=np.float32)
@@ -318,6 +334,8 @@ class TradingEnv(gym.Env):
         costs = transaction_costs + slippage_costs
         cost_total = costs.sum()
         self.equity *= 1 - cost_total
+        record_metric("slippage", float(slippage_costs.sum()), path=TS_PATH)
+        record_metric("liquidity_usage", float(np.abs(deltas).sum()), path=TS_PATH)
 
         reward_components: list[float] = []
         objective_map: dict[str, float] = {}
