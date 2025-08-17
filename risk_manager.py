@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scheduler import start_scheduler
 from risk import risk_of_ruin
+from risk.budget_allocator import BudgetAllocator
 from analytics.metrics_store import record_metric
 try:
     from utils.alerting import send_alert
@@ -48,6 +49,8 @@ class RiskManager:
         self.metrics = RiskMetrics()
         self._pnl_history: List[float] = []
         self._factor_history: List[Dict[str, float]] = []
+        self._bot_pnl_history: Dict[str, List[float]] = {}
+        self.budget_allocator = BudgetAllocator(initial_capital)
         self.tail_hedger = tail_hedger
         self.risk_of_ruin_threshold = risk_of_ruin_threshold
         self.initial_capital = initial_capital
@@ -68,12 +71,16 @@ class RiskManager:
         self.metrics.exposure += exposure
         self.metrics.daily_loss += pnl
         self._pnl_history.append(pnl)
+        bot_hist = self._bot_pnl_history.setdefault(bot_id, [])
+        bot_hist.append(pnl)
         if factor_returns is not None:
             self._factor_history.append(factor_returns)
         if len(self._pnl_history) > self.var_window:
             self._pnl_history.pop(0)
             if self._factor_history:
                 self._factor_history.pop(0)
+        if len(bot_hist) > self.var_window:
+            bot_hist.pop(0)
         if self._pnl_history:
             self.metrics.var = float(-np.percentile(self._pnl_history, 1))
             returns = pd.Series(self._pnl_history) / self.initial_capital
@@ -140,6 +147,23 @@ class RiskManager:
         self.metrics = RiskMetrics()
         self._pnl_history.clear()
         self._factor_history.clear()
+        self._bot_pnl_history.clear()
+        self.budget_allocator.budgets.clear()
+
+    # Risk budgets ----------------------------------------------------
+    def rebalance_budgets(self) -> Dict[str, float]:
+        """Recompute risk budgets from per-bot PnL history."""
+        returns = {
+            bot: pd.Series(hist) / self.initial_capital
+            for bot, hist in self._bot_pnl_history.items()
+            if hist
+        }
+        return self.budget_allocator.allocate(returns)
+
+    def adjust_position_size(self, bot_id: str, size: float) -> float:
+        """Scale ``size`` by the risk budget for ``bot_id``."""
+        frac = self.budget_allocator.fraction(bot_id)
+        return size * frac
 
 
 from risk.tail_hedger import TailHedger
