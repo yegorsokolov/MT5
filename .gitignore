@@ -26,5 +26,6 @@ models/*
 !models/build_model.py
 !models/conformal.py
 !models/quantize.py
+!models/hot_reload.py
 __pycache__/
 logs/
