@@ -14,6 +14,7 @@ import redis
 
 from analytics.metrics_store import record_metric
 from risk.position_sizer import PositionSizer
+from models import conformal
 
 from telemetry import get_tracer, get_meter
 
@@ -25,6 +26,10 @@ _publish_count = meter.create_counter(
 _consume_count = meter.create_counter(
     "signals_consumed", description="Number of signals consumed"
 )
+
+_MAX_INTERVAL_WIDTH = float(os.getenv("CONFORMAL_MAX_WIDTH", "inf"))
+_DROP_WIDE_INTERVALS = os.getenv("CONFORMAL_DROP_WIDE", "0") == "1"
+_CONFORMAL_Q = float(os.getenv("CONFORMAL_RESIDUAL_Q", "0.0"))
 
 # Lazy registry to avoid heavy initialization at import time
 _REGISTRY = None
@@ -227,11 +232,20 @@ async def iter_messages(
                 conf = float(data.get("confidence", 1.0))
                 var = data.get("var")
                 es = data.get("es")
-                size = (
+                lower, upper = conformal.predict_interval([prob], _CONFORMAL_Q)
+                width = float(upper[0] - lower[0])
+                if width > _MAX_INTERVAL_WIDTH:
+                    if _DROP_WIDE_INTERVALS:
+                        continue
+                    scale = _MAX_INTERVAL_WIDTH / width if _MAX_INTERVAL_WIDTH != float("inf") else 0.0
+                else:
+                    scale = 1.0
+                base_size = (
                     sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                     if sizer
                     else prob * conf
                 )
+                size = base_size * scale
                 payload = {
                     "Timestamp": data.get("Timestamp", ""),
                     "Symbol": symbol,
@@ -240,6 +254,8 @@ async def iter_messages(
                     "var": var,
                     "es": es,
                     "size": size,
+                    "interval": (float(lower[0]), float(upper[0])),
+                    "interval_width": width,
                 }
                 if not _passes_meta(meta_clf, prob, conf):
                     continue
@@ -264,11 +280,20 @@ async def iter_messages(
                     var = float(var)
                 if es is not None:
                     es = float(es)
-                size = (
+                lower, upper = conformal.predict_interval([prob], _CONFORMAL_Q)
+                width = float(upper[0] - lower[0])
+                if width > _MAX_INTERVAL_WIDTH:
+                    if _DROP_WIDE_INTERVALS:
+                        continue
+                    scale = _MAX_INTERVAL_WIDTH / width if _MAX_INTERVAL_WIDTH != float("inf") else 0.0
+                else:
+                    scale = 1.0
+                base_size = (
                     sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                     if sizer
                     else prob * conf
                 )
+                size = base_size * scale
                 payload = {
                     "Timestamp": sig.timestamp,
                     "Symbol": symbol,
@@ -277,6 +302,8 @@ async def iter_messages(
                     "var": var,
                     "es": es,
                     "size": size,
+                    "interval": (float(lower[0]), float(upper[0])),
+                    "interval_width": width,
                 }
                 if not _passes_meta(meta_clf, prob, conf):
                     continue
@@ -383,11 +410,20 @@ class KafkaSignalQueue:
                 conf = float(data.get("confidence", 1.0))
                 var = data.get("var")
                 es = data.get("es")
-                size = (
+                lower, upper = conformal.predict_interval([prob], _CONFORMAL_Q)
+                width = float(upper[0] - lower[0])
+                if width > _MAX_INTERVAL_WIDTH:
+                    if _DROP_WIDE_INTERVALS:
+                        continue
+                    scale = _MAX_INTERVAL_WIDTH / width if _MAX_INTERVAL_WIDTH != float("inf") else 0.0
+                else:
+                    scale = 1.0
+                base_size = (
                     sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                     if sizer
                     else prob * conf
                 )
+                size = base_size * scale
                 payload = {
                     "Timestamp": data.get("Timestamp", ""),
                     "Symbol": symbol,
@@ -396,6 +432,8 @@ class KafkaSignalQueue:
                     "var": var,
                     "es": es,
                     "size": size,
+                    "interval": (float(lower[0]), float(upper[0])),
+                    "interval_width": width,
                 }
                 if not _passes_meta(meta_clf, prob, conf):
                     continue
@@ -413,11 +451,20 @@ class KafkaSignalQueue:
                     var = float(var)
                 if es is not None:
                     es = float(es)
-                size = (
+                lower, upper = conformal.predict_interval([prob], _CONFORMAL_Q)
+                width = float(upper[0] - lower[0])
+                if width > _MAX_INTERVAL_WIDTH:
+                    if _DROP_WIDE_INTERVALS:
+                        continue
+                    scale = _MAX_INTERVAL_WIDTH / width if _MAX_INTERVAL_WIDTH != float("inf") else 0.0
+                else:
+                    scale = 1.0
+                base_size = (
                     sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                     if sizer
                     else prob * conf
                 )
+                size = base_size * scale
                 payload = {
                     "Timestamp": sig.timestamp,
                     "Symbol": symbol,
@@ -426,6 +473,8 @@ class KafkaSignalQueue:
                     "var": var,
                     "es": es,
                     "size": size,
+                    "interval": (float(lower[0]), float(upper[0])),
+                    "interval_width": width,
                 }
                 if not _passes_meta(meta_clf, prob, conf):
                     continue
@@ -525,11 +574,20 @@ class RedisSignalQueue:
                     conf = float(payload.get("confidence", 1.0))
                     var = payload.get("var")
                     es = payload.get("es")
-                    size = (
+                    lower, upper = conformal.predict_interval([prob], _CONFORMAL_Q)
+                    width = float(upper[0] - lower[0])
+                    if width > _MAX_INTERVAL_WIDTH:
+                        if _DROP_WIDE_INTERVALS:
+                            continue
+                        scale = _MAX_INTERVAL_WIDTH / width if _MAX_INTERVAL_WIDTH != float("inf") else 0.0
+                    else:
+                        scale = 1.0
+                    base_size = (
                         sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                         if sizer
                         else prob * conf
                     )
+                    size = base_size * scale
                     out = {
                         "Timestamp": payload.get("Timestamp", ""),
                         "Symbol": symbol,
@@ -538,6 +596,8 @@ class RedisSignalQueue:
                         "var": var,
                         "es": es,
                         "size": size,
+                        "interval": (float(lower[0]), float(upper[0])),
+                        "interval_width": width,
                     }
                     if not _passes_meta(meta_clf, prob, conf):
                         continue
@@ -555,11 +615,20 @@ class RedisSignalQueue:
                         var = float(var)
                     if es is not None:
                         es = float(es)
-                    size = (
+                    lower, upper = conformal.predict_interval([prob], _CONFORMAL_Q)
+                    width = float(upper[0] - lower[0])
+                    if width > _MAX_INTERVAL_WIDTH:
+                        if _DROP_WIDE_INTERVALS:
+                            continue
+                        scale = _MAX_INTERVAL_WIDTH / width if _MAX_INTERVAL_WIDTH != float("inf") else 0.0
+                    else:
+                        scale = 1.0
+                    base_size = (
                         sizer.size(prob, symbol, var=var, es=es, confidence=conf)
                         if sizer
                         else prob * conf
                     )
+                    size = base_size * scale
                     out = {
                         "Timestamp": sig.timestamp,
                         "Symbol": symbol,
@@ -568,6 +637,8 @@ class RedisSignalQueue:
                         "var": var,
                         "es": es,
                         "size": size,
+                        "interval": (float(lower[0]), float(upper[0])),
+                        "interval_width": width,
                     }
                     if not _passes_meta(meta_clf, prob, conf):
                         continue
