@@ -24,6 +24,7 @@ from tqdm import tqdm
 from models import model_store
 from models.distillation import distill_teacher_student
 from models.build_model import build_model, compute_scale_factor
+from models.quantize import apply_quantization
 from analysis.feature_selector import select_features
 
 try:
@@ -666,6 +667,19 @@ def main(
                 architecture_history=architecture_history,
             )
             logger.info("Registered model version %s", version_id)
+            if cfg.get("quantize"):
+                qmodel = apply_quantization(
+                    model.module if isinstance(model, DDP) else model
+                )
+                q_path = root / "model_transformer_quantized.pt"
+                joblib.dump(qmodel.state_dict(), q_path)
+                model_store.save_model(
+                    joblib.load(q_path),
+                    {**cfg, "quantized": True},
+                    {"val_loss": best_val_loss, "test_accuracy": acc},
+                    architecture_history=architecture_history,
+                )
+                logger.info("Quantized model saved to %s", q_path)
             if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]:
                 student = TransformerModel(
                     len(features),
@@ -752,6 +766,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
     parser.add_argument("--export", action="store_true", help="Export model to ONNX")
+    parser.add_argument("--quantize", action="store_true", help="Save quantized model")
     parser.add_argument(
         "--resume-online",
         action="store_true",
@@ -773,6 +788,8 @@ if __name__ == "__main__":
         cfg["ddp"] = True
     if args.export:
         cfg["export"] = True
+    if args.quantize:
+        cfg["quantize"] = True
     if args.resume_online:
         cfg["resume_online"] = True
     if args.transfer_from:

@@ -67,6 +67,7 @@ except Exception:  # pragma: no cover - optional dependency
 from data.features import make_features
 from models.distillation import distill_teacher_student
 from models.build_model import build_model, compute_scale_factor
+from models.quantize import apply_quantization
 try:
     from analysis.regime_detection import periodic_reclassification  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -990,6 +991,18 @@ def main(
                 architecture_history=architecture_history,
             )
             logger.info("Registered model version %s", version_id)
+            if cfg.get("quantize"):
+                q_policy = apply_quantization(model.policy)
+                model.policy = q_policy
+                q_artifact = root / "model_rl_quantized.zip"
+                model.save(q_artifact)
+                model_store.save_model(
+                    q_artifact,
+                    {**cfg, "quantized": True},
+                    {"cumulative_return": cumulative_return},
+                    architecture_history=architecture_history,
+                )
+                logger.info("Quantized RL policy saved to %s", q_artifact)
             mlflow.end_run()
 
     if cfg.get("export"):
@@ -1061,6 +1074,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
     parser.add_argument("--export", action="store_true", help="Export model to ONNX")
+    parser.add_argument("--quantize", action="store_true", help="Save quantized model")
     parser.add_argument(
         "--hierarchical", action="store_true", help="Use hierarchical agent"
     )
@@ -1089,6 +1103,8 @@ if __name__ == "__main__":
         cfg["ddp"] = True
     if args.export:
         cfg["export"] = True
+    if args.quantize:
+        cfg["quantize"] = True
     if args.hierarchical:
         cfg["hierarchical"] = True
     if args.graph_model:
