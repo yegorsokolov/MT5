@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import joblib
+from .causal_impact import estimate_causal_impact
 
 TRADE_HISTORY = Path("logs/trade_history.parquet")
 REPORT_DIR = Path("reports/reprocess")
@@ -68,6 +69,11 @@ def reprocess_trades(
             logger.info("Wrote reprocess report %s", out_file)
         except Exception:
             logger.exception("Failed processing model %s", model_file)
+
+    try:
+        estimate_causal_impact(df)
+    except Exception:  # pragma: no cover - analysis optional
+        logger.exception("Causal impact analysis failed")
 
 
 def main() -> None:  # pragma: no cover - CLI entry point
