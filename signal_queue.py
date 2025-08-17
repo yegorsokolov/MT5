@@ -17,6 +17,7 @@ from risk.position_sizer import PositionSizer
 from models import conformal
 
 from telemetry import get_tracer, get_meter
+from strategy import StrategyRouter
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -33,6 +34,11 @@ _CONFORMAL_Q = float(os.getenv("CONFORMAL_RESIDUAL_Q", "0.0"))
 
 # Lazy registry to avoid heavy initialization at import time
 _REGISTRY = None
+
+# Global strategy router that adapts allocations between algorithms based on
+# simple regime features.  It is intentionally lightweight so importing this
+# module does not pull in heavy dependencies.
+_ROUTER = StrategyRouter()
 
 
 def _get_registry():  # pragma: no cover - simple accessor
@@ -54,6 +60,11 @@ _CTX = zmq.Context.instance()
 _ASYNC_CTX = zmq.asyncio.Context.instance()
 
 _QUEUE_DEPTH = 0
+
+
+def update_router(features: dict, reward: float, algorithm: str) -> None:
+    """Update the global strategy router with a realised reward."""
+    _ROUTER.update(features, reward, algorithm)
 
 
 def _passes_meta(meta_clf: Any | None, prob: float, conf: float) -> bool:
@@ -150,6 +161,12 @@ def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf")
                 record_metric("queue_depth", _QUEUE_DEPTH)
             except Exception:
                 pass
+            # Route through the strategy router before generating orders.
+            feats = {
+                "volatility": float(row.get("volatility_30", 0.0)),
+                "trend_strength": float(row.get("trend_strength", 0.0)),
+            }
+            _ROUTER.act(feats)
             if fmt == "json":
                 payload = {
                     "Timestamp": str(row["Timestamp"]),
@@ -186,6 +203,11 @@ async def publish_dataframe_async(
                 record_metric("queue_depth", _QUEUE_DEPTH)
             except Exception:
                 pass
+            feats = {
+                "volatility": float(row.get("volatility_30", 0.0)),
+                "trend_strength": float(row.get("trend_strength", 0.0)),
+            }
+            _ROUTER.act(feats)
             if fmt == "json":
                 payload = {
                     "Timestamp": str(row["Timestamp"]),
