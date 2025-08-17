@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 from typing import Any, Tuple
 import joblib
+from crypto_utils import _load_key, encrypt, decrypt
 try:  # optional during tests
     from core import state_sync
 except Exception:  # pragma: no cover - optional dependency
@@ -28,8 +29,10 @@ def save_checkpoint(state: dict[str, Any], step: int, directory: str | None = No
     directory: Optional override for the checkpoint directory.
     """
     ckpt_dir = _checkpoint_dir(directory)
-    path = ckpt_dir / f"checkpoint_{step}.pkl"
-    joblib.dump(state, path)
+    path = ckpt_dir / f"checkpoint_{step}.pkl.enc"
+    data = joblib.dumps(state)
+    key = _load_key("CHECKPOINT_AES_KEY")
+    path.write_bytes(encrypt(data, key))
     if state_sync:
         state_sync.sync_checkpoints()
     return path
@@ -46,7 +49,7 @@ def load_latest_checkpoint(directory: str | None = None) -> Tuple[int, dict[str,
     ckpt_dir = Path(directory or os.getenv("CHECKPOINT_DIR", "checkpoints"))
     if not ckpt_dir.exists():
         return None
-    checkpoints = sorted(ckpt_dir.glob("checkpoint_*.pkl"))
+    checkpoints = sorted(ckpt_dir.glob("checkpoint_*.pkl.enc"))
     if not checkpoints:
         return None
     latest = max(checkpoints, key=lambda p: p.stat().st_mtime)
@@ -55,7 +58,9 @@ def load_latest_checkpoint(directory: str | None = None) -> Tuple[int, dict[str,
         step = int(step_str)
     except ValueError:
         step = 0
-    state = joblib.load(latest)
+    key = _load_key("CHECKPOINT_AES_KEY")
+    data = decrypt(latest.read_bytes(), key)
+    state = joblib.loads(data)
     return step, state
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import pandas as pd
 
-from log_utils import DECISION_LOG
+from log_utils import read_decisions
 from generate_signals import load_models
 from utils import load_config
 try:  # optional if backend not configured
@@ -20,10 +20,10 @@ REPORT_DIR.mkdir(exist_ok=True)
 def main() -> None:
     if state_sync:
         state_sync.pull_decisions()
-    if not DECISION_LOG.exists():
+    decisions = read_decisions()
+    if decisions.empty:
         print("No decisions log found")
         return
-    decisions = pd.read_parquet(DECISION_LOG)
     preds = decisions[decisions["event"] == "prediction"].copy()
     if preds.empty:
         print("No predictions to replay")
