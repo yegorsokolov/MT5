@@ -1,0 +1,17 @@
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+# Install Python and pip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip && rm -rf /var/lib/apt/lists/*
+
+# Install core dependencies and optional extras
+WORKDIR /app
+COPY requirements-core.txt requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements-core.txt \
+    && pip3 install --no-cache-dir -r requirements.txt
+COPY . .
+
+# Default resource tier inside the container
+ENV RESOURCE_TIER=gpu
+
+CMD ["bash"]
