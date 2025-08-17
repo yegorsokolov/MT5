@@ -184,8 +184,9 @@ class BackupManager:
         """Execute the backup workflow."""
         success = True
         try:
-            self._compress_and_sync(self.checkpoint_dir, "checkpoint_*.pkl")
+            self._compress_and_sync(self.checkpoint_dir, "checkpoint_*.pkl.enc")
             self._compress_and_sync(self.log_dir, "*.log")
+            self._compress_and_sync(self.log_dir, "*.parquet.enc")
             self._prune_archives(self.checkpoint_dir)
             self._prune_archives(self.log_dir)
         except Exception:
