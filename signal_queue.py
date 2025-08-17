@@ -15,6 +15,17 @@ import redis
 from analytics.metrics_store import record_metric
 from risk.position_sizer import PositionSizer
 
+from telemetry import get_tracer, get_meter
+
+tracer = get_tracer(__name__)
+meter = get_meter(__name__)
+_publish_count = meter.create_counter(
+    "signals_published", description="Number of signals published"
+)
+_consume_count = meter.create_counter(
+    "signals_consumed", description="Number of signals consumed"
+)
+
 # Lazy registry to avoid heavy initialization at import time
 _REGISTRY = None
 
@@ -126,33 +137,35 @@ async def get_async_subscriber(connect_address: str | None = None, topic: str = 
 def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf") -> None:
     """Publish rows of a dataframe as JSON or Protobuf messages."""
     global _QUEUE_DEPTH
-    fmt = fmt.lower()
-    for _, row in df.iterrows():
-        _QUEUE_DEPTH += 1
-        try:
-            record_metric("queue_depth", _QUEUE_DEPTH)
-        except Exception:
-            pass
-        if fmt == "json":
-            payload = {
-                "Timestamp": str(row["Timestamp"]),
-                "Symbol": str(row.get("Symbol", "")),
-                "prob": float(row["prob"]),
-                "confidence": float(row.get("confidence", 1.0)),
-            }
-            if "var" in row:
-                payload["var"] = float(row["var"])
-            if "es" in row:
-                payload["es"] = float(row["es"])
-            sock.send_json(payload)
-        else:
-            msg = signals_pb2.Signal(
-                timestamp=str(row["Timestamp"]),
-                symbol=str(row.get("Symbol", "")),
-                probability=str(row["prob"]),
-                confidence=float(row.get("confidence", 1.0)),
-            )
-            sock.send(msg.SerializeToString())
+    with tracer.start_as_current_span("publish_dataframe"):
+        fmt = fmt.lower()
+        for _, row in df.iterrows():
+            _QUEUE_DEPTH += 1
+            try:
+                record_metric("queue_depth", _QUEUE_DEPTH)
+            except Exception:
+                pass
+            if fmt == "json":
+                payload = {
+                    "Timestamp": str(row["Timestamp"]),
+                    "Symbol": str(row.get("Symbol", "")),
+                    "prob": float(row["prob"]),
+                    "confidence": float(row.get("confidence", 1.0)),
+                }
+                if "var" in row:
+                    payload["var"] = float(row["var"])
+                if "es" in row:
+                    payload["es"] = float(row["es"])
+                sock.send_json(payload)
+            else:
+                msg = signals_pb2.Signal(
+                    timestamp=str(row["Timestamp"]),
+                    symbol=str(row.get("Symbol", "")),
+                    probability=str(row["prob"]),
+                    confidence=float(row.get("confidence", 1.0)),
+                )
+                sock.send(msg.SerializeToString())
+            _publish_count.add(1)
 
 
 async def publish_dataframe_async(
@@ -160,33 +173,35 @@ async def publish_dataframe_async(
 ) -> None:
     """Asynchronously publish rows of a dataframe as JSON or Protobuf messages."""
     global _QUEUE_DEPTH
-    fmt = fmt.lower()
-    for _, row in df.iterrows():
-        _QUEUE_DEPTH += 1
-        try:
-            record_metric("queue_depth", _QUEUE_DEPTH)
-        except Exception:
-            pass
-        if fmt == "json":
-            payload = {
-                "Timestamp": str(row["Timestamp"]),
-                "Symbol": str(row.get("Symbol", "")),
-                "prob": float(row["prob"]),
-                "confidence": float(row.get("confidence", 1.0)),
-            }
-            if "var" in row:
-                payload["var"] = float(row["var"])
-            if "es" in row:
-                payload["es"] = float(row["es"])
-            await sock.send_json(payload)
-        else:
-            msg = signals_pb2.Signal(
-                timestamp=str(row["Timestamp"]),
-                symbol=str(row.get("Symbol", "")),
-                probability=str(row["prob"]),
-                confidence=float(row.get("confidence", 1.0)),
-            )
-            await sock.send(msg.SerializeToString())
+    with tracer.start_as_current_span("publish_dataframe_async"):
+        fmt = fmt.lower()
+        for _, row in df.iterrows():
+            _QUEUE_DEPTH += 1
+            try:
+                record_metric("queue_depth", _QUEUE_DEPTH)
+            except Exception:
+                pass
+            if fmt == "json":
+                payload = {
+                    "Timestamp": str(row["Timestamp"]),
+                    "Symbol": str(row.get("Symbol", "")),
+                    "prob": float(row["prob"]),
+                    "confidence": float(row.get("confidence", 1.0)),
+                }
+                if "var" in row:
+                    payload["var"] = float(row["var"])
+                if "es" in row:
+                    payload["es"] = float(row["es"])
+                await sock.send_json(payload)
+            else:
+                msg = signals_pb2.Signal(
+                    timestamp=str(row["Timestamp"]),
+                    symbol=str(row.get("Symbol", "")),
+                    probability=str(row["prob"]),
+                    confidence=float(row.get("confidence", 1.0)),
+                )
+                await sock.send(msg.SerializeToString())
+            _publish_count.add(1)
 
 
 async def iter_messages(
@@ -199,72 +214,75 @@ async def iter_messages(
     global _QUEUE_DEPTH
     fmt = fmt.lower()
     while True:
-        if fmt == "json":
-            data = await sock.recv_json()
-            _QUEUE_DEPTH = max(0, _QUEUE_DEPTH - 1)
-            try:
-                record_metric("queue_depth", _QUEUE_DEPTH)
-            except Exception:
-                pass
-            symbol = data.get("Symbol", "")
-            prob = float(data.get("prob", 0.0))
-            conf = float(data.get("confidence", 1.0))
-            var = data.get("var")
-            es = data.get("es")
-            size = (
-                sizer.size(prob, symbol, var=var, es=es, confidence=conf)
-                if sizer
-                else prob * conf
-            )
-            payload = {
-                "Timestamp": data.get("Timestamp", ""),
-                "Symbol": symbol,
-                "prob": prob,
-                "confidence": conf,
-                "var": var,
-                "es": es,
-                "size": size,
-            }
-            if not _passes_meta(meta_clf, prob, conf):
-                continue
-            _EVENT_STORE.record("prediction", payload)
-            yield payload
-        else:
-            raw = await sock.recv()
-            sig = signals_pb2.Signal()
-            sig.ParseFromString(raw)
-            _QUEUE_DEPTH = max(0, _QUEUE_DEPTH - 1)
-            try:
-                record_metric("queue_depth", _QUEUE_DEPTH)
-            except Exception:
-                pass
-            prob = float(sig.probability)
-            symbol = sig.symbol
-            conf = float(getattr(sig, "confidence", 1.0))
-            var = getattr(sig, "var", None)
-            es = getattr(sig, "es", None)
-            if var is not None:
-                var = float(var)
-            if es is not None:
-                es = float(es)
-            size = (
-                sizer.size(prob, symbol, var=var, es=es, confidence=conf)
-                if sizer
-                else prob * conf
-            )
-            payload = {
-                "Timestamp": sig.timestamp,
-                "Symbol": symbol,
-                "prob": prob,
-                "confidence": conf,
-                "var": var,
-                "es": es,
-                "size": size,
-            }
-            if not _passes_meta(meta_clf, prob, conf):
-                continue
-            _EVENT_STORE.record("prediction", payload)
-            yield payload
+        with tracer.start_as_current_span("iter_message"):
+            if fmt == "json":
+                data = await sock.recv_json()
+                _QUEUE_DEPTH = max(0, _QUEUE_DEPTH - 1)
+                try:
+                    record_metric("queue_depth", _QUEUE_DEPTH)
+                except Exception:
+                    pass
+                symbol = data.get("Symbol", "")
+                prob = float(data.get("prob", 0.0))
+                conf = float(data.get("confidence", 1.0))
+                var = data.get("var")
+                es = data.get("es")
+                size = (
+                    sizer.size(prob, symbol, var=var, es=es, confidence=conf)
+                    if sizer
+                    else prob * conf
+                )
+                payload = {
+                    "Timestamp": data.get("Timestamp", ""),
+                    "Symbol": symbol,
+                    "prob": prob,
+                    "confidence": conf,
+                    "var": var,
+                    "es": es,
+                    "size": size,
+                }
+                if not _passes_meta(meta_clf, prob, conf):
+                    continue
+                _EVENT_STORE.record("prediction", payload)
+                _consume_count.add(1)
+                yield payload
+            else:
+                raw = await sock.recv()
+                sig = signals_pb2.Signal()
+                sig.ParseFromString(raw)
+                _QUEUE_DEPTH = max(0, _QUEUE_DEPTH - 1)
+                try:
+                    record_metric("queue_depth", _QUEUE_DEPTH)
+                except Exception:
+                    pass
+                prob = float(sig.probability)
+                symbol = sig.symbol
+                conf = float(getattr(sig, "confidence", 1.0))
+                var = getattr(sig, "var", None)
+                es = getattr(sig, "es", None)
+                if var is not None:
+                    var = float(var)
+                if es is not None:
+                    es = float(es)
+                size = (
+                    sizer.size(prob, symbol, var=var, es=es, confidence=conf)
+                    if sizer
+                    else prob * conf
+                )
+                payload = {
+                    "Timestamp": sig.timestamp,
+                    "Symbol": symbol,
+                    "prob": prob,
+                    "confidence": conf,
+                    "var": var,
+                    "es": es,
+                    "size": size,
+                }
+                if not _passes_meta(meta_clf, prob, conf):
+                    continue
+                _EVENT_STORE.record("prediction", payload)
+                _consume_count.add(1)
+                yield payload
 
 
 class KafkaSignalQueue:
