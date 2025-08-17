@@ -736,6 +736,22 @@ secret. Restart the service or roll your deployment so pods pick up the new
 value. Once clients have been updated to use the new token, remove the old key
 from the secret or environment.
 
+### Secret Provisioning
+
+Configuration values that contain sensitive information now reference secrets
+using the `secret://` scheme. At runtime these references are resolved by
+`utils.SecretManager`, which first checks environment variables and then (if
+configured) a Vault-compatible backend. To provide secrets:
+
+1. Populate the required environment variables or store the values in Vault.
+2. Update `config.yaml` with `secret://<NAME>` entries, for example
+   `alerting.slack_webhook: "secret://SLACK_WEBHOOK"`.
+3. Ensure unit tests patch `SecretManager.get_secret` when they require specific
+   values.
+
+This approach keeps credentials out of source control while still allowing
+local development without Vault by simply setting environment variables.
+
 ### Monitoring and Dashboard
 
 The API now exposes Prometheus metrics at `/metrics`. Deploying Prometheus and

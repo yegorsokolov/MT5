@@ -1,5 +1,4 @@
 import sys
-import os
 import types
 import importlib
 import asyncio
@@ -24,8 +23,8 @@ def test_combined_drawdown_triggers_global_stop():
     assert rm.status()["trading_halted"] is True
 
 
-def load_api(tmp_log):
-    os.environ["API_KEY"] = "token"
+def load_api(tmp_log, monkeypatch):
+    monkeypatch.patch('utils.secret_manager.SecretManager.get_secret', return_value='token')
     logger = types.SimpleNamespace(warning=lambda *a, **k: None)
     sys.modules["log_utils"] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
@@ -58,8 +57,8 @@ def load_api(tmp_log):
     return importlib.reload(importlib.import_module("remote_api"))
 
 
-def setup_client(tmp_path):
-    api = load_api(tmp_path / "app.log")
+def setup_client(tmp_path, monkeypatch):
+    api = load_api(tmp_path / "app.log", monkeypatch)
     api.bots.clear()
     Path(api.LOG_FILE).write_text("line1\nline2\n")
     return api, TestClient(api.app)
@@ -69,7 +68,7 @@ def test_risk_status_endpoint(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_PORTFOLIO_DRAWDOWN", "100")
     import risk_manager as rm_mod
     importlib.reload(rm_mod)
-    api, client = setup_client(tmp_path)
+    api, client = setup_client(tmp_path, monkeypatch)
     rm = rm_mod.risk_manager
     rm.reset()
     rm.update("b1", -60)

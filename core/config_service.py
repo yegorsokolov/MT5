@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator, Dict, List
 import grpc
 from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.security import APIKeyHeader
+from utils.secret_manager import SecretManager
 from google.protobuf import empty_pb2
 
 from proto import config_pb2, config_pb2_grpc
@@ -144,10 +145,11 @@ if not audit_logger.handlers:
 # Access control
 # ---------------------------------------------------------------------------
 
+_sm = SecretManager()
 API_KEYS: Dict[str, Dict[str, str]] = {
     # api_key: {"user": str, "role": str}
-    os.getenv("CONFIG_ADMIN_KEY", "admin-key"): {"user": "admin", "role": "admin"},
-    os.getenv("CONFIG_READER_KEY", "reader-key"): {"user": "reader", "role": "reader"},
+    _sm.get_secret("CONFIG_ADMIN_KEY", "admin-key"): {"user": "admin", "role": "admin"},
+    _sm.get_secret("CONFIG_READER_KEY", "reader-key"): {"user": "reader", "role": "reader"},
 }
 
 ACL = {
