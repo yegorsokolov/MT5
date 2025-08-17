@@ -50,6 +50,21 @@ except Exception:  # pragma: no cover - plugins optional
 
 logger = logging.getLogger(__name__)
 
+TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+
+
+def _has_resources(obj: object) -> bool:
+    """Return True if current resources meet ``obj``'s capability needs."""
+
+    required = getattr(obj, "min_capability", "lite")
+    current = getattr(monitor, "capability_tier", "lite")
+    return TIERS.get(str(current), 0) >= TIERS.get(str(required), 0)
+
+
+garch_volatility.min_capability = "standard"  # type: ignore[attr-defined]
+rolling_fft_features.min_capability = "standard"  # type: ignore[attr-defined]
+rolling_wavelet_features.min_capability = "standard"  # type: ignore[attr-defined]
+
 
 def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """Downcast numeric columns to reduce memory usage.
@@ -348,6 +363,9 @@ def add_cross_asset_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+add_cross_asset_features.min_capability = "standard"  # type: ignore[attr-defined]
+
+
 def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """Add common technical features used by the ML model.
 
@@ -482,7 +500,10 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
         # base return and volatility
         group["return"] = group["mid"].pct_change()
-        group["garch_vol"] = garch_volatility(group["return"])
+        if _has_resources(garch_volatility):
+            group["garch_vol"] = garch_volatility(group["return"])
+        else:
+            group["garch_vol"] = np.nan
 
         use_numba = (
             monitor.capabilities.cpus <= 4 and nb_rolling_mean is not None and pd.__name__ == "pandas"
@@ -549,7 +570,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
 
-        if monitor.capabilities.cpus >= 8 and monitor.capabilities.memory_gb >= 16:
+        if _has_resources(rolling_fft_features) and _has_resources(rolling_wavelet_features):
             fft_feats = rolling_fft_features(group["mid"], window=128, freqs=[0.01])
             wave_feats = rolling_wavelet_features(
                 group["mid"], window=128, wavelet="db4", level=2
@@ -568,90 +589,92 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             df = df.groupby("Symbol", group_keys=False).apply(_feat)
         pivot = df.pivot_table(index="Timestamp", columns="Symbol", values="return")
 
-        # rolling momentum of each symbol's returns shifted by 1-2 periods
-        mom_features: Dict[str, pd.Series] = {}
-        for sym in pivot.columns:
-            for lag in [1, 2]:
-                mom = pivot[sym].shift(lag).rolling(10).mean()
-                mom_features[f"cross_mom_{sym}_{lag}"] = mom
-        mom_df = pd.DataFrame(mom_features, index=pivot.index).reset_index()
-        df = df.merge(mom_df, on="Timestamp", how="left")
-
         adjacency_matrices = None
-        if df["Symbol"].nunique() > 1:
-            pair_data: Dict[tuple, pd.Series] = {}
-            for sym1 in pivot.columns:
-                for sym2 in pivot.columns:
-                    if sym1 == sym2:
-                        continue
-                    pair_data[(sym1, sym2)] = pivot[sym1].rolling(30).corr(pivot[sym2])
+        if _has_resources(add_cross_asset_features):
+            mom_features: Dict[str, pd.Series] = {}
+            for sym in pivot.columns:
+                for lag in [1, 2]:
+                    mom = pivot[sym].shift(lag).rolling(10).mean()
+                    mom_features[f"cross_mom_{sym}_{lag}"] = mom
+            if mom_features:
+                mom_df = pd.DataFrame(mom_features, index=pivot.index).reset_index()
+                df = df.merge(mom_df, on="Timestamp", how="left")
 
-            symbols = list(pivot.columns)
-            adjacency_matrices = {}
-            for ts in pivot.index:
-                mat = np.zeros((len(symbols), len(symbols)))
-                for i, s1 in enumerate(symbols):
-                    for j, s2 in enumerate(symbols):
-                        if s1 == s2:
+            if df["Symbol"].nunique() > 1:
+                pair_data: Dict[tuple, pd.Series] = {}
+                for sym1 in pivot.columns:
+                    for sym2 in pivot.columns:
+                        if sym1 == sym2:
                             continue
-                        val = pair_data[(s1, s2)].loc[ts]
-                        mat[i, j] = 0.0 if pd.isna(val) else float(val)
-                adjacency_matrices[ts] = mat
+                        pair_data[(sym1, sym2)] = pivot[sym1].rolling(30).corr(pivot[sym2])
 
-            pair_df = pd.concat(pair_data, axis=1)
-            pair_df.columns = pd.MultiIndex.from_tuples(
-                pair_df.columns, names=["Symbol", "Other"]
-            )
-            pair_df = (
-                pair_df.stack(["Symbol", "Other"]).rename("pair_corr").reset_index()
-            )
-            pair_wide = pair_df.pivot_table(
-                index=["Timestamp", "Symbol"], columns="Other", values="pair_corr"
-            )
-            pair_wide = pair_wide.add_prefix("cross_corr_").reset_index()
-            df = df.merge(pair_wide, on=["Timestamp", "Symbol"], how="left")
+                symbols = list(pivot.columns)
+                adjacency_matrices = {}
+                for ts in pivot.index:
+                    mat = np.zeros((len(symbols), len(symbols)))
+                    for i, s1 in enumerate(symbols):
+                        for j, s2 in enumerate(symbols):
+                            if s1 == s2:
+                                continue
+                            val = pair_data[(s1, s2)].loc[ts]
+                            mat[i, j] = 0.0 if pd.isna(val) else float(val)
+                    adjacency_matrices[ts] = mat
 
-            lag_corr_df = pd.DataFrame(index=pivot.index)
-            for sym1 in pivot.columns:
-                for sym2 in pivot.columns:
-                    if sym1 == sym2:
-                        continue
-                    for lag in [3, 4, 5]:
-                        col = f"cross_corr_{sym1}_{sym2}_lag{lag}"
-                        lag_corr_df[col] = (
-                            pivot[sym1].rolling(30).corr(pivot[sym2].shift(lag))
-                        )
+                pair_df = pd.concat(pair_data, axis=1)
+                pair_df.columns = pd.MultiIndex.from_tuples(
+                    pair_df.columns, names=["Symbol", "Other"]
+                )
+                pair_df = (
+                    pair_df.stack(["Symbol", "Other"]).rename("pair_corr").reset_index()
+                )
+                pair_wide = pair_df.pivot_table(
+                    index=["Timestamp", "Symbol"], columns="Other", values="pair_corr"
+                )
+                pair_wide = pair_wide.add_prefix("cross_corr_").reset_index()
+                df = df.merge(pair_wide, on=["Timestamp", "Symbol"], how="left")
 
-            if not lag_corr_df.empty:
-                lag_corr_df = lag_corr_df.reset_index()
-                df = df.merge(lag_corr_df, on="Timestamp", how="left")
-
-            if cfg.get("use_pair_trading", False):
-                from statsmodels.tsa.stattools import coint  # type: ignore
-                window = cfg.get("pair_z_window", 20)
-                pivot_mid = df.pivot_table(index="Timestamp", columns="Symbol", values="mid")
-                pair_feat = pd.DataFrame(index=pivot_mid.index)
-                for s1 in pivot_mid.columns:
-                    for s2 in pivot_mid.columns:
-                        if s1 >= s2:
+                lag_corr_df = pd.DataFrame(index=pivot.index)
+                for sym1 in pivot.columns:
+                    for sym2 in pivot.columns:
+                        if sym1 == sym2:
                             continue
-                        pair_name = f"{s1}_{s2}"
-                        aligned = pivot_mid[[s1, s2]].dropna()
-                        if len(aligned) < window + 5:
-                            continue
-                        beta, alpha = np.polyfit(aligned[s2], aligned[s1], 1)
-                        spread = pivot_mid[s1] - (beta * pivot_mid[s2] + alpha)
-                        z = (spread - spread.rolling(window).mean()) / spread.rolling(window).std()
-                        pair_feat[f"pair_z_{pair_name}"] = z
-                        try:
-                            _, pval, _ = coint(aligned[s1], aligned[s2])
-                        except Exception:
-                            pval = np.nan
-                        pair_feat[f"pair_coint_p_{pair_name}"] = pval
+                        for lag in [3, 4, 5]:
+                            col = f"cross_corr_{sym1}_{sym2}_lag{lag}"
+                            lag_corr_df[col] = (
+                                pivot[sym1].rolling(30).corr(pivot[sym2].shift(lag))
+                            )
 
-                if not pair_feat.empty:
-                    pair_feat = pair_feat.reset_index()
-                    df = df.merge(pair_feat, on="Timestamp", how="left")
+                if not lag_corr_df.empty:
+                    lag_corr_df = lag_corr_df.reset_index()
+                    df = df.merge(lag_corr_df, on="Timestamp", how="left")
+
+                if cfg.get("use_pair_trading", False):
+                    from statsmodels.tsa.stattools import coint  # type: ignore
+
+                    window = cfg.get("pair_z_window", 20)
+                    pivot_mid = df.pivot_table(index="Timestamp", columns="Symbol", values="mid")
+                    pair_feat = pd.DataFrame(index=pivot_mid.index)
+                    for s1 in pivot_mid.columns:
+                        for s2 in pivot_mid.columns:
+                            if s1 >= s2:
+                                continue
+                            pair_name = f"{s1}_{s2}"
+                            aligned = pivot_mid[[s1, s2]].dropna()
+                            if len(aligned) < window + 5:
+                                continue
+                            beta, alpha = np.polyfit(aligned[s2], aligned[s1], 1)
+                            spread = pivot_mid[s1] - (beta * pivot_mid[s2] + alpha)
+                            z = (spread - spread.rolling(window).mean()) / spread.rolling(window).std()
+                            pair_feat[f"pair_z_{pair_name}"] = z
+                            try:
+                                _, pval, _ = coint(aligned[s1], aligned[s2])
+                            except Exception:
+                                pval = np.nan
+                            pair_feat[f"pair_coint_p_{pair_name}"] = pval
+
+                    if not pair_feat.empty:
+                        pair_feat = pair_feat.reset_index()
+                        df = df.merge(pair_feat, on="Timestamp", how="left")
 
         pivot_filled = pivot.fillna(0)
         if (
@@ -690,7 +713,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     df = add_economic_calendar_features(df)
     df = add_news_sentiment_features(df)
     df = add_index_features(df)
-    df = add_cross_asset_features(df)
+    if _has_resources(add_cross_asset_features):
+        df = add_cross_asset_features(df)
 
     macro_symbols = cfg.get("macro_series", [])
     if macro_symbols:

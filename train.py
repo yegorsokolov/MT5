@@ -438,6 +438,7 @@ def main(
         final_pipe,
         cfg,
         {"f1_weighted": aggregate_report["weighted avg"]["f1-score"]},
+        features=features,
     )
     logger.info("Registered model version %s", version_id)
 
