@@ -10,11 +10,12 @@ import joblib
 import pandas as pd
 import math
 from sklearn.metrics import classification_report
-from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMClassifier
 import mlflow
+
+from data.feature_scaler import FeatureScaler
 
 from log_utils import setup_logging, log_exceptions, LOG_DIR
 import numpy as np
@@ -153,6 +154,7 @@ def main(
     np.random.seed(seed)
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
+    scaler_path = root / "scaler.pkl"
 
     donor_booster = _load_donor_booster(transfer_from) if transfer_from else None
 
@@ -238,12 +240,16 @@ def main(
         ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
         if ckpt:
             start_batch = ckpt[0] + 1
-            pipe: Pipeline = ckpt[1]["model"]
+            state = ckpt[1]
+            pipe: Pipeline = state["model"]
+            scaler_state = state.get("scaler_state")
+            if scaler_state and "scaler" in pipe.named_steps:
+                pipe.named_steps["scaler"].load_state_dict(scaler_state)
         else:
             start_batch = 0
             steps: list[tuple[str, object]] = []
             if cfg.get("use_scaler", True):
-                steps.append(("scaler", StandardScaler()))
+                steps.append(("scaler", FeatureScaler.load(scaler_path)))
             steps.append(
                 (
                     "clf",
@@ -275,8 +281,13 @@ def main(
                 else (clf.booster_ if (batch_idx > 0 or ckpt) else None)
             )
             clf.fit(Xb, yb, init_model=init_model)
-            save_checkpoint({"model": pipe}, batch_idx, cfg.get("checkpoint_dir"))
+            state = {"model": pipe}
+            if "scaler" in pipe.named_steps:
+                state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
+            save_checkpoint(state, batch_idx, cfg.get("checkpoint_dir"))
         joblib.dump(pipe, root / "model.joblib")
+        if "scaler" in pipe.named_steps:
+            pipe.named_steps["scaler"].save(scaler_path)
         return 0.0
 
     tscv = TimeSeriesSplit(n_splits=cfg.get("n_splits", 5))
@@ -292,6 +303,9 @@ def main(
         all_preds = state.get("all_preds", [])
         all_true = state.get("all_true", [])
         final_pipe = state.get("model")
+        scaler_state = state.get("scaler_state")
+        if final_pipe and scaler_state and "scaler" in final_pipe.named_steps:
+            final_pipe.named_steps["scaler"].load_state_dict(scaler_state)
         logger.info("Resuming from checkpoint at fold %s", last_fold)
 
     for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
@@ -327,7 +341,7 @@ def main(
 
         steps = []
         if cfg.get("use_scaler", True):
-            steps.append(("scaler", StandardScaler()))
+            steps.append(("scaler", FeatureScaler()))
         steps.append(
             (
                 "clf",
@@ -364,16 +378,15 @@ def main(
 
         all_preds.extend(preds)
         all_true.extend(y_val)
-        save_checkpoint(
-            {
-                "model": pipe,
-                "all_preds": all_preds,
-                "all_true": all_true,
-                "metrics": report,
-            },
-            fold,
-            cfg.get("checkpoint_dir"),
-        )
+        state = {
+            "model": pipe,
+            "all_preds": all_preds,
+            "all_true": all_true,
+            "metrics": report,
+        }
+        if "scaler" in pipe.named_steps:
+            state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
+        save_checkpoint(state, fold, cfg.get("checkpoint_dir"))
 
         if fold == tscv.n_splits - 1:
             final_pipe = pipe
@@ -383,6 +396,8 @@ def main(
     logger.info("\n%s", classification_report(all_true, all_preds))
 
     joblib.dump(final_pipe, root / "model.joblib")
+    if final_pipe and "scaler" in final_pipe.named_steps:
+        final_pipe.named_steps["scaler"].save(scaler_path)
     logger.info("Model saved to %s", root / "model.joblib")
     mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
     mlflow.log_metric("f1_weighted", aggregate_report["weighted avg"]["f1-score"])
@@ -403,7 +418,7 @@ def main(
         y_reg = (df.loc[mask, "return"].shift(-1) > 0).astype(int)
         steps_reg: list[tuple[str, object]] = []
         if cfg.get("use_scaler", True):
-            steps_reg.append(("scaler", StandardScaler()))
+            steps_reg.append(("scaler", FeatureScaler()))
         steps_reg.append(
             (
                 "clf",
