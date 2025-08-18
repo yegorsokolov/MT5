@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Awaitable, Set
+from typing import Optional, Callable, Awaitable, Set, Dict
 
 import psutil
 try:
@@ -72,12 +72,14 @@ class ResourceMonitor:
         self._task: Optional[asyncio.Task] = None
         self._watch_task: Optional[asyncio.Task] = None
         self._subscribers: Set[asyncio.Queue[str]] = set()
+        self._usage_subscribers: Set[asyncio.Queue[Dict[str, float]]] = set()
         self.max_rss_mb = max_rss_mb
         self.max_cpu_pct = max_cpu_pct
         self.sample_interval = sample_interval
         self._breach_checks = 0
         self._breach_threshold = int(max(breach_duration / sample_interval, 1))
         self.alert_callback = alert_callback
+        self.latest_usage: Dict[str, float] = {}
 
     def _parse_cpu_flags(self) -> Set[str]:
         flags: Set[str] = set()
@@ -162,15 +164,39 @@ class ResourceMonitor:
     async def _watch_usage(self) -> None:
         proc = psutil.Process()
         proc.cpu_percent()
+        prev_net = self._read_net_bytes()
+        prev_disk = psutil.disk_io_counters()
         while True:
             await asyncio.sleep(self.sample_interval)
             rss = proc.memory_info().rss / (1024**2)
             cpu = proc.cpu_percent()
+            recv, sent = self._read_net_bytes()
+            disk = psutil.disk_io_counters()
+            net_rx = (recv - prev_net[0]) / self.sample_interval
+            net_tx = (sent - prev_net[1]) / self.sample_interval
+            disk_read = (disk.read_bytes - prev_disk.read_bytes) / self.sample_interval
+            disk_write = (disk.write_bytes - prev_disk.write_bytes) / self.sample_interval
+            prev_net = (recv, sent)
+            prev_disk = disk
             try:
                 record_metric("rss_usage_mb", rss)
                 record_metric("cpu_usage_pct", cpu)
+                record_metric("net_rx_bytes", net_rx)
+                record_metric("net_tx_bytes", net_tx)
+                record_metric("disk_read_bytes", disk_read)
+                record_metric("disk_write_bytes", disk_write)
             except Exception:
                 pass
+            usage = {
+                "rss_mb": rss,
+                "cpu_pct": cpu,
+                "net_rx": net_rx,
+                "net_tx": net_tx,
+                "disk_read": disk_read,
+                "disk_write": disk_write,
+            }
+            self.latest_usage = usage
+            await self._notify_usage(usage)
             reasons = []
             if self.max_rss_mb and rss > self.max_rss_mb:
                 reasons.append(f"rss {rss:.1f}MB>{self.max_rss_mb}")
@@ -210,6 +236,12 @@ class ResourceMonitor:
         self._subscribers.add(q)
         return q
 
+    def subscribe_usage(self) -> asyncio.Queue[Dict[str, float]]:
+        """Return a queue that receives periodic resource usage samples."""
+        q: asyncio.Queue[Dict[str, float]] = asyncio.Queue()
+        self._usage_subscribers.add(q)
+        return q
+
     async def _notify(self, tier: str) -> None:
         for q in list(self._subscribers):
             try:
@@ -217,12 +249,36 @@ class ResourceMonitor:
             except Exception:
                 self._subscribers.discard(q)
 
+    async def _notify_usage(self, usage: Dict[str, float]) -> None:
+        for q in list(self._usage_subscribers):
+            try:
+                await q.put(usage)
+            except Exception:
+                self._usage_subscribers.discard(q)
+
     def stop(self) -> None:
         for attr in ("_task", "_watch_task"):
             task = getattr(self, attr, None)
             if task:
                 task.cancel()
                 setattr(self, attr, None)
+
+    def _read_net_bytes(self) -> tuple[int, int]:
+        """Return total received and sent bytes across all interfaces."""
+        recv = sent = 0
+        try:
+            with open("/proc/net/dev", "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if ":" not in line:
+                        continue
+                    _, data = line.split(":", 1)
+                    fields = data.split()
+                    if len(fields) >= 9:
+                        recv += int(fields[0])
+                        sent += int(fields[8])
+        except Exception:
+            pass
+        return recv, sent
 
 
 monitor = ResourceMonitor()

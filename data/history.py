@@ -33,6 +33,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 from .versioning import compute_hash
 from .delta_store import DeltaStore
+from utils.resource_monitor import monitor
 
 logger = logging.getLogger(__name__)
 DATA_VERSIONS_LOG = Path("logs/data_versions.json")
@@ -307,6 +308,12 @@ def load_history_iter(path: Path, chunk_size: int):
     chunk has the ``Timestamp`` column normalized to naive ``datetime`` objects
     for consistency with other loaders.
     """
+
+    usage = getattr(monitor, "latest_usage", {})
+    disk_pressure = usage.get("disk_read", 0) + usage.get("disk_write", 0)
+    if disk_pressure > 50 * 1024 * 1024:  # 50MB/s
+        chunk_size = max(chunk_size // 2, 1)
+        logger.debug("Disk pressure %.1fMB/s; reducing chunk size to %d", disk_pressure / (1024**2), chunk_size)
 
     logger.info(
         "Streaming Parquet history from %s in chunks of %d", path, chunk_size
