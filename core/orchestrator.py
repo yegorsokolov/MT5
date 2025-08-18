@@ -1,6 +1,13 @@
 import asyncio
 import logging
 import os
+import subprocess
+
+try:  # pragma: no cover - alerting optional in tests
+    from utils.alerting import send_alert
+except Exception:  # pragma: no cover - fallback stub
+    def send_alert(msg: str) -> None:  # type: ignore
+        return
 
 from utils.resource_monitor import ResourceMonitor, monitor
 import model_registry
@@ -23,6 +30,12 @@ class Orchestrator:
         self.registry = model_registry.ModelRegistry(monitor=self.monitor, auto_refresh=False)
         self.canary = CanaryManager(self.registry)
         self.checkpoint = None
+        # mapping of service -> command used to (re)start it
+        self._service_cmds: dict[str, list[str]] = {
+            "signal_queue": ["python", "signal_queue.py"],
+            "realtime_train": ["python", "realtime_train.py"],
+        }
+        self._processes: dict[str, subprocess.Popen[bytes]] = {}
 
     async def _watch(self) -> None:
         """React to capability tier upgrades."""
@@ -69,6 +82,7 @@ class Orchestrator:
         loop.create_task(self._watch())
         loop.create_task(self._sync_monitor())
         loop.create_task(self._daily_summary())
+        loop.create_task(self._watch_services())
 
     @classmethod
     def start(cls) -> "Orchestrator":
@@ -104,3 +118,35 @@ class Orchestrator:
             except Exception:
                 self.logger.exception("Failed to push daily summary")
             await asyncio.sleep(24 * 60 * 60)
+
+    async def _watch_services(self) -> None:
+        """Monitor critical background services and restart if needed."""
+
+        if os.getenv("SERVICE_WATCHDOG", "0") != "1":
+            return
+
+        interval = int(os.getenv("SERVICE_WATCHDOG_INTERVAL", "60"))
+
+        while True:
+            # Ensure scheduler thread is alive
+            try:
+                import scheduler  # local import to avoid heavy dependency at import time
+
+                if not getattr(scheduler, "_started", False):
+                    scheduler.start_scheduler()
+            except Exception:
+                self.logger.exception("Scheduler health check failed")
+
+            # Check external service processes
+            for name, cmd in self._service_cmds.items():
+                proc = self._processes.get(name)
+                if proc is None or proc.poll() is not None:
+                    self.logger.warning("Service %s not running; restarting", name)
+                    try:
+                        self._processes[name] = subprocess.Popen(cmd)
+                        count = state_manager.increment_restart(name)
+                        record_metric(f"{name}_restarts", count, {"service": name})
+                        send_alert(f"Service {name} restarted")
+                    except Exception:
+                        self.logger.exception("Failed to restart service %s", name)
+            await asyncio.sleep(interval)
