@@ -16,6 +16,8 @@ from typing import Callable, Dict, Iterable, List, Tuple
 import numpy as np
 import pandas as pd
 
+from analysis.algorithm_rating import load_ratings
+
 FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
 
@@ -38,6 +40,7 @@ class StrategyRouter:
     algorithms: Dict[str, Algorithm] = field(default_factory=dict)
     alpha: float = 0.1
     scoreboard_path: Path | str = Path("reports/scoreboard.parquet")
+    elo_path: Path | str = Path("reports/elo_ratings.parquet")
 
     def __post_init__(self) -> None:
         if not self.algorithms:
@@ -59,6 +62,8 @@ class StrategyRouter:
         self.history: List[Tuple[FeatureDict, float, str]] = []
         self.scoreboard_path = Path(self.scoreboard_path)
         self.scoreboard = self._load_scoreboard()
+        self.elo_path = Path(self.elo_path)
+        self.elo_ratings = self._load_elo_ratings()
 
     # Registration -----------------------------------------------------
     def register(self, name: str, algorithm: Algorithm) -> None:
@@ -79,7 +84,12 @@ class StrategyRouter:
             theta = A_inv @ self.b[name]
             mean = float((theta.T @ x).item())
             bonus = float(self.alpha * np.sqrt((x.T @ A_inv @ x).item()))
-            score = mean + bonus + self._scoreboard_weight(regime, name)
+            score = (
+                mean
+                + bonus
+                + self._scoreboard_weight(regime, name)
+                + self._elo_weight(name)
+            )
             if score > best_score:
                 best_score = score
                 best_name = name
@@ -124,7 +134,10 @@ class StrategyRouter:
     def _load_scoreboard(self) -> pd.DataFrame:
         if self.scoreboard_path.exists():
             return pd.read_parquet(self.scoreboard_path)
-        return pd.DataFrame(columns=["sharpe", "drawdown"], index=pd.MultiIndex.from_tuples([], names=["regime", "algorithm"]))
+        return pd.DataFrame(
+            columns=["sharpe", "drawdown"],
+            index=pd.MultiIndex.from_tuples([], names=["regime", "algorithm"]),
+        )
 
     def _scoreboard_weight(self, regime: float | None, algorithm: str) -> float:
         if regime is None or self.scoreboard.empty:
@@ -134,7 +147,23 @@ class StrategyRouter:
         except KeyError:
             return 0.0
 
-    def _update_scoreboard(self, regime: float | None, algorithm: str, smooth: float) -> None:
+    def _load_elo_ratings(self) -> Dict[str, float]:
+        """Load persisted ELO ratings."""
+        try:
+            return load_ratings(self.elo_path).to_dict()
+        except Exception:
+            return {}
+
+    def _elo_weight(self, algorithm: str) -> float:
+        """Return a small weight based on the algorithm's ELO rating."""
+        rating = self.elo_ratings.get(algorithm)
+        if rating is None:
+            return 0.0
+        return (float(rating) - 1500.0) / 400.0
+
+    def _update_scoreboard(
+        self, regime: float | None, algorithm: str, smooth: float
+    ) -> None:
         """Blend offline metrics with live PnL using exponential smoothing."""
         if regime is None:
             return
