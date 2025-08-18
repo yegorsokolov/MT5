@@ -28,5 +28,6 @@ models/*
 !models/quantize.py
 !models/hot_reload.py
 !models/tft.py
+!models/ts2vec.py
 __pycache__/
 logs/
