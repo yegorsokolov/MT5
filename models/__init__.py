@@ -21,6 +21,10 @@ try:  # optional torch dependency
 except Exception:  # pragma: no cover - torch may be missing
     MultiHeadTransformer = None
 try:  # optional torch dependency
+    from .hier_forecast import HierarchicalForecaster
+except Exception:  # pragma: no cover - torch may be missing
+    HierarchicalForecaster = None
+try:  # optional torch dependency
     from .tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 except Exception:  # pragma: no cover - torch may be missing
     TemporalFusionTransformer = TFTConfig = QuantileLoss = None
@@ -33,6 +37,7 @@ __all__ = [
     "MetaLearner",
     "PriceDistributionModel",
     "MultiHeadTransformer",
+    "HierarchicalForecaster",
     "TemporalFusionTransformer",
     "TFTConfig",
     "QuantileLoss",
