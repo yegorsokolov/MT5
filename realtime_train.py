@@ -34,6 +34,7 @@ from metrics import (
 
 from telemetry import get_tracer, get_meter
 from analytics.metrics_store import record_metric, TS_PATH
+from analysis.data_quality import apply_quality_checks
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -106,6 +107,11 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
             df["AskVolume"] = df["Volume"]
             df.drop(columns=["Volume"], inplace=True)
             df = sanitize_ticks(df)
+            df, report = apply_quality_checks(df)
+            if any(report.values()):
+                logger.info("Realtime data quality: %s", report)
+                for k, v in report.items():
+                    record_metric(f"data_quality_{k}", v, tags={"source": "realtime"})
             _ticks_counter.add(len(df))
             return df
         return pd.DataFrame()
