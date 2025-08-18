@@ -12,11 +12,19 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, Optional, Callable
 import os
+from collections import OrderedDict
+import threading
 
 import duckdb
 import pandas as pd
 import requests
-from utils.secret_manager import SecretManager
+from analytics.metrics_store import record_metric
+try:  # pragma: no cover - optional dependency in tests
+    from utils.secret_manager import SecretManager
+except Exception:  # pragma: no cover
+    class SecretManager:  # type: ignore
+        def get_secret(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
 from utils.resource_monitor import monitor
 
 
@@ -36,6 +44,7 @@ class FeatureStore:
         service_url: Optional[str] = None,
         api_key: Optional[str] = None,
         tls_cert: Optional[str] = None,
+        memory_size: int = 128,
     ) -> None:
         if path is None:
             path = Path(__file__).resolve().parent / "data" / "feature_store.duckdb"
@@ -45,6 +54,11 @@ class FeatureStore:
         sm = SecretManager()
         self.api_key = api_key or sm.get_secret("FEATURE_SERVICE_API_KEY")
         self.tls_cert = tls_cert or os.getenv("FEATURE_SERVICE_CA_CERT")
+        self.memory_size = memory_size
+        self._memory: "OrderedDict[str, pd.DataFrame]" = OrderedDict()
+        self._lock = threading.Lock()
+        self._hits = {"memory": 0, "disk": 0, "remote": 0}
+        self._totals = {"memory": 0, "disk": 0, "remote": 0}
 
     # ------------------------------------------------------------------
     def _key(self, symbol: str, window: int, params: Dict[str, Any]) -> str:
@@ -249,24 +263,91 @@ class FeatureStore:
         end: str,
         compute_fn: Callable[[], pd.DataFrame],
     ) -> pd.DataFrame:
-        """Fetch features from the service or compute locally.
+        """Fetch features using tiered caching.
 
-        The remote service is queried first; if it responds with a valid
-        DataFrame the result is cached locally and returned. Otherwise
-        ``compute_fn`` is executed and the resulting features are saved both
-        locally and uploaded to the service. This provides a transparent
-        fallback to local computation when the service cannot be reached.
+        The lookup order is in-memory LRU cache, local DuckDB cache and
+        finally the remote feature service.  Misses fall back to
+        ``compute_fn``.  When a lower tier serves the request, upper tiers are
+        populated asynchronously so subsequent calls are faster.  Tier hit
+        ratios are reported via :func:`analytics.metrics_store.record_metric`.
         """
 
         params = {"start": start, "end": end}
-        df = self.fetch_remote(symbol, start, end)
+        key = self._key(symbol, 0, params)
+
+        # Memory tier --------------------------------------------------
+        self._totals["memory"] += 1
+        with self._lock:
+            if key in self._memory:
+                df = self._memory.pop(key)
+                self._memory[key] = df
+                self._hits["memory"] += 1
+                self._record_metrics()
+                return df
+
+        # Disk tier ----------------------------------------------------
+        self._totals["disk"] += 1
+        df = self.load(symbol, 0, params, raw_hash="remote")
         if df is not None:
-            self.save(df, symbol, 0, params, raw_hash="remote")
+            self._hits["disk"] += 1
+            threading.Thread(
+                target=self._cache_memory, args=(key, df), daemon=True
+            ).start()
+            self._record_metrics()
             return df
+
+        # Remote tier --------------------------------------------------
+        if self.service_url:
+            self._totals["remote"] += 1
+            df = self.fetch_remote(symbol, start, end)
+            if df is not None:
+                self._hits["remote"] += 1
+                threading.Thread(
+                    target=self.save,
+                    args=(df, symbol, 0, params, "remote"),
+                    daemon=True,
+                ).start()
+                threading.Thread(
+                    target=self._cache_memory, args=(key, df), daemon=True
+                ).start()
+                self._record_metrics()
+                return df
+
+        # Compute fallback ---------------------------------------------
         df = compute_fn()
-        self.save(df, symbol, 0, params, raw_hash="remote")
-        self.upload_remote(df, symbol, start, end)
+        threading.Thread(
+            target=self.save, args=(df, symbol, 0, params, "remote"), daemon=True
+        ).start()
+        threading.Thread(
+            target=self._cache_memory, args=(key, df), daemon=True
+        ).start()
+        threading.Thread(
+            target=self.upload_remote, args=(df, symbol, start, end), daemon=True
+        ).start()
+        self._record_metrics()
         return df
+
+    # ------------------------------------------------------------------
+    def _cache_memory(self, key: str, df: pd.DataFrame) -> None:
+        """Store ``df`` in the in-memory LRU cache."""
+
+        with self._lock:
+            self._memory[key] = df
+            self._memory.move_to_end(key)
+            while len(self._memory) > self.memory_size:
+                self._memory.popitem(last=False)
+
+    # ------------------------------------------------------------------
+    def _record_metrics(self) -> None:
+        """Record current hit ratios for each tier."""
+
+        for tier, hits in self._hits.items():
+            total = self._totals[tier]
+            if total:
+                ratio = hits / total
+                record_metric(
+                    "feature_store_hit_ratio", ratio, tags={"tier": tier}
+                )
 
 
 __all__ = ["FeatureStore"]
