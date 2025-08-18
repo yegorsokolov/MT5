@@ -12,6 +12,7 @@ from risk import risk_of_ruin
 from risk.budget_allocator import BudgetAllocator
 from analytics.metrics_store import record_metric
 from portfolio.robust_optimizer import RobustOptimizer
+from analysis.extreme_value import estimate_tail_probability, log_evt_result
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -28,6 +29,7 @@ class RiskMetrics:
     daily_loss: float = 0.0
     var: float = 0.0
     risk_of_ruin: float = 0.0
+    tail_prob: float = 0.0
     trading_halted: bool = False
     factor_contributions: Dict[str, float] = field(default_factory=dict)
 
@@ -44,6 +46,8 @@ class RiskManager:
         risk_of_ruin_threshold: float = 1.0,
         initial_capital: float = 1.0,
         optimizer: RobustOptimizer | None = None,
+        tail_threshold: float | None = None,
+        tail_prob_limit: float = 0.05,
     ) -> None:
         self.max_drawdown = max_drawdown
         self.max_var = max_var
@@ -59,6 +63,8 @@ class RiskManager:
         self.robust_optimizer = optimizer or RobustOptimizer()
         self._regime_pnl_history: Dict[int, Dict[str, List[float]]] = {}
         self._last_regime: int | None = None
+        self.tail_threshold = tail_threshold or max_drawdown
+        self.tail_prob_limit = tail_prob_limit
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""
@@ -108,6 +114,14 @@ class RiskManager:
                 fr = FactorRisk(factors_df)
                 contrib = fr.factor_contributions(returns)
                 self.metrics.factor_contributions = contrib.to_dict()
+            tail_prob, evt = estimate_tail_probability(
+                returns,
+                -self.tail_threshold / self.initial_capital,
+            )
+            self.metrics.tail_prob = tail_prob
+            log_evt_result(evt, breach=tail_prob > self.tail_prob_limit)
+            if self.tail_hedger is not None:
+                self.tail_hedger.hedge_ratio = 1.0 + tail_prob
         breach_reason = None
         if self.metrics.daily_loss <= -self.max_drawdown:
             breach_reason = (
@@ -150,6 +164,7 @@ class RiskManager:
             "daily_loss": self.metrics.daily_loss,
             "var": self.metrics.var,
             "risk_of_ruin": self.metrics.risk_of_ruin,
+            "tail_prob": self.metrics.tail_prob,
             "trading_halted": self.metrics.trading_halted,
             "factor_contributions": self.metrics.factor_contributions,
         }
@@ -210,7 +225,8 @@ class RiskManager:
     def adjust_position_size(self, bot_id: str, size: float) -> float:
         """Scale ``size`` by the risk budget for ``bot_id``."""
         frac = self.budget_allocator.fraction(bot_id)
-        return size * frac
+        scale = max(0.0, 1.0 - self.metrics.tail_prob)
+        return size * frac * scale
 
 
 from risk.tail_hedger import TailHedger
