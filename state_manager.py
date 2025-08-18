@@ -114,3 +114,22 @@ def load_runtime_state() -> dict[str, Any] | None:
         return joblib.load(_STATE_FILE)
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Service restart tracking
+# ---------------------------------------------------------------------------
+_RESTART_COUNTERS: dict[str, int] = {}
+
+
+def increment_restart(service: str) -> int:
+    """Increment and return the restart count for ``service``."""
+
+    _RESTART_COUNTERS[service] = _RESTART_COUNTERS.get(service, 0) + 1
+    return _RESTART_COUNTERS[service]
+
+
+def get_restart_counters() -> dict[str, int]:
+    """Return a copy of all service restart counters."""
+
+    return dict(_RESTART_COUNTERS)
