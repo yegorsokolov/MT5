@@ -19,6 +19,7 @@ from analysis.frequency_features import (
     rolling_fft_features,
     rolling_wavelet_features,
 )
+from analysis.fractal_features import rolling_fractal_features
 from analysis.session_features import add_session_features
 from utils.resource_monitor import monitor
 try:  # optional numba acceleration
@@ -75,6 +76,7 @@ def _has_resources(obj: object) -> bool:
 garch_volatility.min_capability = "standard"  # type: ignore[attr-defined]
 rolling_fft_features.min_capability = "standard"  # type: ignore[attr-defined]
 rolling_wavelet_features.min_capability = "standard"  # type: ignore[attr-defined]
+rolling_fractal_features.min_capability = "standard"  # type: ignore[attr-defined]
 
 
 def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
@@ -581,6 +583,13 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         else:
             group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
+
+        if _has_resources(rolling_fractal_features):
+            frac = rolling_fractal_features(group["mid"], window=128)
+            group = pd.concat([group, frac], axis=1)
+        else:
+            group["hurst"] = np.nan
+            group["fractal_dim"] = np.nan
 
         if _has_resources(rolling_fft_features) and _has_resources(rolling_wavelet_features):
             fft_feats = rolling_fft_features(group["mid"], window=128, freqs=[0.01])
