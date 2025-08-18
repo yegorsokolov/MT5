@@ -57,6 +57,7 @@ class ModelVariant:
     name: str
     requirements: ResourceCapabilities
     quantized: Optional[str] = None
+    remote_only: bool = False
 
     def is_supported(self, capabilities: ResourceCapabilities) -> bool:
         """Return True if system capabilities meet this variant's needs."""
@@ -74,6 +75,7 @@ MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
             "sentiment_large",
             ResourceCapabilities(8, 32, True, gpu_count=1),
             "sentiment_large_quantized",
+            remote_only=True,
         ),
         ModelVariant(
             "sentiment_medium",
@@ -91,6 +93,7 @@ MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
             "rl_large",
             ResourceCapabilities(16, 64, True, gpu_count=1),
             "rl_large_quantized",
+            remote_only=True,
         ),
         ModelVariant(
             "rl_medium",
@@ -196,13 +199,18 @@ class ModelRegistry:
             self.selected[task] = baseline
 
     def requires_remote(self, task: str) -> bool:
-        """Return ``True`` if the optimal variant for ``task`` exceeds local capabilities."""
+        """Return True if ``task`` should be executed remotely."""
+        return self._remote_variant(task) is not None
+
+    # Internal ------------------------------------------------------------
+    def _remote_variant(self, task: str) -> Optional[ModelVariant]:
         variants = MODEL_REGISTRY.get(task)
         if not variants:
-            return False
+            return None
         top = variants[0]
-        chosen = self.selected.get(task, top)
-        return chosen.name != top.name
+        if top.remote_only and not top.is_supported(self.monitor.capabilities):
+            return top
+        return None
 
     def predict_mixture(self, history: Any, regime: float) -> float:
         """Predict using the mixture-of-experts gating network."""
@@ -223,10 +231,18 @@ class ModelRegistry:
         """
         model_name = self.get(task)
         with tracer.start_as_current_span("predict"):
-            if self.requires_remote(task):
-                from models.remote_client import predict_remote
+            remote_variant = self._remote_variant(task)
+            if remote_variant is not None:
+                import importlib.util
 
-                return predict_remote(model_name, features)
+                spec = importlib.util.spec_from_file_location(
+                    "inference_client", Path(__file__).with_name("models") / "inference_client.py"
+                )
+                ic = importlib.util.module_from_spec(spec)
+                assert spec and spec.loader
+                spec.loader.exec_module(ic)  # type: ignore
+                client = ic.InferenceClient()
+                return client.predict(remote_variant.name, features)
             model = loader(model_name)
             if hasattr(model, "predict_proba"):
                 return model.predict_proba(features)
