@@ -157,6 +157,12 @@ def main() -> None:
             st.subheader("Drift Events")
             st.line_chart(drift.set_index("timestamp")["value"], height=150)
 
+        for name in ["gaps", "zscore", "median"]:
+            dq = query_metrics(f"data_quality_{name}")
+            if not dq.empty:
+                st.subheader(f"Data Quality - {name.title()}")
+                st.line_chart(dq.set_index("timestamp")["value"], height=150)
+
     # Config Explorer tab
     with tabs[2]:
         current = load_current_config()
