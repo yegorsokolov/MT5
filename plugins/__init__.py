@@ -141,6 +141,7 @@ PLUGIN_MODULES = [
     'regime_plugin',
     'finbert_sentiment',
     'fingpt_sentiment',
+    'multilang_sentiment',
     'anomaly',
     'qlib_features',
     'tsfresh_features',
