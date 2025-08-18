@@ -25,6 +25,7 @@ from tqdm import tqdm
 from models import model_store
 from models.distillation import distill_teacher_student
 from models.build_model import build_model, compute_scale_factor
+from models.hier_forecast import HierarchicalForecaster
 from models.quantize import apply_quantization
 from models.contrastive_encoder import initialize_model_with_contrastive
 from analysis.feature_selector import select_features
@@ -498,8 +499,11 @@ def main(
 
         quantiles = cfg.get("quantiles", [0.1, 0.5, 0.9])
         use_tft = cfg.get("use_tft", False) and TIERS.get(tier, 0) >= TIERS["gpu"]
+        horizons = cfg.get("horizons")
 
-        if use_tft:
+        if horizons and TIERS.get(tier, 0) >= TIERS["standard"]:
+            model = HierarchicalForecaster(len(features), horizons).to(device)
+        elif use_tft:
             tft_cfg = TFTConfig(
                 static_size=0,
                 known_size=len(features),
@@ -519,6 +523,8 @@ def main(
             ).to(device)
         model = initialize_model_with_contrastive(model)
         def _watch_model() -> None:
+            if isinstance(model, HierarchicalForecaster):
+                return
             async def _watch() -> None:
                 q = monitor.subscribe()
                 nonlocal model, scale_factor
@@ -646,11 +652,19 @@ def main(
                     yb = yb.to(device)
                     if use_amp:
                         with autocast():
+                            if isinstance(model, HierarchicalForecaster):
+                                preds = model(xb)
+                                losses.append(loss_fn(preds, yb.float()))
+                            else:
+                                preds = model(xb) if use_tft else model(xb, code)
+                                losses.append(loss_fn(preds, yb.float() if use_tft else yb))
+                    else:
+                        if isinstance(model, HierarchicalForecaster):
+                            preds = model(xb)
+                            losses.append(loss_fn(preds, yb.float()))
+                        else:
                             preds = model(xb) if use_tft else model(xb, code)
                             losses.append(loss_fn(preds, yb.float() if use_tft else yb))
-                    else:
-                        preds = model(xb) if use_tft else model(xb, code)
-                        losses.append(loss_fn(preds, yb.float() if use_tft else yb))
                 raw_loss = sum(losses) / len(losses)
                 if use_amp:
                     scaler.scale(raw_loss / accumulate_steps).backward()
@@ -690,14 +704,21 @@ def main(
                             xb = xb.to(device)
                             yb = yb.to(device)
                             with autocast(enabled=use_amp):
-                                preds = model(xb) if use_tft else model(xb, code)
-                                loss = loss_fn(preds, yb.float() if use_tft else yb)
+                                if isinstance(model, HierarchicalForecaster):
+                                    preds = model(xb)
+                                    loss = loss_fn(preds, yb.float())
+                                else:
+                                    preds = model(xb) if use_tft else model(xb, code)
+                                    loss = loss_fn(preds, yb.float() if use_tft else yb)
                             val_loss += loss.item() * xb.size(0)
-                            pred_labels = (
-                                (preds[:, len(quantiles) // 2] > 0.5).int()
-                                if use_tft
-                                else (preds > 0.5).int()
-                            )
+                            if isinstance(model, HierarchicalForecaster):
+                                pred_labels = (preds[:, 0] > 0.5).int()
+                            else:
+                                pred_labels = (
+                                    (preds[:, len(quantiles) // 2] > 0.5).int()
+                                    if use_tft
+                                    else (preds > 0.5).int()
+                                )
                             correct += (pred_labels == yb.int()).sum().item()
                             total += yb.size(0)
                 val_loss /= total if total else 1
@@ -759,14 +780,21 @@ def main(
                             xb = xb.to(device)
                             yb = yb.to(device)
                             with autocast(enabled=use_amp):
-                                preds = model(xb) if use_tft else model(xb, code)
-                            prob = (
-                                preds[:, len(quantiles) // 2]
-                                if use_tft
-                                else preds.squeeze()
-                            )
+                                if isinstance(model, HierarchicalForecaster):
+                                    preds = model(xb)
+                                else:
+                                    preds = model(xb) if use_tft else model(xb, code)
+                            if isinstance(model, HierarchicalForecaster):
+                                prob = preds[:, 0]
+                                val_true.append(yb[:, 0].cpu().numpy())
+                            else:
+                                prob = (
+                                    preds[:, len(quantiles) // 2]
+                                    if use_tft
+                                    else preds.squeeze()
+                                )
+                                val_true.append(yb.cpu().numpy())
                             val_probs.append(prob.cpu().numpy())
-                            val_true.append(yb.cpu().numpy())
                 if val_probs:
                     val_probs_arr = np.concatenate(val_probs)
                     val_true_arr = np.concatenate(val_true)
@@ -791,20 +819,25 @@ def main(
                         xb = xb.to(device)
                         yb = yb.to(device)
                         with autocast(enabled=use_amp):
-                            preds = model(xb) if use_tft else model(xb, code)
-                        prob = (
-                            preds[:, len(quantiles) // 2]
-                            if use_tft
-                            else preds.squeeze()
-                        )
+                            if isinstance(model, HierarchicalForecaster):
+                                preds = model(xb)
+                                prob = preds[:, 0]
+                            else:
+                                preds = model(xb) if use_tft else model(xb, code)
+                                prob = (
+                                    preds[:, len(quantiles) // 2]
+                                    if use_tft
+                                    else preds.squeeze()
+                                )
                         if calibrator is not None:
                             prob_np = prob.cpu().numpy()
                             prob = torch.tensor(
                                 calibrator.predict(prob_np), device=prob.device
                             )
+                        target = yb[:, 0] if yb.ndim > 1 else yb
                         pred_labels = (prob > 0.5).int()
-                        correct += (pred_labels == yb.int()).sum().item()
-                        total += yb.size(0)
+                        correct += (pred_labels == target.int()).sum().item()
+                        total += target.size(0)
             acc = correct / total if total else 0.0
             logger.info("Test accuracy: %s", acc)
             logger.info("Best validation loss: %s", best_val_loss)
@@ -901,7 +934,15 @@ def main(
             X_tensor = torch.tensor(
                 train_df[features].values, dtype=torch.float32, device=device
             )
-            probs = model(X_tensor).cpu().numpy()
+            preds = model(X_tensor).cpu().numpy()
+        if preds.ndim > 1:
+            np.save(root / "pred_short.npy", preds[:, 0])
+            np.save(root / "pred_long.npy", preds[:, -1])
+            probs = preds[:, 0]
+        else:
+            np.save(root / "pred_short.npy", preds)
+            np.save(root / "pred_long.npy", preds)
+            probs = preds
         probs = np.column_stack([1 - probs, probs])
         al_queue.push(train_df.index, probs, k=cfg.get("al_queue_size", 10))
         new_labels = al_queue.pop_labeled()
