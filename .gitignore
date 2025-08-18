@@ -30,5 +30,6 @@ models/*
 !models/hot_reload.py
 !models/tft.py
 !models/ts2vec.py
+!models/hier_forecast.py
 __pycache__/
 logs/
