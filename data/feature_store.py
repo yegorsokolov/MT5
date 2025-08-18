@@ -45,6 +45,8 @@ class FeatureStore:
         api_key: Optional[str] = None,
         tls_cert: Optional[str] = None,
         memory_size: int = 128,
+        worker_url: Optional[str] = None,
+        worker_retries: int = 3,
     ) -> None:
         if path is None:
             path = Path(__file__).resolve().parent / "data" / "feature_store.duckdb"
@@ -55,6 +57,8 @@ class FeatureStore:
         self.api_key = api_key or sm.get_secret("FEATURE_SERVICE_API_KEY")
         self.tls_cert = tls_cert or os.getenv("FEATURE_SERVICE_CA_CERT")
         self.memory_size = memory_size
+        self.worker_url = worker_url or os.getenv("FEATURE_WORKER_URL")
+        self.worker_retries = worker_retries
         self._memory: "OrderedDict[str, pd.DataFrame]" = OrderedDict()
         self._lock = threading.Lock()
         self._hits = {"memory": 0, "disk": 0, "remote": 0}
@@ -256,6 +260,28 @@ class FeatureStore:
             pass
 
     # ------------------------------------------------------------------
+    def compute_remote(self, symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
+        """Submit a feature computation job to the remote worker.
+
+        Retries are attempted according to ``worker_retries``.  ``None`` is
+        returned if the worker is unreachable or returns a non-200 status
+        code so callers can gracefully fall back to local computation.
+        """
+
+        if not self.worker_url:
+            return None
+        url = f"{self.worker_url.rstrip('/')}/compute"
+        payload = {"symbol": symbol, "start": start, "end": end}
+        for _ in range(max(1, self.worker_retries)):
+            try:
+                resp = requests.post(url, json=payload, timeout=30)
+                if resp.status_code == 200:
+                    return pd.DataFrame(resp.json())
+            except Exception:
+                pass
+        return None
+
+    # ------------------------------------------------------------------
     def get_features(
         self,
         symbol: str,
@@ -302,6 +328,21 @@ class FeatureStore:
             df = self.fetch_remote(symbol, start, end)
             if df is not None:
                 self._hits["remote"] += 1
+                threading.Thread(
+                    target=self.save,
+                    args=(df, symbol, 0, params, "remote"),
+                    daemon=True,
+                ).start()
+                threading.Thread(
+                    target=self._cache_memory, args=(key, df), daemon=True
+                ).start()
+                self._record_metrics()
+                return df
+
+        # Remote worker -----------------------------------------------
+        if getattr(monitor, "capability_tier", "") == "lite" and self.worker_url:
+            df = self.compute_remote(symbol, start, end)
+            if df is not None:
                 threading.Thread(
                     target=self.save,
                     args=(df, symbol, 0, params, "remote"),
