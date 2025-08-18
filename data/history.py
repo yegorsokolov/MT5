@@ -34,6 +34,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 from .versioning import compute_hash
 from .delta_store import DeltaStore
 from utils.resource_monitor import monitor
+from analysis.data_quality import apply_quality_checks
+from analytics.metrics_store import record_metric
 
 logger = logging.getLogger(__name__)
 DATA_VERSIONS_LOG = Path("logs/data_versions.json")
@@ -235,6 +237,14 @@ def load_history(path: Path, validate: bool = False) -> pd.DataFrame:
 
         TICK_SCHEMA.validate(df, lazy=True)
     logger.debug("Loaded %d rows from CSV", len(df))
+
+    # Apply data quality checks before caching and returning
+    df, report = apply_quality_checks(df)
+    if any(report.values()):
+        logger.info("Data quality report: %s", report)
+        for k, v in report.items():
+            record_metric(f"data_quality_{k}", v, tags={"source": "history"})
+
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(cache_path, index=False, date_format="%Y%m%d %H:%M:%S:%f")
     _record_data_version(path)
@@ -296,6 +306,13 @@ def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
         from .validators import TICK_SCHEMA
 
         TICK_SCHEMA.validate(df, lazy=True)
+
+    df, report = apply_quality_checks(df)
+    if any(report.values()):
+        logger.info("Data quality report: %s", report)
+        for k, v in report.items():
+            record_metric(f"data_quality_{k}", v, tags={"source": "history"})
+
     logger.debug("Loaded %d rows from Parquet", len(df))
     return df
 
