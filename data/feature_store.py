@@ -17,6 +17,7 @@ import duckdb
 import pandas as pd
 import requests
 from utils.secret_manager import SecretManager
+from utils.resource_monitor import monitor
 
 
 class FeatureStore:
@@ -60,6 +61,19 @@ class FeatureStore:
         raw_hash: str,
     ) -> Optional[pd.DataFrame]:
         """Return cached features if available and up-to-date."""
+        usage = getattr(monitor, "latest_usage", {})
+        disk_pressure = usage.get("disk_read", 0) + usage.get("disk_write", 0)
+        net_pressure = usage.get("net_rx", 0) + usage.get("net_tx", 0)
+        if (
+            self.service_url
+            and disk_pressure > 50 * 1024 * 1024
+            and net_pressure < 10 * 1024 * 1024
+            and params.get("start")
+            and params.get("end")
+        ):
+            remote = self.fetch_remote(symbol, params["start"], params["end"])
+            if remote is not None:
+                return remote
 
         if not self.path.exists():
             return None

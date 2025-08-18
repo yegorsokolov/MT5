@@ -6,12 +6,21 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 import threading
 import datetime as _dt
+import os
+import requests
+from utils.resource_monitor import monitor
 
 
 class EventStore:
     """Simple append-only event store backed by SQLite."""
 
-    def __init__(self, path: str | Path | None = None, dataset_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        dataset_dir: str | Path | None = None,
+        remote_url: str | None = None,
+        disk_io_threshold: int = 100 * 1024 * 1024,
+    ) -> None:
         base = Path(__file__).resolve().parent
         self.path = Path(path) if path else base / "events.db"
         self.conn = sqlite3.connect(self.path)
@@ -20,6 +29,8 @@ class EventStore:
             self.ds_path.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
+        self.remote_url = remote_url or os.getenv("EVENT_STORE_URL")
+        self.disk_io_threshold = disk_io_threshold
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS events (
@@ -36,6 +47,17 @@ class EventStore:
         """Record an event of the given type with the provided payload."""
         ts = _dt.datetime.utcnow().isoformat()
         data = json.dumps(payload, default=str)
+        usage = getattr(monitor, "latest_usage", {})
+        if self.remote_url and usage.get("disk_write", 0) > self.disk_io_threshold:
+            try:
+                requests.post(
+                    self.remote_url,
+                    json={"timestamp": ts, "type": event_type, "payload": payload},
+                    timeout=5,
+                )
+                return
+            except Exception:
+                pass
         with self.lock:
             self.conn.execute(
                 "INSERT INTO events(timestamp, type, payload) VALUES (?, ?, ?)",
