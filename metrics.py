@@ -19,6 +19,8 @@ PARTIAL_FILL_COUNT = Counter('partial_fill_count', 'Trades partially filled due 
 SKIPPED_TRADE_COUNT = Counter('skipped_trade_count', 'Trades skipped due to insufficient liquidity')
 FEATURE_ANOMALIES = Counter('feature_anomalies', 'Detected feature anomalies')
 RESOURCE_RESTARTS = Counter('resource_restarts', 'Graceful restarts triggered by resource watchdog')
+# Plugin reload metrics
+PLUGIN_RELOADS = Counter('plugin_reloads', 'Total plugin reloads')
 # Prediction cache metrics
 PRED_CACHE_HIT = Counter('pred_cache_hit', 'Predictions served from cache')
 # Resource utilization metrics
