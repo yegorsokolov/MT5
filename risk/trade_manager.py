@@ -104,7 +104,34 @@ class TradeManager:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def update_trade(self, order_id: int, prices: pd.Series, features: Dict[str, Any]) -> Dict[str, float]:
+    def open_trade(self, order: Dict[str, Any], confirm_score: float) -> int | None:
+        """Open a trade if ``confirm_score`` is positive.
+
+        The order is forwarded to the ``execution`` client and persisted via
+        ``trade_log`` when ``confirm_score`` is greater than zero.  The
+        confirmation score is stored alongside the order for later analysis.
+        """
+
+        if confirm_score <= 0:
+            return None
+        order_id = None
+        if hasattr(self.trade_log, "record_order"):
+            order_id = int(self.trade_log.record_order(order))
+            if hasattr(self.trade_log, "record_confirmation"):
+                self.trade_log.record_confirmation(order_id, confirm_score)
+        if hasattr(self.execution, "open_order"):
+            self.execution.open_order(order)
+        elif hasattr(self.execution, "open_trade"):
+            self.execution.open_trade(order)
+        return order_id
+
+    def update_trade(
+        self,
+        order_id: int,
+        prices: pd.Series,
+        features: Dict[str, Any],
+        confirm_score: float | None = None,
+    ) -> Dict[str, float]:
         """Recompute thresholds and persist them for ``order_id``.
 
         The adaptive levels are pushed to the ``execution`` client via its
@@ -114,6 +141,8 @@ class TradeManager:
         """
 
         levels = self.compute_levels(prices, features)
+        if confirm_score is not None and hasattr(self.trade_log, "record_confirmation"):
+            self.trade_log.record_confirmation(order_id, confirm_score)
         if hasattr(self.execution, "update_order"):
             self.execution.update_order(
                 order_id,
@@ -138,13 +167,18 @@ class TradeManager:
                 survival_prob = float(self.survival_model.predict(feat))
             if hasattr(self.trade_log, 'record_survival'):
                 self.trade_log.record_survival(order_id, survival_prob)
-            if survival_prob < self.survival_threshold:
-                if hasattr(self.execution, 'close_order'):
-                    self.execution.close_order(order_id)
-                elif hasattr(self.execution, 'close_trade'):
-                    self.execution.close_trade(order_id)
-                elif hasattr(self.execution, 'close_position'):
-                    self.execution.close_position(order_id)
+        force_exit = False
+        if survival_prob is not None and survival_prob < self.survival_threshold:
+            force_exit = True
+        if confirm_score is not None and confirm_score < 0 and not force_exit:
+            force_exit = True
+        if force_exit:
+            if hasattr(self.execution, 'close_order'):
+                self.execution.close_order(order_id)
+            elif hasattr(self.execution, 'close_trade'):
+                self.execution.close_trade(order_id)
+            elif hasattr(self.execution, 'close_position'):
+                self.execution.close_position(order_id)
         result = dict(levels)
         if survival_prob is not None:
             result['survival_prob'] = survival_prob
