@@ -22,8 +22,8 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     )
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_stub)
     prom_stub = types.SimpleNamespace(
-        Counter=lambda *a, **k: types.SimpleNamespace(),
-        Gauge=lambda *a, **k: types.SimpleNamespace(),
+        Counter=lambda *a, **k: types.SimpleNamespace(inc=lambda *a, **k: None),
+        Gauge=lambda *a, **k: types.SimpleNamespace(set=lambda *a, **k: None),
         __spec__=types.SimpleNamespace(),
     )
     monkeypatch.setitem(sys.modules, "prometheus_client", prom_stub)
@@ -41,8 +41,8 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "torch.utils", torch_utils_stub)
     monkeypatch.setitem(sys.modules, "torch.utils.data", torch_utils_data_stub)
     class DummyBox:
-        def __init__(self, low, high, shape, dtype=None):
-            self.shape = shape
+        def __init__(self, low, high, shape=None, dtype=None):
+            self.shape = shape if shape is not None else getattr(low, "shape", (len(low),))
 
     gym_stub = types.SimpleNamespace(Env=object, spaces=types.SimpleNamespace(Box=DummyBox))
     monkeypatch.setitem(sys.modules, "gym", gym_stub)
@@ -63,6 +63,9 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "data", types.SimpleNamespace())
     monkeypatch.setitem(sys.modules, "data.history", history_stub)
     monkeypatch.setitem(sys.modules, "data.features", features_stub)
+    metrics_stub = types.SimpleNamespace(record_metric=lambda *a, **k: None, TS_PATH="")
+    monkeypatch.setitem(sys.modules, "analytics", types.SimpleNamespace(metrics_store=metrics_stub))
+    monkeypatch.setitem(sys.modules, "analytics.metrics_store", metrics_stub)
     model_store_stub = types.SimpleNamespace(save_model=lambda *a, **k: "0")
     graph_net_stub = types.SimpleNamespace(GraphNet=object)
     monkeypatch.setitem(sys.modules, "models", types.SimpleNamespace(model_store=model_store_stub))
@@ -149,6 +152,16 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(train_rl, "load_history_config", lambda *a, **k: df)
     monkeypatch.setattr(train_rl, "make_features", lambda d: d)
+    class DummyRiskEnv:
+        action_space = types.SimpleNamespace(shape=(1,))
+        observation_space = types.SimpleNamespace(shape=(1,))
+        def __init__(self, *a, **k):
+            pass
+        def reset(self):
+            return np.zeros(1)
+        def step(self, action):
+            return np.zeros(1), 0.0, True, {}
+    monkeypatch.setattr(train_rl, "RiskEnv", DummyRiskEnv)
 
     train_rl.main()
 
