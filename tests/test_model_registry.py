@@ -38,6 +38,7 @@ def test_initial_selection() -> None:
     registry = ModelRegistry(monitor, auto_refresh=False)
     assert registry.get("sentiment") == "sentiment_large"
     assert registry.get("rl_policy") == "rl_medium"
+    assert registry.get("trade_exit") == "exit_transformer"
 
 
 def test_fallback_on_refresh() -> None:
@@ -52,6 +53,7 @@ def test_fallback_on_refresh() -> None:
     registry.refresh()
     assert registry.get("sentiment") == "sentiment_small_quantized"
     assert registry.get("rl_policy") == "rl_small_quantized"
+    assert registry.get("trade_exit") == "exit_gbm_quantized"
 
 
 def test_baseline_on_resource_loss_and_recovery(caplog) -> None:
@@ -66,6 +68,7 @@ def test_baseline_on_resource_loss_and_recovery(caplog) -> None:
     caplog.set_level("WARNING")
     registry.refresh()
     assert registry.get("rl_policy") == "baseline"
+    assert registry.get("trade_exit") == "exit_baseline"
     assert any("baseline" in rec.message for rec in caplog.records)
     caplog.clear()
     monitor.capabilities = ResourceCapabilities(
@@ -75,6 +78,7 @@ def test_baseline_on_resource_loss_and_recovery(caplog) -> None:
     caplog.set_level("INFO")
     registry.refresh()
     assert registry.get("rl_policy") == "rl_medium"
+    assert registry.get("trade_exit") == "exit_transformer"
     assert any("restored" in rec.message.lower() for rec in caplog.records)
 
 
