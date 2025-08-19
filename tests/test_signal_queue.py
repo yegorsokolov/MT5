@@ -4,6 +4,9 @@ import zmq
 import pytest
 from pathlib import Path
 import sys
+import types
+
+sys.modules["utils.environment"] = types.SimpleNamespace(ensure_environment=lambda: None)
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
