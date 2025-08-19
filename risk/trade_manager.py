@@ -35,6 +35,10 @@ class TradeManager:
         Multiplier applied to the ATR to derive baseline profit/stop levels.
     vol_threshold: float, default ``1.5``
         Threshold for the ``volatility`` feature beyond which levels are widened.
+    survival_model: Any, optional
+        Model providing ``predict_survival`` returning probability a trade remains profitable.
+    survival_threshold: float, default ``0.2``
+        Close trade when survival probability falls below this value.
     """
 
     execution: Any
@@ -42,6 +46,8 @@ class TradeManager:
     atr_period: int = 14
     atr_mult: float = 3.0
     vol_threshold: float = 1.5
+    survival_model: Any | None = None
+    survival_threshold: float = 0.2
 
     def __post_init__(self) -> None:  # pragma: no cover - simple assignment
         self._last_regime: Any = None
@@ -122,5 +128,25 @@ class TradeManager:
                 levels["adaptive_tp"],
                 levels["adaptive_sl"],
             )
-        return levels
+        survival_prob = None
+        if self.survival_model is not None:
+            feat = dict(features)
+            feat["age"] = len(prices)
+            if hasattr(self.survival_model, 'predict_survival'):
+                survival_prob = float(self.survival_model.predict_survival(feat))
+            else:
+                survival_prob = float(self.survival_model.predict(feat))
+            if hasattr(self.trade_log, 'record_survival'):
+                self.trade_log.record_survival(order_id, survival_prob)
+            if survival_prob < self.survival_threshold:
+                if hasattr(self.execution, 'close_order'):
+                    self.execution.close_order(order_id)
+                elif hasattr(self.execution, 'close_trade'):
+                    self.execution.close_trade(order_id)
+                elif hasattr(self.execution, 'close_position'):
+                    self.execution.close_position(order_id)
+        result = dict(levels)
+        if survival_prob is not None:
+            result['survival_prob'] = survival_prob
+        return result
 
