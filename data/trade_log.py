@@ -53,6 +53,18 @@ class TradeLog:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS thresholds (
+                order_id INTEGER PRIMARY KEY,
+                base_tp REAL,
+                base_sl REAL,
+                adaptive_tp REAL,
+                adaptive_sl REAL,
+                FOREIGN KEY(order_id) REFERENCES orders(id)
+            )
+            """
+        )
         self.conn.commit()
 
     @staticmethod
@@ -138,3 +150,38 @@ class TradeLog:
                 (getattr(pos, "symbol", None), getattr(pos, "volume", 0), getattr(pos, "price_open", 0)),
             )
         self.conn.commit()
+
+    def record_thresholds(
+        self,
+        order_id: int,
+        base_tp: float,
+        base_sl: float,
+        adaptive_tp: float,
+        adaptive_sl: float,
+    ) -> None:
+        """Persist default and adaptive exit levels for ``order_id``."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO thresholds(order_id, base_tp, base_sl, adaptive_tp, adaptive_sl)
+            VALUES(?,?,?,?,?)
+            """,
+            (order_id, base_tp, base_sl, adaptive_tp, adaptive_sl),
+        )
+        self.conn.commit()
+
+    def get_thresholds(self, order_id: int) -> Dict[str, float] | None:
+        """Return stored thresholds for ``order_id`` if available."""
+        cur = self.conn.cursor()
+        row = cur.execute(
+            "SELECT base_tp, base_sl, adaptive_tp, adaptive_sl FROM thresholds WHERE order_id=?",
+            (order_id,),
+        ).fetchone()
+        if row:
+            return {
+                "base_tp": row[0],
+                "base_sl": row[1],
+                "adaptive_tp": row[2],
+                "adaptive_sl": row[3],
+            }
+        return None
