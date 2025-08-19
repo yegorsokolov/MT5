@@ -31,5 +31,6 @@ models/*
 !models/tft.py
 !models/ts2vec.py
 !models/hier_forecast.py
+!models/exit_survival.py
 __pycache__/
 logs/

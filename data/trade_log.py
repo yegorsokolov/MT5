@@ -65,6 +65,17 @@ class TradeLog:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS survival (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER,
+                timestamp TEXT,
+                probability REAL,
+                FOREIGN KEY(order_id) REFERENCES orders(id)
+            )
+            """
+        )
         self.conn.commit()
 
     @staticmethod
@@ -185,3 +196,27 @@ class TradeLog:
                 "adaptive_sl": row[3],
             }
         return None
+
+    def record_survival(
+        self,
+        order_id: int,
+        probability: float,
+        timestamp: datetime | None = None,
+    ) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO survival(order_id, timestamp, probability)
+            VALUES(?,?,?)
+            """,
+            (order_id, self._dt(timestamp or datetime.utcnow()), float(probability)),
+        )
+        self.conn.commit()
+
+    def get_survival(self, order_id: int) -> List[float]:
+        cur = self.conn.cursor()
+        rows = cur.execute(
+            "SELECT probability FROM survival WHERE order_id=? ORDER BY timestamp",
+            (order_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
