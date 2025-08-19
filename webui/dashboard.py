@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
+import pandas as pd
 import requests
 import streamlit as st
 import yaml
@@ -139,6 +140,15 @@ def main() -> None:
         if not pnl.empty:
             st.subheader("PnL")
             st.line_chart(pnl.set_index("timestamp")["value"], height=150)
+
+        hold_path = Path("reports/hold_duration/pnl_by_duration.csv")
+        if hold_path.exists():
+            try:
+                hdf = pd.read_csv(hold_path).sort_values("duration_min")
+                st.subheader("PnL by Holding Period (min)")
+                st.bar_chart(hdf.set_index("duration_min")["pnl"], height=150)
+            except Exception:
+                pass
 
         latency = query_metrics("queue_depth")
         if not latency.empty:
