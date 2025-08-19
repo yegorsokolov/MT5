@@ -1,0 +1,217 @@
+import csv
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Dict, Optional
+
+import requests
+from bs4 import BeautifulSoup
+
+
+class NewsAggregator:
+    """Aggregate economic calendar events from multiple sources.
+
+    Events are cached on disk in JSON format.  Each event has the
+    following schema::
+
+        {
+            "id": str,                # source specific identifier if available
+            "timestamp": datetime,    # UTC timestamp
+            "currency": str,
+            "event": str,
+            "actual": Optional[str],
+            "forecast": Optional[str],
+            "importance": Optional[str],
+            "sources": List[str],    # provenance information
+        }
+    """
+
+    def __init__(self, cache_dir: Optional[Path] = None):
+        self.cache_dir = Path(cache_dir) if cache_dir else Path("data/news_cache")
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_file = self.cache_dir / "news.json"
+
+    # ------------------------------------------------------------------
+    # Cache handling
+    def _load_cache(self) -> List[Dict]:
+        if not self.cache_file.exists():
+            return []
+        with self.cache_file.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        events: List[Dict] = []
+        for ev in raw:
+            ev = ev.copy()
+            if isinstance(ev.get("timestamp"), str):
+                ev["timestamp"] = datetime.fromisoformat(ev["timestamp"])
+            events.append(ev)
+        return events
+
+    def _save_cache(self, events: List[Dict]) -> None:
+        serialisable: List[Dict] = []
+        for ev in events:
+            ev = ev.copy()
+            ts = ev.get("timestamp")
+            if isinstance(ts, datetime):
+                ev["timestamp"] = ts.isoformat()
+            serialisable.append(ev)
+        with self.cache_file.open("w", encoding="utf-8") as f:
+            json.dump(serialisable, f, ensure_ascii=False, indent=2)
+
+    # ------------------------------------------------------------------
+    def get_news(self, start: datetime, end: datetime) -> List[Dict]:
+        """Return cached news events within the inclusive [start, end] range."""
+        events = self._load_cache()
+        return [ev for ev in events if start <= ev["timestamp"] <= end]
+
+    # ------------------------------------------------------------------
+    # Fetching logic
+    def _fetch(self, url: str) -> Optional[str]:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            resp = requests.get(url, timeout=10, headers=headers)
+            resp.raise_for_status()
+            return resp.text
+        except Exception:
+            return None
+
+    def fetch(self) -> List[Dict]:
+        """Fetch, parse and cache events from all known sources."""
+        sources = [
+            ("faireconomy_xml", "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.xml", self.parse_faireconomy_xml),
+            ("faireconomy_csv", "https://nfs.faireconomy.media/ff_calendar_thisweek.csv", self.parse_faireconomy_csv),
+            ("forexfactory_html", "https://www.forexfactory.com/calendar", self.parse_forexfactory_html),
+        ]
+        events = self._load_cache()
+        for name, url, parser in sources:
+            text = self._fetch(url)
+            if not text:
+                continue
+            try:
+                parsed = parser(text, source=name)
+                events.extend(parsed)
+            except Exception:
+                continue
+        events = self._dedupe(events)
+        self._save_cache(events)
+        return events
+
+    # ------------------------------------------------------------------
+    # Parsing helpers
+    def parse_faireconomy_xml(self, text: str, source: str = "faireconomy_xml") -> List[Dict]:
+        from xml.etree import ElementTree as ET
+
+        events: List[Dict] = []
+        root = ET.fromstring(text)
+        for ev in root.findall(".//event"):
+            try:
+                eid = ev.get("id")
+                title = ev.findtext("title") or ev.findtext("event")
+                currency = ev.findtext("currency") or ev.findtext("country")
+                date_str = ev.findtext("date")
+                time_str = ev.findtext("time") or "00:00"
+                ts = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+                impact = ev.findtext("impact")
+                forecast = ev.findtext("forecast")
+                actual = ev.findtext("actual")
+                events.append(
+                    {
+                        "id": eid,
+                        "timestamp": ts,
+                        "currency": currency,
+                        "event": title,
+                        "actual": actual,
+                        "forecast": forecast,
+                        "importance": impact,
+                        "sources": [source],
+                    }
+                )
+            except Exception:
+                continue
+        return events
+
+    def parse_faireconomy_csv(self, text: str, source: str = "faireconomy_csv") -> List[Dict]:
+        events: List[Dict] = []
+        reader = csv.DictReader(text.splitlines())
+        for row in reader:
+            try:
+                eid = row.get("id") or row.get("eventid")
+                title = row.get("title") or row.get("event")
+                currency = row.get("currency") or row.get("country")
+                date_str = row.get("date")
+                time_str = row.get("time") or "00:00"
+                ts = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+                events.append(
+                    {
+                        "id": eid,
+                        "timestamp": ts,
+                        "currency": currency,
+                        "event": title,
+                        "actual": row.get("actual"),
+                        "forecast": row.get("forecast"),
+                        "importance": row.get("impact"),
+                        "sources": [source],
+                    }
+                )
+            except Exception:
+                continue
+        return events
+
+    def parse_forexfactory_html(self, text: str, source: str = "forexfactory_html") -> List[Dict]:
+        soup = BeautifulSoup(text, "html.parser")
+        events: List[Dict] = []
+        for row in soup.select("tr[data-event-id]"):
+            try:
+                eid = row.get("data-event-id")
+                ts_val = row.get("data-timestamp")
+                if ts_val:
+                    ts = datetime.fromtimestamp(int(ts_val), tz=timezone.utc)
+                else:
+                    ts = None
+                currency_cell = row.find(class_="calendar__currency")
+                event_cell = row.find(class_="calendar__event")
+                actual_cell = row.find(class_="calendar__actual")
+                forecast_cell = row.find(class_="calendar__forecast")
+                importance = row.get("data-impact")
+                events.append(
+                    {
+                        "id": eid,
+                        "timestamp": ts,
+                        "currency": currency_cell.get_text(strip=True) if currency_cell else None,
+                        "event": event_cell.get_text(strip=True) if event_cell else None,
+                        "actual": actual_cell.get_text(strip=True) if actual_cell else None,
+                        "forecast": forecast_cell.get_text(strip=True) if forecast_cell else None,
+                        "importance": importance,
+                        "sources": [source],
+                    }
+                )
+            except Exception:
+                continue
+        return events
+
+    # ------------------------------------------------------------------
+    def _dedupe(self, events: List[Dict]) -> List[Dict]:
+        """Deduplicate events by (id, timestamp, currency, event)."""
+        deduped: Dict[tuple, Dict] = {}
+        for ev in events:
+            key = (
+                ev.get("id"),
+                ev.get("timestamp"),
+                ev.get("currency"),
+                ev.get("event"),
+            )
+            existing = deduped.get(key)
+            if existing:
+                # merge sources
+                existing_sources = set(existing.get("sources", []))
+                new_sources = set(ev.get("sources", []))
+                existing["sources"] = list(existing_sources | new_sources)
+                # fill missing fields
+                for field in ["actual", "forecast", "importance"]:
+                    if not existing.get(field) and ev.get(field):
+                        existing[field] = ev[field]
+            else:
+                deduped[key] = ev
+        return list(deduped.values())
+
+
+__all__ = ["NewsAggregator"]
