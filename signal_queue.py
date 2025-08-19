@@ -16,6 +16,7 @@ from analytics.metrics_store import record_metric
 from risk.position_sizer import PositionSizer
 from models import conformal
 from strategies.trade_exit_policy import TradeExitPolicy
+from analysis.entry_value import EntryValueScorer, log_entry_value
 
 from telemetry import get_tracer, get_meter
 from strategy import StrategyRouter
@@ -179,6 +180,15 @@ def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf")
                     payload["var"] = float(row["var"])
                 if "es" in row:
                     payload["es"] = float(row["es"])
+                for field in [
+                    "depth_imbalance",
+                    "volatility_30",
+                    "regime_embed",
+                    "future_return",
+                    "total_depth",
+                ]:
+                    if field in row:
+                        payload[field] = row[field]
                 sock.send_json(payload)
             else:
                 msg = signals_pb2.Signal(
@@ -220,6 +230,15 @@ async def publish_dataframe_async(
                     payload["var"] = float(row["var"])
                 if "es" in row:
                     payload["es"] = float(row["es"])
+                for field in [
+                    "depth_imbalance",
+                    "volatility_30",
+                    "regime_embed",
+                    "future_return",
+                    "total_depth",
+                ]:
+                    if field in row:
+                        payload[field] = row[field]
                 await sock.send_json(payload)
             else:
                 msg = signals_pb2.Signal(
@@ -238,6 +257,7 @@ async def iter_messages(
     sizer: PositionSizer | None = None,
     meta_clf: Any | None = None,
     exit_policy: TradeExitPolicy | None = None,
+    entry_scorer: EntryValueScorer | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield decoded messages from a subscriber socket as they arrive."""
     global _QUEUE_DEPTH
@@ -281,6 +301,19 @@ async def iter_messages(
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
+                if entry_scorer is not None:
+                    depth = float(data.get("depth_imbalance", 0.0))
+                    vol = float(data.get("volatility_30", 0.0))
+                    embed = data.get("regime_embed", [])
+                    score = entry_scorer.score(depth, vol, embed)
+                    payload["expected_value"] = score
+                    realised = float(data.get("future_return", 0.0))
+                    try:
+                        log_entry_value(payload.get("Timestamp", ""), symbol, score, realised)
+                    except Exception:
+                        pass
+                    if score <= 0:
+                        continue
                 if not _passes_meta(meta_clf, prob, conf):
                     continue
                 _EVENT_STORE.record("prediction", payload)
@@ -333,6 +366,19 @@ async def iter_messages(
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
+                if entry_scorer is not None:
+                    depth = float(getattr(sig, "depth_imbalance", 0.0))
+                    vol = float(getattr(sig, "volatility_30", 0.0))
+                    embed = getattr(sig, "regime_embed", [])
+                    score = entry_scorer.score(depth, vol, embed)
+                    payload["expected_value"] = score
+                    realised = float(getattr(sig, "future_return", 0.0))
+                    try:
+                        log_entry_value(payload.get("Timestamp", ""), symbol, score, realised)
+                    except Exception:
+                        pass
+                    if score <= 0:
+                        continue
                 if not _passes_meta(meta_clf, prob, conf):
                     continue
                 _EVENT_STORE.record("prediction", payload)
@@ -386,6 +432,15 @@ class KafkaSignalQueue:
                     payload_dict["var"] = float(row["var"])
                 if "es" in row:
                     payload_dict["es"] = float(row["es"])
+                for field in [
+                    "depth_imbalance",
+                    "volatility_30",
+                    "regime_embed",
+                    "future_return",
+                    "total_depth",
+                ]:
+                    if field in row:
+                        payload_dict[field] = row[field]
                 payload = json.dumps(payload_dict).encode()
             else:
                 msg = signals_pb2.Signal(
@@ -421,6 +476,7 @@ class KafkaSignalQueue:
         fmt: str = "protobuf",
         sizer: PositionSizer | None = None,
         meta_clf: Any | None = None,
+        entry_scorer: EntryValueScorer | None = None,
     ):
         fmt = fmt.lower()
         for msg in self.consumer:
@@ -467,6 +523,19 @@ class KafkaSignalQueue:
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
+                if entry_scorer is not None:
+                    depth = float(data.get("depth_imbalance", 0.0))
+                    vol = float(data.get("volatility_30", 0.0))
+                    embed = data.get("regime_embed", [])
+                    score = entry_scorer.score(depth, vol, embed)
+                    payload["expected_value"] = score
+                    realised = float(data.get("future_return", 0.0))
+                    try:
+                        log_entry_value(payload.get("Timestamp", ""), symbol, score, realised)
+                    except Exception:
+                        pass
+                    if score <= 0:
+                        continue
                 if not _passes_meta(meta_clf, prob, conf):
                     continue
                 _EVENT_STORE.record("prediction", payload)
@@ -508,6 +577,19 @@ class KafkaSignalQueue:
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
+                if entry_scorer is not None:
+                    depth = float(getattr(sig, "depth_imbalance", 0.0))
+                    vol = float(getattr(sig, "volatility_30", 0.0))
+                    embed = getattr(sig, "regime_embed", [])
+                    score = entry_scorer.score(depth, vol, embed)
+                    payload["expected_value"] = score
+                    realised = float(getattr(sig, "future_return", 0.0))
+                    try:
+                        log_entry_value(payload.get("Timestamp", ""), symbol, score, realised)
+                    except Exception:
+                        pass
+                    if score <= 0:
+                        continue
                 if not _passes_meta(meta_clf, prob, conf):
                     continue
                 _EVENT_STORE.record("prediction", payload)
@@ -543,6 +625,15 @@ class RedisSignalQueue:
                     payload_dict["var"] = float(row["var"])
                 if "es" in row:
                     payload_dict["es"] = float(row["es"])
+                for field in [
+                    "depth_imbalance",
+                    "volatility_30",
+                    "regime_embed",
+                    "future_return",
+                    "total_depth",
+                ]:
+                    if field in row:
+                        payload_dict[field] = row[field]
                 payload = json.dumps(payload_dict).encode()
             else:
                 msg = signals_pb2.Signal(
@@ -576,6 +667,7 @@ class RedisSignalQueue:
         fmt: str = "protobuf",
         sizer: PositionSizer | None = None,
         meta_clf: Any | None = None,
+        entry_scorer: EntryValueScorer | None = None,
     ):
         fmt = fmt.lower()
         while True:
@@ -631,6 +723,19 @@ class RedisSignalQueue:
                         "interval": (float(lower[0]), float(upper[0])),
                         "interval_width": width,
                     }
+                    if entry_scorer is not None:
+                        depth = float(payload.get("depth_imbalance", 0.0))
+                        vol = float(payload.get("volatility_30", 0.0))
+                        embed = payload.get("regime_embed", [])
+                        score = entry_scorer.score(depth, vol, embed)
+                        out["expected_value"] = score
+                        realised = float(payload.get("future_return", 0.0))
+                        try:
+                            log_entry_value(out.get("Timestamp", ""), symbol, score, realised)
+                        except Exception:
+                            pass
+                        if score <= 0:
+                            continue
                     if not _passes_meta(meta_clf, prob, conf):
                         continue
                     _EVENT_STORE.record("prediction", out)
@@ -672,6 +777,19 @@ class RedisSignalQueue:
                         "interval": (float(lower[0]), float(upper[0])),
                         "interval_width": width,
                     }
+                    if entry_scorer is not None:
+                        depth = float(getattr(sig, "depth_imbalance", 0.0))
+                        vol = float(getattr(sig, "volatility_30", 0.0))
+                        embed = getattr(sig, "regime_embed", [])
+                        score = entry_scorer.score(depth, vol, embed)
+                        out["expected_value"] = score
+                        realised = float(getattr(sig, "future_return", 0.0))
+                        try:
+                            log_entry_value(out.get("Timestamp", ""), symbol, score, realised)
+                        except Exception:
+                            pass
+                        if score <= 0:
+                            continue
                     if not _passes_meta(meta_clf, prob, conf):
                         continue
                     _EVENT_STORE.record("prediction", out)
