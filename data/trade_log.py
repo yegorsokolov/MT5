@@ -76,6 +76,15 @@ class TradeLog:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS confirmations (
+                order_id INTEGER PRIMARY KEY,
+                score REAL,
+                FOREIGN KEY(order_id) REFERENCES orders(id)
+            )
+            """,
+        )
         self.conn.commit()
 
     @staticmethod
@@ -99,6 +108,16 @@ class TradeLog:
         )
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def record_confirmation(self, order_id: int, score: float) -> None:
+        """Persist a confirmation score for ``order_id``."""
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO confirmations(order_id, score) VALUES(?,?)",
+            (order_id, float(score)),
+        )
+        self.conn.commit()
 
     def record_fill(self, fill: Dict[str, Any]) -> None:
         """Record a fill and update positions."""
