@@ -161,6 +161,14 @@ def main() -> None:
         if reward_vectors:
             frontier = pareto_frontier(reward_vectors)
             logger.info("Pareto frontier: %s", frontier.tolist())
+    if "market_regime" in env.df.columns:
+        regime_series = env.df.loc[1:, "market_regime"].to_numpy()
+        returns_arr = np.asarray(returns)
+        for regime in np.unique(regime_series):
+            mask = regime_series == regime
+            if mask.any():
+                r_metrics = compute_metrics(pd.Series(returns_arr[mask]))
+                logger.info("Regime %s metrics: %s", regime, r_metrics)
 
 
 if __name__ == "__main__":
