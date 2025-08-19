@@ -15,6 +15,7 @@ import redis
 from analytics.metrics_store import record_metric
 from risk.position_sizer import PositionSizer
 from models import conformal
+from strategies.trade_exit_policy import TradeExitPolicy
 
 from telemetry import get_tracer, get_meter
 from strategy import StrategyRouter
@@ -236,6 +237,7 @@ async def iter_messages(
     fmt: str = "protobuf",
     sizer: PositionSizer | None = None,
     meta_clf: Any | None = None,
+    exit_policy: TradeExitPolicy | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield decoded messages from a subscriber socket as they arrive."""
     global _QUEUE_DEPTH
@@ -284,6 +286,10 @@ async def iter_messages(
                 _EVENT_STORE.record("prediction", payload)
                 _consume_count.add(1)
                 yield payload
+                if exit_policy and exit_policy.should_exit(symbol, payload):
+                    close_msg = {"action": "close", "Symbol": symbol, "Timestamp": payload.get("Timestamp")}
+                    _EVENT_STORE.record("exit", close_msg)
+                    yield close_msg
             else:
                 raw = await sock.recv()
                 sig = signals_pb2.Signal()
@@ -332,6 +338,10 @@ async def iter_messages(
                 _EVENT_STORE.record("prediction", payload)
                 _consume_count.add(1)
                 yield payload
+                if exit_policy and exit_policy.should_exit(symbol, payload):
+                    close_msg = {"action": "close", "Symbol": symbol, "Timestamp": payload.get("Timestamp")}
+                    _EVENT_STORE.record("exit", close_msg)
+                    yield close_msg
 
 
 class KafkaSignalQueue:

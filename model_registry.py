@@ -107,6 +107,20 @@ MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
         ),
         ModelVariant("baseline", ResourceCapabilities(1, 1, False, gpu_count=0)),
     ],
+    "trade_exit": [
+        ModelVariant(
+            "exit_transformer",
+            ResourceCapabilities(8, 32, True, gpu_count=1),
+            "exit_transformer_quantized",
+            remote_only=True,
+        ),
+        ModelVariant(
+            "exit_gbm",
+            ResourceCapabilities(2, 4, False, gpu_count=0),
+            "exit_gbm_quantized",
+        ),
+        ModelVariant("exit_baseline", ResourceCapabilities(1, 1, False, gpu_count=0)),
+    ],
 }
 
 
