@@ -7,6 +7,7 @@ import sys
 import types
 
 sys.modules["utils.environment"] = types.SimpleNamespace(ensure_environment=lambda: None)
+sys.modules.setdefault("mlflow", types.SimpleNamespace())
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
