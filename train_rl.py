@@ -215,6 +215,7 @@ class TradingEnv(gym.Env):
         spread_source: str | None = None,
         objectives: list[str] | None = None,
         objective_weights: list[float] | None = None,
+        exit_penalty: float = 0.001,
     ) -> None:
         super().__init__()
 
@@ -238,6 +239,7 @@ class TradingEnv(gym.Env):
         self.slippage_factor = slippage_factor
         self.spread_source = spread_source
         self.objectives = objectives or ["return"]
+        self.exit_penalty = exit_penalty
         if objective_weights is None:
             objective_weights = [1.0] * len(self.objectives)
         self.objective_weights = np.asarray(objective_weights, dtype=np.float32)
@@ -258,12 +260,19 @@ class TradingEnv(gym.Env):
             )
 
         self.n_symbols = len(self.symbols)
-        self.action_space = spaces.Box(
-            low=-max_position,
-            high=max_position,
-            shape=(self.n_symbols,),
-            dtype=np.float32,
+        lows = np.concatenate(
+            [
+                np.full(self.n_symbols, -max_position, dtype=np.float32),
+                np.zeros(self.n_symbols, dtype=np.float32),
+            ]
         )
+        highs = np.concatenate(
+            [
+                np.full(self.n_symbols, max_position, dtype=np.float32),
+                np.ones(self.n_symbols, dtype=np.float32),
+            ]
+        )
+        self.action_space = spaces.Box(low=lows, high=highs, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -285,21 +294,35 @@ class TradingEnv(gym.Env):
     def step(self, action):
         done = False
 
-        action = np.clip(
-            np.asarray(action, dtype=np.float32), -self.max_position, self.max_position
-        )
+        arr = np.asarray(action, dtype=np.float32).flatten()
+        if arr.size == self.n_symbols:
+            size = arr
+            close = np.zeros(self.n_symbols, dtype=np.float32)
+        elif arr.size == self.n_symbols * 2:
+            size = arr[: self.n_symbols]
+            close = arr[self.n_symbols :]
+        elif isinstance(action, dict):
+            size = np.asarray(action.get("size", np.zeros(self.n_symbols)), dtype=np.float32)
+            close = np.asarray(action.get("close", np.zeros(self.n_symbols)), dtype=np.float32)
+        else:
+            raise ValueError("Invalid action shape")
+        size = np.clip(size, -self.max_position, self.max_position)
+        close = (close > 0.5).astype(np.float32)
+        size = np.where(close == 1.0, 0.0, size)
         prices = self.df.loc[self.i, self.price_cols].values
 
         portfolio_ret = 0.0
         per_symbol_ret = np.zeros(self.n_symbols, dtype=np.float32)
+        residual_return = 0.0
         if self.i > 0:
             prev_prices = self.df.loc[self.i - 1, self.price_cols].values
             price_change = (prices - prev_prices) / prev_prices
             per_symbol_ret = self.positions * price_change
+            residual_return = float(np.sum(per_symbol_ret * close))
             portfolio_ret = per_symbol_ret.sum()
             self.equity *= 1 + portfolio_ret
 
-        deltas = action - self.positions
+        deltas = size - self.positions
 
         exec_prices = prices.copy()
         if self.spread_source == "column":
@@ -339,14 +362,21 @@ class TradingEnv(gym.Env):
 
         reward_components: list[float] = []
         objective_map: dict[str, float] = {}
+        hold_ret = portfolio_ret - residual_return
         if "return" in self.objectives:
-            reward_components.append(portfolio_ret)
-            objective_map["return"] = float(portfolio_ret)
+            reward_components.append(hold_ret)
+            objective_map["return"] = float(hold_ret)
+        if np.any(close):
+            reward_components.append(residual_return)
+            objective_map["residual_return"] = float(residual_return)
+            penalty = -self.exit_penalty * float(close.sum())
+            reward_components.append(penalty)
+            objective_map["exit"] = float(penalty)
         if "cost" in self.objectives:
             reward_components.append(-cost_total)
             objective_map["cost"] = float(-cost_total)
         reward = 0.0
-        self.positions = action
+        self.positions = size
 
         self.i += 1
         if self.i >= len(self.df) - 1:
@@ -374,9 +404,11 @@ class TradingEnv(gym.Env):
             objective_map["risk"] = float(risk)
 
         if reward_components:
+            weights = np.ones(len(reward_components), dtype=np.float32)
+            weights[: len(self.objective_weights)] = self.objective_weights[: len(self.objective_weights)]
             reward = weighted_sum(
                 np.asarray(reward_components, dtype=np.float32),
-                self.objective_weights[: len(reward_components)],
+                weights,
             )
 
         info = {
@@ -587,11 +619,16 @@ def main(
         cvar_window=cfg.get("rl_cvar_window", 30),
         objectives=cfg.get("rl_objectives", ["return"]),
         objective_weights=cfg.get("rl_objective_weights"),
+        exit_penalty=cfg.get("rl_exit_penalty", 0.001),
     )
 
     def _policy_kwargs(scale: float) -> dict:
-        width = max(4, int(64 * scale))
-        return {"net_arch": [width, width]}
+        if monitor.capabilities.capability_tier() == "lite":
+            arch = dict(pi=[32], vf=[32])
+        else:
+            width = max(4, int(64 * scale))
+            arch = dict(pi=[width, width], vf=[width, width])
+        return {"net_arch": arch}
 
     if algo == "PPO":
         env = TradingEnv(**env_kwargs)
