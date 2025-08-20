@@ -11,6 +11,7 @@ from scheduler import start_scheduler
 from risk import risk_of_ruin
 from risk.budget_allocator import BudgetAllocator
 from analytics.metrics_store import record_metric
+from analytics import decision_logger
 from portfolio.robust_optimizer import RobustOptimizer
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
 from news.impact_model import get_impact
@@ -101,6 +102,19 @@ class RiskManager:
                     record_metric("trades_skipped_news", 1)
                 except Exception:
                     pass
+                decision_logger.log(
+                    pd.DataFrame(
+                        [
+                            {
+                                "timestamp": ts.isoformat(),
+                                "symbol": symbol,
+                                "event": "skip",
+                                "position_size": 0.0,
+                                "reason": "quiet_window",
+                            }
+                        ]
+                    )
+                )
                 return 0.0
         impact, uncert = get_impact(symbol, ts)
         if uncert > _UNCERTAINTY_THRESHOLD:
@@ -111,8 +125,33 @@ class RiskManager:
                     record_metric("trades_skipped_news", 1)
                 except Exception:
                     pass
+                decision_logger.log(
+                    pd.DataFrame(
+                        [
+                            {
+                                "timestamp": ts.isoformat(),
+                                "symbol": symbol,
+                                "event": "skip",
+                                "position_size": 0.0,
+                                "reason": "news_impact",
+                            }
+                        ]
+                    )
+                )
                 return 0.0
             size *= _IMPACT_BOOST
+        decision_logger.log(
+            pd.DataFrame(
+                [
+                    {
+                        "timestamp": ts.isoformat(),
+                        "symbol": symbol,
+                        "event": "trade",
+                        "position_size": size,
+                    }
+                ]
+            )
+        )
         return size
 
     def set_quiet_windows(
@@ -201,6 +240,19 @@ class RiskManager:
             record_metric("risk_of_ruin", self.metrics.risk_of_ruin)
         except Exception:
             pass
+        decision_logger.log(
+            pd.DataFrame(
+                [
+                    {
+                        "timestamp": pd.Timestamp.utcnow().isoformat(),
+                        "bot_id": bot_id,
+                        "event": "trade_result",
+                        "pnl": pnl,
+                        "exposure": exposure,
+                    }
+                ]
+            )
+        )
 
     async def monitor(self, queue: "asyncio.Queue[tuple[str, float, float]]") -> None:
         """Consume trade/PnL events from ``queue`` and update metrics."""
