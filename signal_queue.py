@@ -20,6 +20,7 @@ from analysis.entry_value import EntryValueScorer, log_entry_value
 
 from telemetry import get_tracer, get_meter
 from strategy import StrategyRouter
+from news.impact_model import get_impact
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -33,6 +34,11 @@ _consume_count = meter.create_counter(
 _MAX_INTERVAL_WIDTH = float(os.getenv("CONFORMAL_MAX_WIDTH", "inf"))
 _DROP_WIDE_INTERVALS = os.getenv("CONFORMAL_DROP_WIDE", "0") == "1"
 _CONFORMAL_Q = float(os.getenv("CONFORMAL_RESIDUAL_Q", "0.0"))
+
+_IMPACT_THRESHOLD = float(os.getenv("NEWS_IMPACT_THRESHOLD", "0.5"))
+_UNCERTAINTY_THRESHOLD = float(os.getenv("NEWS_IMPACT_UNCERTAINTY", "1.0"))
+_IMPACT_BOOST = float(os.getenv("NEWS_IMPACT_BOOST", "1.5"))
+_DOWNSCALE = float(os.getenv("NEWS_IMPACT_DOWNSCALE", "0.5"))
 
 # Lazy registry to avoid heavy initialization at import time
 _REGISTRY = None
@@ -290,6 +296,14 @@ async def iter_messages(
                     else prob * conf
                 )
                 size = base_size * scale
+                impact, uncert = get_impact(symbol, data.get("Timestamp", ""))
+                direction = 1 if prob >= 0.5 else -1
+                if uncert > _UNCERTAINTY_THRESHOLD:
+                    size *= _DOWNSCALE
+                if impact is not None and abs(impact) > _IMPACT_THRESHOLD:
+                    if impact * direction < 0:
+                        continue
+                    size *= _IMPACT_BOOST
                 payload = {
                     "Timestamp": data.get("Timestamp", ""),
                     "Symbol": symbol,
@@ -298,6 +312,8 @@ async def iter_messages(
                     "var": var,
                     "es": es,
                     "size": size,
+                    "impact": impact,
+                    "uncertainty": uncert,
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
@@ -355,6 +371,14 @@ async def iter_messages(
                     else prob * conf
                 )
                 size = base_size * scale
+                impact, uncert = get_impact(symbol, sig.timestamp)
+                direction = 1 if prob >= 0.5 else -1
+                if uncert > _UNCERTAINTY_THRESHOLD:
+                    size *= _DOWNSCALE
+                if impact is not None and abs(impact) > _IMPACT_THRESHOLD:
+                    if impact * direction < 0:
+                        continue
+                    size *= _IMPACT_BOOST
                 payload = {
                     "Timestamp": sig.timestamp,
                     "Symbol": symbol,
@@ -363,6 +387,8 @@ async def iter_messages(
                     "var": var,
                     "es": es,
                     "size": size,
+                    "impact": impact,
+                    "uncertainty": uncert,
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
