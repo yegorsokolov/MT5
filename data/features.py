@@ -22,6 +22,7 @@ from analysis.frequency_features import (
 from analysis.fractal_features import rolling_fractal_features
 from analysis.session_features import add_session_features
 from utils.resource_monitor import monitor
+from news import sentiment_fusion
 try:  # optional numba acceleration
     from utils.numba_accel import (
         rolling_mean as nb_rolling_mean,
@@ -319,6 +320,33 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
         df["news_summary"] = ""
     df = df.drop(columns=["sentiment", "summary"], errors="ignore")
     logger.debug("Added news sentiment for %d rows", len(df))
+
+    # ------------------------------------------------------------------
+    # Fuse headline embeddings with calendar surprises when resources allow
+    if _has_resources(sentiment_fusion):
+        try:
+            fused = sentiment_fusion.load_scores()
+            if not fused.empty:
+                fused["timestamp"] = pd.to_datetime(fused["timestamp"], utc=True)
+                df["Timestamp"] = pd.to_datetime(df["Timestamp"], utc=True)
+                df = df.merge(
+                    fused,
+                    left_on=["Timestamp", "Symbol"],
+                    right_on=["timestamp", "symbol"],
+                    how="left",
+                )
+                df["event_sentiment"] = df["fused_sentiment"].fillna(0.0)
+                df = df.drop(
+                    columns=["timestamp", "symbol", "fused_sentiment"],
+                    errors="ignore",
+                )
+            else:
+                df["event_sentiment"] = 0.0
+        except Exception as e:  # pragma: no cover - optional dependencies
+            logger.warning("Failed to load fused sentiment: %s", e)
+            df["event_sentiment"] = 0.0
+    else:
+        df["event_sentiment"] = 0.0
     return df
 
 
