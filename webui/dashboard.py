@@ -210,6 +210,11 @@ def main() -> None:
             "[Full config documentation](https://github.com/USERNAME/MT5/blob/main/docs/config.md)"
         )
         st.table(rows)
+        cards_dir = Path("reports/model_cards")
+        if cards_dir.exists():
+            st.subheader("Model Cards")
+            for card in sorted(cards_dir.glob("model_card_*.md")):
+                st.markdown(f"[{card.name}]({card.resolve().as_uri()})")
 
     # Logs tab
     with tabs[3]:
