@@ -85,6 +85,7 @@ except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
 from data.features import make_features
 from analytics.metrics_store import record_metric, TS_PATH
+from analysis import model_card
 try:  # optional dependency
     from models.distillation import distill_teacher_student
 except Exception:  # pragma: no cover
@@ -905,6 +906,18 @@ def main(
                     features=features,
                 )
                 logger.info("Quantized RL policy saved to %s", q_artifact)
+            model_card.generate(
+                cfg,
+                [root / "data" / f"{s}_history.parquet" for s in symbols],
+                features,
+                {
+                    "cumulative_return": cumulative_return,
+                    "sharpe_ratio": sharpe,
+                    "max_drawdown": max_drawdown,
+                    "cvar": cvar,
+                },
+                root / "reports" / "model_cards",
+            )
             mlflow.end_run()
 
     if cfg.get("export"):

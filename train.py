@@ -53,6 +53,7 @@ from analysis.prob_calibration import (
     log_reliability,
 )
 from analysis.active_learning import ActiveLearningQueue, merge_labels
+from analysis import model_card
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -533,6 +534,13 @@ def main(
                 save_history_parquet(df, root / "data" / "history.parquet")
     except Exception as e:  # pragma: no cover - fail safe
         logger.warning("Active learning step failed: %s", e)
+    model_card.generate(
+        cfg,
+        [root / "data" / "history.parquet"],
+        features,
+        aggregate_report,
+        root / "reports" / "model_cards",
+    )
 
     return float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
 
