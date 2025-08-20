@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from analysis.algorithm_rating import load_ratings
+from analysis.rationale_scorer import load_algorithm_win_rates
 
 FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
@@ -41,6 +42,9 @@ class StrategyRouter:
     alpha: float = 0.1
     scoreboard_path: Path | str = Path("reports/scoreboard.parquet")
     elo_path: Path | str = Path("reports/elo_ratings.parquet")
+    rationale_path: Path | str = Path(
+        "reports/rationale_scores/algorithm_win_rates.parquet"
+    )
 
     def __post_init__(self) -> None:
         if not self.algorithms:
@@ -64,6 +68,8 @@ class StrategyRouter:
         self.scoreboard = self._load_scoreboard()
         self.elo_path = Path(self.elo_path)
         self.elo_ratings = self._load_elo_ratings()
+        self.rationale_path = Path(self.rationale_path)
+        self.rationale_scores = self._load_rationale_scores()
 
     # Registration -----------------------------------------------------
     def register(self, name: str, algorithm: Algorithm) -> None:
@@ -89,6 +95,7 @@ class StrategyRouter:
                 + bonus
                 + self._scoreboard_weight(regime, name)
                 + self._elo_weight(name)
+                + self._rationale_weight(name)
             )
             if score > best_score:
                 best_score = score
@@ -160,6 +167,20 @@ class StrategyRouter:
         if rating is None:
             return 0.0
         return (float(rating) - 1500.0) / 400.0
+
+    def _load_rationale_scores(self) -> Dict[str, float]:
+        """Load win rates derived from rationale scoring."""
+        try:
+            return load_algorithm_win_rates(self.rationale_path)
+        except Exception:
+            return {}
+
+    def _rationale_weight(self, algorithm: str) -> float:
+        """Return a small bonus for algorithms with strong rationales."""
+        rate = self.rationale_scores.get(algorithm)
+        if rate is None:
+            return 0.0
+        return float(rate) - 0.5
 
     def _update_scoreboard(
         self, regime: float | None, algorithm: str, smooth: float
