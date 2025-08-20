@@ -86,6 +86,20 @@ def run_drift_detection() -> None:
         logger.exception("Drift detection failed")
 
 
+def run_feature_importance_drift() -> None:
+    """Analyze feature importance drift and persist reports."""
+    try:
+        from analysis.feature_importance_drift import analyze
+
+        flagged = analyze()
+        if flagged:
+            logger.warning("Feature importance drift detected: %s", flagged)
+        else:
+            logger.info("No feature importance drift detected")
+    except Exception:
+        logger.exception("Feature importance drift analysis failed")
+
+
 def run_change_point_detection() -> None:
     """Run change point detection on recorded feature data."""
     try:
@@ -227,6 +241,8 @@ def start_scheduler() -> None:
         jobs.append(("resource_reprobe", resource_reprobe))
     if s_cfg.get("drift_detection", True):
         jobs.append(("drift_detection", run_drift_detection))
+    if s_cfg.get("feature_importance_drift", True):
+        jobs.append(("feature_importance_drift", run_feature_importance_drift))
     if s_cfg.get("change_point_detection", True):
         jobs.append(("change_point_detection", run_change_point_detection))
     if s_cfg.get("checkpoint_cleanup", True):
@@ -251,6 +267,7 @@ __all__ = [
     "cleanup_checkpoints",
     "resource_reprobe",
     "run_drift_detection",
+    "run_feature_importance_drift",
     "run_change_point_detection",
     "run_trade_analysis",
     "run_decision_review",
