@@ -167,6 +167,16 @@ def main() -> None:
             st.subheader("Drift Events")
             st.line_chart(drift.set_index("timestamp")["value"], height=150)
 
+        skipped = query_metrics("trades_skipped_news")
+        if not skipped.empty:
+            st.subheader("Trades Skipped Due To News")
+            st.line_chart(skipped.set_index("timestamp")["value"], height=150)
+
+        replay = query_metrics("replay_pnl_diff")
+        if not replay.empty:
+            st.subheader("Replay PnL Delta")
+            st.line_chart(replay.set_index("timestamp")["value"], height=150)
+
         for name in ["gaps", "zscore", "median"]:
             dq = query_metrics(f"data_quality_{name}")
             if not dq.empty:

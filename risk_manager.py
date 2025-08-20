@@ -72,6 +72,7 @@ class RiskManager:
         self._last_regime: int | None = None
         self.tail_threshold = tail_threshold or max_drawdown
         self.tail_prob_limit = tail_prob_limit
+        self.quiet_windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""
@@ -93,14 +94,32 @@ class RiskManager:
         direction: int
             +1 for long trades, -1 for shorts.
         """
-        impact, uncert = get_impact(symbol, timestamp)
+        ts = pd.Timestamp(timestamp)
+        for start, end in self.quiet_windows:
+            if start <= ts <= end:
+                try:
+                    record_metric("trades_skipped_news", 1)
+                except Exception:
+                    pass
+                return 0.0
+        impact, uncert = get_impact(symbol, ts)
         if uncert > _UNCERTAINTY_THRESHOLD:
             size *= _DOWNSCALE
         if impact is not None and abs(impact) > _IMPACT_THRESHOLD:
             if impact * direction < 0:
+                try:
+                    record_metric("trades_skipped_news", 1)
+                except Exception:
+                    pass
                 return 0.0
             size *= _IMPACT_BOOST
         return size
+
+    def set_quiet_windows(
+        self, windows: list[tuple[pd.Timestamp, pd.Timestamp]]
+    ) -> None:
+        """Define trading blackout periods around high-impact news."""
+        self.quiet_windows = windows
 
     def update(
         self,
