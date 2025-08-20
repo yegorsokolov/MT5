@@ -143,6 +143,20 @@ def run_trade_analysis() -> None:
         logger.exception("Trade analysis failed")
 
 
+def run_decision_review() -> None:
+    """Run LLM-based review of recorded decision rationales."""
+    try:
+        from analysis.decision_reviewer import review_rationales
+
+        flagged = review_rationales()
+        if flagged.get("manual"):
+            logger.warning("Decisions flagged for manual follow-up: %s", flagged["manual"])
+        if flagged.get("retrain"):
+            logger.warning("Decisions flagged for retraining: %s", flagged["retrain"])
+    except Exception:
+        logger.exception("Decision review failed")
+
+
 def run_diagnostics() -> None:
     """Run system diagnostics and dependency checks."""
     try:
@@ -219,6 +233,8 @@ def start_scheduler() -> None:
         jobs.append(("checkpoint_cleanup", cleanup_checkpoints))
     if s_cfg.get("trade_stats", True):
         jobs.append(("trade_stats", run_trade_analysis))
+    if s_cfg.get("decision_review", True):
+        jobs.append(("decision_review", run_decision_review))
     if s_cfg.get("vacuum_history", True):
         jobs.append(("vacuum_history", vacuum_history))
     if s_cfg.get("diagnostics", True):
@@ -237,6 +253,7 @@ __all__ = [
     "run_drift_detection",
     "run_change_point_detection",
     "run_trade_analysis",
+    "run_decision_review",
     "run_diagnostics",
     "vacuum_history",
     "run_backups",
