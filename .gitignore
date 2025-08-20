@@ -34,3 +34,6 @@ models/*
 !models/exit_survival.py
 __pycache__/
 logs/
+analysis/news_impact.parquet
+analytics/*.parquet
+reports/**/*.csv

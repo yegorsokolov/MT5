@@ -13,6 +13,7 @@ from risk.budget_allocator import BudgetAllocator
 from analytics.metrics_store import record_metric
 from portfolio.robust_optimizer import RobustOptimizer
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
+from news.impact_model import get_impact
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -21,6 +22,12 @@ except Exception:  # pragma: no cover - utils may be stubbed in tests
 
 if TYPE_CHECKING:  # pragma: no cover - used only for typing
     from risk.tail_hedger import TailHedger
+
+
+_IMPACT_THRESHOLD = float(os.getenv("NEWS_IMPACT_THRESHOLD", "0.5"))
+_UNCERTAINTY_THRESHOLD = float(os.getenv("NEWS_IMPACT_UNCERTAINTY", "1.0"))
+_IMPACT_BOOST = float(os.getenv("NEWS_IMPACT_BOOST", "1.5"))
+_DOWNSCALE = float(os.getenv("NEWS_IMPACT_DOWNSCALE", "0.5"))
 
 
 @dataclass
@@ -69,6 +76,31 @@ class RiskManager:
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""
         self.tail_hedger = hedger
+
+    def adjust_size(
+        self, symbol: str, size: float, timestamp: str | pd.Timestamp, direction: int
+    ) -> float:
+        """Return size adjusted for predicted news impact.
+
+        Parameters
+        ----------
+        symbol: str
+            Instrument symbol.
+        size: float
+            Proposed position size.
+        timestamp: str or pandas.Timestamp
+            Event timestamp.
+        direction: int
+            +1 for long trades, -1 for shorts.
+        """
+        impact, uncert = get_impact(symbol, timestamp)
+        if uncert > _UNCERTAINTY_THRESHOLD:
+            size *= _DOWNSCALE
+        if impact is not None and abs(impact) > _IMPACT_THRESHOLD:
+            if impact * direction < 0:
+                return 0.0
+            size *= _IMPACT_BOOST
+        return size
 
     def update(
         self,
