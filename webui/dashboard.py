@@ -115,6 +115,17 @@ def main() -> None:
             except Exception:
                 pass
 
+        fid_path = Path("reports/feature_drift/latest.json")
+        if fid_path.exists():
+            try:
+                fid_data = json.loads(fid_path.read_text())
+                flagged = fid_data.get("flagged", {})
+                if flagged:
+                    msg = ", ".join(f"{k} ({v:.2f})" for k, v in flagged.items())
+                    st.error(f"Feature importance drift: {msg}")
+            except Exception:
+                pass
+
         st.subheader("Backup Status")
         bstatus = Path("reports/backup_status.json")
         if bstatus.exists():
@@ -167,6 +178,12 @@ def main() -> None:
         if not drift.empty:
             st.subheader("Drift Events")
             st.line_chart(drift.set_index("timestamp")["value"], height=150)
+
+        fid = query_metrics("feature_importance_drift")
+        if not fid.empty:
+            st.subheader("Feature Importance Drift")
+            pivot = fid.pivot_table(index="timestamp", columns="feature", values="value")
+            st.line_chart(pivot, height=150)
 
         skipped = query_metrics("trades_skipped_news")
         if not skipped.empty:
