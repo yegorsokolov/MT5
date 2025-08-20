@@ -14,11 +14,13 @@ from typing import Any, Dict, Optional, Callable
 import os
 from collections import OrderedDict
 import threading
+import time
 
 import duckdb
 import pandas as pd
 import requests
 from analytics.metrics_store import record_metric
+from services.worker_manager import get_worker_manager
 try:  # pragma: no cover - optional dependency in tests
     from utils.secret_manager import SecretManager
 except Exception:  # pragma: no cover
@@ -296,77 +298,85 @@ class FeatureStore:
         ``compute_fn``.  When a lower tier serves the request, upper tiers are
         populated asynchronously so subsequent calls are faster.  Tier hit
         ratios are reported via :func:`analytics.metrics_store.record_metric`.
+
+        The call latency is reported to
+        :class:`services.worker_manager.WorkerManager` to aid scaling decisions.
         """
 
-        params = {"start": start, "end": end}
-        key = self._key(symbol, 0, params)
+        start_t = time.perf_counter()
+        try:
+            params = {"start": start, "end": end}
+            key = self._key(symbol, 0, params)
 
-        # Memory tier --------------------------------------------------
-        self._totals["memory"] += 1
-        with self._lock:
-            if key in self._memory:
-                df = self._memory.pop(key)
-                self._memory[key] = df
-                self._hits["memory"] += 1
+            # Memory tier --------------------------------------------------
+            self._totals["memory"] += 1
+            with self._lock:
+                if key in self._memory:
+                    df = self._memory.pop(key)
+                    self._memory[key] = df
+                    self._hits["memory"] += 1
+                    self._record_metrics()
+                    return df
+
+            # Disk tier ----------------------------------------------------
+            self._totals["disk"] += 1
+            df = self.load(symbol, 0, params, raw_hash="remote")
+            if df is not None:
+                self._hits["disk"] += 1
+                threading.Thread(
+                    target=self._cache_memory, args=(key, df), daemon=True
+                ).start()
                 self._record_metrics()
                 return df
 
-        # Disk tier ----------------------------------------------------
-        self._totals["disk"] += 1
-        df = self.load(symbol, 0, params, raw_hash="remote")
-        if df is not None:
-            self._hits["disk"] += 1
+            # Remote tier --------------------------------------------------
+            if self.service_url:
+                self._totals["remote"] += 1
+                df = self.fetch_remote(symbol, start, end)
+                if df is not None:
+                    self._hits["remote"] += 1
+                    threading.Thread(
+                        target=self.save,
+                        args=(df, symbol, 0, params, "remote"),
+                        daemon=True,
+                    ).start()
+                    threading.Thread(
+                        target=self._cache_memory, args=(key, df), daemon=True
+                    ).start()
+                    self._record_metrics()
+                    return df
+
+            # Remote worker -----------------------------------------------
+            if getattr(monitor, "capability_tier", "") == "lite" and self.worker_url:
+                df = self.compute_remote(symbol, start, end)
+                if df is not None:
+                    threading.Thread(
+                        target=self.save,
+                        args=(df, symbol, 0, params, "remote"),
+                        daemon=True,
+                    ).start()
+                    threading.Thread(
+                        target=self._cache_memory, args=(key, df), daemon=True
+                    ).start()
+                    self._record_metrics()
+                    return df
+
+            # Compute fallback ---------------------------------------------
+            df = compute_fn()
+            threading.Thread(
+                target=self.save, args=(df, symbol, 0, params, "remote"), daemon=True
+            ).start()
             threading.Thread(
                 target=self._cache_memory, args=(key, df), daemon=True
             ).start()
+            threading.Thread(
+                target=self.upload_remote, args=(df, symbol, start, end), daemon=True
+            ).start()
             self._record_metrics()
             return df
-
-        # Remote tier --------------------------------------------------
-        if self.service_url:
-            self._totals["remote"] += 1
-            df = self.fetch_remote(symbol, start, end)
-            if df is not None:
-                self._hits["remote"] += 1
-                threading.Thread(
-                    target=self.save,
-                    args=(df, symbol, 0, params, "remote"),
-                    daemon=True,
-                ).start()
-                threading.Thread(
-                    target=self._cache_memory, args=(key, df), daemon=True
-                ).start()
-                self._record_metrics()
-                return df
-
-        # Remote worker -----------------------------------------------
-        if getattr(monitor, "capability_tier", "") == "lite" and self.worker_url:
-            df = self.compute_remote(symbol, start, end)
-            if df is not None:
-                threading.Thread(
-                    target=self.save,
-                    args=(df, symbol, 0, params, "remote"),
-                    daemon=True,
-                ).start()
-                threading.Thread(
-                    target=self._cache_memory, args=(key, df), daemon=True
-                ).start()
-                self._record_metrics()
-                return df
-
-        # Compute fallback ---------------------------------------------
-        df = compute_fn()
-        threading.Thread(
-            target=self.save, args=(df, symbol, 0, params, "remote"), daemon=True
-        ).start()
-        threading.Thread(
-            target=self._cache_memory, args=(key, df), daemon=True
-        ).start()
-        threading.Thread(
-            target=self.upload_remote, args=(df, symbol, start, end), daemon=True
-        ).start()
-        self._record_metrics()
-        return df
+        finally:
+            latency = time.perf_counter() - start_t
+            get_worker_manager().record_request("feature_store", latency)
 
     # ------------------------------------------------------------------
     def _cache_memory(self, key: str, df: pd.DataFrame) -> None:

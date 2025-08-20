@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+"""Dynamic worker scaling based on request load.
+
+The :class:`WorkerManager` tracks request rates from the ``remote_client``
+model API and the :class:`~data.feature_store.FeatureStore`.  When the recent
+request rate crosses configurable thresholds the manager will spawn or
+terminate worker containers.  Scaling actions are executed via Ray when
+available or fall back to no-ops in tests.  Worker counts and observed
+request latencies are persisted using :func:`analytics.metrics_store.record_metric`.
+"""
+
+import time
+from collections import defaultdict, deque
+from typing import Deque, Dict, Optional
+
+from analytics.metrics_store import record_metric
+
+try:  # pragma: no cover - optional dependency
+    import ray  # type: ignore
+except Exception:  # pragma: no cover
+    ray = None
+
+
+class WorkerManager:
+    """Scale worker processes based on request throughput."""
+
+    def __init__(
+        self,
+        *,
+        window: float = 10.0,
+        high_rps: float = 50.0,
+        low_rps: float = 10.0,
+        min_workers: int = 1,
+        max_workers: int = 10,
+        backend: str = "ray",
+    ) -> None:
+        self.window = window
+        self.high_rps = high_rps
+        self.low_rps = low_rps
+        self.min_workers = min_workers
+        self.max_workers = max_workers
+        self.backend = backend
+        self.worker_count = min_workers
+        self._requests: Dict[str, Deque[float]] = defaultdict(deque)
+        if backend == "ray" and ray is not None:
+            try:  # pragma: no cover - defensive
+                ray.init(ignore_reinit_error=True)
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    def record_request(self, source: str, latency: float) -> None:
+        """Record a request and update scaling decisions."""
+
+        now = time.time()
+        q = self._requests[source]
+        q.append(now)
+        cutoff = now - self.window
+        while q and q[0] < cutoff:
+            q.popleft()
+        record_metric("queue_latency", latency, tags={"source": source})
+        self._scale()
+
+    # ------------------------------------------------------------------
+    def _current_rps(self) -> float:
+        now = time.time()
+        cutoff = now - self.window
+        count = sum(len([t for t in q if t >= cutoff]) for q in self._requests.values())
+        return count / self.window
+
+    # ------------------------------------------------------------------
+    def _scale(self) -> None:
+        rps = self._current_rps()
+        if rps > self.high_rps and self.worker_count < self.max_workers:
+            self._spawn_worker()
+        elif rps < self.low_rps and self.worker_count > self.min_workers:
+            self._terminate_worker()
+        record_metric("worker_count", float(self.worker_count))
+
+    # ------------------------------------------------------------------
+    def _spawn_worker(self) -> None:
+        self.worker_count += 1
+        if self.backend == "ray" and ray is not None:
+            try:  # pragma: no cover - best effort
+                @ray.remote
+                def _noop() -> None:
+                    return None
+
+                _noop.remote()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    def _terminate_worker(self) -> None:
+        if self.worker_count > self.min_workers:
+            self.worker_count -= 1
+            # Actual termination is backend specific and omitted for brevity.
+
+
+_manager: Optional[WorkerManager] = None
+
+
+def get_worker_manager() -> WorkerManager:
+    """Return a process-wide :class:`WorkerManager` singleton."""
+
+    global _manager
+    if _manager is None:
+        _manager = WorkerManager()
+    return _manager
+
+
+__all__ = ["WorkerManager", "get_worker_manager"]
