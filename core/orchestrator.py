@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import subprocess
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 try:  # pragma: no cover - alerting optional in tests
     from utils.alerting import send_alert
@@ -18,6 +20,7 @@ from . import state_sync
 from analytics.metrics_store import record_metric
 from risk_manager import risk_manager
 from deployment.canary import CanaryManager
+from news.aggregator import NewsAggregator
 
 
 class Orchestrator:
@@ -47,9 +50,11 @@ class Orchestrator:
                 self.logger.info("Higher-tier resources detected: %s", tier)
                 self.registry.refresh()
                 try:
+                    out_dir = Path("reports/news_replay")
+                    out_dir.mkdir(parents=True, exist_ok=True)
                     reprocess = getattr(replay, "reprocess", None)
                     if callable(reprocess):
-                        reprocess()
+                        reprocess(out_dir)
                     else:
                         getattr(replay, "main", lambda: None)()
                 except Exception:  # pragma: no cover - defensive
@@ -83,6 +88,7 @@ class Orchestrator:
         loop.create_task(self._sync_monitor())
         loop.create_task(self._daily_summary())
         loop.create_task(self._watch_services())
+        loop.create_task(self._update_quiet_windows())
 
     @classmethod
     def start(cls) -> "Orchestrator":
@@ -117,6 +123,32 @@ class Orchestrator:
                     self.logger.exception("Strategy evaluation failed")
             except Exception:
                 self.logger.exception("Failed to push daily summary")
+            await asyncio.sleep(24 * 60 * 60)
+
+    async def _update_quiet_windows(self) -> None:
+        """Refresh quiet trading windows around high-impact news events."""
+        agg = NewsAggregator()
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                try:
+                    agg.fetch()
+                except Exception:
+                    pass
+                events = agg.get_news(now, now + timedelta(days=1))
+                windows: list[tuple[datetime, datetime]] = []
+                for ev in events:
+                    imp = str(ev.get("importance", "")).lower()
+                    ts = ev.get("timestamp")
+                    if ts and imp.startswith("high"):
+                        start = ts - timedelta(minutes=30)
+                        end = ts + timedelta(minutes=30)
+                        windows.append((start, end))
+                if hasattr(risk_manager, "set_quiet_windows"):
+                    risk_manager.set_quiet_windows(windows)
+                record_metric("quiet_windows", len(windows))
+            except Exception:
+                self.logger.exception("Failed to update quiet windows")
             await asyncio.sleep(24 * 60 * 60)
 
     async def _watch_services(self) -> None:

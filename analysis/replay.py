@@ -5,9 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import pandas as pd
 
-from log_utils import read_decisions
-from generate_signals import load_models
-from utils import load_config
+from analytics.metrics_store import record_metric
+from news import impact_model
 try:  # optional if backend not configured
     from core import state_sync
 except Exception:  # pragma: no cover - optional dependency
@@ -17,31 +16,50 @@ REPORT_DIR = Path(__file__).resolve().parent.parent / "reports"
 REPORT_DIR.mkdir(exist_ok=True)
 
 
-def main() -> None:
+def reprocess(out_dir: Path | None = None) -> pd.DataFrame:
+    """Reprocess historical trades applying the latest news impact model."""
+    trade_path = Path("reports/trades.csv")
     if state_sync:
-        state_sync.pull_decisions()
-    decisions = read_decisions()
-    if decisions.empty:
-        print("No decisions log found")
-        return
-    preds = decisions[decisions["event"] == "prediction"].copy()
-    if preds.empty:
-        print("No predictions to replay")
-        return
-    cfg = load_config()
-    models = load_models(cfg.get("models", []))
-    if not models:
-        print("No model available for replay")
-        return
-    model = models[0]
-    feature_cols = [c for c in preds.columns if c not in {"timestamp", "event", "Symbol", "prob"}]
-    new_probs = model.predict_proba(preds[feature_cols])[:, 1]
-    preds["reprocessed_prob"] = new_probs
-    preds.to_parquet(REPORT_DIR / "reprocessed.parquet", index=False)
-    mae = (preds["prob"] - preds["reprocessed_prob"]).abs().mean()
-    report = pd.DataFrame({"mae": [mae]})
-    report.to_parquet(REPORT_DIR / "summary.parquet", index=False)
-    print(f"Saved reports to {REPORT_DIR}")
+        try:
+            state_sync.pull_decisions()
+        except Exception:
+            pass
+    if not trade_path.exists():
+        return pd.DataFrame()
+    trades = pd.read_csv(trade_path, parse_dates=["timestamp"])
+    out_dir = Path(out_dir) if out_dir else REPORT_DIR
+    adj = []
+    for row in trades.itertuples():
+        impact, _ = impact_model.get_impact(row.symbol, row.timestamp)
+        adj.append(row.pnl * (1 + (impact or 0)))
+    trades["reprocessed_pnl"] = adj
+    out_dir.mkdir(parents=True, exist_ok=True)
+    trades.to_parquet(out_dir / "reprocessed.parquet", index=False)
+    summary = pd.DataFrame(
+        {
+            "pnl_old": [float(trades["pnl"].sum())],
+            "pnl_new": [float(trades["reprocessed_pnl"].sum())],
+        }
+    )
+    summary.to_parquet(out_dir / "summary.parquet", index=False)
+    try:
+        record_metric("replay_pnl_old", summary["pnl_old"].iloc[0])
+        record_metric("replay_pnl_new", summary["pnl_new"].iloc[0])
+        record_metric(
+            "replay_pnl_diff",
+            summary["pnl_new"].iloc[0] - summary["pnl_old"].iloc[0],
+        )
+    except Exception:
+        pass
+    return summary
+
+
+def main() -> None:
+    res = reprocess()
+    if res.empty:
+        print("No trades to replay")
+    else:
+        print(f"Saved reports to {REPORT_DIR}")
 
 
 if __name__ == "__main__":
