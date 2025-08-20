@@ -13,6 +13,7 @@ from kafka import KafkaProducer, KafkaConsumer, TopicPartition, errors as kafka_
 import redis
 
 from analytics.metrics_store import record_metric
+from analytics import decision_logger
 from risk.position_sizer import PositionSizer
 from models import conformal
 from strategies.trade_exit_policy import TradeExitPolicy
@@ -161,6 +162,8 @@ async def get_async_subscriber(connect_address: str | None = None, topic: str = 
 def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf") -> None:
     """Publish rows of a dataframe as JSON or Protobuf messages."""
     global _QUEUE_DEPTH
+    algos: list[str] = []
+    sizes: list[float] = []
     with tracer.start_as_current_span("publish_dataframe"):
         fmt = fmt.lower()
         for _, row in df.iterrows():
@@ -169,12 +172,13 @@ def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf")
                 record_metric("queue_depth", _QUEUE_DEPTH)
             except Exception:
                 pass
-            # Route through the strategy router before generating orders.
             feats = {
                 "volatility": float(row.get("volatility_30", 0.0)),
                 "trend_strength": float(row.get("trend_strength", 0.0)),
             }
-            _ROUTER.act(feats)
+            algo, action = _ROUTER.act(feats)
+            algos.append(algo)
+            sizes.append(float(action))
             if fmt == "json":
                 payload = {
                     "Timestamp": str(row["Timestamp"]),
@@ -205,6 +209,12 @@ def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf")
                 )
                 sock.send(msg.SerializeToString())
             _publish_count.add(1)
+    df_log = df.copy()
+    if "Timestamp" in df_log.columns:
+        df_log = df_log.rename(columns={"Timestamp": "timestamp"})
+    df_log["algorithm"] = algos
+    df_log["position_size"] = sizes
+    decision_logger.log(df_log)
 
 
 async def publish_dataframe_async(
@@ -212,6 +222,8 @@ async def publish_dataframe_async(
 ) -> None:
     """Asynchronously publish rows of a dataframe as JSON or Protobuf messages."""
     global _QUEUE_DEPTH
+    algos: list[str] = []
+    sizes: list[float] = []
     with tracer.start_as_current_span("publish_dataframe_async"):
         fmt = fmt.lower()
         for _, row in df.iterrows():
@@ -224,7 +236,9 @@ async def publish_dataframe_async(
                 "volatility": float(row.get("volatility_30", 0.0)),
                 "trend_strength": float(row.get("trend_strength", 0.0)),
             }
-            _ROUTER.act(feats)
+            algo, action = _ROUTER.act(feats)
+            algos.append(algo)
+            sizes.append(float(action))
             if fmt == "json":
                 payload = {
                     "Timestamp": str(row["Timestamp"]),
@@ -255,6 +269,12 @@ async def publish_dataframe_async(
                 )
                 await sock.send(msg.SerializeToString())
             _publish_count.add(1)
+    df_log = df.copy()
+    if "Timestamp" in df_log.columns:
+        df_log = df_log.rename(columns={"Timestamp": "timestamp"})
+    df_log["algorithm"] = algos
+    df_log["position_size"] = sizes
+    decision_logger.log(df_log)
 
 
 async def iter_messages(
@@ -446,7 +466,16 @@ class KafkaSignalQueue:
 
     def publish_dataframe(self, df: pd.DataFrame, fmt: str = "protobuf", retries: int = 3) -> None:
         fmt = fmt.lower()
+        algos: list[str] = []
+        sizes: list[float] = []
         for _, row in df.iterrows():
+            feats = {
+                "volatility": float(row.get("volatility_30", 0.0)),
+                "trend_strength": float(row.get("trend_strength", 0.0)),
+            }
+            algo, action = _ROUTER.act(feats)
+            algos.append(algo)
+            sizes.append(float(action))
             if fmt == "json":
                 payload_dict = {
                     "Timestamp": str(row["Timestamp"]),
@@ -496,6 +525,12 @@ class KafkaSignalQueue:
                     if attempt + 1 == retries:
                         raise
                     time.sleep(1)
+        df_log = df.copy()
+        if "Timestamp" in df_log.columns:
+            df_log = df_log.rename(columns={"Timestamp": "timestamp"})
+        df_log["algorithm"] = algos
+        df_log["position_size"] = sizes
+        decision_logger.log(df_log)
 
     def iter_messages(
         self,
@@ -639,7 +674,16 @@ class RedisSignalQueue:
 
     def publish_dataframe(self, df: pd.DataFrame, fmt: str = "protobuf", retries: int = 3) -> None:
         fmt = fmt.lower()
+        algos: list[str] = []
+        sizes: list[float] = []
         for _, row in df.iterrows():
+            feats = {
+                "volatility": float(row.get("volatility_30", 0.0)),
+                "trend_strength": float(row.get("trend_strength", 0.0)),
+            }
+            algo, action = _ROUTER.act(feats)
+            algos.append(algo)
+            sizes.append(float(action))
             if fmt == "json":
                 payload_dict = {
                     "Timestamp": str(row["Timestamp"]),
@@ -687,6 +731,12 @@ class RedisSignalQueue:
                     if attempt + 1 == retries:
                         raise
                     time.sleep(1)
+        df_log = df.copy()
+        if "Timestamp" in df_log.columns:
+            df_log = df_log.rename(columns={"Timestamp": "timestamp"})
+        df_log["algorithm"] = algos
+        df_log["position_size"] = sizes
+        decision_logger.log(df_log)
 
     def iter_messages(
         self,

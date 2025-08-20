@@ -46,9 +46,8 @@ def replay_trades(model_versions: List[str]) -> None:
     if not models:
         return
 
-    feature_cols = [
-        c for c in preds.columns if c not in {"timestamp", "event", "Symbol", "prob"}
-    ]
+    exclude = {"timestamp", "event", "Symbol", "prob", "algorithm", "position_size", "reason"}
+    feature_cols = [c for c in preds.columns if c not in exclude]
 
     summary_rows = []
     for vid, model in zip(model_versions, models):
@@ -56,7 +55,11 @@ def replay_trades(model_versions: List[str]) -> None:
             new_prob = model.predict_proba(preds[feature_cols])[:, 1]
         except Exception:  # pragma: no cover - defensive
             continue
-        comp = preds[["timestamp", "Symbol", "prob"]].copy()
+        base_cols = ["timestamp", "Symbol", "prob"]
+        for col in ["algorithm", "position_size", "reason"]:
+            if col in preds.columns:
+                base_cols.append(col)
+        comp = preds[base_cols].copy()
         comp["new_prob"] = new_prob
         comp["abs_diff"] = (comp["prob"] - comp["new_prob"]).abs()
         comp.to_parquet(REPLAY_DIR / f"{vid}.parquet", index=False)
