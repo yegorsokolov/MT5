@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional
 
 import optuna
 import pandas as pd
+from pathlib import Path
 
 from analysis import regime_detection
 from models import model_store
@@ -27,10 +28,15 @@ class AutoOptimizer:
         *,
         n_trials: int = 10,
         interval: int = 3600,
+        rationale_path: Path | str = Path(
+            "reports/rationale_scores/reason_accuracy.parquet"
+        ),
     ) -> None:
         self.objective_fn = objective_fn
         self.n_trials = n_trials
         self.interval = interval
+        self.rationale_path = Path(rationale_path)
+        self.rationale_bonus = self._load_rationale_bonus()
         self.last_run: float = 0.0
         self.last_regime: Optional[int] = None
         self.best_params: Optional[Dict[str, Any]] = None
@@ -50,6 +56,14 @@ class AutoOptimizer:
         )
         return trigger, regime
 
+    def _load_rationale_bonus(self) -> float:
+        """Load overall rationale accuracy as an optimisation bonus."""
+        try:
+            df = pd.read_parquet(self.rationale_path)
+            return float(df.loc["__overall__", "accuracy"])
+        except Exception:
+            return 0.0
+
     def maybe_optimize(self, data: pd.DataFrame) -> Optional[Dict[str, Any]]:
         run, regime = self.should_run(data)
         if not run:
@@ -63,7 +77,8 @@ class AutoOptimizer:
             params = {"lr": trial.suggest_float("lr", 1e-5, 1e-1)}
             return self.objective_fn(params, data)
 
-        study.optimize(objective, n_trials=self.n_trials)
+        trials = int(self.n_trials * (1.0 + self.rationale_bonus))
+        study.optimize(objective, n_trials=trials)
         params = study.best_params
         score = float(study.best_value)
 
