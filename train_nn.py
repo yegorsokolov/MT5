@@ -32,6 +32,7 @@ from analysis.feature_selector import select_features
 from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
 from analysis.active_learning import ActiveLearningQueue, merge_labels
+from analysis import model_card
 
 try:
     import shap
@@ -925,6 +926,18 @@ def main(
                 X_sample_np = X_sample[: cfg.get("shap_samples", 100)] if X_sample is not None else None
                 if X_sample_np is not None:
                     log_shap_importance(model, X_sample_np, features, report_dir, device)
+
+            model_card.generate(
+                cfg,
+                [root / "data" / f"{s}_history.parquet" for s in symbols],
+                features,
+                {
+                    "best_val_loss": best_val_loss,
+                    "val_accuracy": val_acc,
+                    "test_accuracy": acc,
+                },
+                root / "reports" / "model_cards",
+            )
 
     # Active learning: queue uncertain samples and merge any returned labels
     try:
