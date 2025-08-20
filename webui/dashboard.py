@@ -9,6 +9,7 @@ import streamlit as st
 import yaml
 
 from analytics.metrics_store import MetricsStore, query_metrics
+from log_utils import read_decisions
 
 from config_schema import ConfigSchema
 
@@ -200,6 +201,15 @@ def main() -> None:
         logs = st.session_state.get("logs", fetch_json("/logs", api_key))
         st.text_area("Recent Logs", logs.get("logs", ""), height=300)
         st.download_button("Download Logs", logs.get("logs", ""), file_name="system.log")
+        dec = read_decisions()
+        if not dec.empty:
+            cols = [
+                c
+                for c in ["timestamp", "event", "Symbol", "algorithm", "position_size", "reason"]
+                if c in dec.columns
+            ]
+            st.subheader("Recent Decisions")
+            st.dataframe(dec.tail(50)[cols])
 
     # Traces tab
     with tabs[4]:
