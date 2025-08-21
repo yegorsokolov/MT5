@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 import joblib
+from models import LazyModel
 
 # Minimum capability tier required to use this module
 min_capability = "standard"
@@ -26,8 +27,17 @@ _MODEL_PATH = Path(
     )
 )
 
-_model_cache: RandomForestRegressor | None = None
 _df_cache: pd.DataFrame | None = None
+
+
+def _model_loader(path: Path | str) -> RandomForestRegressor:
+    p = Path(_MODEL_PATH)
+    if p.exists():
+        return joblib.load(p)
+    return RandomForestRegressor(n_estimators=50, random_state=0)
+
+
+_MODEL = LazyModel(loader=_model_loader)
 
 
 def _prepare_features(events: pd.DataFrame) -> np.ndarray:
@@ -43,7 +53,7 @@ def _prepare_features(events: pd.DataFrame) -> np.ndarray:
 def train(events: pd.DataFrame, target: Iterable[float]) -> RandomForestRegressor:
     """Train the sentiment fusion model and persist per-event scores."""
 
-    global _model_cache, _df_cache
+    global _df_cache
     X = _prepare_features(events)
     y = np.asarray(list(target), dtype=float)
     model = RandomForestRegressor(n_estimators=50, random_state=0)
@@ -59,25 +69,14 @@ def train(events: pd.DataFrame, target: Iterable[float]) -> RandomForestRegresso
     _DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(_DATA_PATH, index=False)
     joblib.dump(model, _MODEL_PATH)
-    _model_cache = model
+    _MODEL.set(model)
     _df_cache = out
     return model
 
 
-def _load_model() -> RandomForestRegressor:
-    global _model_cache
-    if _model_cache is None:
-        if _MODEL_PATH.exists():
-            _model_cache = joblib.load(_MODEL_PATH)
-        else:  # pragma: no cover - model missing
-            _model_cache = RandomForestRegressor(n_estimators=50, random_state=0)
-    return _model_cache
-
-
 def score(events: pd.DataFrame) -> pd.DataFrame:
     """Return fused sentiment scores for ``events``."""
-
-    model = _load_model()
+    model = _MODEL.load()
     X = _prepare_features(events)
     scores = model.predict(X)
     return pd.DataFrame(

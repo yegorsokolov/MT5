@@ -4,13 +4,22 @@ import asyncio
 import importlib.util
 import logging
 import sys
+import weakref
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import types
+
+import joblib
 
 # ``models.mixture_of_experts`` depends on no heavy libraries but importing the
 # ``models`` package would trigger optional imports like ``torch``. Import the
 # module directly from its file path to keep tests lightweight.
+sys.modules.setdefault(
+    "analytics.metrics_store", types.SimpleNamespace(record_metric=lambda *a, **k: None)
+)
+
 _moe_spec = importlib.util.spec_from_file_location(
     "mixture_of_experts", Path(__file__).with_name("models") / "mixture_of_experts.py"
 )
@@ -58,6 +67,15 @@ class ModelVariant:
     requirements: ResourceCapabilities
     quantized: Optional[str] = None
     remote_only: bool = False
+    weights: Optional[Path] = None
+    quantized_weights: Optional[Path] = None
+
+    def __post_init__(self) -> None:
+        base = Path(__file__).with_name("models")
+        if self.weights is None:
+            self.weights = base / f"{self.name}.pkl"
+        if self.quantized and self.quantized_weights is None:
+            self.quantized_weights = base / f"{self.quantized}.pkl"
 
     def is_supported(self, capabilities: ResourceCapabilities) -> bool:
         """Return True if system capabilities meet this variant's needs."""
@@ -134,6 +152,19 @@ class ModelRegistry:
         self._previous: Dict[str, ModelVariant] = {}
         self._task: Optional[asyncio.Task] = None
         self.logger = logging.getLogger(__name__)
+        self._models: Dict[str, Any] = {}
+        self._finalizers: Dict[str, weakref.finalize] = {}
+        self._weights: Dict[str, Path] = {}
+        self._variant_by_name: Dict[str, ModelVariant] = {}
+        for variants in MODEL_REGISTRY.values():
+            for v in variants:
+                self._variant_by_name[v.name] = v
+                if v.weights:
+                    self._weights[v.name] = Path(v.weights)
+                if v.quantized:
+                    self._variant_by_name[v.quantized] = v
+                    if v.quantized_weights:
+                        self._weights[v.quantized] = Path(v.quantized_weights)
         self.moe = GatingNetwork(
             [
                 ExpertSpec(TrendExpert(), ResourceCapabilities(2, 4, False, gpu_count=0)),
@@ -173,13 +204,14 @@ class ModelRegistry:
             _refresh_counter.add(1)
 
     async def _watch(self, queue: asyncio.Queue[str]) -> None:
-        """Re-evaluate models when capability tier increases."""
+        """Re-evaluate models when capability tier changes."""
         prev = self.monitor.capability_tier
         while True:
             tier = await queue.get()
-            if TIERS.get(tier, 0) > TIERS.get(prev, 0):
-                self.logger.info("Capability tier upgraded to %s; re-evaluating models", tier)
+            if tier != prev:
+                self.logger.info("Capability tier changed to %s; re-evaluating models", tier)
                 self._pick_models()
+                self._purge_unused()
             prev = tier
 
     def get(self, task: str) -> str:
@@ -194,6 +226,7 @@ class ModelRegistry:
         """Manually re-run model selection using current capabilities."""
         with tracer.start_as_current_span("refresh_models"):
             self._pick_models()
+            self._purge_unused()
 
     def report_failure(self, task: str) -> None:
         """Report that the active model for ``task`` has crashed.
@@ -211,6 +244,7 @@ class ModelRegistry:
                 "Model %s for %s crashed; using baseline", prev.name if prev else "unknown", task
             )
             self.selected[task] = baseline
+            self._purge_unused()
 
     def requires_remote(self, task: str) -> bool:
         """Return True if ``task`` should be executed remotely."""
@@ -226,23 +260,35 @@ class ModelRegistry:
             return top
         return None
 
+    def _load_model(self, name: str) -> Any:
+        model = self._models.get(name)
+        if model is None:
+            path = self._weights.get(name)
+            if path is None:
+                raise KeyError(f"Unknown model {name}")
+            model = joblib.load(path)
+            self._models[name] = model
+            self._finalizers[name] = weakref.finalize(model, self._models.pop, name, None)
+        return model
+
+    def _purge_unused(self) -> None:
+        active = {self.get(task) for task in self.selected}
+        for name in list(self._models):
+            if name not in active:
+                fin = self._finalizers.pop(name, None)
+                if fin is not None:
+                    fin()
+                self._models.pop(name, None)
+        gc.collect()
+
     def predict_mixture(self, history: Any, regime: float) -> float:
         """Predict using the mixture-of-experts gating network."""
         with tracer.start_as_current_span("predict_mixture"):
             return self.moe.predict(history, regime, self.monitor.capabilities)
 
-    def predict(self, task: str, features: Any, loader) -> Any:
-        """Return predictions for ``task`` using local or remote models.
+    def predict(self, task: str, features: Any, loader=None) -> Any:
+        """Return predictions for ``task`` using local or remote models."""
 
-        Parameters
-        ----------
-        task:
-            Name of the task as defined in :data:`MODEL_REGISTRY`.
-        features:
-            Feature matrix passed to the model's ``predict`` or ``predict_proba``.
-        loader:
-            Callable taking a model name and returning the local model instance.
-        """
         model_name = self.get(task)
         with tracer.start_as_current_span("predict"):
             remote_variant = self._remote_variant(task)
@@ -257,7 +303,7 @@ class ModelRegistry:
                 spec.loader.exec_module(ic)  # type: ignore
                 client = ic.InferenceClient()
                 return client.predict(remote_variant.name, features)
-            model = loader(model_name)
+            model = loader(model_name) if loader else self._load_model(model_name)
             if hasattr(model, "predict_proba"):
                 return model.predict_proba(features)
             return model.predict(features)
