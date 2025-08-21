@@ -33,6 +33,7 @@ from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
 from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
+from analysis.domain_adapter import DomainAdapter
 
 try:
     import shap
@@ -339,6 +340,13 @@ def main(
         df = make_features(
             pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False)
         )
+        adapter_path = root / "domain_adapter.pkl"
+        adapter = DomainAdapter.load(adapter_path)
+        num_cols = df.select_dtypes(np.number).columns
+        if len(num_cols) > 0:
+            adapter.fit_source(df[num_cols])
+            df[num_cols] = adapter.transform(df[num_cols])
+            adapter.save(adapter_path)
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 

@@ -54,6 +54,7 @@ from analysis.prob_calibration import (
 )
 from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
+from analysis.domain_adapter import DomainAdapter
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -198,6 +199,13 @@ def main(
             save_history_parquet(df, root / "data" / "history.parquet")
 
             df = make_features(df, validate=cfg.get("validate", False))
+            adapter_path = root / "domain_adapter.pkl"
+            adapter = DomainAdapter.load(adapter_path)
+            num_cols = df.select_dtypes(np.number).columns
+            if len(num_cols) > 0:
+                adapter.fit_source(df[num_cols])
+                df[num_cols] = adapter.transform(df[num_cols])
+                adapter.save(adapter_path)
             df = periodic_reclassification(
                 df, step=cfg.get("regime_reclass_period", 500)
             )
