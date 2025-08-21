@@ -35,6 +35,7 @@ from metrics import (
 from telemetry import get_tracer, get_meter
 from analytics.metrics_store import record_metric, TS_PATH
 from analysis.data_quality import apply_quality_checks
+from analysis.domain_adapter import DomainAdapter
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -240,6 +241,8 @@ async def train_realtime():
         root = Path(__file__).resolve().parent
         scaler_path = root / "scaler.pkl"
         scaler = FeatureScaler.load(scaler_path)
+        adapter_path = root / "domain_adapter.pkl"
+        adapter = DomainAdapter.load(adapter_path)
 
         symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
@@ -258,6 +261,7 @@ async def train_realtime():
             if len(num_cols) > 0:
                 scaler.partial_fit(feats[num_cols])
                 feats[num_cols] = scaler.transform(feats[num_cols])
+                feats[num_cols] = adapter.transform(feats[num_cols])
                 scaler.save(scaler_path)
             await dispatch_signals(queue, feats)
 
