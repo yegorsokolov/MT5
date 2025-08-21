@@ -8,6 +8,7 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor
 import joblib
 import numpy as np
+from models import LazyModel
 
 # Paths for persisted artefacts.  ``NEWS_IMPACT_PATH`` allows tests or
 # callers to override the default location of the impact scores file.
@@ -24,14 +25,33 @@ _MODEL_PATH = Path(
     )
 )
 
-_model_cache: GradientBoostingRegressor | None = None
 _df_cache: pd.DataFrame | None = None
 _residual_std: float = 0.0
 
 
+def _model_loader(path: Path | str) -> GradientBoostingRegressor:
+    """Load model and residual information from ``_MODEL_PATH``."""
+
+    global _residual_std
+    p = Path(_MODEL_PATH)
+    if p.exists():
+        obj = joblib.load(p)
+        if isinstance(obj, dict):
+            _residual_std = obj.get("residual_std", 0.0)
+            return obj.get("model")  # type: ignore[return-value]
+        _residual_std = 0.0
+        return obj
+    _residual_std = 0.0
+    return GradientBoostingRegressor()
+
+
+_MODEL = LazyModel(loader=_model_loader)
+
+
 def train(events: pd.DataFrame, target: pd.Series) -> GradientBoostingRegressor:
     """Train the impact model and persist per-event scores."""
-    global _model_cache, _df_cache, _residual_std
+
+    global _df_cache, _residual_std
     features = events[["surprise", "sentiment", "historical_response"]]
     model = GradientBoostingRegressor()
     model.fit(features, target)
@@ -47,31 +67,14 @@ def train(events: pd.DataFrame, target: pd.Series) -> GradientBoostingRegressor:
     )
     out.to_parquet(_DATA_PATH, index=False)
     joblib.dump({"model": model, "residual_std": _residual_std}, _MODEL_PATH)
-    _model_cache = model
+    _MODEL.set(model)
     _df_cache = out
     return model
 
 
-def _load_model() -> GradientBoostingRegressor:
-    global _model_cache, _residual_std
-    if _model_cache is None:
-        if _MODEL_PATH.exists():
-            obj = joblib.load(_MODEL_PATH)
-            if isinstance(obj, dict):
-                _model_cache = obj.get("model")
-                _residual_std = obj.get("residual_std", 0.0)
-            else:
-                _model_cache = obj
-                _residual_std = 0.0
-        else:  # pragma: no cover - only when model missing
-            _model_cache = GradientBoostingRegressor()
-            _residual_std = 0.0
-    return _model_cache
-
-
 def score(events: pd.DataFrame) -> pd.DataFrame:
     """Return impact predictions for ``events``."""
-    model = _load_model()
+    model = _MODEL.load()
     feats = events[["surprise", "sentiment", "historical_response"]]
     impact = model.predict(feats)
     return pd.DataFrame(
