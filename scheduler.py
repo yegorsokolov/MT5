@@ -74,6 +74,21 @@ def resource_reprobe() -> None:
         logger.info("Trade reprocessing completed")
     except Exception:
         logger.exception("Trade reprocessing failed")
+    try:
+        import pandas as pd
+        from analysis.domain_adapter import DomainAdapter
+        from monitor_drift import DRIFT_METRICS
+
+        adapter = DomainAdapter.load(Path("domain_adapter.pkl"))
+        if DRIFT_METRICS.exists():
+            df = pd.read_parquet(DRIFT_METRICS)
+            num = df.select_dtypes(np.number)
+            if not num.empty:
+                adapter.reestimate(num)
+                adapter.save(Path("domain_adapter.pkl"))
+        logger.info("Domain adapter parameters refreshed")
+    except Exception:
+        logger.exception("Domain adapter re-estimation failed")
 
 def run_drift_detection() -> None:
     """Run model/data drift comparison."""
