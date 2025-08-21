@@ -13,16 +13,31 @@ import numpy as np
 from sklearn.decomposition import PCA
 
 from utils.data_backend import get_dataframe_module
-from analysis.garch_vol import garch_volatility
+from analysis.garch_vol import garch_volatility as _cpu_garch_volatility
 from analysis.kalman_filter import kalman_smooth
 from analysis.frequency_features import (
-    rolling_fft_features,
-    rolling_wavelet_features,
+    rolling_fft_features as _cpu_rolling_fft_features,
+    rolling_wavelet_features as _cpu_rolling_wavelet_features,
 )
-from analysis.fractal_features import rolling_fractal_features
+from analysis.fractal_features import (
+    rolling_fractal_features as _cpu_rolling_fractal_features,
+)
 from analysis.session_features import add_session_features
 from utils.resource_monitor import monitor
 from news import sentiment_fusion
+
+try:  # GPU accelerated versions
+    from analysis.gpu_features import (
+        garch_volatility_gpu,
+        rolling_fft_features_gpu,
+        rolling_wavelet_features_gpu,
+        rolling_fractal_features_gpu,
+    )
+except Exception:  # pragma: no cover - GPU optional
+    garch_volatility_gpu = None
+    rolling_fft_features_gpu = None
+    rolling_wavelet_features_gpu = None
+    rolling_fractal_features_gpu = None
 try:  # optional numba acceleration
     from utils.numba_accel import (
         rolling_mean as nb_rolling_mean,
@@ -74,10 +89,45 @@ def _has_resources(obj: object) -> bool:
     return TIERS.get(str(current), 0) >= TIERS.get(str(required), 0)
 
 
-garch_volatility.min_capability = "standard"  # type: ignore[attr-defined]
-rolling_fft_features.min_capability = "standard"  # type: ignore[attr-defined]
-rolling_wavelet_features.min_capability = "standard"  # type: ignore[attr-defined]
-rolling_fractal_features.min_capability = "standard"  # type: ignore[attr-defined]
+# Mark capability requirements for CPU implementations
+_cpu_garch_volatility.min_capability = "standard"  # type: ignore[attr-defined]
+_cpu_rolling_fft_features.min_capability = "standard"  # type: ignore[attr-defined]
+_cpu_rolling_wavelet_features.min_capability = "standard"  # type: ignore[attr-defined]
+_cpu_rolling_fractal_features.min_capability = "standard"  # type: ignore[attr-defined]
+
+# Mark GPU implementations if available
+if garch_volatility_gpu is not None:
+    garch_volatility_gpu.min_capability = "gpu"  # type: ignore[attr-defined]
+if rolling_fft_features_gpu is not None:
+    rolling_fft_features_gpu.min_capability = "gpu"  # type: ignore[attr-defined]
+if rolling_wavelet_features_gpu is not None:
+    rolling_wavelet_features_gpu.min_capability = "gpu"  # type: ignore[attr-defined]
+if rolling_fractal_features_gpu is not None:
+    rolling_fractal_features_gpu.min_capability = "gpu"  # type: ignore[attr-defined]
+
+# Choose CPU or GPU implementations based on resource monitor
+_use_gpu = bool(getattr(monitor.capabilities, "gpu", getattr(monitor.capabilities, "has_gpu", False)))
+
+garch_volatility = (
+    garch_volatility_gpu
+    if _use_gpu and garch_volatility_gpu is not None
+    else _cpu_garch_volatility
+)
+rolling_fft_features = (
+    rolling_fft_features_gpu
+    if _use_gpu and rolling_fft_features_gpu is not None
+    else _cpu_rolling_fft_features
+)
+rolling_wavelet_features = (
+    rolling_wavelet_features_gpu
+    if _use_gpu and rolling_wavelet_features_gpu is not None
+    else _cpu_rolling_wavelet_features
+)
+rolling_fractal_features = (
+    rolling_fractal_features_gpu
+    if _use_gpu and rolling_fractal_features_gpu is not None
+    else _cpu_rolling_fractal_features
+)
 
 
 def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
