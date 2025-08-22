@@ -70,6 +70,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from core.orchestrator import Orchestrator
+from utils.lr_scheduler import LookaheadAdamW
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -583,7 +584,7 @@ def main(
                 cfg.get("checkpoint_dir"),
             )
             federated_client.fetch_global()
-        optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+        optim = LookaheadAdamW(model.parameters(), lr=1e-3)
         loss_fn = QuantileLoss(quantiles) if use_tft else torch.nn.BCELoss()
 
         use_amp = cfg.get("use_amp", False)
@@ -734,6 +735,7 @@ def main(
                 val_acc = correct / total if total else 0.0
                 mlflow.log_metric("val_loss", val_loss, step=epoch)
                 mlflow.log_metric("val_accuracy", val_acc, step=epoch)
+                mlflow.log_metric("lr", optim.get_lr(), step=epoch)
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
