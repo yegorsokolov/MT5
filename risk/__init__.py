@@ -2,5 +2,6 @@
 
 from .risk_of_ruin import risk_of_ruin
 from .trade_manager import TradeManager
+from .net_exposure import NetExposure
 
-__all__ = ["risk_of_ruin", "TradeManager"]
+__all__ = ["risk_of_ruin", "TradeManager", "NetExposure"]

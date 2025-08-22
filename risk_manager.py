@@ -10,6 +10,7 @@ import pandas as pd
 from scheduler import start_scheduler
 from risk import risk_of_ruin
 from risk.budget_allocator import BudgetAllocator
+from risk.net_exposure import NetExposure
 from analytics.metrics_store import record_metric
 from analytics import decision_logger
 from portfolio.robust_optimizer import RobustOptimizer
@@ -56,6 +57,8 @@ class RiskManager:
         optimizer: RobustOptimizer | None = None,
         tail_threshold: float | None = None,
         tail_prob_limit: float = 0.05,
+        max_long_exposure: float = float("inf"),
+        max_short_exposure: float = float("inf"),
     ) -> None:
         self.max_drawdown = max_drawdown
         self.max_var = max_var
@@ -74,6 +77,9 @@ class RiskManager:
         self.tail_threshold = tail_threshold or max_drawdown
         self.tail_prob_limit = tail_prob_limit
         self.quiet_windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+        self.net_exposure = NetExposure(
+            max_long=max_long_exposure, max_short=max_short_exposure
+        )
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""
@@ -140,6 +146,28 @@ class RiskManager:
                 )
                 return 0.0
             size *= _IMPACT_BOOST
+        proposed = size * direction
+        allowed = self.net_exposure.limit(symbol, proposed)
+        if allowed == 0.0:
+            try:
+                record_metric("trades_skipped_exposure", 1)
+            except Exception:
+                pass
+            decision_logger.log(
+                pd.DataFrame(
+                    [
+                        {
+                            "timestamp": ts.isoformat(),
+                            "symbol": symbol,
+                            "event": "skip",
+                            "position_size": 0.0,
+                            "reason": "exposure_limit",
+                        }
+                    ]
+                )
+            )
+            return 0.0
+        size = abs(allowed)
         decision_logger.log(
             pd.DataFrame(
                 [
@@ -167,9 +195,16 @@ class RiskManager:
         exposure: float = 0.0,
         check_hedge: bool = True,
         factor_returns: Dict[str, float] | None = None,
+        *,
+        symbol: str | None = None,
     ) -> None:
         """Record a trade or PnL update from ``bot_id``."""
-        self.metrics.exposure += exposure
+        if symbol is not None:
+            self.net_exposure.update(symbol, exposure)
+            totals = self.net_exposure.totals()
+            self.metrics.exposure = totals["net"]
+        else:
+            self.metrics.exposure += exposure
         self.metrics.daily_loss += pnl
         self._pnl_history.append(pnl)
         bot_hist = self._bot_pnl_history.setdefault(bot_id, [])
@@ -262,8 +297,11 @@ class RiskManager:
 
     def status(self) -> Dict[str, float | bool]:
         """Return current aggregated risk metrics."""
+        totals = self.net_exposure.totals()
         return {
             "exposure": self.metrics.exposure,
+            "long_exposure": totals["long"],
+            "short_exposure": totals["short"],
             "daily_loss": self.metrics.daily_loss,
             "var": self.metrics.var,
             "risk_of_ruin": self.metrics.risk_of_ruin,
@@ -339,12 +377,16 @@ MAX_VAR = float(os.getenv("MAX_VAR", "1e9"))
 TAIL_HEDGE_VAR = float(os.getenv("TAIL_HEDGE_VAR", str(MAX_VAR)))
 RISK_OF_RUIN_THRESHOLD = float(os.getenv("RISK_OF_RUIN_THRESHOLD", "1.0"))
 INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "1.0"))
+MAX_LONG_EXPOSURE = float(os.getenv("MAX_LONG_EXPOSURE", "inf"))
+MAX_SHORT_EXPOSURE = float(os.getenv("MAX_SHORT_EXPOSURE", "inf"))
 
 risk_manager = RiskManager(
     MAX_DRAWDOWN,
     MAX_VAR,
     risk_of_ruin_threshold=RISK_OF_RUIN_THRESHOLD,
     initial_capital=INITIAL_CAPITAL,
+    max_long_exposure=MAX_LONG_EXPOSURE,
+    max_short_exposure=MAX_SHORT_EXPOSURE,
 )
 tail_hedger = TailHedger(risk_manager, TAIL_HEDGE_VAR)
 risk_manager.attach_tail_hedger(tail_hedger)
