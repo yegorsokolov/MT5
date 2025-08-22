@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import random
 import torch
+from utils.lr_scheduler import LookaheadAdamW
 try:
     import torch.nn as nn
 except Exception:  # pragma: no cover - torch may be stubbed
@@ -196,9 +197,9 @@ def offline_pretrain(
         import torch  # type: ignore
 
         if hasattr(policy, "parameters"):
-            optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
+            optimizer = LookaheadAdamW(policy.parameters(), lr=lr)
             loss_fn = torch.nn.MSELoss()
-            for _ in range(max(1, epochs)):
+            for i in range(max(1, epochs)):
                 for obs, actions, _, _, _ in dataset.iter_batches(batch_size):
                     obs_t = torch.as_tensor(obs, dtype=torch.float32)
                     act_t = torch.as_tensor(actions, dtype=torch.float32)
@@ -207,6 +208,7 @@ def offline_pretrain(
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
+                mlflow.log_metric("pretrain_lr", optimizer.get_lr(), step=i)
             dataset.close()
             return
     except Exception:  # pragma: no cover - torch not available
@@ -608,6 +610,11 @@ def main(
     else:
         raise ValueError(f"Unknown rl_algorithm {algo}")
 
+    if algo != "RLLIB" and hasattr(model, "policy") and hasattr(model.policy, "optimizer"):
+        model.policy.optimizer = LookaheadAdamW(
+            model.policy.parameters(), lr=cfg.get("rl_learning_rate", 3e-4)
+        )
+
     if algo != "RLLIB":
         def _watch_model() -> None:
             async def _watch() -> None:
@@ -739,6 +746,8 @@ def main(
             except TypeError:  # pragma: no cover - stub algos may not support kwarg
                 model.learn(total_timesteps=learn_steps)
             current += learn_steps
+            if rank == 0 and hasattr(model.policy, "optimizer"):
+                mlflow.log_metric("lr", model.policy.optimizer.get_lr(), step=current)
             save_checkpoint(
                 {
                     "model": model.policy.state_dict(),
