@@ -195,6 +195,34 @@ def main() -> None:
             st.subheader("Replay PnL Delta")
             st.line_chart(replay.set_index("timestamp")["value"], height=150)
 
+        replay_dir = Path("reports/replay")
+        pnl_summary = replay_dir / "pnl_summary.parquet"
+        model_summary = replay_dir / "summary.parquet"
+        flag_file = replay_dir / "latest.json"
+        if pnl_summary.exists():
+            try:
+                ps = pd.read_parquet(pnl_summary)
+                st.subheader("Replay PnL Summary")
+                st.table(ps)
+            except Exception:
+                pass
+        if model_summary.exists():
+            try:
+                ms = pd.read_parquet(model_summary)
+                st.subheader("Model Replay MAE")
+                st.table(ms)
+            except Exception:
+                pass
+        if flag_file.exists():
+            try:
+                data = json.loads(flag_file.read_text())
+                flagged = data.get("flagged", {})
+                if flagged:
+                    msg = ", ".join(f"{k} ({v:.3f})" for k, v in flagged.items())
+                    st.error(f"Replay discrepancies: {msg}")
+            except Exception:
+                pass
+
         for name in ["gaps", "zscore", "median"]:
             dq = query_metrics(f"data_quality_{name}")
             if not dq.empty:
