@@ -13,6 +13,8 @@ from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 from utils import load_config
+from execution import ExecutionEngine
+from utils.resource_monitor import monitor
 from data.history import load_history_parquet, load_history_config
 from data.features import make_features
 from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
@@ -154,8 +156,11 @@ def backtest_on_df(
 
     threshold = cfg.get("threshold", 0.55)
     distance = cfg.get("trailing_stop_pips", 20) * 1e-4
-    slippage = cfg.get("slippage_bps", 0.0) / 10000.0
     order_size = cfg.get("order_size", 1.0)
+
+    engine = ExecutionEngine()
+    tier = getattr(monitor, "capability_tier", "lite")
+    strategy = "ioc" if tier == "lite" else cfg.get("execution_strategy", "vwap")
 
     in_position = False
     entry = 0.0
@@ -171,21 +176,44 @@ def backtest_on_df(
         bid_vol = getattr(row, "BidVolume", np.inf)
         ask_vol = getattr(row, "AskVolume", np.inf)
 
+        engine.record_volume(bid_vol + ask_vol)
         if not in_position and prob > threshold:
-            if ask_vol < order_size:
+            result = engine.place_order(
+                side="buy",
+                quantity=order_size,
+                bid=bid,
+                ask=ask,
+                bid_vol=bid_vol,
+                ask_vol=ask_vol,
+                mid=price_mid,
+                strategy=strategy,
+                expected_slippage_bps=cfg.get("slippage_bps", 0.0),
+            )
+            if result["filled"] < order_size:
                 skipped_trades += 1
                 continue
             in_position = True
-            entry = ask * (1 + slippage)
+            entry = result["avg_price"]
             stop = entry - distance
             continue
         if in_position:
             stop = trailing_stop(entry, price_mid, stop, distance)
             if price_mid <= stop:
-                fill_frac = min(bid_vol / order_size, 1.0)
+                result = engine.place_order(
+                    side="sell",
+                    quantity=order_size,
+                    bid=bid,
+                    ask=ask,
+                    bid_vol=bid_vol,
+                    ask_vol=ask_vol,
+                    mid=price_mid,
+                    strategy=strategy,
+                    expected_slippage_bps=cfg.get("slippage_bps", 0.0),
+                )
+                fill_frac = min(result["filled"] / order_size, 1.0)
                 if fill_frac < 1.0:
                     partial_fills += 1
-                exit_price = bid * (1 - slippage)
+                exit_price = result["avg_price"]
                 returns.append(((exit_price - entry) / entry) * fill_frac)
                 in_position = False
 
