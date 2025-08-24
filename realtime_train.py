@@ -13,6 +13,8 @@ from brokers import connection_manager as conn_mgr
 import MetaTrader5 as mt5  # type: ignore
 
 from utils import load_config
+from execution import ExecutionEngine
+from utils.resource_monitor import monitor
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -53,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 # initialize connection manager with primary MetaTrader5 broker
 conn_mgr.init([mt5])
+exec_engine = ExecutionEngine()
 
 try:  # pragma: no cover - orchestrator may be stubbed in tests
     from core.orchestrator import Orchestrator
@@ -162,6 +165,30 @@ async def dispatch_signals(queue, df: pd.DataFrame) -> None:
         if queue is None or df.empty:
             return
         await asyncio.to_thread(queue.publish_dataframe, df)
+
+        tier = getattr(monitor, "capability_tier", "lite")
+        strategy = "ioc" if tier == "lite" else "vwap"
+        for row in df.itertuples(index=False):
+            side = getattr(row, "side", None)
+            size = getattr(row, "size", None)
+            if side is None or size is None:
+                continue
+            bid = getattr(row, "Bid", getattr(row, "mid", 0.0))
+            ask = getattr(row, "Ask", getattr(row, "mid", 0.0))
+            bid_vol = getattr(row, "BidVolume", float("inf"))
+            ask_vol = getattr(row, "AskVolume", float("inf"))
+            mid = getattr(row, "mid", (bid + ask) / 2 if (bid and ask) else bid)
+            exec_engine.record_volume(bid_vol + ask_vol)
+            exec_engine.place_order(
+                side=side,
+                quantity=size,
+                bid=bid,
+                ask=ask,
+                bid_vol=bid_vol,
+                ask_vol=ask_vol,
+                mid=mid,
+                strategy=strategy,
+            )
 
 
 async def tick_producer(
