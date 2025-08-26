@@ -22,9 +22,14 @@ from analysis.frequency_features import (
 from analysis.fractal_features import (
     rolling_fractal_features as _cpu_rolling_fractal_features,
 )
+from analysis.dtw_features import compute as dtw_compute
 from analysis.session_features import add_session_features
 from utils.resource_monitor import monitor
-from news import sentiment_fusion
+
+try:  # pragma: no cover - news sentiment is optional
+    from news import sentiment_fusion
+except Exception:  # pragma: no cover - optional dependency
+    sentiment_fusion = None
 
 try:  # GPU accelerated versions
     from analysis.gpu_features import (
@@ -483,6 +488,10 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     use_kalman = cfg.get("use_kalman", True)
     use_dask = cfg.get("use_dask", False)
     use_cache = cfg.get("use_feature_cache", False)
+    use_dtw = cfg.get("use_dtw", True)
+    dtw_window = cfg.get("dtw_window", 64)
+    dtw_motifs = cfg.get("dtw_motifs", 5)
+    dtw_enabled = use_dtw and _has_resources(dtw_compute)
     dask_url = cfg.get("dask_cluster_url")
     service_url = cfg.get("feature_service_url")
     service_api_key = cfg.get("feature_service_api_key")
@@ -513,6 +522,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         "use_atr": use_atr,
         "use_donchian": use_donchian,
         "use_kalman": use_kalman,
+        "use_dtw": dtw_enabled,
+        "dtw_window": dtw_window if dtw_enabled else None,
+        "dtw_motifs": dtw_motifs if dtw_enabled else None,
     }
     if use_cache:
         cached_store = FeatureStore()
@@ -675,6 +687,29 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
                 group["mid"], window=128, wavelet="db4", level=2
             )
             group = pd.concat([group, fft_feats, wave_feats], axis=1)
+
+        if dtw_enabled:
+            symbol = (
+                group["Symbol"].iloc[0] if "Symbol" in group.columns else "nosymbol"
+            )
+            if use_cache and cached_store is not None:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                    group["mid"].to_csv(tmp.name, index=False)
+                    mid_hash = compute_hash(tmp.name)
+                os.unlink(tmp.name)
+                params = {"feature": "dtw", "window": dtw_window, "motifs": dtw_motifs}
+                dtw_df = cached_store.get_or_set(
+                    symbol,
+                    len(group["mid"]),
+                    params,
+                    mid_hash,
+                    lambda: dtw_compute(
+                        group["mid"], window=dtw_window, n_motifs=dtw_motifs
+                    ),
+                )
+            else:
+                dtw_df = dtw_compute(group["mid"], window=dtw_window, n_motifs=dtw_motifs)
+            group = pd.concat([group, dtw_df], axis=1)
 
         return group
 
