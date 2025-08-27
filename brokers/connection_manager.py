@@ -1,5 +1,9 @@
+import asyncio
 import logging
-from typing import List, Any, Optional
+import time
+from typing import Any, List, Optional
+
+from metrics import BROKER_FAILURES, BROKER_LATENCY_MS
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +24,7 @@ class ConnectionManager:
             raise ValueError("At least one broker must be provided")
         self._brokers = brokers
         self._active_index: Optional[int] = None
+        self._failure_counts = {i: 0 for i in range(len(brokers))}
         self._connect_first_available()
 
     def _connect_first_available(self) -> None:
@@ -62,6 +67,46 @@ class ConnectionManager:
         logger.error("All brokers failed during failover")
         return False
 
+    async def watchdog(
+        self,
+        interval: float = 5.0,
+        timeout: float = 1.0,
+        latency_threshold_ms: float = 1000.0,
+        failure_threshold: int = 3,
+    ) -> None:
+        """Periodically ping brokers and trigger failover on degradation."""
+
+        try:
+            while True:
+                for i, broker in enumerate(self._brokers):
+                    name = getattr(broker, "__name__", broker.__class__.__name__)
+                    start = time.perf_counter()
+                    try:
+                        if hasattr(broker, "ping"):
+                            func = broker.ping
+                        else:
+                            func = broker.initialize
+                        if asyncio.iscoroutinefunction(func):
+                            await asyncio.wait_for(func(), timeout=timeout)
+                        else:
+                            await asyncio.wait_for(asyncio.to_thread(func), timeout=timeout)
+                        latency = (time.perf_counter() - start) * 1000
+                        BROKER_LATENCY_MS.labels(broker=name).set(latency)
+                        if latency > latency_threshold_ms:
+                            self._failure_counts[i] += 1
+                            BROKER_FAILURES.labels(broker=name).inc()
+                        else:
+                            self._failure_counts[i] = 0
+                    except Exception:
+                        BROKER_FAILURES.labels(broker=name).inc()
+                        self._failure_counts[i] += 1
+                    if i == self._active_index and self._failure_counts[i] >= failure_threshold:
+                        self.failover()
+                        self._failure_counts[i] = 0
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            pass
+
 _manager: Optional[ConnectionManager] = None
 
 
@@ -81,3 +126,9 @@ def failover() -> bool:
     if _manager is None:
         return False
     return _manager.failover()
+
+
+async def watchdog(**kwargs) -> None:
+    if _manager is None:
+        return
+    await _manager.watchdog(**kwargs)

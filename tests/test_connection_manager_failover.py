@@ -10,6 +10,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 sys.modules['git'] = types.SimpleNamespace(Repo=lambda *a, **k: None)
 sys.modules['yaml'] = types.SimpleNamespace(safe_load=lambda *a, **k: {})
 sys.modules['utils'] = types.SimpleNamespace(load_config=lambda: {})
+sys.modules['utils.resource_monitor'] = types.SimpleNamespace(monitor=lambda *a, **k: None)
+sys.modules['requests'] = types.SimpleNamespace(get=lambda *a, **k: None)
 data_pkg = types.ModuleType('data')
 data_pkg.features = types.SimpleNamespace(make_features=lambda df: df)
 data_pkg.sanitize = types.SimpleNamespace(sanitize_ticks=lambda df: df)
@@ -31,6 +33,10 @@ sys.modules['metrics'] = types.SimpleNamespace(
     TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
     FEATURE_ANOMALIES=types.SimpleNamespace(inc=lambda: None),
     RESOURCE_RESTARTS=types.SimpleNamespace(inc=lambda: None),
+    BROKER_LATENCY_MS=types.SimpleNamespace(labels=lambda **k: types.SimpleNamespace(set=lambda v: None)),
+    BROKER_FAILURES=types.SimpleNamespace(labels=lambda **k: types.SimpleNamespace(inc=lambda: None)),
+    SLIPPAGE_BPS=types.SimpleNamespace(set=lambda v: None),
+    REALIZED_SLIPPAGE_BPS=types.SimpleNamespace(set=lambda v: None),
 )
 sys.modules['models'] = types.SimpleNamespace(model_store=types.SimpleNamespace(load_model=lambda *a, **k: (None, None)))
 sys.modules['prometheus_client'] = types.SimpleNamespace(Counter=lambda *a, **k: None, Gauge=lambda *a, **k: None)
