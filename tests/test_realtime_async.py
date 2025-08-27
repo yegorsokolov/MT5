@@ -13,6 +13,9 @@ os.environ.setdefault("DISABLE_ENV_CHECK", "1")
 sys.modules['git'] = types.SimpleNamespace(Repo=lambda *args, **kwargs: None)
 sys.modules['yaml'] = types.SimpleNamespace(safe_load=lambda *args, **kwargs: {})
 sys.modules['utils'] = types.SimpleNamespace(load_config=lambda: {})
+sys.modules['utils.resource_monitor'] = types.SimpleNamespace(monitor=lambda *a, **k: None)
+sys.modules['requests'] = types.SimpleNamespace(get=lambda *a, **k: None)
+sys.modules['crypto_utils'] = types.SimpleNamespace(_load_key=lambda: b"", encrypt=lambda *a, **k: b"", decrypt=lambda *a, **k: b"")
 data_pkg = types.ModuleType('data')
 data_pkg.features = types.SimpleNamespace(make_features=lambda df: df)
 data_pkg.sanitize = types.SimpleNamespace(sanitize_ticks=lambda df: df)
@@ -23,10 +26,12 @@ data_pkg.trade_log = types.SimpleNamespace(
         sync_mt5_positions=lambda *a, **k: None,
     )
 )
+data_pkg.feature_scaler = types.SimpleNamespace(FeatureScaler=lambda: None)
 sys.modules['data'] = data_pkg
 sys.modules['data.features'] = data_pkg.features
 sys.modules['data.sanitize'] = data_pkg.sanitize
 sys.modules['data.trade_log'] = data_pkg.trade_log
+sys.modules['data.feature_scaler'] = data_pkg.feature_scaler
 sys.modules['signal_queue'] = types.SimpleNamespace(get_signal_backend=lambda cfg: None)
 sys.modules['metrics'] = types.SimpleNamespace(
     RECONNECT_COUNT=types.SimpleNamespace(inc=lambda: None),
@@ -36,6 +41,10 @@ sys.modules['metrics'] = types.SimpleNamespace(
     RESOURCE_RESTARTS=types.SimpleNamespace(inc=lambda: None),
     QUEUE_DEPTH=types.SimpleNamespace(set=lambda v: None),
     BATCH_LATENCY=types.SimpleNamespace(set=lambda v: None),
+    BROKER_LATENCY_MS=types.SimpleNamespace(labels=lambda **k: types.SimpleNamespace(set=lambda v: None)),
+    BROKER_FAILURES=types.SimpleNamespace(labels=lambda **k: types.SimpleNamespace(inc=lambda: None)),
+    SLIPPAGE_BPS=types.SimpleNamespace(set=lambda v: None),
+    REALIZED_SLIPPAGE_BPS=types.SimpleNamespace(set=lambda v: None),
 )
 sys.modules['models'] = types.SimpleNamespace(model_store=types.SimpleNamespace(load_model=lambda *a, **k: (None, None)))
 import importlib.machinery
