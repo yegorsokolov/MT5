@@ -81,6 +81,13 @@ class StrategyRouter:
         self.algorithms[name] = algorithm
         self.A[name] = np.identity(self.dim)
         self.b[name] = np.zeros((self.dim, 1))
+        try:
+            from core.orchestrator import GLOBAL_ORCHESTRATOR
+
+            if GLOBAL_ORCHESTRATOR is not None:
+                GLOBAL_ORCHESTRATOR.register_strategy(name, algorithm)
+        except Exception:  # pragma: no cover - best effort
+            pass
 
     # Selection --------------------------------------------------------
     def select(self, features: FeatureDict) -> str:
