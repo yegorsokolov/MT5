@@ -4,6 +4,7 @@ import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 try:  # pragma: no cover - alerting optional in tests
     from utils.alerting import send_alert
@@ -21,6 +22,7 @@ from analytics.metrics_store import record_metric
 from risk_manager import risk_manager
 from deployment.canary import CanaryManager
 from news.aggregator import NewsAggregator
+from strategy.shadow_runner import ShadowRunner
 
 
 class Orchestrator:
@@ -39,6 +41,7 @@ class Orchestrator:
             "realtime_train": ["python", "realtime_train.py"],
         }
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
+        self._shadow_tasks: dict[str, asyncio.Task] = {}
 
     async def _watch(self) -> None:
         """React to capability tier upgrades."""
@@ -89,11 +92,20 @@ class Orchestrator:
         loop.create_task(self._daily_summary())
         loop.create_task(self._watch_services())
         loop.create_task(self._update_quiet_windows())
+        try:  # start shadow runners for existing strategies
+            import signal_queue
+
+            for name, algo in getattr(signal_queue, "_ROUTER").algorithms.items():
+                self.register_strategy(name, algo)
+        except Exception:
+            pass
 
     @classmethod
     def start(cls) -> "Orchestrator":
         orchestrator = cls()
         orchestrator._start()
+        global GLOBAL_ORCHESTRATOR
+        GLOBAL_ORCHESTRATOR = orchestrator
         return orchestrator
 
     async def _sync_monitor(self) -> None:
@@ -104,6 +116,18 @@ class Orchestrator:
             if not state_sync.check_health(max_lag):
                 self.logger.warning("State replication lag exceeds %s seconds", max_lag)
             await asyncio.sleep(interval)
+
+    # Shadow strategy management ---------------------------------------------
+    def register_strategy(self, name: str, handler: Callable[[dict], float]) -> None:
+        """Start a shadow runner for ``name`` if not already running."""
+        if name in self._shadow_tasks:
+            return
+        runner = ShadowRunner(name=name, handler=handler)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        self._shadow_tasks[name] = loop.create_task(runner.run())
 
     async def _daily_summary(self) -> None:
         """Record daily aggregated metrics to the store."""
@@ -182,3 +206,6 @@ class Orchestrator:
                     except Exception:
                         self.logger.exception("Failed to restart service %s", name)
             await asyncio.sleep(interval)
+
+
+GLOBAL_ORCHESTRATOR: Orchestrator | None = None
