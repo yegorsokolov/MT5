@@ -18,6 +18,7 @@ import pandas as pd
 
 from analysis.algorithm_rating import load_ratings
 from analysis.rationale_scorer import load_algorithm_win_rates
+from analytics.regime_performance_store import RegimePerformanceStore
 
 FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
@@ -45,6 +46,7 @@ class StrategyRouter:
     rationale_path: Path | str = Path(
         "reports/rationale_scores/algorithm_win_rates.parquet"
     )
+    regime_perf_path: Path | str = Path("analytics/regime_performance.parquet")
 
     def __post_init__(self) -> None:
         if not self.algorithms:
@@ -70,6 +72,8 @@ class StrategyRouter:
         self.elo_ratings = self._load_elo_ratings()
         self.rationale_path = Path(self.rationale_path)
         self.rationale_scores = self._load_rationale_scores()
+        self.regime_perf_path = Path(self.regime_perf_path)
+        self.regime_performance = self._load_regime_performance()
 
     # Registration -----------------------------------------------------
     def register(self, name: str, algorithm: Algorithm) -> None:
@@ -96,6 +100,7 @@ class StrategyRouter:
                 + self._scoreboard_weight(regime, name)
                 + self._elo_weight(name)
                 + self._rationale_weight(name)
+                + self._regime_performance_weight(regime, name)
             )
             if score > best_score:
                 best_score = score
@@ -181,6 +186,32 @@ class StrategyRouter:
         if rate is None:
             return 0.0
         return float(rate) - 0.5
+
+    def _load_regime_performance(self) -> pd.DataFrame:
+        """Load historical PnL by regime and model."""
+        try:
+            store = RegimePerformanceStore(self.regime_perf_path)
+            return store.load()
+        except Exception:
+            return pd.DataFrame(
+                columns=["date", "model", "regime", "pnl_daily", "pnl_weekly"]
+            )
+
+    def refresh_regime_performance(self) -> None:
+        """Reload regime performance statistics from disk."""
+        self.regime_performance = self._load_regime_performance()
+
+    def _regime_performance_weight(self, regime: float | None, algorithm: str) -> float:
+        """Return a normalised weight based on historical PnL."""
+        if regime is None or self.regime_performance.empty:
+            return 0.0
+        df = self.regime_performance
+        sub = df[(df["regime"] == regime) & (df["model"] == algorithm)]
+        if sub.empty:
+            return 0.0
+        pnl = float(sub.iloc[-1]["pnl_weekly"])
+        scale = float(df["pnl_weekly"].abs().max() or 1.0)
+        return pnl / scale
 
     def _update_scoreboard(
         self, regime: float | None, algorithm: str, smooth: float
