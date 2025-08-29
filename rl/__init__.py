@@ -8,6 +8,7 @@ from .trading_env import (
     HierarchicalTradingEnv,
     RLLibTradingEnv,
 )
+from .multi_agent_env import MultiAgentTradingEnv
 
 __all__ = [
     "CVaRRewardWrapper",
@@ -18,4 +19,5 @@ __all__ = [
     "DiscreteTradingEnv",
     "HierarchicalTradingEnv",
     "RLLibTradingEnv",
+    "MultiAgentTradingEnv",
 ]

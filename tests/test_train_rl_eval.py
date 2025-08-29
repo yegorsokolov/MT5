@@ -17,7 +17,7 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
         log_param=lambda *a, **k: None,
         log_artifact=lambda *a, **k: None,
         end_run=lambda *a, **k: None,
-        log_metric=lambda k, v: metrics_logged.setdefault(k, v),
+        log_metric=lambda k, v, **kw: metrics_logged.setdefault(k, v),
         __spec__=types.SimpleNamespace(),
     )
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_stub)
@@ -47,6 +47,23 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     gym_stub = types.SimpleNamespace(Env=object, spaces=types.SimpleNamespace(Box=DummyBox))
     monkeypatch.setitem(sys.modules, "gym", gym_stub)
     monkeypatch.setitem(sys.modules, "utils", types.SimpleNamespace(load_config=lambda: {}))
+    monkeypatch.setitem(
+        sys.modules,
+        "utils.lr_scheduler",
+        types.SimpleNamespace(
+            LookaheadAdamW=lambda *a, **k: types.SimpleNamespace(
+                state_dict=lambda: {}, get_lr=lambda: 0
+            )
+        ),
+    )
+    monitor_stub = types.SimpleNamespace(
+        start=lambda: None,
+        capability_tier=lambda: "lite",
+        capabilities=types.SimpleNamespace(capability_tier=lambda: "lite", ddp=lambda: False),
+    )
+    monkeypatch.setitem(
+        sys.modules, "utils.resource_monitor", types.SimpleNamespace(monitor=monitor_stub)
+    )
     monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace())
     monkeypatch.setitem(sys.modules, "joblib", types.SimpleNamespace())
     state_stub = types.SimpleNamespace(
@@ -63,27 +80,57 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "data", types.SimpleNamespace())
     monkeypatch.setitem(sys.modules, "data.history", history_stub)
     monkeypatch.setitem(sys.modules, "data.features", features_stub)
-    metrics_stub = types.SimpleNamespace(record_metric=lambda *a, **k: None, TS_PATH="")
-    monkeypatch.setitem(sys.modules, "analytics", types.SimpleNamespace(metrics_store=metrics_stub))
+    monkeypatch.setitem(
+        sys.modules, "data.versioning", types.SimpleNamespace(compute_hash=lambda *a, **k: "0")
+    )
+    metrics_stub = types.ModuleType("metrics_store")
+    metrics_stub.record_metric = lambda *a, **k: None
+    metrics_stub.TS_PATH = ""
+    analytics_stub = types.ModuleType("analytics")
+    analytics_stub.metrics_store = metrics_stub
+    analytics_stub.__path__ = []  # mark as package
+    sys.modules.pop("analytics.metrics_store", None)
+    monkeypatch.setitem(sys.modules, "analytics", analytics_stub)
     monkeypatch.setitem(sys.modules, "analytics.metrics_store", metrics_stub)
     model_store_stub = types.SimpleNamespace(save_model=lambda *a, **k: "0")
     graph_net_stub = types.SimpleNamespace(GraphNet=object)
     monkeypatch.setitem(sys.modules, "models", types.SimpleNamespace(model_store=model_store_stub))
     monkeypatch.setitem(sys.modules, "models.model_store", model_store_stub)
     monkeypatch.setitem(sys.modules, "models.graph_net", graph_net_stub)
+    class DummyRiskEnv:
+        action_space = types.SimpleNamespace(shape=(1,))
+        observation_space = types.SimpleNamespace(shape=(1,))
+
+        def __init__(self, *a, **k):
+            pass
+
+        def reset(self):
+            return np.zeros(1)
+
+        def step(self, action):
+            return np.zeros(1), 0.0, True, {}
+
+    plugins_stub = types.SimpleNamespace(rl_risk=types.SimpleNamespace(RiskEnv=DummyRiskEnv))
+    monkeypatch.setitem(sys.modules, "plugins", plugins_stub)
+    monkeypatch.setitem(sys.modules, "plugins.rl_risk", plugins_stub.rl_risk)
 
     class DummyAlgo:
         def __init__(self, policy, env, verbose=0, seed=0, **kwargs):
             self.env = env
             self.policy = types.SimpleNamespace(
-                state_dict=lambda: {}, optimizer=types.SimpleNamespace(state_dict=lambda: {})
+                parameters=lambda: [],
+                state_dict=lambda: {},
+                optimizer=types.SimpleNamespace(state_dict=lambda: {}, get_lr=lambda: 0),
             )
 
         def learn(self, total_timesteps):
             pass
 
         def predict(self, obs, deterministic=True):
-            return np.zeros(self.env.action_space.shape), None
+            shape = getattr(self.env.action_space, "shape", (1,))
+            if shape is None:
+                shape = (1,)
+            return np.zeros(shape), None
 
         def save(self, path):
             pass
@@ -120,6 +167,8 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     )
     train_rl = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(train_rl)
+    import rl.trading_env as trading_env
+    monkeypatch.setattr(trading_env, "record_metric", lambda *a, **k: None)
 
     monkeypatch.setattr(train_rl, "__file__", tmp_path / "train_rl.py")
     cfg = {
