@@ -6,12 +6,15 @@ import logging
 import sys
 import weakref
 import gc
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import types
 
 import joblib
+
+from analysis.inference_latency import InferenceLatency
 
 # ``models.mixture_of_experts`` depends on no heavy libraries but importing the
 # ``models`` package would trigger optional imports like ``torch``. Import the
@@ -57,6 +60,14 @@ _refresh_counter = meter.create_counter(
 )
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+
+# Maximum acceptable moving-average latency (seconds) per capability tier
+LATENCY_THRESHOLDS: Dict[str, float] = {
+    "lite": 0.1,
+    "standard": 0.1,
+    "gpu": 0.1,
+    "hpc": 0.1,
+}
 
 
 @dataclass
@@ -145,7 +156,12 @@ MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
 class ModelRegistry:
     """Selects appropriate model variants based on available resources."""
 
-    def __init__(self, monitor: ResourceMonitor = monitor, auto_refresh: bool = True) -> None:
+    def __init__(
+        self,
+        monitor: ResourceMonitor = monitor,
+        auto_refresh: bool = True,
+        latency: Optional[InferenceLatency] = None,
+    ) -> None:
         self.monitor = monitor
         self.selected: Dict[str, ModelVariant] = {}
         # Keep track of previous variants so we can rollback if a canary fails
@@ -156,6 +172,12 @@ class ModelRegistry:
         self._finalizers: Dict[str, weakref.finalize] = {}
         self._weights: Dict[str, Path] = {}
         self._variant_by_name: Dict[str, ModelVariant] = {}
+        self.latency = latency or InferenceLatency()
+        self.breach_checks = 3
+        self.recovery_checks = 5
+        self._latency_breach: Dict[str, int] = {}
+        self._latency_recover: Dict[str, int] = {}
+        self._latency_history: Dict[str, List[ModelVariant]] = {}
         for variants in MODEL_REGISTRY.values():
             for v in variants:
                 self._variant_by_name[v.name] = v
@@ -281,6 +303,74 @@ class ModelRegistry:
                 self._models.pop(name, None)
         gc.collect()
 
+    def _check_latency(self, task: str, model_name: str) -> None:
+        tier = self.monitor.capability_tier
+        threshold = LATENCY_THRESHOLDS.get(tier)
+        if threshold is None:
+            return
+        avg = self.latency.moving_average(model_name)
+        if avg > threshold:
+            cnt = self._latency_breach.get(task, 0) + 1
+            self._latency_breach[task] = cnt
+            self._latency_recover[task] = 0
+            if cnt >= self.breach_checks:
+                self._downgrade(task, avg)
+                self._latency_breach[task] = 0
+        else:
+            cnt = self._latency_recover.get(task, 0) + 1
+            self._latency_recover[task] = cnt
+            self._latency_breach[task] = 0
+            if cnt >= self.recovery_checks:
+                self._upgrade(task, avg)
+                self._latency_recover[task] = 0
+
+    def _downgrade(self, task: str, avg: float) -> None:
+        current = self.selected.get(task)
+        if not current:
+            return
+        remote = self._remote_variant(task)
+        if remote is not None and current.name != remote.name:
+            self.logger.warning(
+                "Latency high for %s (%.3fs); offloading to remote %s", task, avg, remote.name
+            )
+            self._latency_history.setdefault(task, []).append(current)
+            self.selected[task] = remote
+            self._purge_unused()
+            return
+        variants = MODEL_REGISTRY.get(task, [])
+        try:
+            idx = variants.index(current)
+        except ValueError:
+            return
+        if idx + 1 < len(variants):
+            new_variant = variants[idx + 1]
+            self.logger.warning(
+                "Latency high for %s (%.3fs); switching from %s to %s",
+                task,
+                avg,
+                current.name,
+                new_variant.name,
+            )
+            self._latency_history.setdefault(task, []).append(current)
+            self.selected[task] = new_variant
+            self._purge_unused()
+
+    def _upgrade(self, task: str, avg: float) -> None:
+        history = self._latency_history.get(task)
+        if not history:
+            return
+        prev = history.pop()
+        if not prev.is_supported(self.monitor.capabilities):
+            history.append(prev)
+            return
+        self.logger.info(
+            "Latency normalised for %s (%.3fs); restoring %s", task, avg, prev.name
+        )
+        self.selected[task] = prev
+        self._purge_unused()
+        if not history:
+            del self._latency_history[task]
+
     def predict_mixture(self, history: Any, regime: float) -> float:
         """Predict using the mixture-of-experts gating network."""
         with tracer.start_as_current_span("predict_mixture"):
@@ -292,21 +382,31 @@ class ModelRegistry:
         model_name = self.get(task)
         with tracer.start_as_current_span("predict"):
             remote_variant = self._remote_variant(task)
-            if remote_variant is not None:
-                import importlib.util
+            active_name = remote_variant.name if remote_variant else model_name
+            start = time.perf_counter()
+            try:
+                if remote_variant is not None:
+                    import importlib.util
 
-                spec = importlib.util.spec_from_file_location(
-                    "inference_client", Path(__file__).with_name("models") / "inference_client.py"
-                )
-                ic = importlib.util.module_from_spec(spec)
-                assert spec and spec.loader
-                spec.loader.exec_module(ic)  # type: ignore
-                client = ic.InferenceClient()
-                return client.predict(remote_variant.name, features)
-            model = loader(model_name) if loader else self._load_model(model_name)
-            if hasattr(model, "predict_proba"):
-                return model.predict_proba(features)
-            return model.predict(features)
+                    spec = importlib.util.spec_from_file_location(
+                        "inference_client", Path(__file__).with_name("models") / "inference_client.py"
+                    )
+                    ic = importlib.util.module_from_spec(spec)
+                    assert spec and spec.loader
+                    spec.loader.exec_module(ic)  # type: ignore
+                    client = ic.InferenceClient()
+                    result = client.predict(remote_variant.name, features)
+                else:
+                    model = loader(model_name) if loader else self._load_model(model_name)
+                    if hasattr(model, "predict_proba"):
+                        result = model.predict_proba(features)
+                    else:
+                        result = model.predict(features)
+            finally:
+                elapsed = time.perf_counter() - start
+                self.latency.record(active_name, elapsed)
+                self._check_latency(task, active_name)
+            return result
 
     # ------------------------------------------------------------------
     def promote(self, task: str, model_name: str) -> None:
