@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, List
 
 import numpy as np
 import pandas as pd
 
 from strategy.router import StrategyRouter, FeatureDict
+from .performance_correlation import compute_correlations
 
 
 @dataclass
@@ -61,15 +62,31 @@ class StrategyEvaluator:
             )
 
         records = []
+        corr_records: List[dict] = []
         for regime, df_reg in history.groupby("regime"):
             df_window = df_reg.tail(self.window)
             feats = df_window[["volatility", "trend_strength"]].to_dict("records")
             rets = df_window["return"].values
+            corr_features = [c for c in df_window.columns if c not in ["return", "regime"]]
             for name, algo in router.algorithms.items():
                 actions = [algo({**f, "regime": regime}) for f in feats]
                 pnl = np.asarray(actions) * rets
                 metrics = self._risk_metrics(pnl)
                 records.append({"regime": regime, "algorithm": name, **metrics})
+                # Correlations
+                corr_df = compute_correlations(df_window[corr_features], pnl, corr_features)
+                ts = pd.Timestamp.utcnow()
+                for row in corr_df.itertuples(index=False):
+                    corr_records.append(
+                        {
+                            "timestamp": ts,
+                            "regime": regime,
+                            "algorithm": name,
+                            "feature": row.feature,
+                            "pearson": row.pearson,
+                            "spearman": row.spearman,
+                        }
+                    )
 
         scoreboard = pd.DataFrame(records).set_index(["regime", "algorithm"])
         router.scoreboard = scoreboard
@@ -79,6 +96,21 @@ class StrategyEvaluator:
         except Exception:
             # Optional parquet dependencies may be missing in minimal setups.
             pass
+
+        # Append correlation results
+        if corr_records:
+            corr_path = Path("reports/performance_correlations.parquet")
+            try:
+                existing = pd.read_parquet(corr_path) if corr_path.exists() else pd.DataFrame()
+            except Exception:
+                existing = pd.DataFrame()
+            new_corr = pd.DataFrame(corr_records)
+            try:
+                corr_path.parent.mkdir(parents=True, exist_ok=True)
+                pd.concat([existing, new_corr], ignore_index=True).to_parquet(corr_path)
+            except Exception:
+                pass
+
         return scoreboard
 
     # ------------------------------------------------------------------
