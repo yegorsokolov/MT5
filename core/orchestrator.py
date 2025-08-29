@@ -19,7 +19,7 @@ import state_manager
 from analysis import replay
 from . import state_sync
 from analytics.metrics_store import record_metric
-from risk_manager import risk_manager
+from risk_manager import risk_manager, subscribe_to_broker_alerts
 from deployment.canary import CanaryManager
 from news.aggregator import NewsAggregator
 from strategy.shadow_runner import ShadowRunner
@@ -87,6 +87,7 @@ class Orchestrator:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = asyncio.get_event_loop()
+        subscribe_to_broker_alerts()
         loop.create_task(self._watch())
         loop.create_task(self._sync_monitor())
         loop.create_task(self._daily_summary())
