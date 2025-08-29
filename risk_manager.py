@@ -15,7 +15,11 @@ from analytics.metrics_store import record_metric
 from analytics import decision_logger
 from portfolio.robust_optimizer import RobustOptimizer
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
-from news.impact_model import get_impact
+try:
+    from news.impact_model import get_impact
+except Exception:  # pragma: no cover - optional dependency
+    def get_impact(*args, **kwargs):  # type: ignore
+        return 0.0, 0.0
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -102,6 +106,25 @@ class RiskManager:
             +1 for long trades, -1 for shorts.
         """
         ts = pd.Timestamp(timestamp)
+        if self.metrics.trading_halted:
+            try:
+                record_metric("trades_skipped_halt", 1)
+            except Exception:
+                pass
+            decision_logger.log(
+                pd.DataFrame(
+                    [
+                        {
+                            "timestamp": ts.isoformat(),
+                            "symbol": symbol,
+                            "event": "skip",
+                            "position_size": 0.0,
+                            "reason": "trading_halted",
+                        }
+                    ]
+                )
+            )
+            return 0.0
         for start, end in self.quiet_windows:
             if start <= ts <= end:
                 try:
@@ -295,6 +318,15 @@ class RiskManager:
             bot_id, pnl, exposure = await queue.get()
             self.update(bot_id, pnl, exposure)
 
+    async def watch_feed_divergence(self, queue: asyncio.Queue) -> None:
+        """Subscribe to broker divergence alerts and halt trading when necessary."""
+        while True:
+            event = await queue.get()
+            if getattr(event, "resolved", False):
+                self.metrics.trading_halted = False
+            else:
+                self.metrics.trading_halted = True
+
     def status(self) -> Dict[str, float | bool]:
         """Return current aggregated risk metrics."""
         totals = self.net_exposure.totals()
@@ -390,4 +422,20 @@ risk_manager = RiskManager(
 )
 tail_hedger = TailHedger(risk_manager, TAIL_HEDGE_VAR)
 risk_manager.attach_tail_hedger(tail_hedger)
+
+
+def subscribe_to_broker_alerts(rm: RiskManager | None = None) -> asyncio.Task | None:
+    """Subscribe ``rm`` to broker divergence alerts."""
+    rm = rm or risk_manager
+    try:
+        from data.tick_aggregator import divergence_alerts
+    except Exception:
+        return None
+    queue = divergence_alerts()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    return loop.create_task(rm.watch_feed_divergence(queue))
+
 start_scheduler()

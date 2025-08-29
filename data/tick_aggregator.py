@@ -16,14 +16,64 @@ fails to provide data.
 import asyncio
 import logging
 import time
+import os
+import csv
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from pathlib import Path
+from typing import Any, Optional, Tuple, List
 
 import pandas as pd
 
 from analytics.metrics_store import record_metric
 
+try:  # pragma: no cover - alerting optional in tests
+    from utils.alerting import send_alert
+except Exception:  # pragma: no cover - fallback stub
+    def send_alert(msg: str) -> None:  # type: ignore
+        logger = logging.getLogger(__name__)
+        logger.warning("ALERT: %s", msg)
+
+_DIVERGENCE_THRESHOLD = float(os.getenv("BROKER_SPREAD_THRESHOLD", "0.5"))
+_LOG_PATH = Path("logs/broker_anomalies.csv")
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DivergenceEvent:
+    symbol: str
+    divergence: float
+    timestamp: pd.Timestamp
+    resolved: bool = False
+
+
+_subscribers: List[asyncio.Queue[DivergenceEvent]] = []
+_diverged = False
+
+
+def divergence_alerts() -> asyncio.Queue[DivergenceEvent]:
+    """Return a queue that receives broker divergence events."""
+    q: asyncio.Queue[DivergenceEvent] = asyncio.Queue()
+    _subscribers.append(q)
+    return q
+
+
+def _publish(event: DivergenceEvent) -> None:
+    for q in list(_subscribers):
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:  # pragma: no cover - unlikely
+            continue
+
+
+def _log_divergence(symbol: str, div: float, ts: pd.Timestamp) -> None:
+    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    exists = _LOG_PATH.exists()
+    with _LOG_PATH.open("a", newline="") as f:
+        writer = csv.writer(f)
+        if not exists:
+            writer.writerow(["timestamp", "symbol", "divergence"])
+        writer.writerow([ts.isoformat(), symbol, f"{div:.6f}"])
 
 
 def _convert_ticks(ticks: Any) -> pd.DataFrame:
@@ -84,8 +134,22 @@ class TickAggregator:
         if not overlap.empty:
             mid_p = (overlap["Bid_p"] + overlap["Ask_p"]) / 2
             mid_s = (overlap["Bid_s"] + overlap["Ask_s"]) / 2
-            divergence = float((mid_p - mid_s).abs().mean())
+            spread = (mid_p - mid_s).abs()
+            divergence = float(spread.mean())
             record_metric("tick_source_divergence", divergence, tags={"symbol": symbol})
+            max_div = float(spread.max())
+            ts_max = overlap.loc[spread.idxmax(), "Timestamp"]
+            global _diverged
+            if max_div > _DIVERGENCE_THRESHOLD:
+                send_alert(
+                    f"Broker price divergence {max_div:.6f} on {symbol}"
+                )
+                _log_divergence(symbol, max_div, ts_max)
+                _publish(DivergenceEvent(symbol, max_div, ts_max, False))
+                _diverged = True
+            elif _diverged:
+                _publish(DivergenceEvent(symbol, 0.0, ts_max, True))
+                _diverged = False
 
         # Prefer ticks from the lower latency source for overlapping timestamps
         if prim_lat <= sec_lat:
@@ -116,4 +180,10 @@ async def fetch_ticks(symbol: str, n: int = 1000) -> pd.DataFrame:
     return await _aggregator.fetch(symbol, n)
 
 
-__all__ = ["TickAggregator", "init", "fetch_ticks"]
+__all__ = [
+    "TickAggregator",
+    "init",
+    "fetch_ticks",
+    "divergence_alerts",
+    "DivergenceEvent",
+]
