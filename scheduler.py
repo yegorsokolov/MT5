@@ -89,6 +89,13 @@ def resource_reprobe() -> None:
         logger.info("Domain adapter parameters refreshed")
     except Exception:
         logger.exception("Domain adapter re-estimation failed")
+    try:
+        from signal_queue import _ROUTER
+
+        _ROUTER.refresh_regime_performance()
+        logger.info("Strategy router regime performance refreshed")
+    except Exception:
+        logger.exception("Strategy router refresh failed")
 
 def run_drift_detection() -> None:
     """Run model/data drift comparison."""
@@ -170,6 +177,21 @@ def run_trade_analysis() -> None:
         logger.info("Saved trade stats to %s", out_file)
     except Exception:
         logger.exception("Trade analysis failed")
+
+
+def update_regime_performance() -> None:
+    """Recompute regime/model performance statistics and refresh router."""
+    try:
+        from analytics.regime_performance_store import RegimePerformanceStore
+
+        store = RegimePerformanceStore()
+        store.recompute()
+        from signal_queue import _ROUTER
+
+        _ROUTER.refresh_regime_performance()
+        logger.info("Regime performance statistics updated")
+    except Exception:
+        logger.exception("Regime performance update failed")
 
 
 def run_decision_review() -> None:
@@ -272,6 +294,8 @@ def start_scheduler() -> None:
         jobs.append(("diagnostics", run_diagnostics))
     if s_cfg.get("backups", True):
         jobs.append(("backups", run_backups))
+    if s_cfg.get("regime_performance", True):
+        jobs.append(("regime_performance", update_regime_performance))
     if jobs:
         _schedule_jobs(jobs)
     _started = True
@@ -289,4 +313,5 @@ __all__ = [
     "run_diagnostics",
     "vacuum_history",
     "run_backups",
+    "update_regime_performance",
 ]
