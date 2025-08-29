@@ -18,6 +18,9 @@ sys.modules["telemetry"] = types.SimpleNamespace(
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from model_registry import ModelRegistry, ResourceCapabilities
+import model_registry as mr
+import time
+from analysis.inference_latency import InferenceLatency
 
 
 @dataclass
@@ -93,3 +96,42 @@ def test_baseline_on_model_crash(caplog) -> None:
     assert any("crashed" in rec.message for rec in caplog.records)
     registry.refresh()
     assert registry.get("rl_policy") == "rl_medium"
+
+
+def test_latency_watchdog_downgrades_and_recovers(monkeypatch, caplog) -> None:
+    monitor = DummyMonitor(
+        ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=True, gpu_count=1)
+    )
+    registry = ModelRegistry(monitor, auto_refresh=False)
+    registry.latency = InferenceLatency(window=1)
+    registry.breach_checks = 1
+    registry.recovery_checks = 1
+    monkeypatch.setitem(mr.LATENCY_THRESHOLDS, "gpu", 0.01)
+    registry._remote_variant = lambda task: None
+
+    def slow_loader(name):
+        class SlowModel:
+            def predict(self, features):
+                time.sleep(0.05)
+                return 0
+
+        return SlowModel()
+
+    caplog.set_level("WARNING")
+    registry.predict("rl_policy", None, loader=slow_loader)
+    assert registry.get("rl_policy") == "rl_small"
+    assert any("Latency high" in rec.message for rec in caplog.records)
+
+    def fast_loader(name):
+        class FastModel:
+            def predict(self, features):
+                return 0
+
+        return FastModel()
+
+    caplog.clear()
+    caplog.set_level("INFO")
+    registry.predict("rl_policy", None, loader=fast_loader)
+    assert registry.get("rl_policy") == "rl_medium"
+    assert any("Latency normalised" in rec.message for rec in caplog.records)
+
