@@ -53,6 +53,7 @@ from rl.trading_env import (
     HierarchicalTradingEnv,
     RLLibTradingEnv,
 )
+from rl.multi_agent_env import MultiAgentTradingEnv
 
 try:
     import gymnasium as gymn
@@ -578,23 +579,22 @@ def main(
 
         rllib_algo = cfg.get("rllib_algorithm", "PPO").upper()
 
-        def env_creator(env_config=None):
-            env_i = RLLibTradingEnv(**env_kwargs)
-            return maybe_wrap(env_i)
+        if cfg.get("multi_agent"):
+            def env_creator(env_config=None):
+                env_i = MultiAgentTradingEnv(**env_kwargs)
+                return env_i
 
-        ray.init(ignore_reinit_error=True, include_dashboard=False)
-        if rllib_algo == "DDPG":
-            config = (
-                DDPGConfig()
-                .environment(env_creator, disable_env_checking=True)
-                .rollouts(num_rollout_workers=0)
-                .training(
-                    gamma=cfg.get("rl_gamma", 0.99),
-                    lr=cfg.get("rl_learning_rate", 3e-4),
+            temp_env = env_creator()
+            policies = {
+                sym: (
+                    None,
+                    temp_env.observation_space[sym],
+                    temp_env.action_space[sym],
+                    {},
                 )
-                .seed(seed)
-            )
-        else:
+                for sym in temp_env.agents
+            }
+            ray.init(ignore_reinit_error=True, include_dashboard=False)
             config = (
                 PPOConfig()
                 .environment(env_creator, disable_env_checking=True)
@@ -602,9 +602,43 @@ def main(
                 .training(
                     gamma=cfg.get("rl_gamma", 0.99),
                     lr=cfg.get("rl_learning_rate", 3e-4),
+                    model={"vf_share_layers": True},
+                    replay_buffer_config={"type": "MultiAgentReplayBuffer"},
+                )
+                .multi_agent(
+                    policies=policies,
+                    policy_mapping_fn=lambda agent_id, *a, **k: agent_id,
                 )
                 .seed(seed)
             )
+        else:
+            def env_creator(env_config=None):
+                env_i = RLLibTradingEnv(**env_kwargs)
+                return maybe_wrap(env_i)
+
+            ray.init(ignore_reinit_error=True, include_dashboard=False)
+            if rllib_algo == "DDPG":
+                config = (
+                    DDPGConfig()
+                    .environment(env_creator, disable_env_checking=True)
+                    .rollouts(num_rollout_workers=0)
+                    .training(
+                        gamma=cfg.get("rl_gamma", 0.99),
+                        lr=cfg.get("rl_learning_rate", 3e-4),
+                    )
+                    .seed(seed)
+                )
+            else:
+                config = (
+                    PPOConfig()
+                    .environment(env_creator, disable_env_checking=True)
+                    .rollouts(num_rollout_workers=0)
+                    .training(
+                        gamma=cfg.get("rl_gamma", 0.99),
+                        lr=cfg.get("rl_learning_rate", 3e-4),
+                    )
+                    .seed(seed)
+                )
 
         model = config.build()
     else:
@@ -1027,6 +1061,9 @@ if __name__ == "__main__":
         help="Objectives to optimise e.g. return risk cost",
     )
     parser.add_argument(
+        "--multi-agent", action="store_true", help="Enable multi-agent training"
+    )
+    parser.add_argument(
         "--meta-train",
         action="store_true",
         help="Run meta-training to produce meta-initialised RL policy",
@@ -1059,6 +1096,8 @@ if __name__ == "__main__":
         if TIERS.get(monitor.capabilities.capability_tier(), 0) < TIERS["gpu"]:
             objs = objs[:1]
         cfg["rl_objectives"] = objs
+    if args.multi_agent:
+        cfg["multi_agent"] = True
     if args.meta_train:
         cfg["meta_train"] = True
     if args.fine_tune:
