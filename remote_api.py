@@ -6,6 +6,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
     Query,
+    Request,
 )
 from fastapi.security.api_key import APIKeyHeader
 from subprocess import Popen
@@ -18,6 +19,9 @@ from pathlib import Path
 import uvicorn
 from utils import update_config
 import socket
+import time
+import datetime
+import csv
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
@@ -111,6 +115,64 @@ async def authorize(key: str = Security(api_key_header)) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 bots_lock = asyncio.Lock()
+
+RATE_LIMIT = int(os.getenv("RATE_LIMIT", "5"))
+AUDIT_LOG = Path("logs/api_audit.csv")
+AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass
+class TokenBucket:
+    tokens: float
+    last: float
+
+
+_buckets: Dict[str, TokenBucket] = {}
+
+
+def _allow_request(key: str) -> bool:
+    now = time.time()
+    bucket = _buckets.get(key)
+    if not bucket:
+        bucket = TokenBucket(tokens=RATE_LIMIT, last=now)
+        _buckets[key] = bucket
+    else:
+        bucket.tokens = min(
+            RATE_LIMIT, bucket.tokens + (now - bucket.last) * RATE_LIMIT
+        )
+        bucket.last = now
+    if bucket.tokens < 1:
+        return False
+    bucket.tokens -= 1
+    return True
+
+
+def _audit_log(key: str, action: str, status: int) -> None:
+    AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(AUDIT_LOG, "a", newline="") as f:
+        csv.writer(f).writerow(
+            [datetime.datetime.utcnow().isoformat(), key, action, status]
+        )
+
+
+@app.middleware("http")
+async def _rate_limiter(request: Request, call_next):
+    client = request.client.host if request.client else "unknown"
+    key = request.headers.get("x-api-key") or client
+    action = request.url.path
+    if not _allow_request(key):
+        _audit_log(key, action, 429)
+        return Response("Too Many Requests", status_code=429)
+    try:
+        response = await call_next(request)
+    except HTTPException as exc:
+        _audit_log(key, action, exc.status_code)
+        raise
+    except Exception:
+        _audit_log(key, action, 500)
+        raise
+    _audit_log(key, action, response.status_code)
+    return response
 
 
 @dataclass

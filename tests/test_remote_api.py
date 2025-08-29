@@ -11,7 +11,12 @@ import contextlib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def load_api(tmp_log, monkeypatch):
-    monkeypatch.patch('utils.secret_manager.SecretManager.get_secret', return_value='token')
+    sm_mod = types.ModuleType('utils.secret_manager')
+    class SM:
+        def get_secret(self, *a, **k):
+            return 'token'
+    sm_mod.SecretManager = SM
+    sys.modules['utils.secret_manager'] = sm_mod
     logs = []
     logger = types.SimpleNamespace(warning=lambda msg, *a: logs.append(msg % a if a else msg))
     sys.modules['log_utils'] = types.SimpleNamespace(
@@ -20,7 +25,14 @@ def load_api(tmp_log, monkeypatch):
         log_exceptions=lambda f: f,
         TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
         ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
+        log_decision=lambda *a, **k: None,
     )
+    risk_mod = types.ModuleType('risk_manager')
+    risk_mod.risk_manager = types.SimpleNamespace(status=lambda: {})
+    sys.modules['risk_manager'] = risk_mod
+    sched_mod = types.ModuleType('scheduler')
+    sched_mod.start_scheduler = lambda: None
+    sys.modules['scheduler'] = sched_mod
     sys.modules['prometheus_client'] = types.SimpleNamespace(
         Counter=lambda *a, **k: None,
         Gauge=lambda *a, **k: None,
@@ -36,12 +48,13 @@ def load_api(tmp_log, monkeypatch):
     sys.modules['utils.environment'] = env_mod
     sys.modules['utils'] = types.SimpleNamespace(update_config=lambda *a, **k: None)
     sys.modules['metrics'] = importlib.import_module('metrics')
-    sys.modules['mlflow'] = types.SimpleNamespace(
-        set_tracking_uri=lambda *a, **k: None,
-        set_experiment=lambda *a, **k: None,
-        start_run=contextlib.nullcontext,
-        log_dict=lambda *a, **k: None,
-    )
+    mlflow_mod = types.ModuleType('mlflow')
+    mlflow_mod.set_tracking_uri = lambda *a, **k: None
+    mlflow_mod.set_experiment = lambda *a, **k: None
+    mlflow_mod.start_run = contextlib.nullcontext
+    mlflow_mod.log_dict = lambda *a, **k: None
+    mlflow_mod.__spec__ = importlib.machinery.ModuleSpec('mlflow', loader=None)
+    sys.modules['mlflow'] = mlflow_mod
     mod = importlib.reload(importlib.import_module('remote_api'))
     mod._logs = logs
     return mod
