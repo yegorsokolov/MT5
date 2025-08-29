@@ -223,6 +223,44 @@ def main() -> None:
             except Exception:
                 pass
 
+        corr_path = Path("reports/performance_correlations.parquet")
+        if corr_path.exists():
+            try:
+                cdf = pd.read_parquet(corr_path)
+                if not cdf.empty:
+                    st.subheader("Feature-PnL Correlations")
+                    regimes = sorted(cdf["regime"].unique())
+                    regime = st.selectbox("Regime", regimes)
+                    latest = (
+                        cdf[cdf["regime"] == regime]
+                        .sort_values("timestamp")
+                        .groupby(["algorithm", "feature"])
+                        .tail(1)
+                    )
+                    pivot = latest.pivot_table(
+                        index="feature", columns="algorithm", values="pearson"
+                    )
+                    try:
+                        import seaborn as sns  # type: ignore
+                        import matplotlib.pyplot as plt  # type: ignore
+
+                        fig, ax = plt.subplots()
+                        sns.heatmap(pivot, ax=ax, annot=True, cmap="RdBu", center=0)
+                        st.pyplot(fig)
+                    except Exception:
+                        st.dataframe(pivot)
+
+                    st.subheader("Correlation History")
+                    hist = cdf[cdf["regime"] == regime]
+                    for feat in hist["feature"].unique():
+                        fdf = hist[hist["feature"] == feat]
+                        pivot_hist = fdf.pivot(
+                            index="timestamp", columns="algorithm", values="pearson"
+                        )
+                        st.line_chart(pivot_hist, height=150)
+            except Exception:
+                pass
+
         for name in ["gaps", "zscore", "median"]:
             dq = query_metrics(f"data_quality_{name}")
             if not dq.empty:
