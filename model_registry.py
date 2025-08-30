@@ -206,6 +206,27 @@ class ModelRegistry:
             queue = self.monitor.subscribe()
             self._task = loop.create_task(self._watch(queue))
 
+    # Registration -----------------------------------------------------
+    def register_variants(self, task: str, variants: List[ModelVariant]) -> None:
+        """Register *variants* for ``task`` and immediately evaluate them.
+
+        This is primarily used by strategy evolution experiments where new
+        contenders are generated at runtime.  Variants should be ordered from
+        richest to lightest implementation.
+        """
+
+        MODEL_REGISTRY[task] = variants
+        for v in variants:
+            self._variant_by_name[v.name] = v
+            if v.weights:
+                self._weights[v.name] = Path(v.weights)
+            if v.quantized:
+                self._variant_by_name[v.quantized] = v
+                if v.quantized_weights:
+                    self._weights[v.quantized] = Path(v.quantized_weights)
+        # Re-run selection to include the new task
+        self._pick_models()
+
     def _pick_models(self) -> None:
         with tracer.start_as_current_span("pick_models"):
             caps = self.monitor.capabilities
@@ -226,14 +247,18 @@ class ModelRegistry:
             _refresh_counter.add(1)
 
     async def _watch(self, queue: asyncio.Queue[str]) -> None:
-        """Re-evaluate models when capability tier changes."""
+        """Re-evaluate models whenever resource information is refreshed."""
+
         prev = self.monitor.capability_tier
         while True:
             tier = await queue.get()
             if tier != prev:
                 self.logger.info("Capability tier changed to %s; re-evaluating models", tier)
-                self._pick_models()
-                self._purge_unused()
+            else:
+                # Hardware may have improved within the same tier; still re-check
+                self.logger.info("Resource capabilities refreshed; re-evaluating models")
+            self._pick_models()
+            self._purge_unused()
             prev = tier
 
     def get(self, task: str) -> str:
@@ -389,13 +414,12 @@ class ModelRegistry:
                     import importlib.util
 
                     spec = importlib.util.spec_from_file_location(
-                        "inference_client", Path(__file__).with_name("models") / "inference_client.py"
+                        "remote_client", Path(__file__).with_name("models") / "remote_client.py"
                     )
-                    ic = importlib.util.module_from_spec(spec)
+                    rc = importlib.util.module_from_spec(spec)
                     assert spec and spec.loader
-                    spec.loader.exec_module(ic)  # type: ignore
-                    client = ic.InferenceClient()
-                    result = client.predict(remote_variant.name, features)
+                    spec.loader.exec_module(rc)  # type: ignore
+                    result = rc.predict_remote(remote_variant.name, features)
                 else:
                     model = loader(model_name) if loader else self._load_model(model_name)
                     if hasattr(model, "predict_proba"):
