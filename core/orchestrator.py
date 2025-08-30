@@ -23,6 +23,7 @@ from risk_manager import risk_manager, subscribe_to_broker_alerts
 from deployment.canary import CanaryManager
 from news.aggregator import NewsAggregator
 from strategy.shadow_runner import ShadowRunner
+from strategy.evolution_lab import EvolutionLab
 
 
 class Orchestrator:
@@ -42,6 +43,21 @@ class Orchestrator:
         }
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
         self._shadow_tasks: dict[str, asyncio.Task] = {}
+        self.lab = EvolutionLab(self._base_strategy(), register=self.register_strategy)
+
+    def _base_strategy(self) -> Callable[[dict], float]:
+        """Return a default strategy used as seed for variant generation."""
+
+        try:
+            import signal_queue  # local import to avoid heavy dependency
+
+            router = getattr(signal_queue, "_ROUTER", None)
+            algorithms = getattr(router, "algorithms", {}) if router else {}
+            if algorithms:
+                return next(iter(algorithms.values()))
+        except Exception:
+            pass
+        return lambda _: 0.0
 
     async def _watch(self) -> None:
         """React to capability tier upgrades."""
@@ -146,6 +162,10 @@ class Orchestrator:
                     StrategyEvaluator().run()
                 except Exception:
                     self.logger.exception("Strategy evaluation failed")
+                try:
+                    self.lab.run()
+                except Exception:
+                    self.logger.exception("Evolution lab failed")
             except Exception:
                 self.logger.exception("Failed to push daily summary")
             await asyncio.sleep(24 * 60 * 60)
