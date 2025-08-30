@@ -11,7 +11,10 @@ from strategy.router import StrategyRouter
 
 
 def test_algorithms_ranked_by_regime(tmp_path):
-    regimes = {0: np.full(30, 0.01), 1: np.full(30, -0.01)}
+    regimes = {
+        0: np.linspace(0.005, 0.015, 30),
+        1: np.linspace(-0.015, -0.005, 30),
+    }
     strategies = {
         "long": lambda data: data,
         "short": lambda data: -data,
@@ -25,7 +28,17 @@ def test_algorithms_ranked_by_regime(tmp_path):
         algorithms={"long": lambda _: 1.0, "short": lambda _: -1.0},
         scoreboard_path=path,
     )
-    bull = {"volatility": 0.0, "trend_strength": 0.0, "regime": 0}
-    bear = {"volatility": 0.0, "trend_strength": 0.0, "regime": 1}
+    bull = {
+        "volatility": 0.0,
+        "trend_strength": 0.0,
+        "regime": 0,
+        "market_basket": 0,
+    }
+    bear = {
+        "volatility": 0.0,
+        "trend_strength": 0.0,
+        "regime": 1,
+        "market_basket": 1,
+    }
     assert router.select(bull) == "long"
     assert router.select(bear) == "short"

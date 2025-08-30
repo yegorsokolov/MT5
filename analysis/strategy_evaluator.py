@@ -1,4 +1,4 @@
-"""Evaluate registered algorithms on recent history by regime."""
+"""Evaluate registered algorithms on recent history by market basket."""
 
 from __future__ import annotations
 
@@ -20,12 +20,12 @@ class StrategyEvaluator:
     Parameters
     ----------
     window: int
-        Number of most recent observations per regime to include in the
+        Number of most recent observations per market basket to include in the
         evaluation.  Acts as a rolling window length.
     history_path: Path | str
         Location of the historical features/returns dataset.  The file is
         expected to contain ``return``, ``volatility``, ``trend_strength`` and
-        ``regime`` columns.  By default ``data/history.parquet`` is used.
+        ``market_basket`` columns.  By default ``data/history.parquet`` is used.
     """
 
     window: int = 252
@@ -42,37 +42,46 @@ class StrategyEvaluator:
     # ------------------------------------------------------------------
     @staticmethod
     def _risk_metrics(returns: Iterable[float]) -> dict:
+        """Compute basic risk metrics for a sequence of returns."""
         arr = np.asarray(list(returns), dtype=float)
         if arr.size == 0:
-            return {"sharpe": 0.0, "drawdown": 0.0}
+            return {"pnl": 0.0, "sharpe": 0.0, "drawdown": 0.0}
         mean = float(arr.mean())
         std = float(arr.std(ddof=0))
         sharpe = mean / (std + 1e-9)
         cumulative = (1 + arr).cumprod()
         drawdown = float((np.maximum.accumulate(cumulative) - cumulative).max())
-        return {"sharpe": sharpe, "drawdown": drawdown}
+        return {"pnl": float(arr.sum()), "sharpe": sharpe, "drawdown": drawdown}
 
     # ------------------------------------------------------------------
     def evaluate(self, history: pd.DataFrame, router: StrategyRouter) -> pd.DataFrame:
         """Evaluate ``router`` algorithms on ``history`` and persist scoreboard."""
         if history.empty:
             return pd.DataFrame(
-                columns=["sharpe", "drawdown"],
-                index=pd.MultiIndex.from_tuples([], names=["regime", "algorithm"]),
+                columns=["pnl", "sharpe", "drawdown"],
+                index=pd.MultiIndex.from_tuples([], names=["market_basket", "algorithm"]),
             )
 
-        records = []
+        records: List[dict] = []
         corr_records: List[dict] = []
-        for regime, df_reg in history.groupby("regime"):
-            df_window = df_reg.tail(self.window)
-            feats = df_window[["volatility", "trend_strength"]].to_dict("records")
+        for basket, df_basket in history.groupby("market_basket"):
+            df_window = df_basket.tail(self.window)
+            feats = df_window[["volatility", "trend_strength", "regime"]].to_dict(
+                "records"
+            )
             rets = df_window["return"].values
-            corr_features = [c for c in df_window.columns if c not in ["return", "regime"]]
+            corr_features = [
+                c
+                for c in df_window.columns
+                if c not in ["return", "market_basket", "regime"]
+            ]
             for name, algo in router.algorithms.items():
-                actions = [algo({**f, "regime": regime}) for f in feats]
+                actions = [
+                    algo({**f, "market_basket": basket}) for f in feats
+                ]
                 pnl = np.asarray(actions) * rets
                 metrics = self._risk_metrics(pnl)
-                records.append({"regime": regime, "algorithm": name, **metrics})
+                records.append({"market_basket": basket, "algorithm": name, **metrics})
                 # Correlations
                 corr_df = compute_correlations(df_window[corr_features], pnl, corr_features)
                 ts = pd.Timestamp.utcnow()
@@ -80,7 +89,7 @@ class StrategyEvaluator:
                     corr_records.append(
                         {
                             "timestamp": ts,
-                            "regime": regime,
+                            "market_basket": basket,
                             "algorithm": name,
                             "feature": row.feature,
                             "pearson": row.pearson,
@@ -88,7 +97,7 @@ class StrategyEvaluator:
                         }
                     )
 
-        scoreboard = pd.DataFrame(records).set_index(["regime", "algorithm"])
+        scoreboard = pd.DataFrame(records).set_index(["market_basket", "algorithm"])
         router.scoreboard = scoreboard
         try:
             router.scoreboard_path.parent.mkdir(parents=True, exist_ok=True)

@@ -13,6 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 from utils import load_config
+from analysis.strategy_evaluator import StrategyEvaluator
 from execution import ExecutionEngine
 from utils.resource_monitor import monitor
 from data.history import load_history_parquet, load_history_config
@@ -404,6 +405,13 @@ def main():
 
     logger.info("Rolling backtest:")
     run_rolling_backtest(cfg, external_strategy=args.external_strategy)
+
+    # Refresh baseline strategy scores so new baskets or strategies receive
+    # historical weights immediately.
+    try:
+        StrategyEvaluator().run()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
