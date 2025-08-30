@@ -140,6 +140,7 @@ class StrategyRouter:
         x = _feature_vector(features)
         regime = features.get("regime")
         basket = features.get("market_basket")
+        instrument = features.get("instrument")
         best_name = self.champion
         best_score = -np.inf
         for name in self.algorithms:
@@ -151,7 +152,7 @@ class StrategyRouter:
                 mean
                 + bonus
                 + self._reward_ucb(name)
-                + self._scoreboard_weight(basket, name)
+                + self._scoreboard_weight(instrument, basket, name)
                 + self._elo_weight(name)
                 + self._rationale_weight(name)
                 + self._regime_performance_weight(regime, name)
@@ -195,7 +196,9 @@ class StrategyRouter:
         self.reward_sums[algorithm] += reward
         self.plays[algorithm] += 1
         self.total_plays += 1
-        self._update_scoreboard(features.get("market_basket"), algorithm, smooth)
+        self._update_scoreboard(
+            features.get("instrument"), features.get("market_basket"), algorithm, smooth
+        )
         self._save_state()
 
     # Convenience ------------------------------------------------------
@@ -209,14 +212,18 @@ class StrategyRouter:
             return pd.read_parquet(self.scoreboard_path)
         return pd.DataFrame(
             columns=["pnl", "sharpe", "drawdown"],
-            index=pd.MultiIndex.from_tuples([], names=["market_basket", "algorithm"]),
+            index=pd.MultiIndex.from_tuples(
+                [], names=["instrument", "market_basket", "algorithm"]
+            ),
         )
 
-    def _scoreboard_weight(self, basket: float | int | None, algorithm: str) -> float:
-        if basket is None or self.scoreboard.empty:
+    def _scoreboard_weight(
+        self, instrument: float | int | str | None, basket: float | int | None, algorithm: str
+    ) -> float:
+        if instrument is None or basket is None or self.scoreboard.empty:
             return 0.0
         try:
-            val = float(self.scoreboard.loc[(basket, algorithm), "sharpe"])
+            val = float(self.scoreboard.loc[(instrument, basket, algorithm), "sharpe"])
             if abs(val) > 1e3:
                 return 0.0
             return val
@@ -278,15 +285,21 @@ class StrategyRouter:
         return pnl / scale
 
     def _update_scoreboard(
-        self, basket: float | int | None, algorithm: str, smooth: float
+        self,
+        instrument: float | int | str | None,
+        basket: float | int | None,
+        algorithm: str,
+        smooth: float,
     ) -> None:
         """Blend offline metrics with live PnL using exponential smoothing."""
-        if basket is None:
+        if instrument is None or basket is None:
             return
         rewards = [
             r
             for f, r, a in self.history
-            if a == algorithm and f.get("market_basket") == basket
+            if a == algorithm
+            and f.get("instrument") == instrument
+            and f.get("market_basket") == basket
         ]
         if not rewards:
             return
@@ -294,13 +307,13 @@ class StrategyRouter:
         live_sharpe = float(arr.mean() / (arr.std() + 1e-9))
         prev = 0.0
         try:
-            prev = float(self.scoreboard.loc[(basket, algorithm), "sharpe"])
+            prev = float(self.scoreboard.loc[(instrument, basket, algorithm), "sharpe"])
         except KeyError:
             pass
         sharpe = smooth * live_sharpe + (1.0 - smooth) * prev
         cumulative = (1 + arr).cumprod()
         drawdown = float((np.maximum.accumulate(cumulative) - cumulative).max())
-        self.scoreboard.loc[(basket, algorithm), ["pnl", "sharpe", "drawdown"]] = [
+        self.scoreboard.loc[(instrument, basket, algorithm), ["pnl", "sharpe", "drawdown"]] = [
             float(arr.sum()),
             sharpe,
             drawdown,
