@@ -25,6 +25,7 @@ def test_weight_updates_with_synthetic_regimes(tmp_path):
             "volatility": [0.1] * len(returns),
             "trend_strength": [0.5] * len(returns),
             "regime": [0] * len(returns),
+            "market_basket": [0] * len(returns),
             "return": returns,
         }
     )
@@ -32,7 +33,12 @@ def test_weight_updates_with_synthetic_regimes(tmp_path):
     evaluator = StrategyEvaluator(window=len(returns))
     evaluator.evaluate(history, router)
 
-    features = {"volatility": 0.1, "trend_strength": 0.5, "regime": 0}
+    features = {
+        "volatility": 0.1,
+        "trend_strength": 0.5,
+        "regime": 0,
+        "market_basket": 0,
+    }
     assert router.select(features) == "long"
 
     # Live data now favours the short algorithm; ensure weights adapt.

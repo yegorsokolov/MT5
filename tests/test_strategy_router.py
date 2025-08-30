@@ -12,7 +12,6 @@ def test_algorithm_switching_across_regimes():
         algorithms={
             "mean_reversion": lambda f: -1.0,
             "trend_following": lambda f: 1.0,
-            "rl_policy": lambda f: 0.0,
         },
         alpha=0.1,
     )
@@ -22,7 +21,6 @@ def test_algorithm_switching_across_regimes():
     reward_map_trend = {
         "trend_following": 1.0,
         "mean_reversion": -1.0,
-        "rl_policy": 0.0,
     }
     for _ in range(20):
         name = router.select(features_trend)
@@ -35,7 +33,6 @@ def test_algorithm_switching_across_regimes():
     reward_map_revert = {
         "trend_following": -1.0,
         "mean_reversion": 1.0,
-        "rl_policy": 0.0,
     }
     for _ in range(20):
         name = router.select(features_revert)

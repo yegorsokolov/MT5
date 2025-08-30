@@ -37,16 +37,16 @@ STRATEGY_REPLAY_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _risk_metrics(returns: Iterable[float]) -> Dict[str, float]:
-    """Compute Sharpe ratio and max drawdown for a return series."""
+    """Compute simple risk metrics for a return series."""
     arr = pd.Series(list(returns), dtype=float)
     if arr.empty:
-        return {"sharpe": 0.0, "drawdown": 0.0}
+        return {"pnl": 0.0, "sharpe": 0.0, "drawdown": 0.0}
     mean = float(arr.mean())
     std = float(arr.std(ddof=0))
     sharpe = mean / (std + 1e-9)
     cumulative = (1 + arr).cumprod()
     drawdown = float((cumulative.cummax() - cumulative).max())
-    return {"sharpe": sharpe, "drawdown": drawdown}
+    return {"pnl": float(arr.sum()), "sharpe": sharpe, "drawdown": drawdown}
 
 
 def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
@@ -70,7 +70,7 @@ def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
     from strategy.router import StrategyRouter
 
     router = StrategyRouter()
-    features = ["volatility", "trend_strength", "regime"]
+    features = ["volatility", "trend_strength", "regime", "market_basket"]
     for col in features:
         if col not in decisions.columns:
             decisions[col] = 0.0
@@ -88,6 +88,7 @@ def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
                     "volatility": row.volatility,
                     "trend_strength": row.trend_strength,
                     "regime": row.regime,
+                    "market_basket": row.market_basket,
                 }
             )
             for row in decisions[features].itertuples(index=False)
@@ -100,6 +101,7 @@ def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
                 "action": acts,
                 "pnl": pnl,
                 "regime": decisions.get("regime", 0),
+                "market_basket": decisions.get("market_basket", 0),
             }
         )
         try:
@@ -107,11 +109,10 @@ def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
         except Exception:
             comp.to_csv(STRATEGY_REPLAY_DIR / f"{sid}.csv", index=False)
         metrics = _risk_metrics(pnl)
-        metrics["pnl"] = float(pnl.sum())
         summary_rows.append({"algorithm": sid, **metrics})
-        for regime, df_reg in comp.groupby("regime"):
-            rm = _risk_metrics(df_reg["pnl"])
-            scoreboard_rows.append({"regime": regime, "algorithm": sid, **rm})
+        for basket, df_basket in comp.groupby("market_basket"):
+            rm = _risk_metrics(df_basket["pnl"])
+            scoreboard_rows.append({"market_basket": basket, "algorithm": sid, **rm})
 
     if not summary_rows:
         return pd.DataFrame()
@@ -129,14 +130,16 @@ def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
         existing = pd.read_parquet(path) if path.exists() else pd.DataFrame()
     except Exception:
         existing = pd.DataFrame()
-    new_scores = pd.DataFrame(scoreboard_rows).set_index(["regime", "algorithm"])
+    new_scores = pd.DataFrame(scoreboard_rows).set_index(["market_basket", "algorithm"])
     if not existing.empty:
         existing = existing.reset_index()
         combined = pd.concat([existing, new_scores.reset_index()])
     else:
         combined = new_scores.reset_index()
-    combined = combined.drop_duplicates(subset=["regime", "algorithm"], keep="last")
-    combined = combined.set_index(["regime", "algorithm"])
+    combined = combined.drop_duplicates(
+        subset=["market_basket", "algorithm"], keep="last"
+    )
+    combined = combined.set_index(["market_basket", "algorithm"])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         combined.to_parquet(path)
