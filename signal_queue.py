@@ -16,6 +16,8 @@ from analytics.metrics_store import record_metric
 from analytics import decision_logger
 from risk.position_sizer import PositionSizer
 from models import conformal
+from models.quantile_regression import GradientBoostedQuantile, NeuralQuantile  # type: ignore
+from analysis.quantile_forecast import log_quantile_forecast
 from strategies.trade_exit_policy import TradeExitPolicy
 from analysis.entry_value import EntryValueScorer, log_entry_value
 
@@ -58,6 +60,39 @@ def _get_registry():  # pragma: no cover - simple accessor
         _REGISTRY = ModelRegistry(auto_refresh=False)
     return _REGISTRY
 
+
+_QUANTILE_MODEL_ID = os.getenv("QUANTILE_MODEL_ID")
+_QUANTILE_MODEL = None
+
+
+def _get_quantile_model():
+    """Load cached quantile model if configured."""
+    global _QUANTILE_MODEL
+    if _QUANTILE_MODEL is None and _QUANTILE_MODEL_ID:
+        try:
+            from models import model_store
+            _QUANTILE_MODEL, _ = model_store.load_model(_QUANTILE_MODEL_ID)
+        except Exception:
+            _QUANTILE_MODEL = None
+    return _QUANTILE_MODEL
+
+
+def _predict_var_es(prob: float, conf: float) -> tuple[float | None, float | None]:
+    model = _get_quantile_model()
+    if model is None:
+        return None, None
+    try:
+        X = pd.DataFrame([[prob, conf]], columns=["prob", "confidence"]).to_numpy()
+        if hasattr(model, "var_es"):
+            var, es = model.var_es(X, 0.05)
+            v = float(var[0]) if var is not None else None
+            e = float(es[0]) if es is not None else None
+            return v, e
+        preds = model.predict(X)
+        var = preds.get(0.05)
+        return (float(var[0]) if var is not None else None, None)
+    except Exception:
+        return None, None
 import asyncio
 from proto import signals_pb2
 from event_store import EventStore
@@ -302,6 +337,12 @@ async def iter_messages(
                 conf = float(data.get("confidence", 1.0))
                 var = data.get("var")
                 es = data.get("es")
+                if var is None or es is None:
+                    q_var, q_es = _predict_var_es(prob, conf)
+                    if var is None:
+                        var = q_var
+                    if es is None:
+                        es = q_es
                 lower, upper = conformal.predict_interval([prob], _CONFORMAL_Q)
                 width = float(upper[0] - lower[0])
                 if width > _MAX_INTERVAL_WIDTH:
@@ -337,6 +378,25 @@ async def iter_messages(
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
+                try:
+                    realised = None
+                    try:
+                        realised = data.get("future_return")  # type: ignore[union-attr]
+                    except Exception:
+                        pass
+                    if realised is None:
+                        try:
+                            realised = getattr(sig, "future_return")  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    if realised is None:
+                        try:
+                            realised = payload.get("future_return")  # type: ignore[union-attr]
+                        except Exception:
+                            pass
+                    log_quantile_forecast(payload.get("Timestamp", ""), symbol, 0.05, var, None if realised is None else float(realised))
+                except Exception:
+                    pass
                 if entry_scorer is not None:
                     depth = float(data.get("depth_imbalance", 0.0))
                     vol = float(data.get("volatility_30", 0.0))
@@ -373,6 +433,12 @@ async def iter_messages(
                 conf = float(getattr(sig, "confidence", 1.0))
                 var = getattr(sig, "var", None)
                 es = getattr(sig, "es", None)
+                if var is None or es is None:
+                    q_var, q_es = _predict_var_es(prob, conf)
+                    if var is None:
+                        var = q_var
+                    if es is None:
+                        es = q_es
                 if var is not None:
                     var = float(var)
                 if es is not None:
@@ -412,6 +478,25 @@ async def iter_messages(
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
+                try:
+                    realised = None
+                    try:
+                        realised = data.get("future_return")  # type: ignore[union-attr]
+                    except Exception:
+                        pass
+                    if realised is None:
+                        try:
+                            realised = getattr(sig, "future_return")  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    if realised is None:
+                        try:
+                            realised = payload.get("future_return")  # type: ignore[union-attr]
+                        except Exception:
+                            pass
+                    log_quantile_forecast(payload.get("Timestamp", ""), symbol, 0.05, var, None if realised is None else float(realised))
+                except Exception:
+                    pass
                 if entry_scorer is not None:
                     depth = float(getattr(sig, "depth_imbalance", 0.0))
                     vol = float(getattr(sig, "volatility_30", 0.0))
@@ -559,6 +644,12 @@ class KafkaSignalQueue:
                 conf = float(data.get("confidence", 1.0))
                 var = data.get("var")
                 es = data.get("es")
+                if var is None or es is None:
+                    q_var, q_es = _predict_var_es(prob, conf)
+                    if var is None:
+                        var = q_var
+                    if es is None:
+                        es = q_es
                 lower, upper = conformal.predict_interval([prob], _CONFORMAL_Q)
                 width = float(upper[0] - lower[0])
                 if width > _MAX_INTERVAL_WIDTH:
@@ -584,6 +675,25 @@ class KafkaSignalQueue:
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
+                try:
+                    realised = None
+                    try:
+                        realised = data.get("future_return")  # type: ignore[union-attr]
+                    except Exception:
+                        pass
+                    if realised is None:
+                        try:
+                            realised = getattr(sig, "future_return")  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    if realised is None:
+                        try:
+                            realised = payload.get("future_return")  # type: ignore[union-attr]
+                        except Exception:
+                            pass
+                    log_quantile_forecast(payload.get("Timestamp", ""), symbol, 0.05, var, None if realised is None else float(realised))
+                except Exception:
+                    pass
                 if entry_scorer is not None:
                     depth = float(data.get("depth_imbalance", 0.0))
                     vol = float(data.get("volatility_30", 0.0))
@@ -609,6 +719,12 @@ class KafkaSignalQueue:
                 conf = float(getattr(sig, "confidence", 1.0))
                 var = getattr(sig, "var", None)
                 es = getattr(sig, "es", None)
+                if var is None or es is None:
+                    q_var, q_es = _predict_var_es(prob, conf)
+                    if var is None:
+                        var = q_var
+                    if es is None:
+                        es = q_es
                 if var is not None:
                     var = float(var)
                 if es is not None:
@@ -638,6 +754,25 @@ class KafkaSignalQueue:
                     "interval": (float(lower[0]), float(upper[0])),
                     "interval_width": width,
                 }
+                try:
+                    realised = None
+                    try:
+                        realised = data.get("future_return")  # type: ignore[union-attr]
+                    except Exception:
+                        pass
+                    if realised is None:
+                        try:
+                            realised = getattr(sig, "future_return")  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    if realised is None:
+                        try:
+                            realised = payload.get("future_return")  # type: ignore[union-attr]
+                        except Exception:
+                            pass
+                    log_quantile_forecast(payload.get("Timestamp", ""), symbol, 0.05, var, None if realised is None else float(realised))
+                except Exception:
+                    pass
                 if entry_scorer is not None:
                     depth = float(getattr(sig, "depth_imbalance", 0.0))
                     vol = float(getattr(sig, "volatility_30", 0.0))
@@ -799,6 +934,25 @@ class RedisSignalQueue:
                         "interval": (float(lower[0]), float(upper[0])),
                         "interval_width": width,
                     }
+                    try:
+                        realised = None
+                        try:
+                            realised = data.get("future_return")  # type: ignore[union-attr]
+                        except Exception:
+                            pass
+                        if realised is None:
+                            try:
+                                realised = getattr(sig, "future_return")  # type: ignore[attr-defined]
+                            except Exception:
+                                pass
+                        if realised is None:
+                            try:
+                                realised = payload.get("future_return")  # type: ignore[union-attr]
+                            except Exception:
+                                pass
+                        log_quantile_forecast(payload.get("Timestamp", ""), symbol, 0.05, var, None if realised is None else float(realised))
+                    except Exception:
+                        pass
                     if entry_scorer is not None:
                         depth = float(payload.get("depth_imbalance", 0.0))
                         vol = float(payload.get("volatility_30", 0.0))
@@ -824,6 +978,12 @@ class RedisSignalQueue:
                     conf = float(getattr(sig, "confidence", 1.0))
                     var = getattr(sig, "var", None)
                     es = getattr(sig, "es", None)
+                    if var is None or es is None:
+                        q_var, q_es = _predict_var_es(prob, conf)
+                        if var is None:
+                            var = q_var
+                        if es is None:
+                            es = q_es
                     if var is not None:
                         var = float(var)
                     if es is not None:
@@ -853,6 +1013,25 @@ class RedisSignalQueue:
                         "interval": (float(lower[0]), float(upper[0])),
                         "interval_width": width,
                     }
+                    try:
+                        realised = None
+                        try:
+                            realised = data.get("future_return")  # type: ignore[union-attr]
+                        except Exception:
+                            pass
+                        if realised is None:
+                            try:
+                                realised = getattr(sig, "future_return")  # type: ignore[attr-defined]
+                            except Exception:
+                                pass
+                        if realised is None:
+                            try:
+                                realised = payload.get("future_return")  # type: ignore[union-attr]
+                            except Exception:
+                                pass
+                        log_quantile_forecast(payload.get("Timestamp", ""), symbol, 0.05, var, None if realised is None else float(realised))
+                    except Exception:
+                        pass
                     if entry_scorer is not None:
                         depth = float(getattr(sig, "depth_imbalance", 0.0))
                         vol = float(getattr(sig, "volatility_30", 0.0))
