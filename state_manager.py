@@ -117,6 +117,58 @@ def load_runtime_state() -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# Strategy router state persistence
+# ---------------------------------------------------------------------------
+_ROUTER_FILE = _STATE_DIR / "router_state.pkl"
+
+
+def save_router_state(
+    champion: str | None,
+    A: dict[str, Any],
+    b: dict[str, Any],
+    rewards: dict[str, float],
+    counts: dict[str, int],
+    history: list[tuple[Any, float, str]],
+    total_plays: int,
+) -> Path:
+    """Persist the strategy router's state to disk.
+
+    Parameters
+    ----------
+    champion: Current champion strategy name.
+    A, b: LinUCB parameter matrices.
+    rewards: Cumulative reward per strategy.
+    counts: Number of plays per strategy.
+    history: Recorded feature/reward pairs.
+    total_plays: Total number of routing decisions made.
+    """
+
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    state = {
+        "champion": champion,
+        "A": A,
+        "b": b,
+        "rewards": rewards,
+        "counts": counts,
+        "history": history,
+        "total_plays": total_plays,
+    }
+    joblib.dump(state, _ROUTER_FILE)
+    return _ROUTER_FILE
+
+
+def load_router_state() -> dict[str, Any] | None:
+    """Load previously persisted strategy router state."""
+
+    if not _ROUTER_FILE.exists():
+        return None
+    try:
+        return joblib.load(_ROUTER_FILE)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Service restart tracking
 # ---------------------------------------------------------------------------
 _RESTART_COUNTERS: dict[str, int] = {}
