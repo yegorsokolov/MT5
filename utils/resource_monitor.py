@@ -146,9 +146,10 @@ class ResourceMonitor:
             await asyncio.sleep(24 * 60 * 60)
             self.capabilities = self._probe()
             new_tier = self.capabilities.capability_tier()
-            if new_tier != self.capability_tier:
-                self.capability_tier = new_tier
-                await self._notify(new_tier)
+            self.capability_tier = new_tier
+            # Notify subscribers even if the tier did not change so they can
+            # reconsider heavier models when hardware improves within the same tier.
+            await self._notify(new_tier)
             self.logger.info(
                 "Refreshed resource capabilities: %s (tier=%s)",
                 self.capabilities,
