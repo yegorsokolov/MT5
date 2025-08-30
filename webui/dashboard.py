@@ -345,6 +345,102 @@ def main() -> None:
             except Exception:
                 pass
 
+        # Basket/Strategy metrics -------------------------------------------------
+        score_path = Path("reports/strategy_scores.parquet")
+        if score_path.exists():
+            try:
+                sboard = pd.read_parquet(score_path).reset_index()
+            except Exception:
+                try:
+                    sboard = pd.read_csv(score_path).reset_index()  # pragma: no cover
+                except Exception:
+                    sboard = pd.DataFrame()
+        else:
+            sboard = pd.DataFrame()
+
+        if not sboard.empty:
+            if "instrument" not in sboard.columns:
+                sboard["instrument"] = "N/A"
+            instruments = ["All"] + sorted(map(str, sboard["instrument"].dropna().unique()))
+            inst = st.selectbox("Instrument", instruments, key="bs-inst")
+            if inst != "All":
+                sboard = sboard[sboard["instrument"].astype(str) == inst]
+
+            trade_counts = pd.DataFrame()
+            trades = pd.DataFrame()
+            trade_path = Path("reports/trades.csv")
+            if trade_path.exists():
+                try:
+                    trades = pd.read_csv(trade_path, parse_dates=["exit_time"], infer_datetime_format=True)
+                    if "model" in trades.columns and "algorithm" not in trades.columns:
+                        trades.rename(columns={"model": "algorithm"}, inplace=True)
+                    group_cols = [c for c in ["instrument", "market_basket", "algorithm"] if c in trades.columns]
+                    if group_cols:
+                        trade_counts = trades.groupby(group_cols).size().reset_index(name="obs")
+                        if "pnl" in trades.columns and "exit_time" in trades.columns:
+                            recent = trades[trades["exit_time"] >= pd.Timestamp.utcnow() - pd.Timedelta(days=30)]
+                            trend = recent.groupby(group_cols)["pnl"].sum().reset_index(name="pnl_30d")
+                            trade_counts = trade_counts.merge(trend, on=group_cols, how="left")
+                except Exception:
+                    trade_counts = pd.DataFrame()
+                    trades = pd.DataFrame()
+
+            if not trade_counts.empty:
+                sboard = sboard.merge(trade_counts, on=[c for c in ["instrument", "market_basket", "algorithm"] if c in sboard.columns and c in trade_counts.columns], how="left")
+
+            sboard["obs"] = sboard.get("obs", 0).fillna(0).astype(int)
+            sboard["pnl_30d"] = sboard.get("pnl_30d", 0.0).fillna(0.0)
+
+            st.subheader("Basket/Strategy Metrics")
+
+            # Alerts for insufficient data
+            counts_by_basket = sboard.groupby("market_basket")["obs"].sum()
+            low = counts_by_basket[counts_by_basket < 5]
+            if not low.empty:
+                st.warning("Insufficient data for baskets: " + ", ".join(map(str, low.index)))
+
+            # Alert on top strategy change
+            tops = sboard.sort_values("sharpe", ascending=False).dropna(subset=["sharpe"]).groupby("market_basket").first()
+            prev_tops = st.session_state.get("_prev_tops", {})
+            changes = []
+            for basket, row in tops.iterrows():
+                algo = row.get("algorithm")
+                prev = prev_tops.get(basket)
+                if prev and prev != algo:
+                    changes.append(f"{basket}: {prev} -> {algo}")
+                prev_tops[basket] = algo
+            st.session_state["_prev_tops"] = prev_tops
+            if changes:
+                st.error("Top strategy changed: " + ", ".join(changes))
+
+            # Heatmap of Sharpe ratios
+            pivot = sboard.pivot_table(index="market_basket", columns="algorithm", values="sharpe")
+            try:
+                import seaborn as sns  # type: ignore
+                import matplotlib.pyplot as plt  # type: ignore
+
+                fig, ax = plt.subplots()
+                sns.heatmap(pivot, ax=ax, annot=True, cmap="RdBu", center=0)
+                st.pyplot(fig)
+            except Exception:
+                st.dataframe(pivot)
+
+            st.dataframe(sboard)
+            csv = sboard.to_csv(index=False).encode("utf-8")
+            st.download_button("Download Report", csv, file_name="basket_strategy_metrics.csv")
+
+            if not trades.empty and "exit_time" in trades.columns and "pnl" in trades.columns:
+                baskets = sorted(sboard["market_basket"].dropna().unique())
+                if baskets:
+                    bsel = st.selectbox("Basket Trend", baskets, key="bs-trend")
+                    btrades = trades[trades["market_basket"] == bsel]
+                    if inst != "All" and "instrument" in btrades.columns:
+                        btrades = btrades[btrades["instrument"].astype(str) == inst]
+                    if not btrades.empty:
+                        daily = btrades.groupby([pd.Grouper(key="exit_time", freq="D"), "algorithm"])["pnl"].sum().reset_index()
+                        trend_pivot = daily.pivot_table(index="exit_time", columns="algorithm", values="pnl")
+                        st.line_chart(trend_pivot, height=150)
+
         for name in ["gaps", "zscore", "median"]:
             dq = query_metrics(f"data_quality_{name}")
             if not dq.empty:
