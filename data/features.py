@@ -74,6 +74,9 @@ except Exception:  # pragma: no cover - plugins optional
 
 logger = logging.getLogger(__name__)
 
+FEATURE_BASKET_PATH = Path("analysis")/"feature_baskets.csv"
+FEATURE_BASKET_META_PATH = Path("analysis")/"feature_baskets_meta.json"
+
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 
 
@@ -903,6 +906,26 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         df = label_regimes(df)
     except Exception:  # pragma: no cover - optional dependency
         df["market_regime"] = 0
+
+
+    try:
+        from analysis.market_baskets import cluster_market_baskets
+
+        basket_cols = [c for c in ("garch_vol", "mid_change", "macro_surprise") if c in df.columns]
+        if basket_cols:
+            labels, meta = cluster_market_baskets(
+                df,
+                features=basket_cols,
+                n_baskets=cfg.get("feature_baskets", 5),
+                save_path=cfg.get("feature_basket_path", str(FEATURE_BASKET_PATH)),
+                metadata_path=cfg.get("feature_basket_meta_path", str(FEATURE_BASKET_META_PATH)),
+            )
+            df["feature_basket"] = labels
+            df.attrs["feature_basket_metadata"] = meta
+        else:
+            df["feature_basket"] = np.nan
+    except Exception:  # pragma: no cover - optional dependency
+        df["feature_basket"] = np.nan
 
     # integrate any evolved features and trigger new evolution on regime change
     try:
