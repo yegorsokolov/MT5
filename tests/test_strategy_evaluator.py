@@ -10,40 +10,44 @@ from strategy.router import StrategyRouter
 from analysis.strategy_evaluator import StrategyEvaluator
 
 
-def test_weight_updates_with_synthetic_regimes(tmp_path):
-    # Router with two simple algorithms: long and short.
+def test_instrument_aware_weight_updates(tmp_path):
     router = StrategyRouter(
         algorithms={"long": lambda f: 1.0, "short": lambda f: -1.0},
         alpha=0.0,
-        scoreboard_path=tmp_path / "score.parquet",
     )
 
-    # Generate synthetic history where long strategy outperforms.
-    returns = np.array([0.02] * 25 + [-0.01] * 25)
+    returns_a = np.array([0.02] * 25 + [-0.01] * 25)
+    returns_b = np.array([-0.02] * 25 + [-0.01] * 25)
     history = pd.DataFrame(
         {
-            "volatility": [0.1] * len(returns),
-            "trend_strength": [0.5] * len(returns),
-            "regime": [0] * len(returns),
-            "market_basket": [0] * len(returns),
-            "return": returns,
+            "volatility": [0.1] * 100,
+            "trend_strength": [0.5] * 100,
+            "regime": [0] * 100,
+            "market_basket": [0] * 100,
+            "instrument": ["A"] * 50 + ["B"] * 50,
+            "return": np.concatenate([returns_a, returns_b]),
         }
     )
 
-    evaluator = StrategyEvaluator(window=len(returns))
+    evaluator = StrategyEvaluator(window=50)
     evaluator.evaluate(history, router)
 
-    features = {
+    features_a = {
         "volatility": 0.1,
         "trend_strength": 0.5,
         "regime": 0,
         "market_basket": 0,
+        "instrument": "A",
     }
-    assert router.select(features) == "long"
+    features_b = {**features_a, "instrument": "B"}
 
-    # Live data now favours the short algorithm; ensure weights adapt.
+    assert router.select(features_a) == "long"
+    assert router.select(features_b) == "short"
+
     for _ in range(20):
-        router.update(features, 0.05, "short", smooth=0.3)
-        router.update(features, -0.05, "long", smooth=0.3)
+        router.update(features_a, 0.05, "short", smooth=0.3)
+        router.update(features_a, -0.05, "long", smooth=0.3)
 
-    assert router.select(features) == "short"
+    assert router.select(features_a) == "short"
+    assert router.select(features_b) == "short"
+

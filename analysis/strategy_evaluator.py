@@ -1,4 +1,4 @@
-"""Evaluate registered algorithms on recent history by market basket."""
+"""Evaluate registered algorithms on recent history by instrument/basket."""
 
 from __future__ import annotations
 
@@ -24,8 +24,9 @@ class StrategyEvaluator:
         evaluation.  Acts as a rolling window length.
     history_path: Path | str
         Location of the historical features/returns dataset.  The file is
-        expected to contain ``return``, ``volatility``, ``trend_strength`` and
-        ``market_basket`` columns.  By default ``data/history.parquet`` is used.
+        expected to contain ``return``, ``volatility``, ``trend_strength``,
+        ``instrument`` and ``market_basket`` columns.  By default
+        ``data/history.parquet`` is used.
     """
 
     window: int = 252
@@ -59,12 +60,14 @@ class StrategyEvaluator:
         if history.empty:
             return pd.DataFrame(
                 columns=["pnl", "sharpe", "drawdown"],
-                index=pd.MultiIndex.from_tuples([], names=["market_basket", "algorithm"]),
+                index=pd.MultiIndex.from_tuples(
+                    [], names=["instrument", "market_basket", "algorithm"]
+                ),
             )
 
         records: List[dict] = []
         corr_records: List[dict] = []
-        for basket, df_basket in history.groupby("market_basket"):
+        for (inst, basket), df_basket in history.groupby(["instrument", "market_basket"]):
             df_window = df_basket.tail(self.window)
             feats = df_window[["volatility", "trend_strength", "regime"]].to_dict(
                 "records"
@@ -73,15 +76,17 @@ class StrategyEvaluator:
             corr_features = [
                 c
                 for c in df_window.columns
-                if c not in ["return", "market_basket", "regime"]
+                if c not in ["return", "market_basket", "instrument", "regime"]
             ]
             for name, algo in router.algorithms.items():
                 actions = [
-                    algo({**f, "market_basket": basket}) for f in feats
+                    algo({**f, "market_basket": basket, "instrument": inst}) for f in feats
                 ]
                 pnl = np.asarray(actions) * rets
                 metrics = self._risk_metrics(pnl)
-                records.append({"market_basket": basket, "algorithm": name, **metrics})
+                records.append(
+                    {"instrument": inst, "market_basket": basket, "algorithm": name, **metrics}
+                )
                 # Correlations
                 corr_df = compute_correlations(df_window[corr_features], pnl, corr_features)
                 ts = pd.Timestamp.utcnow()
@@ -89,6 +94,7 @@ class StrategyEvaluator:
                     corr_records.append(
                         {
                             "timestamp": ts,
+                            "instrument": inst,
                             "market_basket": basket,
                             "algorithm": name,
                             "feature": row.feature,
@@ -97,11 +103,15 @@ class StrategyEvaluator:
                         }
                     )
 
-        scoreboard = pd.DataFrame(records).set_index(["market_basket", "algorithm"])
+        scoreboard = pd.DataFrame(records).set_index(
+            ["instrument", "market_basket", "algorithm"]
+        )
         router.scoreboard = scoreboard
         try:
-            router.scoreboard_path.parent.mkdir(parents=True, exist_ok=True)
-            router.scoreboard.to_parquet(router.scoreboard_path)
+            path = Path("reports/strategy_scores.parquet")
+            router.scoreboard_path = path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            router.scoreboard.to_parquet(path)
         except Exception:
             # Optional parquet dependencies may be missing in minimal setups.
             pass
