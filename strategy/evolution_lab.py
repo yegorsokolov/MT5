@@ -13,12 +13,15 @@ pool for further evolution.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, TYPE_CHECKING
 import random
 
 import pandas as pd
 
 from .shadow_runner import ShadowRunner
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from model_registry import ModelRegistry
 
 try:  # pragma: no cover - optional dependency during tests
     from signal_queue import _ROUTER
@@ -38,6 +41,7 @@ class EvolutionLab:
     out_path: Path = Path("reports/strategy_tournament.parquet")
     significance: float = 2.0
     variants: Dict[str, Strategy] = field(default_factory=dict)
+    registry: ModelRegistry | None = None
 
     # ------------------------------------------------------------------
     def _mutate(self, scale: float = 0.1) -> Strategy:
@@ -62,11 +66,30 @@ class EvolutionLab:
         for i in range(start, start + n):
             name = f"{getattr(self.base, '__name__', 'strategy')}_var{i}"
             handler = self._mutate()
-            self.variants[name] = handler
+            chosen = handler
+            if self.registry is not None:
+                caps = self.registry.monitor.capabilities
+                if caps.cpus < 4 or caps.memory_gb < 8:
+                    import importlib.util
+
+                    spec = importlib.util.spec_from_file_location(
+                        "remote_client",
+                        Path(__file__).resolve().parents[1] / "models" / "remote_client.py",
+                    )
+                    rc = importlib.util.module_from_spec(spec)
+                    assert spec and spec.loader
+                    spec.loader.exec_module(rc)  # type: ignore
+
+                    def remote_handler(features: Dict[str, Any], *, _name=name, _rc=rc) -> float:
+                        preds = _rc.predict_remote(_name, [features])
+                        return float(preds[0]) if preds else 0.0
+
+                    chosen = remote_handler
+            self.variants[name] = chosen
             if self.register is not None:
-                self.register(name, handler)
+                self.register(name, chosen)
             else:  # pragma: no cover - fallback when orchestrator absent
-                runner = ShadowRunner(name=name, handler=handler)
+                runner = ShadowRunner(name=name, handler=chosen)
                 try:
                     import asyncio
 
