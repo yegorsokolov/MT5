@@ -1,5 +1,3 @@
-"""Tools for labeling market regimes using clustering or HMM."""
-
 from __future__ import annotations
 
 from typing import Iterable
@@ -12,7 +10,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - hmmlearn may not be installed
     GaussianHMM = None  # type: ignore
 
-from sklearn.cluster import KMeans
+from .market_baskets import cluster_market_baskets
 
 
 def detect_regimes(
@@ -20,6 +18,8 @@ def detect_regimes(
     n_states: int = 3,
     method: str = "hmm",
     columns: Iterable[str] = ("return", "volatility_30"),
+    save_path: str | None = None,
+    metadata_path: str | None = None,
 ) -> pd.Series:
     """Label each row with an estimated market regime.
 
@@ -28,29 +28,34 @@ def detect_regimes(
     df: pd.DataFrame
         Historical data including at least ``return`` and ``volatility_30`` columns.
     n_states: int
-        Number of regimes to detect.
+        Number of regimes/baskets to detect when using ``kmeans``.
     method: str
-        ``"hmm"`` uses a ``GaussianHMM`` from ``hmmlearn``. When ``hmmlearn`` is not
-        available or ``method`` is not ``"hmm"`` a KMeans clustering model is used
-        instead.
+        ``"hmm"`` uses a ``GaussianHMM`` from ``hmmlearn``. ``"kmeans"`` or
+        ``"hdbscan"`` cluster the feature vectors into persistent baskets.
     columns: Iterable[str]
         Names of columns to use as features for regime detection.
+    save_path: str, optional
+        Path to persist basket ids when using clustering methods.
+    metadata_path: str, optional
+        Path to persist basket metadata for audit/dashboard use.
 
     Returns
     -------
     pd.Series
         A series of integer regime labels aligned to ``df``.
     """
-    features = df.loc[:, list(columns)].fillna(0).values
     if method == "hmm" and GaussianHMM is not None:
+        features = df.loc[:, list(columns)].fillna(0).values
         model = GaussianHMM(
             n_components=n_states, covariance_type="diag", n_iter=100, random_state=42
         )
         model.fit(features)
         labels = model.predict(features)
-    else:  # fallback to clustering
-        model = KMeans(n_clusters=n_states, n_init="auto", random_state=42)
-        labels = model.fit_predict(features)
+        return pd.Series(labels, index=df.index, name="market_regime")
+
+    labels, _ = cluster_market_baskets(
+        df, features=list(columns), n_baskets=n_states, method=method, save_path=save_path, metadata_path=metadata_path
+    )
     return pd.Series(labels, index=df.index, name="market_regime")
 
 
