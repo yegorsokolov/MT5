@@ -19,6 +19,7 @@ import pandas as pd
 from analysis.algorithm_rating import load_ratings
 from analysis.rationale_scorer import load_algorithm_win_rates
 from analytics.regime_performance_store import RegimePerformanceStore
+from state_manager import load_router_state, save_router_state
 
 FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
@@ -74,6 +75,13 @@ class StrategyRouter:
         self.rationale_scores = self._load_rationale_scores()
         self.regime_perf_path = Path(self.regime_perf_path)
         self.regime_performance = self._load_regime_performance()
+        self.reward_sums: Dict[str, float] = {name: 0.0 for name in self.algorithms}
+        self.plays: Dict[str, int] = {name: 0 for name in self.algorithms}
+        self.total_plays: int = 0
+        self.champion: str | None = None
+        self._load_state()
+        if self.champion is None and self.algorithms:
+            self.champion = next(iter(self.algorithms))
 
     # Registration -----------------------------------------------------
     def register(self, name: str, algorithm: Algorithm) -> None:
@@ -81,6 +89,9 @@ class StrategyRouter:
         self.algorithms[name] = algorithm
         self.A[name] = np.identity(self.dim)
         self.b[name] = np.zeros((self.dim, 1))
+        self.reward_sums[name] = 0.0
+        self.plays[name] = 0
+        self._save_state()
         try:
             from core.orchestrator import GLOBAL_ORCHESTRATOR
 
@@ -89,12 +100,46 @@ class StrategyRouter:
         except Exception:  # pragma: no cover - best effort
             pass
 
+    def _save_state(self) -> None:
+        try:
+            save_router_state(
+                self.champion,
+                self.A,
+                self.b,
+                self.reward_sums,
+                self.plays,
+                self.history,
+                self.total_plays,
+            )
+        except Exception:  # pragma: no cover - best effort
+            pass
+
+    def _load_state(self) -> None:
+        state = load_router_state()
+        if not state:
+            return
+        self.champion = state.get("champion", self.champion)
+        self.A.update(state.get("A", {}))
+        self.b.update(state.get("b", {}))
+        self.reward_sums.update(state.get("rewards", {}))
+        self.plays.update(state.get("counts", {}))
+        self.history = state.get("history", self.history)
+        self.total_plays = state.get("total_plays", self.total_plays)
+
+    def _reward_ucb(self, name: str) -> float:
+        n = self.plays.get(name, 0)
+        if n == 0:
+            return 0.0
+        mean = self.reward_sums.get(name, 0.0) / n
+        bonus = self.alpha * np.sqrt(2.0 * np.log(self.total_plays + 1) / n)
+        return mean + bonus
+
     # Selection --------------------------------------------------------
     def select(self, features: FeatureDict) -> str:
         """Return the algorithm name with the highest UCB score."""
         x = _feature_vector(features)
         regime = features.get("regime")
-        best_name = None
+        best_name = self.champion
         best_score = -np.inf
         for name in self.algorithms:
             A_inv = np.linalg.inv(self.A[name])
@@ -104,6 +149,7 @@ class StrategyRouter:
             score = (
                 mean
                 + bonus
+                + self._reward_ucb(name)
                 + self._scoreboard_weight(regime, name)
                 + self._elo_weight(name)
                 + self._rationale_weight(name)
@@ -113,6 +159,9 @@ class StrategyRouter:
                 best_score = score
                 best_name = name
         assert best_name is not None  # for type checkers
+        if best_name != self.champion:
+            self.champion = best_name
+            self._save_state()
         return best_name
 
     def act(self, features: FeatureDict) -> Tuple[str, float]:
@@ -142,7 +191,11 @@ class StrategyRouter:
         self.A[algorithm] += x @ x.T
         self.b[algorithm] += reward * x
         self.history.append((features, reward, algorithm))
+        self.reward_sums[algorithm] += reward
+        self.plays[algorithm] += 1
+        self.total_plays += 1
         self._update_scoreboard(features.get("regime"), algorithm, smooth)
+        self._save_state()
 
     # Convenience ------------------------------------------------------
     def log_reward(self, features: FeatureDict, reward: float, algorithm: str) -> None:
@@ -162,7 +215,10 @@ class StrategyRouter:
         if regime is None or self.scoreboard.empty:
             return 0.0
         try:
-            return float(self.scoreboard.loc[(regime, algorithm), "sharpe"])
+            val = float(self.scoreboard.loc[(regime, algorithm), "sharpe"])
+            if abs(val) > 1e3:
+                return 0.0
+            return val
         except KeyError:
             return 0.0
 
