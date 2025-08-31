@@ -3,10 +3,24 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from typing import Deque, Iterable, List
+from typing import Deque, Iterable, List, Optional
 
 from .algorithms import twap_schedule, vwap_schedule
+from .rl_executor import RLExecutor
 from metrics import SLIPPAGE_BPS, REALIZED_SLIPPAGE_BPS
+
+try:  # optional dependency
+    from utils.resource_monitor import monitor
+except Exception:  # pragma: no cover - light fallback
+    class _Cap:
+        @staticmethod
+        def capability_tier() -> str:
+            return "lite"
+
+    class _Mon:
+        capabilities = _Cap()
+
+    monitor = _Mon()  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +32,15 @@ class ExecutionEngine:
     VWAP scheduler to apportion child order sizes.
     """
 
-    def __init__(self, volume_window: int = 20) -> None:
+    def __init__(
+        self,
+        volume_window: int = 20,
+        rl_executor: Optional[RLExecutor] = None,
+        rl_threshold: float = 0.0,
+    ) -> None:
         self.recent_volume: Deque[float] = deque(maxlen=volume_window)
+        self.rl_executor = rl_executor
+        self.rl_threshold = rl_threshold
 
     # ------------------------------------------------------------------
     def record_volume(self, volume: float) -> None:
@@ -61,6 +82,26 @@ class ExecutionEngine:
         """
 
         strat = strategy.lower()
+
+        use_rl = False
+        if self.rl_executor is not None:
+            tier = getattr(monitor.capabilities, "capability_tier", lambda: "lite")()
+            if strat == "rl" or (
+                tier != "lite" and quantity >= self.rl_threshold and strat not in {"twap", "vwap"}
+            ):
+                use_rl = True
+
+        if use_rl:
+            return self.rl_executor.execute(
+                side=side,
+                quantity=quantity,
+                bid=bid,
+                ask=ask,
+                bid_vol=bid_vol,
+                ask_vol=ask_vol,
+                mid=mid,
+            )
+
         if strat == "vwap" and self.recent_volume:
             slices = vwap_schedule(quantity, self.recent_volume)
         elif strat == "twap":
