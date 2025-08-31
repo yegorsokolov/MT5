@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Awaitable, Set, Dict
 
@@ -80,6 +81,24 @@ class ResourceMonitor:
         self._breach_threshold = int(max(breach_duration / sample_interval, 1))
         self.alert_callback = alert_callback
         self.latest_usage: Dict[str, float] = {}
+        self._tick_start: Optional[float] = None
+        self.tick_to_signal_latency: float = 0.0
+
+    def mark_tick(self) -> None:
+        """Record the arrival time of the latest tick."""
+        self._tick_start = time.perf_counter()
+
+    def mark_signal(self) -> None:
+        """Record signal emission and update latency metrics."""
+        if self._tick_start is None:
+            return
+        latency = time.perf_counter() - self._tick_start
+        self.tick_to_signal_latency = latency
+        try:
+            record_metric("tick_to_signal_latency", latency)
+        except Exception:
+            pass
+        self._tick_start = None
 
     def _parse_cpu_flags(self) -> Set[str]:
         flags: Set[str] = set()
