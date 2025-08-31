@@ -25,6 +25,7 @@ from analysis.fractal_features import (
 from analysis.dtw_features import compute as dtw_compute
 from analysis.session_features import add_session_features
 from utils.resource_monitor import monitor
+from analytics.metrics_store import record_metric
 
 try:  # pragma: no cover - news sentiment is optional
     from news import sentiment_fusion
@@ -103,15 +104,26 @@ _cpu_rolling_fft_features.min_capability = "standard"  # type: ignore[attr-defin
 _cpu_rolling_wavelet_features.min_capability = "standard"  # type: ignore[attr-defined]
 _cpu_rolling_fractal_features.min_capability = "standard"  # type: ignore[attr-defined]
 
+# Mark degradable transforms so they can be shed under latency pressure
+_cpu_garch_volatility.degradable = True  # type: ignore[attr-defined]
+_cpu_rolling_fft_features.degradable = True  # type: ignore[attr-defined]
+_cpu_rolling_wavelet_features.degradable = True  # type: ignore[attr-defined]
+_cpu_rolling_fractal_features.degradable = True  # type: ignore[attr-defined]
+dtw_compute.degradable = True  # type: ignore[attr-defined]
+
 # Mark GPU implementations if available
 if garch_volatility_gpu is not None:
     garch_volatility_gpu.min_capability = "gpu"  # type: ignore[attr-defined]
+    garch_volatility_gpu.degradable = True  # type: ignore[attr-defined]
 if rolling_fft_features_gpu is not None:
     rolling_fft_features_gpu.min_capability = "gpu"  # type: ignore[attr-defined]
+    rolling_fft_features_gpu.degradable = True  # type: ignore[attr-defined]
 if rolling_wavelet_features_gpu is not None:
     rolling_wavelet_features_gpu.min_capability = "gpu"  # type: ignore[attr-defined]
+    rolling_wavelet_features_gpu.degradable = True  # type: ignore[attr-defined]
 if rolling_fractal_features_gpu is not None:
     rolling_fractal_features_gpu.min_capability = "gpu"  # type: ignore[attr-defined]
+    rolling_fractal_features_gpu.degradable = True  # type: ignore[attr-defined]
 
 # Choose CPU or GPU implementations based on resource monitor
 _use_gpu = bool(getattr(monitor.capabilities, "gpu", getattr(monitor.capabilities, "has_gpu", False)))
@@ -547,6 +559,22 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         except Exception:  # pragma: no cover - dask cluster issues
             pass
 
+    latency_threshold = cfg.get("latency_threshold", float("inf"))
+
+    def _should_run(func: object) -> bool:
+        if not _has_resources(func):
+            return False
+        if getattr(func, "degradable", False) and getattr(
+            monitor, "tick_to_signal_latency", 0.0
+        ) > latency_threshold:
+            record_metric(
+                "feature_shed",
+                1,
+                tags={"feature": getattr(func, "__name__", str(func))},
+            )
+            return False
+        return True
+
     def _feat(group: pd.DataFrame) -> pd.DataFrame:
         # basic microstructure measures
         group["spread"] = group["Ask"] - group["Bid"]
@@ -607,7 +635,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
         # base return and volatility
         group["return"] = group["mid"].pct_change()
-        if _has_resources(garch_volatility):
+        if _should_run(garch_volatility):
             group["garch_vol"] = garch_volatility(group["return"])
         else:
             group["garch_vol"] = np.nan
@@ -677,21 +705,23 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             group["volatility_30"] = group["return"].rolling(30).std()
         group["rsi_14"] = compute_rsi(group["mid"], 14)
 
-        if _has_resources(rolling_fractal_features):
+        if _should_run(rolling_fractal_features):
             frac = rolling_fractal_features(group["mid"], window=128)
             group = pd.concat([group, frac], axis=1)
         else:
             group["hurst"] = np.nan
             group["fractal_dim"] = np.nan
 
-        if _has_resources(rolling_fft_features) and _has_resources(rolling_wavelet_features):
+        fft_ok = _should_run(rolling_fft_features)
+        wave_ok = _should_run(rolling_wavelet_features)
+        if fft_ok and wave_ok:
             fft_feats = rolling_fft_features(group["mid"], window=128, freqs=[0.01])
             wave_feats = rolling_wavelet_features(
                 group["mid"], window=128, wavelet="db4", level=2
             )
             group = pd.concat([group, fft_feats, wave_feats], axis=1)
 
-        if dtw_enabled:
+        if dtw_enabled and _should_run(dtw_compute):
             symbol = (
                 group["Symbol"].iloc[0] if "Symbol" in group.columns else "nosymbol"
             )
