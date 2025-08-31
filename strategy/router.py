@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Tuple
 
+import logging
 import numpy as np
 import pandas as pd
 
@@ -20,6 +21,8 @@ from analysis.algorithm_rating import load_ratings
 from analysis.rationale_scorer import load_algorithm_win_rates
 from analytics.regime_performance_store import RegimePerformanceStore
 from state_manager import load_router_state, save_router_state
+from models.ftrl import FTRLModel
+from utils.resource_monitor import monitor
 
 FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
@@ -57,8 +60,11 @@ class StrategyRouter:
     )
     regime_perf_path: Path | str = Path("analytics/regime_performance.parquet")
     factor_names: List[str] = field(default_factory=list)
+    use_ftrl: bool = field(default=False, init=False)
+    ftrl_models: Dict[str, FTRLModel] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
+        self.logger = logging.getLogger(__name__)
         if not self.algorithms:
             # Default placeholder algorithms.  They simply return a constant
             # action; real applications should supply concrete implementations.
@@ -92,6 +98,23 @@ class StrategyRouter:
         self._load_state()
         if self.champion is None and self.algorithms:
             self.champion = next(iter(self.algorithms))
+
+        # Determine whether to use lightweight FTRL models based on capability tier
+        if monitor and getattr(monitor, "capability_tier", "") == "lite":
+            self.use_ftrl = True
+            self.logger.info("Initialising FTRL models for lite capability tier")
+            self.ftrl_models = {name: FTRLModel(dim=self.dim) for name in self.algorithms}
+        else:
+            self.use_ftrl = False
+
+    def _maybe_upgrade_models(self) -> None:
+        """Switch back to full models if resource tier improves."""
+        if self.use_ftrl and monitor and getattr(monitor, "capability_tier", "lite") != "lite":
+            self.logger.info(
+                "Capability tier upgraded to %s; switching to full models", monitor.capability_tier
+            )
+            self.use_ftrl = False
+            self.ftrl_models.clear()
 
     def set_factor_names(self, names: Iterable[str]) -> None:
         """Configure factor names and expand internal matrices if required."""
@@ -166,8 +189,19 @@ class StrategyRouter:
 
     # Selection --------------------------------------------------------
     def select(self, features: FeatureDict) -> str:
-        """Return the algorithm name with the highest UCB score."""
+        """Return the algorithm name with the highest score."""
+        self._maybe_upgrade_models()
         x = _feature_vector(features, self.factor_names)
+        if self.use_ftrl:
+            x_vec = x.ravel()
+            best_name = max(
+                self.algorithms.keys(), key=lambda n: self.ftrl_models[n].predict(x_vec)
+            )
+            if best_name != self.champion:
+                self.champion = best_name
+                self._save_state()
+            return best_name
+
         regime = features.get("regime")
         basket = features.get("market_basket")
         instrument = features.get("instrument")
@@ -211,7 +245,7 @@ class StrategyRouter:
         *,
         smooth: float = 0.1,
     ) -> None:
-        """Update bandit parameters with observed ``reward``.
+        """Update model parameters with observed ``reward``.
 
         ``smooth`` controls the exponential smoothing factor applied when
         updating risk-adjusted scoreboard metrics.  A value of ``0`` keeps the
@@ -219,9 +253,14 @@ class StrategyRouter:
         latest observation.
         """
 
+        self._maybe_upgrade_models()
         x = _feature_vector(features, self.factor_names)
-        self.A[algorithm] += x @ x.T
-        self.b[algorithm] += reward * x
+        if self.use_ftrl:
+            y = 1.0 if reward > 0 else 0.0
+            self.ftrl_models[algorithm].update(x.ravel(), y)
+        else:
+            self.A[algorithm] += x @ x.T
+            self.b[algorithm] += reward * x
         self.history.append((features, reward, algorithm))
         self.reward_sums[algorithm] += reward
         self.plays[algorithm] += 1
