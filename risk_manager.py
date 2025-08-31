@@ -63,6 +63,7 @@ class RiskManager:
         tail_prob_limit: float = 0.05,
         max_long_exposure: float = float("inf"),
         max_short_exposure: float = float("inf"),
+        ewma_alpha: float = 0.06,
     ) -> None:
         self.max_drawdown = max_drawdown
         self.max_var = max_var
@@ -70,6 +71,9 @@ class RiskManager:
         self.metrics = RiskMetrics()
         self._pnl_history: List[float] = []
         self._factor_history: List[Dict[str, float]] = []
+        self._ewma_pnl_history: List[float] = []
+        self._ewma_factor_history: List[Dict[str, float]] = []
+        self.ewma_alpha = ewma_alpha
         self._bot_pnl_history: Dict[str, List[float]] = {}
         self.budget_allocator = BudgetAllocator(initial_capital)
         self.tail_hedger = tail_hedger
@@ -230,11 +234,20 @@ class RiskManager:
             self.metrics.exposure += exposure
         self.metrics.daily_loss += pnl
         self._pnl_history.append(pnl)
+        self._ewma_pnl_history = [
+            h * (1 - self.ewma_alpha) for h in self._ewma_pnl_history
+        ]
+        self._ewma_pnl_history.append(pnl)
         bot_hist = self._bot_pnl_history.setdefault(bot_id, [])
         bot_hist.append(pnl)
         regime = None
         if factor_returns is not None:
             self._factor_history.append(factor_returns)
+            self._ewma_factor_history = [
+                {k: v * (1 - self.ewma_alpha) for k, v in d.items()}
+                for d in self._ewma_factor_history
+            ]
+            self._ewma_factor_history.append(factor_returns)
             regime = factor_returns.get("regime")
             if regime is None:
                 regime = factor_returns.get("market_regime")
@@ -247,16 +260,20 @@ class RiskManager:
             self._pnl_history.pop(0)
             if self._factor_history:
                 self._factor_history.pop(0)
+        if len(self._ewma_pnl_history) > self.var_window:
+            self._ewma_pnl_history.pop(0)
+            if self._ewma_factor_history:
+                self._ewma_factor_history.pop(0)
         if len(bot_hist) > self.var_window:
             bot_hist.pop(0)
-        if self._pnl_history:
-            self.metrics.var = float(-np.percentile(self._pnl_history, 1))
-            returns = pd.Series(self._pnl_history) / self.initial_capital
+        if self._ewma_pnl_history:
+            self.metrics.var = float(-np.percentile(self._ewma_pnl_history, 1))
+            returns = pd.Series(self._ewma_pnl_history) / self.initial_capital
             self.metrics.risk_of_ruin = float(
                 risk_of_ruin(returns, self.initial_capital)
             )
-            if self._factor_history and len(self._factor_history) == len(self._pnl_history):
-                factors_df = pd.DataFrame(self._factor_history)
+            if self._ewma_factor_history and len(self._ewma_factor_history) == len(self._ewma_pnl_history):
+                factors_df = pd.DataFrame(self._ewma_factor_history)
                 from portfolio.factor_risk import FactorRisk
 
                 fr = FactorRisk(factors_df)
@@ -294,8 +311,8 @@ class RiskManager:
         try:
             record_metric("pnl", pnl, {"bot_id": bot_id})
             record_metric("exposure", self.metrics.exposure)
-            record_metric("var", self.metrics.var)
-            record_metric("risk_of_ruin", self.metrics.risk_of_ruin)
+            record_metric("var_ewma", self.metrics.var)
+            record_metric("risk_of_ruin_ewma", self.metrics.risk_of_ruin)
         except Exception:
             pass
         decision_logger.log(
@@ -349,6 +366,8 @@ class RiskManager:
         self.metrics = RiskMetrics()
         self._pnl_history.clear()
         self._factor_history.clear()
+        self._ewma_pnl_history.clear()
+        self._ewma_factor_history.clear()
         self._bot_pnl_history.clear()
         self.budget_allocator.budgets.clear()
         self._regime_pnl_history.clear()
@@ -431,10 +450,12 @@ RISK_OF_RUIN_THRESHOLD = float(os.getenv("RISK_OF_RUIN_THRESHOLD", "1.0"))
 INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "1.0"))
 MAX_LONG_EXPOSURE = float(os.getenv("MAX_LONG_EXPOSURE", "inf"))
 MAX_SHORT_EXPOSURE = float(os.getenv("MAX_SHORT_EXPOSURE", "inf"))
+EWMA_ALPHA = float(os.getenv("EWMA_ALPHA", "0.06"))
 
 risk_manager = RiskManager(
     MAX_DRAWDOWN,
     MAX_VAR,
+    ewma_alpha=EWMA_ALPHA,
     risk_of_ruin_threshold=RISK_OF_RUIN_THRESHOLD,
     initial_capital=INITIAL_CAPITAL,
     max_long_exposure=MAX_LONG_EXPOSURE,
