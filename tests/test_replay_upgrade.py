@@ -3,13 +3,14 @@ import os
 import sys
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 
 def test_replay_updates_pnl_on_upgrade(tmp_path, monkeypatch):
+    sys.modules.pop("pandas", None)
+    import pandas as pd
     reports = tmp_path / "reports"
     reports.mkdir()
     trades = pd.DataFrame(
@@ -36,7 +37,7 @@ def test_replay_updates_pnl_on_upgrade(tmp_path, monkeypatch):
 
     import analysis.replay as replay
 
-    base = replay.reprocess(reports / "news_replay")
+    base = replay.reprocess(reports / "replays")
     base_pnl = base["pnl_new"].iloc[0]
 
     impact_df = pd.DataFrame(
@@ -54,5 +55,8 @@ def test_replay_updates_pnl_on_upgrade(tmp_path, monkeypatch):
 
     importlib.reload(im)
 
-    updated = replay.reprocess(reports / "news_replay")
+    out = reports / "replays"
+    updated = replay.reprocess(out)
     assert updated["pnl_new"].iloc[0] > base_pnl
+    assert (out / "old_vs_new_pnl.csv").exists()
+    assert (out / "sharpe_deltas.csv").exists()
