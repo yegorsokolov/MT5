@@ -77,17 +77,25 @@ class TradingEnv(gym.Env):
             close_space = spaces.Box(
                 low=0, high=1, shape=(self.n_symbols,), dtype=np.int32
             )
-        self.action_space = spaces.Dict(
-            {
-                "size": spaces.Box(
-                    low=-max_position,
-                    high=max_position,
-                    shape=(self.n_symbols,),
-                    dtype=np.float32,
-                ),
-                "close": close_space,
-            }
-        )
+        try:
+            self.action_space = spaces.Dict(
+                {
+                    "size": spaces.Box(
+                        low=-max_position,
+                        high=max_position,
+                        shape=(self.n_symbols,),
+                        dtype=np.float32,
+                    ),
+                    "close": close_space,
+                }
+            )
+        except AttributeError:  # pragma: no cover - gym stub without Dict
+            self.action_space = spaces.Box(
+                low=-max_position,
+                high=max_position,
+                shape=(self.n_symbols * 2,),
+                dtype=np.float32,
+            )
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,

@@ -1,6 +1,9 @@
 """Reinforcement learning utilities."""
 
-from .risk_cvar import CVaRRewardWrapper
+try:  # optional dependency on gym
+    from .risk_cvar import CVaRRewardWrapper
+except Exception:  # pragma: no cover - gym may be stubbed
+    CVaRRewardWrapper = object  # type: ignore
 from .world_model import WorldModel, WorldModelEnv, Transition
 from .trading_env import (
     TradingEnv,
