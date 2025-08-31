@@ -33,16 +33,30 @@ def _run(cmd: list[str]) -> bool:
         return False
 
 
-def _sync_dir(src: Path, dst: str) -> bool:
-    if BACKEND.startswith("s3://"):
-        return _run(["aws", "s3", "sync", str(src), dst])
-    return _run(["rsync", "-az", f"{src}/", dst])
+def _run_with_backoff(cmd: list[str], retries: int = 3, delay: float = 1.0) -> bool:
+    """Run ``cmd`` with simple exponential backoff."""
+    for _ in range(retries):
+        if _run(cmd):
+            return True
+        time.sleep(delay)
+        delay *= 2
+    return False
 
 
-def _sync_file(src: Path, dst: str) -> bool:
-    if BACKEND.startswith("s3://"):
-        return _run(["aws", "s3", "cp", str(src), dst])
-    return _run(["rsync", "-az", str(src), dst])
+def _sync_dir(src: Path, dst: str, backend: str) -> bool:
+    if backend.startswith("s3://"):
+        cmd = ["aws", "s3", "sync", str(src), dst]
+    else:
+        cmd = ["rsync", "-az", f"{src}/", dst]
+    return _run_with_backoff(cmd)
+
+
+def _sync_file(src: Path, dst: str, backend: str) -> bool:
+    if backend.startswith("s3://"):
+        cmd = ["aws", "s3", "cp", str(src), dst]
+    else:
+        cmd = ["rsync", "-az", str(src), dst]
+    return _run_with_backoff(cmd)
 
 
 def sync_checkpoints() -> bool:
@@ -52,10 +66,13 @@ def sync_checkpoints() -> bool:
     ckpt_dir = Path("checkpoints")
     if not ckpt_dir.exists():
         return True
-    ok = _sync_dir(ckpt_dir, f"{BACKEND.rstrip('/')}/checkpoints")
+    ok = _sync_dir(ckpt_dir, f"{BACKEND.rstrip('/')}/checkpoints", BACKEND)
     if ok:
         global LAST_SYNC
         LAST_SYNC = time.time()
+        logger.info("Synced checkpoints to %s", BACKEND)
+    else:
+        logger.warning("Failed to sync checkpoints to %s", BACKEND)
     return ok
 
 
@@ -66,10 +83,13 @@ def sync_decisions() -> bool:
     dec_log = Path("logs/decisions.parquet.enc")
     if not dec_log.exists():
         return True
-    ok = _sync_file(dec_log, f"{BACKEND.rstrip('/')}/logs/decisions.parquet")
+    ok = _sync_file(dec_log, f"{BACKEND.rstrip('/')}/logs/decisions.parquet", BACKEND)
     if ok:
         global LAST_SYNC
         LAST_SYNC = time.time()
+        logger.info("Synced decision log to %s", BACKEND)
+    else:
+        logger.warning("Failed to sync decision log to %s", BACKEND)
     return ok
 
 
@@ -81,9 +101,9 @@ def pull_checkpoints() -> None:
     dst.mkdir(exist_ok=True)
     src = f"{BACKEND.rstrip('/')}/checkpoints"
     if BACKEND.startswith("s3://"):
-        _run(["aws", "s3", "sync", src, str(dst)])
+        _run_with_backoff(["aws", "s3", "sync", src, str(dst)])
     else:
-        _run(["rsync", "-az", f"{src}/", str(dst)])
+        _run_with_backoff(["rsync", "-az", f"{src}/", str(dst)])
 
 
 def pull_decisions() -> None:
@@ -94,9 +114,46 @@ def pull_decisions() -> None:
     dst.mkdir(exist_ok=True)
     src = f"{BACKEND.rstrip('/')}/logs/decisions.parquet.enc"
     if BACKEND.startswith("s3://"):
-        _run(["aws", "s3", "cp", src, str(dst / 'decisions.parquet.enc')])
+        _run_with_backoff(["aws", "s3", "cp", src, str(dst / 'decisions.parquet.enc')])
     else:
-        _run(["rsync", "-az", src, str(dst / 'decisions.parquet.enc')])
+        _run_with_backoff(["rsync", "-az", src, str(dst / 'decisions.parquet.enc')])
+
+
+def sync_event_store(db_path: Path, dataset_dir: Path | None = None, backend: str | None = None) -> bool:
+    """Replicate the event store database and dataset."""
+    backend = backend or BACKEND
+    if not backend:
+        return True
+    dst_root = f"{backend.rstrip('/')}/event_store"
+    ok = _sync_file(db_path, f"{dst_root}/{db_path.name}", backend)
+    if dataset_dir and Path(dataset_dir).exists():
+        ok = _sync_dir(Path(dataset_dir), f"{dst_root}/dataset", backend) and ok
+    if ok:
+        global LAST_SYNC
+        LAST_SYNC = time.time()
+        logger.info("Synced event store to %s", backend)
+    else:
+        logger.warning("Failed to sync event store to %s", backend)
+    return ok
+
+
+def pull_event_store(db_path: Path | None = None, dataset_dir: Path | None = None, backend: str | None = None) -> None:
+    """Retrieve the event store from the backend if available."""
+    backend = backend or BACKEND
+    if not backend:
+        return
+    db_path = Path(db_path or os.getenv("EVENT_STORE_PATH", "event_store/events.db"))
+    dataset_dir = Path(dataset_dir or db_path.with_suffix(".parquet"))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    root = f"{backend.rstrip('/')}/event_store"
+    if backend.startswith("s3://"):
+        _run_with_backoff(["aws", "s3", "cp", f"{root}/{db_path.name}", str(db_path)])
+        _run_with_backoff(["aws", "s3", "sync", f"{root}/dataset", str(dataset_dir)])
+    else:
+        _run_with_backoff(["rsync", "-az", f"{root}/{db_path.name}", str(db_path)])
+        _run_with_backoff(["rsync", "-az", f"{root}/dataset/", str(dataset_dir)])
+    logger.info("Pulled event store from %s", backend)
 
 
 def check_health(max_lag: int = 300) -> bool:
