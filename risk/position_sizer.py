@@ -43,8 +43,28 @@ class PositionSizer:
         var: float | None = None,
         es: float | None = None,
         confidence: float = 1.0,
+        slippage: float | None = None,
+        liquidity: float | None = None,
     ) -> float:
-        """Return position size based on configured sizing method."""
+        """Return position size based on configured sizing method.
+
+        Parameters
+        ----------
+        prob : float
+            Expected win probability of the trade.
+        symbol : str, optional
+            Asset symbol used when ``weights`` were supplied.
+        volatility, var, es : float, optional
+            Risk inputs used depending on the configured ``method``.
+        confidence : float, default 1.0
+            Multiplier representing model confidence in the signal.
+        slippage : float, optional
+            Estimated fractional execution cost.  Higher slippage reduces the
+            returned size.
+        liquidity : float, optional
+            Available volume at the top of book.  The final size will not
+            exceed this value.
+        """
         weight = 1.0
         if self.weights and symbol is not None:
             weight = self.weights.get(symbol, 0.0)
@@ -70,19 +90,29 @@ class PositionSizer:
             target = capital * self.target_vol
             realized = base_size * volatility
         size = base_size * confidence
+        slip_factor = 1.0
+        if slippage is not None and slippage > 0:
+            slip_factor = 1.0 / (1.0 + slippage)
+            size *= slip_factor
+        if liquidity is not None:
+            size = min(size, liquidity)
         try:
             record_metric("target_risk", target)
             record_metric("realized_risk", realized)
             record_metric("adj_target_risk", target * confidence)
             record_metric("adj_realized_risk", realized * confidence)
+            record_metric("slip_adj_target_risk", target * confidence * slip_factor)
+            record_metric("slip_adj_realized_risk", realized * confidence * slip_factor)
         except Exception:
             pass
         logger.info(
-            "Position size computed: base=%.4f adjusted=%.4f target=%.4f adj_target=%.4f conf=%.2f",
+            "Position size computed: base=%.4f adjusted=%.4f target=%.4f adj_target=%.4f slip=%.4f liq=%.4f conf=%.2f",
             base_size,
             size,
             target,
-            target * confidence,
+            target * confidence * slip_factor,
+            slippage or 0.0,
+            float(liquidity) if liquidity is not None else float("nan"),
             confidence,
         )
         return size
