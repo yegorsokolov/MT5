@@ -5,7 +5,7 @@ capability tier events.  When the local hardware tier is re-probed or upgraded
 we reload newly enabled model variants and replay historical decisions through
 them.  Candidate trading strategies can also be supplied and are evaluated
 against the encrypted decision log to compute counterfactual PnL and risk
-metrics.  Comparison reports are written to ``reports/replay`` and
+metrics.  Comparison reports are written to ``reports/replays`` and
 ``reports/strategy_replay`` with results fed back into the tournament
 scoreboard for the :class:`strategy.router.StrategyRouter`.
 """
@@ -27,7 +27,7 @@ try:  # optional if backend not configured
 except Exception:  # pragma: no cover - optional dependency
     state_sync = None
 
-REPLAY_DIR = Path(__file__).resolve().parent.parent / "reports" / "replay"
+REPLAY_DIR = Path(__file__).resolve().parent.parent / "reports" / "replays"
 REPLAY_DIR.mkdir(parents=True, exist_ok=True)
 
 STRATEGY_REPLAY_DIR = (
@@ -150,7 +150,11 @@ def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
 
 
 def reprocess(out_dir: Path | None = None) -> pd.DataFrame:
-    """Reprocess historical trades applying the latest news impact model."""
+    """Reprocess historical trades applying the latest news impact model.
+
+    Generates comparison reports including per-trade PnL deltas and Sharpe
+    ratio differences.  ``out_dir`` defaults to ``reports/replays``.
+    """
     import importlib.util
 
     news_dir = Path(__file__).resolve().parent.parent / "news" / "impact_model.py"
@@ -175,22 +179,48 @@ def reprocess(out_dir: Path | None = None) -> pd.DataFrame:
         adj.append(row.pnl * (1 + (impact or 0)))
     trades["reprocessed_pnl"] = adj
     out_dir.mkdir(parents=True, exist_ok=True)
-    trades.to_parquet(out_dir / "reprocessed.parquet", index=False)
+    try:
+        trades.to_parquet(out_dir / "reprocessed.parquet", index=False)
+    except Exception:
+        trades.to_csv(out_dir / "reprocessed.csv", index=False)
+
+    comp = trades[["timestamp", "pnl", "reprocessed_pnl"]].rename(
+        columns={"pnl": "pnl_old", "reprocessed_pnl": "pnl_new"}
+    )
+    comp["pnl_delta"] = comp["pnl_new"] - comp["pnl_old"]
+    comp.to_csv(out_dir / "old_vs_new_pnl.csv", index=False)
+
+    old_metrics = _risk_metrics(comp["pnl_old"])
+    new_metrics = _risk_metrics(comp["pnl_new"])
+    sharpe_delta = new_metrics["sharpe"] - old_metrics["sharpe"]
+    pd.DataFrame(
+        [
+            {
+                "sharpe_old": old_metrics["sharpe"],
+                "sharpe_new": new_metrics["sharpe"],
+                "sharpe_delta": sharpe_delta,
+            }
+        ]
+    ).to_csv(out_dir / "sharpe_deltas.csv", index=False)
+
     summary = pd.DataFrame(
         {
-            "pnl_old": [float(trades["pnl"].sum())],
-            "pnl_new": [float(trades["reprocessed_pnl"].sum())],
+            "pnl_old": [float(comp["pnl_old"].sum())],
+            "pnl_new": [float(comp["pnl_new"].sum())],
+            "sharpe_old": [old_metrics["sharpe"]],
+            "sharpe_new": [new_metrics["sharpe"]],
+            "sharpe_delta": [sharpe_delta],
         }
     )
     summary_path = out_dir / "pnl_summary.parquet"
-    summary.to_parquet(summary_path, index=False)
+    try:
+        summary.to_parquet(summary_path, index=False)
+    except Exception:
+        summary.to_csv(out_dir / "pnl_summary.csv", index=False)
     try:
         record_metric("replay_pnl_old", summary["pnl_old"].iloc[0])
         record_metric("replay_pnl_new", summary["pnl_new"].iloc[0])
-        record_metric(
-            "replay_pnl_diff",
-            summary["pnl_new"].iloc[0] - summary["pnl_old"].iloc[0],
-        )
+        record_metric("replay_pnl_diff", summary["pnl_new"].iloc[0] - summary["pnl_old"].iloc[0])
     except Exception:
         pass
     return summary

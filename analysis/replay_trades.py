@@ -3,7 +3,7 @@
 This utility loads previously recorded decision logs and reprocesses the
 features through newly enabled model versions.  The resulting comparison
 between the original probabilities and the reprocessed probabilities is
-written to ``reports/replay`` for operator review.
+written to ``reports/replays`` for operator review.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pandas as pd
 from log_utils import read_decisions
 from utils import load_config
 
-REPLAY_DIR = Path(__file__).resolve().parent.parent / "reports" / "replay"
+REPLAY_DIR = Path(__file__).resolve().parent.parent / "reports" / "replays"
 REPLAY_DIR.mkdir(parents=True, exist_ok=True)
 
 
