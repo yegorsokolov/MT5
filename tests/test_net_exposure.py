@@ -1,9 +1,12 @@
 import sys
 from pathlib import Path
 
-import pandas as pd
 import pytest
 import types
+import importlib
+
+sys.modules.pop("pandas", None)
+pd = importlib.import_module("pandas")
 
 sys.modules["prometheus_client"] = types.SimpleNamespace(
     Counter=lambda *a, **k: None,
@@ -42,6 +45,9 @@ def test_net_exposure_limits_and_logging(tmp_path, monkeypatch):
         max_short_exposure=80.0,
     )
 
+    for i in range(1, 6):
+        rm.net_exposure.record_returns({"AAA": 0.01 * i, "BBB": 0.01 * i, "CCC": 0.01 * i, "DDD": 0.01 * i})
+
     ts = pd.Timestamp("2024-01-01")
     s1 = rm.adjust_size("AAA", 60, ts, direction=1)
     assert s1 == 60
@@ -77,3 +83,31 @@ def test_net_exposure_limits_and_logging(tmp_path, monkeypatch):
     short_val = [v for n, v, _ in logged if n == "short_exposure"][-1]
     assert long_val == pytest.approx(100.0)
     assert short_val == pytest.approx(80.0)
+
+
+def test_correlation_limiter(monkeypatch):
+    import analytics.metrics_store as ms
+
+    logged: list[tuple[str, float]] = []
+    monkeypatch.setattr(
+        ms, "record_metric", lambda name, value, tags=None, path=None: logged.append((name, value))
+    )
+
+    import importlib
+    from risk import net_exposure as ne_mod
+    importlib.reload(ne_mod)
+    NetExposure = ne_mod.NetExposure
+
+    ne = NetExposure(max_long=100.0, window=3)
+    ne.record_returns({"AAA": 0.01, "BBB": 0.02})
+    ne.record_returns({"AAA": 0.02, "BBB": 0.01})
+    ne.record_returns({"AAA": 0.03, "BBB": 0.02})
+    ne.update("AAA", 60)
+    uncorr_allowed = ne.limit("BBB", 70)
+    for r in [0.01, 0.02, 0.03]:
+        ne.record_returns({"AAA": r, "BBB": r})
+    corr_allowed = ne.limit("BBB", 70)
+    assert corr_allowed < uncorr_allowed
+    assert ne.corr.loc["AAA", "BBB"] > 0.9
+    avg = [v for n, v in logged if n == "avg_correlation"][-1]
+    assert avg > 0.9
