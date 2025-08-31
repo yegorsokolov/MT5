@@ -69,16 +69,24 @@ class Orchestrator:
                 self.logger.info("Higher-tier resources detected: %s", tier)
                 self.registry.refresh()
                 try:
-                    out_dir = Path("reports/news_replay")
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    reprocess = getattr(replay, "reprocess", None)
-                    if callable(reprocess):
-                        reprocess(out_dir)
-                    else:
-                        getattr(replay, "main", lambda: None)()
-                except Exception:  # pragma: no cover - defensive
-                    self.logger.exception("Replay reprocess failed")
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:  # pragma: no cover - event loop not running
+                    loop = asyncio.get_event_loop()
+                loop.create_task(self._run_reprocess())
             previous = tier
+
+    async def _run_reprocess(self) -> None:
+        """Reprocess trades and alert operators on completion."""
+        try:
+            df = await asyncio.to_thread(replay.reprocess, Path("reports/replays"))
+            diff = float(df["pnl_new"].iloc[0] - df["pnl_old"].iloc[0])
+            send_alert(f"Replay reprocess complete. ΔPnL={diff:.2f}")
+        except Exception:  # pragma: no cover - defensive
+            self.logger.exception("Replay reprocess failed")
+            try:
+                send_alert("Replay reprocess failed")
+            except Exception:
+                pass
 
     def _resume(self) -> None:
         loader = getattr(state_manager, "latest_checkpoint", None)
