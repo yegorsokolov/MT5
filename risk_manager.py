@@ -355,7 +355,11 @@ class RiskManager:
         self._last_regime = None
 
     # Risk budgets ----------------------------------------------------
-    def rebalance_budgets(self, regime: int | None = None) -> Dict[str, float]:
+    def rebalance_budgets(
+        self,
+        regime: int | None = None,
+        factor_exposures: Dict[str, pd.Series] | None = None,
+    ) -> Dict[str, float]:
         """Recompute risk budgets using a robust optimiser.
 
         When ``regime`` is provided (or inferred from the most recent update) the
@@ -371,6 +375,22 @@ class RiskManager:
             if hist
         }
         budgets = self.budget_allocator.allocate(returns)
+
+        # If factor exposures are supplied, derive a covariance matrix from them
+        # to better reflect cross-asset correlations.  This provides a more
+        # stable estimate of risk when only limited history is available.
+        if factor_exposures:
+            exp_df = pd.DataFrame(factor_exposures).T.fillna(0.0)
+            mat = exp_df.to_numpy()
+            cov = mat @ mat.T
+            cov += np.eye(cov.shape[0]) * 1e-6
+            inv_var = 1.0 / np.diag(cov)
+            weights = inv_var / inv_var.sum()
+            total = sum(budgets.values()) or self.budget_allocator.capital
+            self.budget_allocator.budgets = {
+                bot: total * w for bot, w in zip(exp_df.index, weights)
+            }
+            return self.budget_allocator.budgets
 
         reg = regime if regime is not None else self._last_regime
         if reg is None or reg not in self._regime_pnl_history:
