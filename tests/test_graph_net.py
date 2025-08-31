@@ -2,7 +2,9 @@ import importlib.util
 from pathlib import Path
 
 import pandas as pd
-import torch
+import pytest
+
+torch = pytest.importorskip("torch")
 
 # Load modules without importing heavy package initializers
 spec = importlib.util.spec_from_file_location(
@@ -81,3 +83,14 @@ def test_graph_net_beats_baseline():
     mse_gnn /= n
 
     assert mse_gnn < baseline_mse
+
+
+def test_graph_net_with_node_types():
+    x = torch.tensor([[1.0], [2.0], [3.0]])
+    edge_index = torch.tensor([[0, 1, 2, 1], [1, 0, 1, 2]])
+    node_type = torch.tensor([0, 1, 0])
+    model = GraphNet(
+        1, hidden_channels=4, out_channels=1, num_node_types=2, type_embed_dim=2
+    )
+    out = model(x, edge_index, node_type=node_type)
+    assert out.shape == (3, 1)
