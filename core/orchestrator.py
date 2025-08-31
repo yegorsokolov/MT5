@@ -98,6 +98,7 @@ class Orchestrator:
             self.monitor.max_cpu_pct = max_cpu
         self.monitor.start()
         self.registry.refresh()
+        state_sync.pull_event_store()
         self._resume()
         try:
             loop = asyncio.get_running_loop()
