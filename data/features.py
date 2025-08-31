@@ -586,6 +586,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             group["depth_imbalance"] = ob["depth_imbalance"]
             group["vw_spread"] = ob["vw_spread"]
             group["market_impact"] = ob["market_impact"]
+            group["slippage"] = ob["slippage"]
+            group["liquidity"] = ob["liquidity"]
         else:
             if {"BidVolume", "AskVolume"}.issubset(group.columns):
                 bid_depth = group.get("BidVolume", 0)
@@ -594,10 +596,13 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
                 group["depth_imbalance"] = np.where(
                     total > 0, (bid_depth - ask_depth) / total, 0
                 )
+                group["liquidity"] = total
             else:
                 group["depth_imbalance"] = 0.0
+                group["liquidity"] = 0.0
             group["vw_spread"] = group["spread"]
             group["market_impact"] = group["vw_spread"] * group["depth_imbalance"]
+            group["slippage"] = np.abs(group["vw_spread"]) + np.abs(group["market_impact"])
 
         if use_kalman:
             symbol = (

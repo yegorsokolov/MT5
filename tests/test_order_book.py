@@ -1,9 +1,12 @@
-import pandas as pd
-import numpy as np
-from pathlib import Path
 import sys
 import types
+from pathlib import Path
 import importlib.util
+
+sys.modules.pop("pandas", None)
+sys.modules.pop("numpy", None)
+import pandas as pd
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
@@ -34,6 +37,8 @@ data_backend_stub = types.SimpleNamespace(get_dataframe_module=lambda: __import_
 utils_pkg.data_backend = data_backend_stub
 sys.modules.setdefault("utils", utils_pkg)
 sys.modules.setdefault("utils.data_backend", data_backend_stub)
+sys.modules.setdefault("utils.resource_monitor", types.SimpleNamespace(monitor=types.SimpleNamespace()))
+sys.modules.setdefault("utils.lr_scheduler", types.SimpleNamespace(LookaheadAdamW=object))
 features_stub = types.ModuleType("data.features")
 features_stub.make_features = lambda df: df
 sys.modules.setdefault("data.features", features_stub)
@@ -92,8 +97,15 @@ rl_risk_stub.RiskEnv = object
 sys.modules.setdefault("plugins", plugins_pkg)
 sys.modules.setdefault("plugins.rl_risk", rl_risk_stub)
 
-from realtime_train import apply_liquidity_adjustment
-from train_rl import TradingEnv
+analytics_stub = types.ModuleType("analytics")
+analytics_stub.__path__ = []
+metrics_stub = types.ModuleType("analytics.metrics_store")
+metrics_stub.record_metric = lambda *a, **k: None
+metrics_stub.TS_PATH = Path("/tmp/metrics.parquet")
+sys.modules["analytics"] = analytics_stub
+sys.modules["analytics.metrics_store"] = metrics_stub
+analytics_stub.metrics_store = metrics_stub
+
 from analytics import metrics_store
 
 
@@ -119,9 +131,16 @@ def test_order_book_feature_computation():
     total_vol = (10 + 8) + (5 + 4)
     expected_vw = (spread1 * (10 + 8) + spread2 * (5 + 4)) / total_vol
     assert np.isclose(feats.loc[0, "vw_spread"], expected_vw)
+    expected_mi = expected_vw * expected_imbalance
+    expected_slip = abs(expected_vw) + abs(expected_mi)
+    assert np.isclose(feats.loc[0, "market_impact"], expected_mi)
+    assert np.isclose(feats.loc[0, "slippage"], expected_slip)
+    assert np.isclose(feats.loc[0, "liquidity"], 27.0)
 
 
 def test_liquidity_adjustments_and_metrics(tmp_path):
+    from realtime_train import apply_liquidity_adjustment
+
     df = pd.DataFrame(
         {
             "mid": [100.0, 100.0],
@@ -142,6 +161,7 @@ def test_liquidity_adjustments_and_metrics(tmp_path):
 
 
 def test_trading_env_uses_liquidity_metrics(tmp_path):
+    from train_rl import TradingEnv
     metrics_store.TS_PATH = tmp_path / "env_metrics.parquet"
     import train_rl
     train_rl.TS_PATH = metrics_store.TS_PATH
