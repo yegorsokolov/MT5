@@ -279,7 +279,7 @@ def main() -> None:
             st.subheader("Replay PnL Delta")
             st.line_chart(replay.set_index("timestamp")["value"], height=150)
 
-        replay_dir = Path("reports/replay")
+        replay_dir = Path("reports/replays")
         pnl_summary = replay_dir / "pnl_summary.parquet"
         model_summary = replay_dir / "summary.parquet"
         flag_file = replay_dir / "latest.json"
