@@ -12,7 +12,10 @@ import numpy as np
 import pandas as pd
 import random
 import torch
-from utils.lr_scheduler import LookaheadAdamW
+try:  # optional dependency
+    from utils.lr_scheduler import LookaheadAdamW
+except Exception:  # pragma: no cover - utils may be stubbed
+    LookaheadAdamW = object  # type: ignore
 try:
     import torch.nn as nn
 except Exception:  # pragma: no cover - torch may be stubbed
@@ -1136,7 +1139,7 @@ if __name__ == "__main__":
     if args.fine_tune:
         cfg["fine_tune"] = True
     if args.tune:
-        from tuning.hyperopt import tune_rl
+        from tuning.rl_hyperopt import tune_rl
 
         tune_rl(cfg)
     else:
