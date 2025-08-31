@@ -25,15 +25,23 @@ FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
 
 
-def _feature_vector(features: FeatureDict) -> np.ndarray:
-    """Return a 3x1 feature vector of volatility, trend strength and regime."""
-    return np.array(
-        [
-            features.get("volatility", 0.0),
-            features.get("trend_strength", 0.0),
-            features.get("regime", 0.0),
-        ]
-    ).reshape(-1, 1)
+def _feature_vector(features: FeatureDict, factor_names: Iterable[str]) -> np.ndarray:
+    """Return feature vector including factor exposures.
+
+    The base features are volatility, trend strength and regime.  Any factor
+    exposures provided under the ``factor_exposures`` key are appended in the
+    order of ``factor_names``.  Missing factors default to zero exposure.
+    """
+
+    exposures = features.get("factor_exposures", {}) or {}
+    vec: List[float] = [
+        features.get("volatility", 0.0),
+        features.get("trend_strength", 0.0),
+        features.get("regime", 0.0),
+    ]
+    for name in factor_names:
+        vec.append(float(exposures.get(name, 0.0)))
+    return np.array(vec).reshape(-1, 1)
 
 
 @dataclass
@@ -48,6 +56,7 @@ class StrategyRouter:
         "reports/rationale_scores/algorithm_win_rates.parquet"
     )
     regime_perf_path: Path | str = Path("analytics/regime_performance.parquet")
+    factor_names: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.algorithms:
@@ -58,8 +67,9 @@ class StrategyRouter:
                 "trend_following": lambda _: 1.0,
                 "rl_policy": lambda _: 0.0,
             }
-        # include regime dimension alongside volatility and trend strength
-        self.dim = 3
+        # include regime dimension alongside volatility and trend strength and
+        # optional factor exposures
+        self.dim = 3 + len(self.factor_names)
         self.A: Dict[str, np.ndarray] = {
             name: np.identity(self.dim) for name in self.algorithms
         }
@@ -82,6 +92,26 @@ class StrategyRouter:
         self._load_state()
         if self.champion is None and self.algorithms:
             self.champion = next(iter(self.algorithms))
+
+    def set_factor_names(self, names: Iterable[str]) -> None:
+        """Configure factor names and expand internal matrices if required."""
+        new_names = list(names)
+        if new_names == self.factor_names:
+            return
+        old_dim = self.dim
+        self.factor_names = new_names
+        self.dim = 3 + len(self.factor_names)
+        if self.dim == old_dim:
+            return
+        for key in list(self.A.keys()):
+            A_old = self.A[key]
+            b_old = self.b[key]
+            A_new = np.identity(self.dim)
+            A_new[:old_dim, :old_dim] = A_old
+            b_new = np.zeros((self.dim, 1))
+            b_new[:old_dim] = b_old
+            self.A[key] = A_new
+            self.b[key] = b_new
 
     # Registration -----------------------------------------------------
     def register(self, name: str, algorithm: Algorithm) -> None:
@@ -137,7 +167,7 @@ class StrategyRouter:
     # Selection --------------------------------------------------------
     def select(self, features: FeatureDict) -> str:
         """Return the algorithm name with the highest UCB score."""
-        x = _feature_vector(features)
+        x = _feature_vector(features, self.factor_names)
         regime = features.get("regime")
         basket = features.get("market_basket")
         instrument = features.get("instrument")
@@ -189,7 +219,7 @@ class StrategyRouter:
         latest observation.
         """
 
-        x = _feature_vector(features)
+        x = _feature_vector(features, self.factor_names)
         self.A[algorithm] += x @ x.T
         self.b[algorithm] += reward * x
         self.history.append((features, reward, algorithm))
