@@ -21,6 +21,12 @@ class ConfigSchema(BaseModel):
     pred_cache_policy: str = Field(
         "lru", description="Eviction policy for prediction cache (lru or fifo)"
     )
+    ewma_alpha: float = Field(
+        0.06,
+        gt=0,
+        le=1,
+        description="Smoothing factor for EWMA risk metrics",
+    )
     log_forward: dict | None = Field(
         None,
         description="Remote log forwarding configuration, e.g. {'url': 'http://host'}",
