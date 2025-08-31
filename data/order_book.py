@@ -2,8 +2,10 @@
 
 This module provides helpers to load order book snapshots and compute
 liquidity related features such as depth imbalance, volume weighted spread
-and a simple market impact estimate.  The functions are intentionally
-light‑weight and rely only on ``pandas`` making them easy to unit test.
+and a simple market impact estimate.  It also derives aggregate *slippage*
+and available *liquidity* measures which can be fed into risk controls.  The
+functions are intentionally light‑weight and rely only on ``pandas`` making
+them easy to unit test.
 """
 from __future__ import annotations
 
@@ -55,8 +57,11 @@ def compute_order_book_features(df: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Dataframe with ``depth_imbalance``, ``vw_spread`` and
-        ``market_impact`` columns appended.
+        Dataframe with ``depth_imbalance``, ``vw_spread``, ``market_impact``,
+        ``slippage`` and ``liquidity`` columns appended.  ``slippage`` is a
+        naive estimate of execution cost derived from the spread and the
+        order book imbalance while ``liquidity`` represents the total depth
+        available across bid and ask levels.
     """
     bid_price_cols = _level_columns("BidPrice", df.columns)
     bid_vol_cols = _level_columns("BidVolume", df.columns)
@@ -87,6 +92,9 @@ def compute_order_book_features(df: pd.DataFrame) -> pd.DataFrame:
     df["vw_spread"] = vw_spread
     df["market_impact"] = market_impact.fillna(0.0)
     df["total_depth"] = total_depth
+    # slippage approximated as spread plus absolute market impact
+    df["slippage"] = np.abs(df["vw_spread"]) + np.abs(df["market_impact"])
+    df["liquidity"] = total_depth
     return df
 
 
