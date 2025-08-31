@@ -125,6 +125,7 @@ from rl.hierarchical_agent import (
     TrendPolicy,
     MeanReversionPolicy,
 )
+from execution.rl_executor import RLExecutor
 import argparse
 try:
     import torch.distributed as dist
@@ -979,6 +980,8 @@ def main(
 def launch(cfg: dict | None = None) -> float:
     if cfg is None:
         cfg = load_config()
+    if cfg.get("rl_exec"):
+        return train_execution(cfg)
     if cfg.get("hierarchical"):
         return train_hierarchical(cfg)
     if cluster_available():
@@ -1025,6 +1028,31 @@ def train_hierarchical(cfg: dict) -> float:
     return 0.0
 
 
+def train_execution(cfg: dict) -> float:
+    """Train an execution policy using :class:`RLExecutor`."""
+    source = cfg.get("order_book_source")
+    if source is None:
+        # generate a small synthetic order book for quick tests
+        df = pd.DataFrame(
+            {
+                "Timestamp": pd.date_range("2020-01-01", periods=100, freq="s"),
+                "BidPrice1": 100.0,
+                "AskPrice1": 100.1,
+                "BidVolume1": 10.0,
+                "AskVolume1": 10.0,
+            }
+        )
+        env = RLExecutor.make_env(df, side=cfg.get("side", "buy"))
+    else:
+        env = RLExecutor.make_env(source, side=cfg.get("side", "buy"))
+    executor = RLExecutor(env=env)
+    executor.train(steps=int(cfg.get("rl_steps", 1000)))
+    if cfg.get("checkpoint_dir"):
+        path = Path(cfg["checkpoint_dir"]) / "rl_executor"
+        executor.save(path)
+    return 0.0
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1035,6 +1063,9 @@ if __name__ == "__main__":
     parser.add_argument("--quantize", action="store_true", help="Save quantized model")
     parser.add_argument(
         "--hierarchical", action="store_true", help="Use hierarchical agent"
+    )
+    parser.add_argument(
+        "--rl-exec", action="store_true", help="Train RL execution policy",
     )
     parser.add_argument(
         "--graph-model", action="store_true", help="Use GraphNet as policy backbone"
@@ -1083,6 +1114,8 @@ if __name__ == "__main__":
         cfg["quantize"] = True
     if args.hierarchical:
         cfg["hierarchical"] = True
+    if args.rl_exec:
+        cfg["rl_exec"] = True
     if args.graph_model:
         cfg["graph_model"] = True
     if args.risk_objective:
