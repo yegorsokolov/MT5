@@ -351,7 +351,9 @@ def main(
 
     size = monitor.capabilities.capability_tier()
     algo_cfg = cfg.get("rl_algorithm", "AUTO").upper()
-    if algo_cfg == "AUTO":
+    if cfg.get("distributional"):
+        algo = "QRDQN"
+    elif algo_cfg == "AUTO":
         algo = "A2C" if size == "lite" else "PPO"
     else:
         algo = algo_cfg
@@ -827,6 +829,11 @@ def main(
             )
             evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
             eval_returns = np.array(eval_env.portfolio_returns)
+            cumulative_return = 0.0
+            sharpe = 0.0
+            max_drawdown = 0.0
+            var = 0.0
+            cvar = 0.0
             if eval_returns.size:
                 cumulative_return = float((1 + eval_returns).prod() - 1)
                 sharpe = (
@@ -841,6 +848,8 @@ def main(
                 mlflow.log_metric("sharpe_ratio", sharpe)
                 mlflow.log_metric("max_drawdown", max_drawdown)
                 var_threshold = np.percentile(eval_returns, 5)
+                var = float(var_threshold)
+                mlflow.log_metric("value_at_risk", var)
                 if np.any(eval_returns <= var_threshold):
                     cvar = -float(eval_returns[eval_returns <= var_threshold].mean())
                 else:
@@ -962,6 +971,7 @@ def main(
                     "sharpe_ratio": sharpe,
                     "max_drawdown": max_drawdown,
                     "cvar": cvar,
+                    "value_at_risk": var,
                 },
                 root / "reports" / "model_cards",
             )
@@ -1068,6 +1078,11 @@ if __name__ == "__main__":
         "--hierarchical", action="store_true", help="Use hierarchical agent"
     )
     parser.add_argument(
+        "--distributional",
+        action="store_true",
+        help="Train a distributional (quantile-based) agent",
+    )
+    parser.add_argument(
         "--rl-exec", action="store_true", help="Train RL execution policy",
     )
     parser.add_argument(
@@ -1117,6 +1132,8 @@ if __name__ == "__main__":
         cfg["quantize"] = True
     if args.hierarchical:
         cfg["hierarchical"] = True
+    if args.distributional:
+        cfg["distributional"] = True
     if args.rl_exec:
         cfg["rl_exec"] = True
     if args.graph_model:
