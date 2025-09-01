@@ -88,6 +88,15 @@ def main() -> None:
         col3.metric("VaR", metrics.get("var", 0))
         col4.metric("Trading Halted", metrics.get("trading_halted", False))
 
+        exp_file = Path("reports/currency_exposure/latest.json")
+        if exp_file.exists():
+            try:
+                exp_data = json.loads(exp_file.read_text())
+                st.subheader("Currency-adjusted Exposure")
+                st.bar_chart(pd.Series(exp_data))
+            except Exception:
+                pass
+
         bots = fetch_json("/bots", api_key)
         st.subheader("Running Bots")
         for bid, info in bots.items():
