@@ -147,6 +147,10 @@ from ray_utils import (
 from rl.offline_dataset import OfflineDataset
 from event_store import EventStore
 try:  # optional dependency
+    from rl.world_model import WorldModel, Transition
+except Exception:  # pragma: no cover - world model optional
+    WorldModel = Transition = None  # type: ignore
+try:  # optional dependency
     from core.orchestrator import Orchestrator
 except Exception:  # pragma: no cover
     class Orchestrator:  # type: ignore
@@ -234,6 +238,66 @@ def offline_pretrain(
     policy.weight = w
     policy.bias = b
     dataset.close()
+
+
+def self_optimize(model: object, env: object, cfg: dict) -> None:
+    """Replay recent trades and update world model/hyper-parameters.
+
+    The routine is deliberately lightweight – it loads the most recent
+    experiences from the :mod:`event_store`, fits a new :class:`WorldModel` and
+    if the average reward has deteriorated adjusts the learning rate of the
+    policy.  Replay statistics and tuned parameters are stored via
+    :mod:`model_store`.  All operations are wrapped in ``try`` blocks so that the
+    function becomes a no-op when optional dependencies are missing.
+    """
+
+    if WorldModel is None or Transition is None:
+        return
+
+    try:
+        dataset = OfflineDataset(cfg.get("event_store_path"))
+    except Exception:  # pragma: no cover - dataset unavailable
+        return
+
+    window = int(cfg.get("replay_window", 100))
+    samples = dataset.samples[-window:]
+    dataset.close()
+    if not samples:
+        return
+
+    transitions = [Transition(s.obs, s.action, s.next_obs, s.reward) for s in samples]
+    try:
+        wm = getattr(model, "world_model")  # type: ignore[attr-defined]
+    except Exception:
+        wm = None
+    if wm is None:
+        try:
+            wm = WorldModel(env.observation_space.shape[0], env.action_space.shape[0])
+        except Exception:  # pragma: no cover - gym unavailable
+            return
+    wm.train(transitions)
+    setattr(model, "world_model", wm)
+
+    rewards = np.array([t.reward for t in transitions], dtype=float)
+    mean_r = float(rewards.mean()) if rewards.size else 0.0
+    if model_store is not None:
+        try:
+            model_store.save_replay_stats({"mean_reward": mean_r, "count": len(transitions)})
+        except Exception:  # pragma: no cover - optional
+            pass
+
+    threshold = cfg.get("performance_threshold")
+    if threshold is not None and mean_r < float(threshold):
+        if hasattr(model, "policy") and hasattr(model.policy, "optimizer"):
+            for group in getattr(model.policy, "optimizer").param_groups:  # type: ignore[attr-defined]
+                lr = group.get("lr", cfg.get("rl_learning_rate", 3e-4))
+                new_lr = lr * float(cfg.get("drift_lr_decay", 0.5))
+                group["lr"] = new_lr
+                if model_store is not None:
+                    try:
+                        model_store.save_tuned_params({"learning_rate": new_lr})
+                    except Exception:  # pragma: no cover - optional
+                        pass
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -797,6 +861,11 @@ def main(
                 current,
                 cfg.get("checkpoint_dir"),
             )
+            if cfg.get("world_model"):
+                try:
+                    self_optimize(model, env, cfg)
+                except Exception:  # pragma: no cover - optional path
+                    logger.exception("Self optimisation failed")
             if rank == 0 and federated_client is not None:
                 federated_client.push_update()
         cumulative_return = 0.0
