@@ -316,6 +316,23 @@ def main() -> None:
             except Exception:
                 pass
 
+        risk_dir = Path("reports/replay_risk")
+        risk_file = risk_dir / "risk_comparison.parquet"
+        if risk_file.exists() or (risk_dir / "risk_comparison.csv").exists():
+            try:
+                if risk_file.exists():
+                    rcomp = pd.read_parquet(risk_file)
+                else:
+                    rcomp = pd.read_csv(risk_dir / "risk_comparison.csv")
+                if not rcomp.empty:
+                    st.subheader("Replay Risk Comparison")
+                    cols = st.columns(len(rcomp))
+                    for col, row in zip(cols, rcomp.itertuples(index=False)):
+                        col.metric(row.metric.capitalize(), f"{row.replay:.2f}", f"{row.delta:+.2f}")
+                    st.table(rcomp)
+            except Exception:
+                pass
+
         corr_path = Path("reports/performance_correlations.parquet")
         if corr_path.exists():
             try:

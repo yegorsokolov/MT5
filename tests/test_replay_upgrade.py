@@ -60,3 +60,5 @@ def test_replay_updates_pnl_on_upgrade(tmp_path, monkeypatch):
     assert updated["pnl_new"].iloc[0] > base_pnl
     assert (out / "old_vs_new_pnl.csv").exists()
     assert (out / "sharpe_deltas.csv").exists()
+    risk_dir = reports / "replay_risk"
+    assert any((risk_dir / f"risk_comparison.{ext}").exists() for ext in ["parquet", "csv"])
