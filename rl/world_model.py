@@ -1,9 +1,27 @@
 from __future__ import annotations
 
-"""Lightweight deterministic world model for model-based RL."""
+"""Lightweight deterministic world model for model-based RL.
+
+This module intentionally implements only a *very* small subset of what a
+full blown world model would normally provide.  The goal is to supply enough
+functionality for unit tests and simple reinforcement learning experiments
+without pulling in large third party dependencies.  The implementation learns
+linear dynamics and reward predictions from transitions which can be collected
+offline from the event store.  After an initial offline pretraining step the
+model can be fine tuned online by incrementally refitting on the most recent
+transitions.
+
+The design emphasises being self contained and dependency light: NumPy is the
+only required third party package and even that is optional – the module raises
+an informative error should NumPy not be available.  All other integrations
+such as reading from the :mod:`event_store` are written defensively so that the
+code keeps functioning in environments where the optional components are not
+installed (for example when the tests stub them out).
+"""
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from pathlib import Path
+from typing import Iterable, Sequence, List
 
 try:  # pragma: no cover - optional dependency
     import numpy as np
@@ -29,18 +47,15 @@ class Transition:
 
 
 class WorldModel:
-    """Simple linear world model.
-
-    The model predicts next state and reward from the current state and action.
-    A small quadratic feature basis is used which is sufficient for the unit
-    tests.  Parameters are fitted with a least squares solution.
-    """
+    """Simple linear world model with offline/online training capabilities."""
 
     def __init__(self, state_dim: int, action_dim: int) -> None:
         self.state_dim = state_dim
         self.action_dim = action_dim
         self._W: np.ndarray | None = None
         self._b: np.ndarray | None = None
+        # keep a small replay buffer of transitions for incremental updates
+        self._buffer: List[Transition] = []
 
     # internal -----------------------------------------------------------------
     def _features(self, state: np.ndarray, action: np.ndarray) -> np.ndarray:
@@ -74,12 +89,65 @@ class WorldModel:
     def train(self, transitions: Iterable[Transition]) -> None:
         """Convenience wrapper to train from an iterable of ``Transition``."""
         states, actions, next_states, rewards = [], [], [], []
-        for t in transitions:
+        self._buffer = list(transitions)
+        for t in self._buffer:
             states.append(t.state)
             actions.append(t.action)
             next_states.append(t.next_state)
             rewards.append(t.reward)
         self.fit(states, actions, next_states, rewards)
+
+    # ------------------------------------------------------------------ I/O --
+    def pretrain_from_events(
+        self,
+        store: "EventStore | str | Path | None" = None,
+        limit: int | None = None,
+    ) -> int:
+        """Pretrain the model using transitions stored in an event log.
+
+        Parameters
+        ----------
+        store:
+            Optional :class:`~event_store.EventStore` instance or path.  If not
+            provided the default event store location is used.
+        limit:
+            Optionally cap the number of transitions loaded.
+
+        Returns
+        -------
+        int
+            Number of transitions used for training.
+        """
+
+        try:  # import lazily to avoid mandatory dependency
+            from rl.offline_dataset import OfflineDataset  # type: ignore
+        except Exception:  # pragma: no cover - dataset not available
+            return 0
+
+        dataset = OfflineDataset(store)
+        samples = dataset.samples if limit is None else dataset.samples[-limit:]
+        transitions = [
+            Transition(s.obs, s.action, s.next_obs, s.reward) for s in samples
+        ]
+        if transitions:
+            self.train(transitions)
+        dataset.close()
+        return len(transitions)
+
+    def update_online(self, transition: Transition, max_buffer: int = 1000) -> None:
+        """Incrementally update the model with a new transition.
+
+        The transition is appended to an internal replay buffer (capped at
+        ``max_buffer`` entries) and the linear parameters are re-estimated using
+        the current buffer contents.  For the small models used in the tests
+        this simple refit approach is sufficient and keeps the implementation
+        compact.
+        """
+
+        self._buffer.append(transition)
+        if len(self._buffer) > max_buffer:
+            self._buffer.pop(0)
+        self.train(self._buffer)
 
     # prediction ---------------------------------------------------------------
     def predict(
