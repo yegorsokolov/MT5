@@ -27,6 +27,11 @@ FEATURE_SCHEMA = pa.DataFrameSchema(
         "volatility_30": pa.Column(float),
         "rsi_14": pa.Column(float),
         "market_regime": pa.Column(int),
+        # Optional external features
+        "pe_ratio": pa.Column(float, required=False, nullable=True),
+        "dividend_yield": pa.Column(float, required=False, nullable=True),
+        "implied_vol": pa.Column(float, required=False, nullable=True),
+        "active_addresses": pa.Column(float, required=False, nullable=True),
     },
     coerce=True,
 )

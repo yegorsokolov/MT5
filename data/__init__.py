@@ -25,6 +25,9 @@ from .features import (
 )
 from .multitimeframe import aggregate_timeframes
 from .graph_builder import build_correlation_graph
+from .fundamental_features import load_fundamentals
+from .options_features import load_options_data
+from .onchain_features import load_onchain_data
 
 __all__ = [
     "get_events",
@@ -42,6 +45,9 @@ __all__ = [
     "add_news_sentiment_features",
     "aggregate_timeframes",
     "build_correlation_graph",
+    "load_fundamentals",
+    "load_options_data",
+    "load_onchain_data",
     "make_features",
     "make_features_memmap",
     "compute_rsi",
