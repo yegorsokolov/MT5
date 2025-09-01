@@ -122,6 +122,16 @@ def record_metric(name: str, value: float, tags: Optional[Dict[str, Any]] = None
     df.to_parquet(path, index=False)
 
 
+def model_cache_hit() -> None:
+    """Record a cache hit for a loaded model."""
+    record_metric("model_cache_hits", 1.0)
+
+
+def model_unload() -> None:
+    """Record that a cached model was unloaded."""
+    record_metric("model_unloads", 1.0)
+
+
 def query_metrics(
     name: str | None = None,
     *,
