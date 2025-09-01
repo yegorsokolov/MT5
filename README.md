@@ -38,6 +38,17 @@ The solution is split into two components:
    an Optuna search over learning rate, model depth and RL discount factors. The
    best settings are logged to MLflow and persisted in `tuning/*.db`.
 
+## Data sources
+
+The feature engineering pipeline supports a range of optional external
+datasets.  Fundamental loaders ingest company financial statements and
+valuation ratios from local CSV files or lightweight APIs and merge them
+with macroeconomic series such as GDP, CPI and interest rates.  A separate
+alternative data loader integrates options‑implied volatility, blockchain
+activity metrics and ESG scores when available.  These datasets reside
+under `data/` or `dataset/` and are merged into the main feature table via
+backward ``asof`` joins.
+
 ## Deployment and Environment Checks
 
 The toolkit attempts to run even on minimal virtual machines. An environment
