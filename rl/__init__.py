@@ -12,6 +12,7 @@ from .trading_env import (
     RLLibTradingEnv,
 )
 from .multi_agent_env import MultiAgentTradingEnv
+from .distributional_agent import DistributionalAgent, MeanAgent
 
 __all__ = [
     "CVaRRewardWrapper",
@@ -23,4 +24,6 @@ __all__ = [
     "HierarchicalTradingEnv",
     "RLLibTradingEnv",
     "MultiAgentTradingEnv",
+    "DistributionalAgent",
+    "MeanAgent",
 ]
