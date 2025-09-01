@@ -30,6 +30,7 @@ models/*
 !models/hot_reload.py
 !models/tft.py
 !models/ts2vec.py
+!models/ts_masked_encoder.py
 !models/hier_forecast.py
 !models/exit_survival.py
 !models/news_meta_label.py
