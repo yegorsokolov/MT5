@@ -97,6 +97,22 @@ def resource_reprobe() -> None:
     except Exception:
         logger.exception("Strategy router refresh failed")
 
+
+def rebuild_news_vectors() -> None:
+    """Rebuild the news event vector store with latest cached events."""
+
+    try:
+        from news.aggregator import NewsAggregator
+        from news import vector_store
+
+        agg = NewsAggregator()
+        events = agg.fetch()
+        texts = [ev.get("event") for ev in events if ev.get("event")]
+        vector_store.rebuild(texts)
+        logger.info("Rebuilt news vector store with %d events", len(texts))
+    except Exception:
+        logger.exception("News vector store rebuild failed")
+
 def run_drift_detection() -> None:
     """Run model/data drift comparison."""
     try:
@@ -296,6 +312,8 @@ def start_scheduler() -> None:
         jobs.append(("backups", run_backups))
     if s_cfg.get("regime_performance", True):
         jobs.append(("regime_performance", update_regime_performance))
+    if s_cfg.get("news_vector_store", True):
+        jobs.append(("news_vector_store", rebuild_news_vectors))
     if jobs:
         _schedule_jobs(jobs)
     _started = True
@@ -314,4 +332,5 @@ __all__ = [
     "vacuum_history",
     "run_backups",
     "update_regime_performance",
+    "rebuild_news_vectors",
 ]
