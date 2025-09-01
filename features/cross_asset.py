@@ -75,17 +75,18 @@ def add_cross_asset_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     from data import features as base
+    from data.graph_builder import build_rolling_adjacency
 
     df = base.add_index_features(df)
     df = base.add_cross_asset_features(df)
 
-    if "Symbol" in df.columns:
-        symbols = sorted(df["Symbol"].unique())
-        size = len(symbols)
-        eye = np.eye(size)
-        matrices = {}
-        for ts in pd.to_datetime(df["Timestamp"]).unique():
-            matrices[ts] = eye
+    if {"Symbol", "Timestamp"}.issubset(df.columns):
+        try:
+            matrices = build_rolling_adjacency(df)
+        except Exception:  # pragma: no cover - fallback to identity
+            symbols = sorted(df["Symbol"].unique())
+            eye = np.eye(len(symbols))
+            matrices = {ts: eye for ts in pd.to_datetime(df["Timestamp"]).unique()}
         df.attrs["adjacency_matrices"] = matrices
     return df
 

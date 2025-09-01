@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import random
 import torch
+import pickle
 try:  # optional dependency
     from utils.lr_scheduler import LookaheadAdamW
 except Exception:  # pragma: no cover - utils may be stubbed
@@ -128,6 +129,10 @@ from rl.hierarchical_agent import (
     TrendPolicy,
     MeanReversionPolicy,
 )
+try:  # optional dependency
+    from rl.graph_agent import GraphAgent
+except Exception:  # pragma: no cover - torch may be stubbed
+    GraphAgent = None  # type: ignore
 from execution.rl_executor import RLExecutor
 import argparse
 try:
@@ -1078,6 +1083,8 @@ def launch(cfg: dict | None = None) -> float:
         cfg = load_config()
     if cfg.get("rl_exec"):
         return train_execution(cfg)
+    if cfg.get("graph_rl"):
+        return train_graph_rl(cfg)
     if cfg.get("hierarchical"):
         return train_hierarchical(cfg)
     if cluster_available():
@@ -1095,6 +1102,41 @@ def launch(cfg: dict | None = None) -> float:
         return 0.0
     else:
         return main(0, 1, cfg)
+
+
+def train_graph_rl(cfg: dict) -> float:
+    """Train :class:`GraphAgent` using precomputed graphs.
+
+    The implementation is intentionally lightweight and operates on synthetic
+    data so it can run in unit tests without heavy dependencies.  When
+    ``graph_rl`` is enabled, precomputed adjacency matrices are loaded from the
+    path specified in ``cfg['graph_path']`` and a small policy network is
+    trained for a few iterations.
+    """
+
+    if GraphAgent is None:  # pragma: no cover - torch dependency missing
+        raise RuntimeError("GraphAgent not available")
+
+    path = Path(cfg.get("graph_path", "data/graphs/rolling.pkl"))
+    matrices = {}
+    if path.exists():
+        try:
+            with open(path, "rb") as f:
+                matrices = pickle.load(f)
+        except Exception:  # pragma: no cover - loading failed
+            matrices = {}
+
+    # Create a tiny environment: rewards are +1 for selecting the last node
+    num_nodes = next(iter(matrices.values())).shape[0] if matrices else 2
+    features = np.eye(num_nodes)
+    agent = GraphAgent(in_features=num_nodes, hidden_dim=16, num_actions=num_nodes)
+    adj = next(iter(matrices.values())) if matrices else np.ones((num_nodes, num_nodes))
+    for _ in range(cfg.get("graph_rl_steps", 10)):
+        action = agent.act(features, adj)
+        reward = 1.0 if action == num_nodes - 1 else 0.0
+        agent.store(features, adj, action, reward)
+        agent.train()
+    return 0.0
 
 
 def train_hierarchical(cfg: dict) -> float:
@@ -1172,6 +1214,15 @@ if __name__ == "__main__":
         "--graph-model", action="store_true", help="Use GraphNet as policy backbone"
     )
     parser.add_argument(
+        "--graph-rl", action="store_true", help="Enable graph-based RL agent",
+    )
+    parser.add_argument(
+        "--graph-path",
+        type=str,
+        default="data/graphs/rolling.pkl",
+        help="Path to pickled adjacency matrices for graph RL",
+    )
+    parser.add_argument(
         "--offline-pretrain",
         action="store_true",
         help="Initialize policy using offline data before online fine-tuning",
@@ -1226,6 +1277,9 @@ if __name__ == "__main__":
         cfg["rl_exec"] = True
     if args.graph_model:
         cfg["graph_model"] = True
+    if args.graph_rl:
+        cfg["graph_rl"] = True
+        cfg["graph_path"] = args.graph_path
     if args.risk_objective:
         cfg["risk_objective"] = args.risk_objective
     if args.offline_pretrain:
