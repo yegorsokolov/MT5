@@ -18,14 +18,26 @@ from features.cross_asset import (
     add_index_features,
     add_cross_asset_features,
 )
+from utils.resource_monitor import monitor
 
 logger = logging.getLogger(__name__)
 
 
 def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
-    """Generate model features by executing registered modules sequentially."""
+    """Generate model features by executing registered modules sequentially.
+
+    In addition to the lightweight feature modules registered in
+    :func:`features.get_feature_pipeline`, this function optionally merges
+    external datasets such as fundamentals, options implied volatility and
+    on-chain metrics.  These heavier data sources are only loaded when the
+    :class:`utils.resource_monitor.ResourceMonitor` reports sufficient
+    capabilities to avoid overwhelming constrained environments.
+    """
+
     for compute in get_feature_pipeline():
         df = compute(df)
+
+    # Allow runtime plugins to extend the feature set
     adjacency = df.attrs.get("adjacency_matrices")
     try:
         import dataset  # type: ignore
@@ -35,6 +47,38 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         plugins = []
     for plugin in plugins:
         df = plugin(df, adjacency_matrices=adjacency)
+
+    tier = getattr(monitor, "capability_tier", "lite")
+    if tier in {"standard", "gpu", "hpc"}:
+        try:
+            from .fundamental_features import compute as fundamental_compute
+
+            df = fundamental_compute(df)
+        except Exception:  # pragma: no cover - optional dependency failures
+            logger.debug("fundamental feature computation failed", exc_info=True)
+
+    if tier in {"gpu", "hpc"}:
+        try:
+            from .options_features import compute as options_compute
+
+            df = options_compute(df)
+        except Exception:
+            logger.debug("options feature computation failed", exc_info=True)
+        try:
+            from .onchain_features import compute as onchain_compute
+
+            df = onchain_compute(df)
+        except Exception:
+            logger.debug("on-chain feature computation failed", exc_info=True)
+
+    if validate:
+        try:
+            from .validators import FEATURE_SCHEMA
+
+            FEATURE_SCHEMA.validate(df, lazy=True)
+        except Exception:
+            logger.debug("feature validation failed", exc_info=True)
+
     return df
 
 
