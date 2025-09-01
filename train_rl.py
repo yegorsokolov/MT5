@@ -1246,7 +1246,7 @@ if __name__ == "__main__":
     if args.fine_tune:
         cfg["fine_tune"] = True
     if args.tune:
-        from tuning.rl_hyperopt import tune_rl
+        from tuning.distributed_search import tune_rl
 
         tune_rl(cfg)
     else:
