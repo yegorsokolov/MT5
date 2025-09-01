@@ -210,6 +210,45 @@ def update_regime_performance() -> None:
         logger.exception("Regime performance update failed")
 
 
+def reevaluate_world_model() -> None:
+    """Retrain a small world model on recent experiences and log the error.
+
+    The function is intentionally defensive: all imports are done lazily and any
+    exception simply results in the routine logging the failure.  When
+    successful, the mean squared error of the reward predictions is written to
+    the :mod:`model_store` for later inspection.
+    """
+
+    try:
+        from rl.world_model import WorldModel, Transition  # type: ignore
+        from rl.offline_dataset import OfflineDataset  # type: ignore
+        import numpy as np  # type: ignore
+        from models import model_store  # type: ignore
+    except Exception:  # pragma: no cover - optional dependencies missing
+        logger.exception("World model evaluation dependencies unavailable")
+        return
+
+    try:
+        dataset = OfflineDataset()
+        if not dataset.samples:
+            dataset.close()
+            return
+        first = dataset.samples[0]
+        wm = WorldModel(len(first.obs), len(first.action))
+        transitions = [
+            Transition(s.obs, s.action, s.next_obs, s.reward) for s in dataset.samples
+        ]
+        wm.train(transitions)
+        preds = [wm.predict(t.state, t.action)[1] for t in transitions]
+        rewards = [t.reward for t in transitions]
+        mse = float(np.mean((np.array(preds) - np.array(rewards)) ** 2))
+        model_store.save_replay_stats({"world_model_mse": mse})
+        dataset.close()
+        logger.info("World model re-evaluation MSE %.6f", mse)
+    except Exception:
+        logger.exception("World model re-evaluation failed")
+
+
 def run_decision_review() -> None:
     """Run LLM-based review of recorded decision rationales."""
     try:
@@ -314,6 +353,8 @@ def start_scheduler() -> None:
         jobs.append(("regime_performance", update_regime_performance))
     if s_cfg.get("news_vector_store", True):
         jobs.append(("news_vector_store", rebuild_news_vectors))
+    if s_cfg.get("world_model_eval", True):
+        jobs.append(("world_model_eval", reevaluate_world_model))
     if s_cfg.get("factor_update", True):
         from analysis.factor_updater import update_factors
 
@@ -337,4 +378,5 @@ __all__ = [
     "run_backups",
     "update_regime_performance",
     "rebuild_news_vectors",
+    "reevaluate_world_model",
 ]
