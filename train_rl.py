@@ -804,6 +804,20 @@ def main(
             model.num_timesteps = last_step
             start_step = last_step
             logger.info("Resuming from checkpoint at step %s", last_step)
+        elif cfg.get("inverse_reward"):
+            try:
+                from rl.inverse_reward import learn_inverse_reward, pretrain_with_reward
+
+                dataset = OfflineDataset(cfg.get("event_store_path"))
+                params, reward_fn = learn_inverse_reward(dataset)
+                pretrain_with_reward(model, dataset, reward_fn)
+                if model_store is not None:
+                    model_store.save_model(params, cfg, {"type": "inverse_reward"})
+                logger.info(
+                    "Completed inverse reward pretraining using recorded experiences"
+                )
+            except Exception:
+                logger.exception("Inverse reward pretraining failed")
         elif cfg.get("offline_pretrain"):
             try:
                 offline_pretrain(model, cfg.get("event_store_path"))
@@ -1163,6 +1177,11 @@ if __name__ == "__main__":
         help="Initialize policy using offline data before online fine-tuning",
     )
     parser.add_argument(
+        "--inverse-reward",
+        action="store_true",
+        help="Pretrain policy using reward learned from expert demonstrations",
+    )
+    parser.add_argument(
         "--world-model",
         action="store_true",
         help="Use a learned world model for model-based pretraining",
@@ -1211,6 +1230,8 @@ if __name__ == "__main__":
         cfg["risk_objective"] = args.risk_objective
     if args.offline_pretrain:
         cfg["offline_pretrain"] = True
+    if args.inverse_reward:
+        cfg["inverse_reward"] = True
     if args.world_model:
         cfg["world_model"] = True
     if args.objectives:
