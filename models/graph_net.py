@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import os
+
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
 import torch
 import torch.nn.functional as F
 

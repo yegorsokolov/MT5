@@ -24,7 +24,7 @@ from .features import (
     make_sequence_arrays,
 )
 from .multitimeframe import aggregate_timeframes
-from .graph_builder import build_correlation_graph
+from .graph_builder import build_correlation_graph, build_rolling_adjacency
 from .fundamental_features import load_fundamentals
 from .options_features import load_options_data
 from .onchain_features import load_onchain_data
@@ -45,6 +45,7 @@ __all__ = [
     "add_news_sentiment_features",
     "aggregate_timeframes",
     "build_correlation_graph",
+    "build_rolling_adjacency",
     "load_fundamentals",
     "load_options_data",
     "load_onchain_data",
