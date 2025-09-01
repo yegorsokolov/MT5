@@ -24,6 +24,7 @@ from analysis.fractal_features import (
 )
 from analysis.dtw_features import compute as dtw_compute
 from analysis.session_features import add_session_features
+from analysis.robust_filters import robust_preprocess
 from utils.resource_monitor import monitor
 from analytics.metrics_store import record_metric
 
@@ -490,6 +491,13 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """
 
     logger.info("Creating features for dataframe with %d rows", len(df))
+
+    # Apply robust preprocessing to clamp extreme anomalies which could
+    # destabilize downstream feature generation. Log any detected anomalies.
+    df, anomalies = robust_preprocess(df)
+    for col, idx in anomalies.items():
+        if idx:
+            logger.info("Removed %d anomalies in %s", len(idx), col)
 
     try:
         from utils import load_config
