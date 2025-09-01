@@ -32,6 +32,12 @@ FEATURE_SCHEMA = pa.DataFrameSchema(
         "dividend_yield": pa.Column(float, required=False, nullable=True),
         "implied_vol": pa.Column(float, required=False, nullable=True),
         "active_addresses": pa.Column(float, required=False, nullable=True),
+        "revenue": pa.Column(float, required=False, nullable=True),
+        "net_income": pa.Column(float, required=False, nullable=True),
+        "gdp": pa.Column(float, required=False, nullable=True),
+        "cpi": pa.Column(float, required=False, nullable=True),
+        "interest_rate": pa.Column(float, required=False, nullable=True),
+        "esg_score": pa.Column(float, required=False, nullable=True),
     },
     coerce=True,
 )

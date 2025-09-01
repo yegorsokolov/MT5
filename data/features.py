@@ -51,25 +51,77 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     tier = getattr(monitor, "capability_tier", "lite")
     if tier in {"standard", "gpu", "hpc"}:
         try:
-            from .fundamental_features import compute as fundamental_compute
+            from .fundamental_loader import load_fundamental_data
 
-            df = fundamental_compute(df)
+            if "Symbol" in df.columns:
+                fundamentals = load_fundamental_data(sorted(df["Symbol"].unique()))
+            else:
+                fundamentals = pd.DataFrame()
+            if not fundamentals.empty and "Symbol" in df.columns:
+                fundamentals = fundamentals.rename(columns={"Date": "fund_date"})
+                df = pd.merge_asof(
+                    df.sort_values("Timestamp"),
+                    fundamentals.sort_values("fund_date"),
+                    left_on="Timestamp",
+                    right_on="fund_date",
+                    by="Symbol",
+                    direction="backward",
+                ).drop(columns=["fund_date"])
+            for col in [
+                "revenue",
+                "net_income",
+                "pe_ratio",
+                "dividend_yield",
+                "gdp",
+                "cpi",
+                "interest_rate",
+            ]:
+                if col not in df.columns:
+                    df[col] = 0.0
+                else:
+                    df[col] = df[col].ffill().fillna(0.0)
         except Exception:  # pragma: no cover - optional dependency failures
-            logger.debug("fundamental feature computation failed", exc_info=True)
+            logger.debug("fundamental data merge failed", exc_info=True)
+            for col in [
+                "revenue",
+                "net_income",
+                "pe_ratio",
+                "dividend_yield",
+                "gdp",
+                "cpi",
+                "interest_rate",
+            ]:
+                if col not in df.columns:
+                    df[col] = 0.0
 
     if tier in {"gpu", "hpc"}:
         try:
-            from .options_features import compute as options_compute
+            from .alt_data_loader import load_alt_data
 
-            df = options_compute(df)
+            if "Symbol" in df.columns:
+                alt = load_alt_data(sorted(df["Symbol"].unique()))
+            else:
+                alt = pd.DataFrame()
+            if not alt.empty and "Symbol" in df.columns:
+                alt = alt.rename(columns={"Date": "alt_date"})
+                df = pd.merge_asof(
+                    df.sort_values("Timestamp"),
+                    alt.sort_values("alt_date"),
+                    left_on="Timestamp",
+                    right_on="alt_date",
+                    by="Symbol",
+                    direction="backward",
+                ).drop(columns=["alt_date"])
+            for col in ["implied_vol", "active_addresses", "esg_score"]:
+                if col not in df.columns:
+                    df[col] = 0.0
+                else:
+                    df[col] = df[col].ffill().fillna(0.0)
         except Exception:
-            logger.debug("options feature computation failed", exc_info=True)
-        try:
-            from .onchain_features import compute as onchain_compute
-
-            df = onchain_compute(df)
-        except Exception:
-            logger.debug("on-chain feature computation failed", exc_info=True)
+            logger.debug("alternative data merge failed", exc_info=True)
+            for col in ["implied_vol", "active_addresses", "esg_score"]:
+                if col not in df.columns:
+                    df[col] = 0.0
 
     if validate:
         try:
