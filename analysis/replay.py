@@ -36,17 +36,45 @@ STRATEGY_REPLAY_DIR = (
 STRATEGY_REPLAY_DIR.mkdir(parents=True, exist_ok=True)
 
 
+
 def _risk_metrics(returns: Iterable[float]) -> Dict[str, float]:
-    """Compute simple risk metrics for a return series."""
+    """Compute risk metrics for a return series.
+
+    Parameters
+    ----------
+    returns:
+        Iterable of periodic returns or PnL values.
+
+    Returns
+    -------
+    dict
+        Dictionary containing PnL, Sharpe ratio, max drawdown and a simple
+        tail-risk proxy (CVaR at 5%).
+    """
+
     arr = pd.Series(list(returns), dtype=float)
     if arr.empty:
-        return {"pnl": 0.0, "sharpe": 0.0, "drawdown": 0.0}
+        return {
+            "pnl": 0.0,
+            "sharpe": 0.0,
+            "drawdown": 0.0,
+            "cvar": 0.0,
+        }
     mean = float(arr.mean())
     std = float(arr.std(ddof=0))
     sharpe = mean / (std + 1e-9)
     cumulative = (1 + arr).cumprod()
     drawdown = float((cumulative.cummax() - cumulative).max())
-    return {"pnl": float(arr.sum()), "sharpe": sharpe, "drawdown": drawdown}
+    # 5% CVaR (expected shortfall)
+    var_threshold = arr.quantile(0.05)
+    tail = arr[arr <= var_threshold]
+    cvar = -float(tail.mean()) if not tail.empty else 0.0
+    return {
+        "pnl": float(arr.sum()),
+        "sharpe": sharpe,
+        "drawdown": drawdown,
+        "cvar": cvar,
+    }
 
 
 def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
@@ -173,6 +201,8 @@ def reprocess(out_dir: Path | None = None) -> pd.DataFrame:
         return pd.DataFrame()
     trades = pd.read_csv(trade_path, parse_dates=["timestamp"])
     out_dir = Path(out_dir) if out_dir else REPLAY_DIR
+    risk_dir = out_dir.parent / "replay_risk"
+    risk_dir.mkdir(parents=True, exist_ok=True)
     adj = []
     for row in trades.itertuples():
         impact, _ = impact_model.get_impact(row.symbol, row.timestamp)
@@ -192,7 +222,11 @@ def reprocess(out_dir: Path | None = None) -> pd.DataFrame:
 
     old_metrics = _risk_metrics(comp["pnl_old"])
     new_metrics = _risk_metrics(comp["pnl_new"])
+
     sharpe_delta = new_metrics["sharpe"] - old_metrics["sharpe"]
+    drawdown_delta = new_metrics["drawdown"] - old_metrics["drawdown"]
+    cvar_delta = new_metrics["cvar"] - old_metrics["cvar"]
+
     pd.DataFrame(
         [
             {
@@ -210,6 +244,12 @@ def reprocess(out_dir: Path | None = None) -> pd.DataFrame:
             "sharpe_old": [old_metrics["sharpe"]],
             "sharpe_new": [new_metrics["sharpe"]],
             "sharpe_delta": [sharpe_delta],
+            "drawdown_old": [old_metrics["drawdown"]],
+            "drawdown_new": [new_metrics["drawdown"]],
+            "drawdown_delta": [drawdown_delta],
+            "cvar_old": [old_metrics["cvar"]],
+            "cvar_new": [new_metrics["cvar"]],
+            "cvar_delta": [cvar_delta],
         }
     )
     summary_path = out_dir / "pnl_summary.parquet"
@@ -217,6 +257,21 @@ def reprocess(out_dir: Path | None = None) -> pd.DataFrame:
         summary.to_parquet(summary_path, index=False)
     except Exception:
         summary.to_csv(out_dir / "pnl_summary.csv", index=False)
+
+    # side-by-side risk comparison output
+    risk_comp = pd.DataFrame(
+        [
+            {"metric": "pnl", "original": summary["pnl_old"].iloc[0], "replay": summary["pnl_new"].iloc[0], "delta": summary["pnl_new"].iloc[0] - summary["pnl_old"].iloc[0]},
+            {"metric": "sharpe", "original": old_metrics["sharpe"], "replay": new_metrics["sharpe"], "delta": sharpe_delta},
+            {"metric": "drawdown", "original": old_metrics["drawdown"], "replay": new_metrics["drawdown"], "delta": drawdown_delta},
+            {"metric": "cvar", "original": old_metrics["cvar"], "replay": new_metrics["cvar"], "delta": cvar_delta},
+        ]
+    )
+    try:
+        risk_comp.to_parquet(risk_dir / "risk_comparison.parquet", index=False)
+    except Exception:
+        risk_comp.to_csv(risk_dir / "risk_comparison.csv", index=False)
+
     try:
         record_metric("replay_pnl_old", summary["pnl_old"].iloc[0])
         record_metric("replay_pnl_new", summary["pnl_new"].iloc[0])
