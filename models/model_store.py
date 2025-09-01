@@ -9,6 +9,23 @@ from typing import Any, Dict, List, Tuple
 import shutil
 import joblib
 
+# Extra metadata helpers ------------------------------------------------------
+def _save_metadata(name: str, data: Dict, store_dir: Path | None = None) -> str:
+    """Persist a small JSON blob under the model store.
+
+    This is used for recording auxiliary information such as replay statistics
+    or tuned hyper-parameters.  The function creates a unique file name to avoid
+    collisions and returns the resulting identifier which mirrors the behaviour
+    of :func:`save_model`.
+    """
+
+    store = _ensure_store(store_dir)
+    version_id = datetime.utcnow().strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    path = store / f"{name}_{version_id}.json"
+    with open(path, "w") as fh:
+        json.dump(data, fh)
+    return path.name
+
 STORE_DIR = Path(__file__).resolve().parent / "store"
 
 
@@ -114,3 +131,25 @@ def list_versions(store_dir: Path | None = None) -> List[Dict]:
             data["version_id"] = d.name
             versions.append(data)
     return versions
+
+
+# Convenience wrappers --------------------------------------------------------
+def save_replay_stats(stats: Dict, store_dir: Path | None = None) -> str:
+    """Persist replay statistics for later analysis."""
+
+    return _save_metadata("replay", stats, store_dir)
+
+
+def save_tuned_params(params: Dict, store_dir: Path | None = None) -> str:
+    """Persist tuned hyper-parameters."""
+
+    return _save_metadata("tuned", params, store_dir)
+
+
+__all__ = [
+    "save_model",
+    "load_model",
+    "list_versions",
+    "save_replay_stats",
+    "save_tuned_params",
+]
