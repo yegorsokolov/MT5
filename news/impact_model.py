@@ -9,6 +9,7 @@ from sklearn.ensemble import GradientBoostingRegressor
 import joblib
 import numpy as np
 from models import LazyModel
+from . import vector_store
 
 # Paths for persisted artefacts.  ``NEWS_IMPACT_PATH`` allows tests or
 # callers to override the default location of the impact scores file.
@@ -48,11 +49,33 @@ def _model_loader(path: Path | str) -> GradientBoostingRegressor:
 _MODEL = LazyModel(loader=_model_loader)
 
 
+def _similarity_scores(texts: pd.Series, k: int = 5) -> pd.Series:
+    """Return average similarity of each text to the existing vector store."""
+
+    def score(t: str) -> float:
+        sims = [s for _, s in vector_store.similar_events(t, k)] if t else []
+        return float(np.mean(sims)) if sims else 0.0
+
+    return texts.fillna("").apply(score)
+
+
 def train(events: pd.DataFrame, target: pd.Series) -> GradientBoostingRegressor:
     """Train the impact model and persist per-event scores."""
 
     global _df_cache, _residual_std
-    features = events[["surprise", "sentiment", "historical_response"]]
+    text_col = (
+        events["event"]
+        if "event" in events.columns
+        else events.get("text", pd.Series([""] * len(events)))
+    )
+    features = pd.DataFrame(
+        {
+            "surprise": events["surprise"],
+            "sentiment": events["sentiment"],
+            "historical_response": events["historical_response"],
+            "similarity": _similarity_scores(text_col),
+        }
+    )
     model = GradientBoostingRegressor()
     model.fit(features, target)
     preds = model.predict(features)
@@ -74,8 +97,21 @@ def train(events: pd.DataFrame, target: pd.Series) -> GradientBoostingRegressor:
 
 def score(events: pd.DataFrame) -> pd.DataFrame:
     """Return impact predictions for ``events``."""
+
     model = _MODEL.load()
-    feats = events[["surprise", "sentiment", "historical_response"]]
+    text_col = (
+        events["event"]
+        if "event" in events.columns
+        else events.get("text", pd.Series([""] * len(events)))
+    )
+    feats = pd.DataFrame(
+        {
+            "surprise": events["surprise"],
+            "sentiment": events["sentiment"],
+            "historical_response": events["historical_response"],
+            "similarity": _similarity_scores(text_col),
+        }
+    )
     impact = model.predict(feats)
     return pd.DataFrame(
         {
