@@ -314,6 +314,10 @@ def start_scheduler() -> None:
         jobs.append(("regime_performance", update_regime_performance))
     if s_cfg.get("news_vector_store", True):
         jobs.append(("news_vector_store", rebuild_news_vectors))
+    if s_cfg.get("factor_update", True):
+        from analysis.factor_updater import update_factors
+
+        jobs.append(("factor_update", update_factors))
     if jobs:
         _schedule_jobs(jobs)
     _started = True
