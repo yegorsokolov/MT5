@@ -1,202 +1,195 @@
-"""Plugin registration and loading helpers.
+"""Lazy plugin registration and loading utilities.
 
-This module imports a number of built-in plugins for their side effects. Any
-errors during import should not fail the entire application, so we log them
-and continue.
+Plugins are represented by :class:`PluginSpec` instances which contain
+resource requirements and a :py:meth:`load` method.  Importing the
+``plugins`` package only registers these specs; plugin modules are only
+imported when their ``load`` method is invoked.  This avoids importing
+heavy optional dependencies on machines that cannot support them.
 """
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import logging
-import sys
+import re
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional
-import inspect
+from pathlib import Path
+from typing import Any, Callable, List
 
-from log_utils import setup_logging
-from utils.resource_monitor import monitor
+try:  # pragma: no cover - optional during tests
+    from log_utils import setup_logging
+except Exception:  # pragma: no cover - fallback if heavy deps missing
+    def setup_logging() -> logging.Logger:  # type: ignore
+        logging.basicConfig(level=logging.INFO)
+        return logging.getLogger()
 
-# Configure root logging so warnings are visible to the global logger.
+# Import ``resource_monitor`` without importing the entire ``utils`` package
+# which pulls in many optional dependencies.  This mirrors the approach used in
+# ``model_registry`` and keeps tests lightweight.
+import importlib.util
+_spec = importlib.util.spec_from_file_location(
+    "resource_monitor", Path(__file__).resolve().parents[0].parent / "utils" / "resource_monitor.py"
+)
+_rm = importlib.util.module_from_spec(_spec)
+assert _spec and _spec.loader
+_spec.loader.exec_module(_rm)  # type: ignore
+monitor = _rm.monitor
+
 setup_logging()
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Dataclasses and registries
+# ---------------------------------------------------------------------------
+
 @dataclass
 class PluginSpec:
-    """Metadata about a registered plugin.
+    """Description of a plugin module.
 
-    The ``plugin`` attribute stores the actual callable or object that
-    implements the plugin. ``PluginSpec`` implements ``__call__`` so existing
-    code that expects a callable continues to work transparently.
+    The ``loader`` callback imports the plugin module.  ``load`` first checks
+    the current system capabilities exposed by :mod:`utils.resource_monitor`.
+    If requirements are not met the plugin is skipped and a message is logged.
     """
 
     name: str
-    plugin: Callable[..., Any]
+    loader: Callable[[], Any]
     min_cpus: int = 0
     min_mem_gb: float = 0.0
     requires_gpu: bool = False
     tier: str = "lite"
+    _loaded: bool = False
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - thin wrapper
-        return self.plugin(*args, **kwargs)
+    def _meets_requirements(self) -> bool:
+        caps = monitor.capabilities
+        if caps.cpus < self.min_cpus:
+            self._skip_reason = f"requires >= {self.min_cpus} CPUs"
+            return False
+        if caps.memory_gb < self.min_mem_gb:
+            self._skip_reason = f"requires >= {self.min_mem_gb}GB RAM"
+            return False
+        if self.requires_gpu and not caps.has_gpu:
+            self._skip_reason = "requires GPU"
+            return False
+        return True
 
+    def load(self) -> Any | None:
+        """Import the plugin module if resources permit.
 
-FEATURE_PLUGINS: List[PluginSpec] = []
-MODEL_PLUGINS: List[PluginSpec] = []
-RISK_CHECKS: List[PluginSpec] = []
+        Returns the imported module or ``None`` if the requirements are not
+        satisfied.
+        """
 
-TIERS = {"lite": 0, "standard": 1, "gpu": 2, "full": 2, "hpc": 3}
-
-
-def _meets_requirements(spec: PluginSpec) -> bool:
-    caps = monitor.capabilities
-    if TIERS.get(monitor.capability_tier, 0) < TIERS.get(spec.tier, 0):
-        return False
-    if caps.cpus < spec.min_cpus:
-        return False
-    if caps.memory_gb < spec.min_mem_gb:
-        return False
-    if spec.requires_gpu and not caps.has_gpu:
-        return False
-    return True
-
-
-def _build_spec(
-    func: Callable[..., Any], *, name: Optional[str] = None, tier: str = "lite"
-) -> PluginSpec:
-    module = inspect.getmodule(func)
-    min_cpus = getattr(module, "MIN_CPUS", 0)
-    min_mem_gb = getattr(module, "MIN_MEM_GB", 0.0)
-    requires_gpu = getattr(module, "REQUIRES_GPU", False)
-    return PluginSpec(
-        name=name or getattr(func, "__name__", str(func)),
-        plugin=func,
-        min_cpus=min_cpus,
-        min_mem_gb=min_mem_gb,
-        requires_gpu=requires_gpu,
-        tier=tier,
-    )
+        if self._loaded:
+            return self.loader()
+        if not self._meets_requirements():
+            logger.info("Skipping plugin %s: %s", self.name, self._skip_reason)
+            return None
+        module = self.loader()
+        self._loaded = True
+        return module
 
 
-def _register_plugin(spec: PluginSpec, registry: List[PluginSpec]) -> None:
-    if not _meets_requirements(spec):
-        logger.info("Skipping %s plugin %s due to insufficient resources", spec.tier, spec.name)
-        return
-    for i, existing in enumerate(registry):
-        if existing.name == spec.name:
-            if TIERS.get(spec.tier, 0) >= TIERS.get(existing.tier, 0):
-                registry[i] = spec
-            return
-    registry.append(spec)
+# Actual feature/model/risk callables registered by plugin modules once
+# loaded.  These lists remain empty until their corresponding modules are
+# imported via :py:meth:`PluginSpec.load`.
+FEATURE_PLUGINS: List[Callable[..., Any]] = []
+MODEL_PLUGINS: List[Callable[..., Any]] = []
+RISK_CHECKS: List[Callable[..., Any]] = []
 
 
-def register_feature(
-    func: Optional[Callable[..., Any]] = None,
-    *,
-    tier: str = "lite",
-    name: Optional[str] = None,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-        spec = _build_spec(f, name=name, tier=tier)
-        _register_plugin(spec, FEATURE_PLUGINS)
-        return f
-
-    if func is None:
-        return decorator
-    return decorator(func)
+# ---------------------------------------------------------------------------
+# Registration helpers used by plugin modules once they are loaded.
+# ---------------------------------------------------------------------------
 
 
-def register_model(
-    obj: Optional[Callable[..., Any]] = None,
-    *,
-    tier: str = "lite",
-    name: Optional[str] = None,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-        spec = _build_spec(f, name=name, tier=tier)
-        _register_plugin(spec, MODEL_PLUGINS)
-        return f
+def register_feature(func: Callable[..., Any]) -> Callable[..., Any]:
+    FEATURE_PLUGINS.append(func)
+    return func
 
-    if obj is None:
-        return decorator
-    return decorator(obj)
+
+def register_model(func: Callable[..., Any]) -> Callable[..., Any]:
+    MODEL_PLUGINS.append(func)
+    return func
 
 
 def register_risk_check(func: Callable[..., Any]) -> Callable[..., Any]:
-    spec = _build_spec(func)
-    if _meets_requirements(spec):
-        RISK_CHECKS.append(spec)
-    else:  # pragma: no cover - logging only
-        logger.info("Skipping risk plugin %s due to insufficient resources", spec.name)
+    RISK_CHECKS.append(func)
     return func
 
+
+# ---------------------------------------------------------------------------
+# Build ``PluginSpec`` objects for all bundled plugins.  Requirements are
+# extracted by statically parsing the plugin source files so modules are not
+# imported prematurely.
+# ---------------------------------------------------------------------------
+
 PLUGIN_MODULES = [
-    'atr',
-    'donchian',
-    'keltner',
-    'spread',
-    'slippage',
-    'regime_plugin',
-    'finbert_sentiment',
-    'fingpt_sentiment',
-    'multilang_sentiment',
-    'anomaly',
-    'qlib_features',
-    'tsfresh_features',
-    'fred_features',
-    'autoencoder_features',
-    'deep_regime',
-    'pair_trading',
-    'rl_risk',
-    'graph_features',
+    "atr",
+    "donchian",
+    "keltner",
+    "spread",
+    "slippage",
+    "regime_plugin",
+    "finbert_sentiment",
+    "fingpt_sentiment",
+    "multilang_sentiment",
+    "anomaly",
+    "qlib_features",
+    "tsfresh_features",
+    "fred_features",
+    "autoencoder_features",
+    "deep_regime",
+    "pair_trading",
+    "rl_risk",
+    "graph_features",
+    "gpu_feature",  # test helper requiring a GPU
 ]
 
 
-def _import_plugins(reload: bool = False) -> None:
-    for _mod in PLUGIN_MODULES:
-        try:
-            name = f"{__name__}.{_mod}"
-            if reload and name in sys.modules:
-                importlib.reload(sys.modules[name])
-            else:
-                __import__(name)
-        except Exception:  # pragma: no cover - defensive
-            logger.warning("Failed to load plugin '%s'", _mod, exc_info=True)
+_req_re = {
+    "cpus": re.compile(r"MIN_CPUS\s*=\s*([0-9]+)", re.MULTILINE),
+    "mem": re.compile(r"MIN_MEM_GB\s*=\s*([0-9]+(?:\.[0-9]+)?)", re.MULTILINE),
+    "gpu": re.compile(r"REQUIRES_GPU\s*=\s*(True|False)", re.MULTILINE),
+}
 
 
-def _setup_watcher() -> None:
-    async def _watch() -> None:
-        q = monitor.subscribe()
-        current = monitor.capability_tier
-        while True:
-            tier = await q.get()
-            if TIERS.get(tier, 0) > TIERS.get(current, 0):
-                logger.info("Capability tier upgraded to %s; reloading plugins", tier)
-                FEATURE_PLUGINS.clear()
-                MODEL_PLUGINS.clear()
-                RISK_CHECKS.clear()
-                _import_plugins(reload=True)
-                current = tier
-
-    monitor.start()
+def _extract_requirements(mod: str) -> tuple[int, float, bool]:
+    path = Path(__file__).with_name(f"{mod}.py")
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-    loop.create_task(_watch())
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:  # pragma: no cover - defensive
+        return 0, 0.0, False
+    cpus = int(_req_re["cpus"].search(text).group(1)) if _req_re["cpus"].search(text) else 0
+    mem = float(_req_re["mem"].search(text).group(1)) if _req_re["mem"].search(text) else 0.0
+    gpu = _req_re["gpu"].search(text)
+    requires_gpu = gpu.group(1) == "True" if gpu else False
+    return cpus, mem, requires_gpu
 
 
-# Import built-in plugins so registration side effects occur
-_import_plugins()
-_setup_watcher()
+PLUGIN_SPECS: List[PluginSpec] = []
+for _mod in PLUGIN_MODULES:
+    min_cpus, min_mem, req_gpu = _extract_requirements(_mod)
+
+    def _loader(mod=_mod):
+        return importlib.import_module(f"{__name__}.{mod}")
+
+    PLUGIN_SPECS.append(
+        PluginSpec(
+            name=_mod,
+            loader=_loader,
+            min_cpus=min_cpus,
+            min_mem_gb=min_mem,
+            requires_gpu=req_gpu,
+        )
+    )
 
 
 __all__ = [
     "FEATURE_PLUGINS",
     "MODEL_PLUGINS",
     "RISK_CHECKS",
+    "PLUGIN_SPECS",
     "register_feature",
     "register_model",
     "register_risk_check",
