@@ -23,6 +23,8 @@ from data.features import (
     make_sequence_arrays,
 )
 
+FEATURE_PLUGINS: list = []
+
 __all__ = [
     "get_events",
     "load_history_from_urls",
