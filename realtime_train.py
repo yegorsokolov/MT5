@@ -49,6 +49,7 @@ _batch_latency = meter.create_histogram(
     unit="s",
     description="Latency for processing tick batches",
 )
+_empty_batch_count = 0
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -87,6 +88,9 @@ async def _handle_resource_breach(reason: str) -> None:
 
 async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
     """Fetch recent tick data from the active broker asynchronously."""
+    cfg = load_config()
+    max_empty = cfg.get("max_empty_batches", 3)
+    global _empty_batch_count
     with tracer.start_as_current_span("fetch_ticks"):
         for attempt in range(retries):
             broker = conn_mgr.get_active_broker()
@@ -102,7 +106,22 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
                 await asyncio.sleep(1)
                 continue
             if len(ticks) == 0:
+                _empty_batch_count += 1
+                record_metric("fetch_empty_batches", _empty_batch_count, tags={"symbol": symbol})
+                if _empty_batch_count >= max_empty:
+                    logger.error(
+                        "No ticks received for %s after %d empty batches", symbol, _empty_batch_count
+                    )
+                    send_alert(
+                        f"No ticks received for {symbol} after {_empty_batch_count} attempts"
+                    )
+                    RECONNECT_COUNT.inc()
+                    conn_mgr.failover()
+                    _empty_batch_count = 0
+                    await asyncio.sleep(1)
+                    continue
                 return pd.DataFrame()
+            _empty_batch_count = 0
             df = pd.DataFrame(ticks)
             df["Timestamp"] = pd.to_datetime(df["time"], unit="s")
             df.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
