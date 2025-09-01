@@ -15,12 +15,18 @@ import types
 import joblib
 
 from analysis.inference_latency import InferenceLatency
+from analytics.metrics_store import model_cache_hit, model_unload
 
 # ``models.mixture_of_experts`` depends on no heavy libraries but importing the
 # ``models`` package would trigger optional imports like ``torch``. Import the
 # module directly from its file path to keep tests lightweight.
 sys.modules.setdefault(
-    "analytics.metrics_store", types.SimpleNamespace(record_metric=lambda *a, **k: None)
+    "analytics.metrics_store",
+    types.SimpleNamespace(
+        record_metric=lambda *a, **k: None,
+        model_cache_hit=lambda: None,
+        model_unload=lambda: None,
+    ),
 )
 
 _moe_spec = importlib.util.spec_from_file_location(
@@ -161,6 +167,7 @@ class ModelRegistry:
         monitor: ResourceMonitor = monitor,
         auto_refresh: bool = True,
         latency: Optional[InferenceLatency] = None,
+        cfg: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.monitor = monitor
         self.selected: Dict[str, ModelVariant] = {}
@@ -170,9 +177,12 @@ class ModelRegistry:
         self.logger = logging.getLogger(__name__)
         self._models: Dict[str, Any] = {}
         self._finalizers: Dict[str, weakref.finalize] = {}
+        self._last_used: Dict[str, float] = {}
         self._weights: Dict[str, Path] = {}
         self._variant_by_name: Dict[str, ModelVariant] = {}
         self.latency = latency or InferenceLatency()
+        self.cfg = cfg or {}
+        self._cache_ttl = float(self.cfg.get("model_cache_ttl", 0))
         self.breach_checks = 3
         self.recovery_checks = 5
         self._latency_breach: Dict[str, int] = {}
@@ -254,6 +264,8 @@ class ModelRegistry:
             tier = await queue.get()
             if tier != prev:
                 self.logger.info("Capability tier changed to %s; re-evaluating models", tier)
+                if TIERS.get(tier, 0) < TIERS.get(prev, 0):
+                    self._evict_oversized()
             else:
                 # Hardware may have improved within the same tier; still re-check
                 self.logger.info("Resource capabilities refreshed; re-evaluating models")
@@ -272,6 +284,7 @@ class ModelRegistry:
     def refresh(self) -> None:
         """Manually re-run model selection using current capabilities."""
         with tracer.start_as_current_span("refresh_models"):
+            self._evict_oversized()
             self._pick_models()
             self._purge_unused()
 
@@ -316,17 +329,34 @@ class ModelRegistry:
             model = joblib.load(path)
             self._models[name] = model
             self._finalizers[name] = weakref.finalize(model, self._models.pop, name, None)
+        else:
+            model_cache_hit()
+        self._last_used[name] = time.time()
         return model
 
     def _purge_unused(self) -> None:
         active = {self.get(task) for task in self.selected}
+        now = time.time()
         for name in list(self._models):
-            if name not in active:
-                fin = self._finalizers.pop(name, None)
-                if fin is not None:
-                    fin()
-                self._models.pop(name, None)
+            ttl_expired = self._cache_ttl and now - self._last_used.get(name, now) > self._cache_ttl
+            if name not in active or ttl_expired:
+                self._unload_model(name)
         gc.collect()
+
+    def _unload_model(self, name: str) -> None:
+        fin = self._finalizers.pop(name, None)
+        if fin is not None:
+            fin()
+        self._models.pop(name, None)
+        self._last_used.pop(name, None)
+        model_unload()
+
+    def _evict_oversized(self) -> None:
+        caps = self.monitor.capabilities
+        for name in list(self._models):
+            variant = self._variant_by_name.get(name)
+            if variant and not variant.is_supported(caps):
+                self._unload_model(name)
 
     def _check_latency(self, task: str, model_name: str) -> None:
         tier = self.monitor.capability_tier

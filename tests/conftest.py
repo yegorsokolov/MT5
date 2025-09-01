@@ -31,6 +31,8 @@ sys.modules.setdefault("prometheus_client", prom_mod)
 
 metrics_mod = types.ModuleType("analytics.metrics_store")
 metrics_mod.record_metric = lambda *a, **k: None
+metrics_mod.model_cache_hit = lambda: None
+metrics_mod.model_unload = lambda: None
 metrics_mod.__spec__ = importlib.machinery.ModuleSpec("analytics.metrics_store", loader=None)
 sys.modules.setdefault("analytics.metrics_store", metrics_mod)
 
@@ -43,13 +45,8 @@ pd_mod.DataFrame = lambda data=None: _DF(data or [])
 pd_mod.__spec__ = importlib.machinery.ModuleSpec("pandas", loader=None)
 sys.modules.setdefault("pandas", pd_mod)
 
-joblib_mod = types.ModuleType("joblib")
-joblib_mod.dump = lambda *a, **k: None
-joblib_mod.load = lambda *a, **k: {}
-joblib_mod.dumps = lambda obj: b""
-joblib_mod.loads = lambda b: {}
-joblib_mod.__spec__ = importlib.machinery.ModuleSpec("joblib", loader=None)
-sys.modules.setdefault("joblib", joblib_mod)
+import joblib as _joblib_real
+sys.modules.setdefault("joblib", _joblib_real)
 
 env_mod = types.ModuleType("utils.environment")
 env_mod.ensure_environment = lambda: None
