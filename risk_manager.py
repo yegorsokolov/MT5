@@ -11,6 +11,7 @@ from scheduler import start_scheduler
 from risk import risk_of_ruin
 from risk.budget_allocator import BudgetAllocator
 from risk.net_exposure import NetExposure
+from risk.currency_exposure import CurrencyExposure
 from analytics.metrics_store import record_metric
 from analytics import decision_logger
 from portfolio.robust_optimizer import RobustOptimizer
@@ -64,6 +65,8 @@ class RiskManager:
         max_long_exposure: float = float("inf"),
         max_short_exposure: float = float("inf"),
         ewma_alpha: float = 0.06,
+        base_currency: str = "USD",
+        instrument_currencies: Dict[str, str] | None = None,
     ) -> None:
         self.max_drawdown = max_drawdown
         self.max_var = max_var
@@ -87,6 +90,9 @@ class RiskManager:
         self.quiet_windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
         self.net_exposure = NetExposure(
             max_long=max_long_exposure, max_short=max_short_exposure
+        )
+        self.currency_exposure = CurrencyExposure(
+            base_currency, instrument_currencies or {}
         )
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
@@ -227,10 +233,12 @@ class RiskManager:
     ) -> None:
         """Record a trade or PnL update from ``bot_id``."""
         if symbol is not None:
+            exposure = self.currency_exposure.convert(symbol, exposure)
             self.net_exposure.update(symbol, exposure)
             totals = self.net_exposure.totals()
             self.metrics.exposure = totals["net"]
         else:
+            exposure = self.currency_exposure.convert(None, exposure)
             self.metrics.exposure += exposure
         self.metrics.daily_loss += pnl
         self._pnl_history.append(pnl)
@@ -328,6 +336,12 @@ class RiskManager:
                 ]
             )
         )
+        net = {
+            s: self.net_exposure.long.get(s, 0.0)
+            - self.net_exposure.short.get(s, 0.0)
+            for s in set(self.net_exposure.long) | set(self.net_exposure.short)
+        }
+        self.currency_exposure.snapshot(net)
 
     async def monitor(self, queue: "asyncio.Queue[tuple[str, float, float]]") -> None:
         """Consume trade/PnL events from ``queue`` and update metrics."""
