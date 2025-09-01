@@ -198,6 +198,17 @@ def make_sequence_arrays(
     return X, y
 
 
+def apply_evolved_features(
+    df: pd.DataFrame, store_dir: str | Path | None = None
+) -> pd.DataFrame:
+    """Apply evolved features stored in ``feature_store`` to ``df``."""
+
+    from analysis.feature_evolver import FeatureEvolver
+
+    evolver = FeatureEvolver(store_dir=store_dir)
+    return evolver.apply_stored_features(df)
+
+
 __all__ = [
     "add_index_features",
     "add_economic_calendar_features",
@@ -209,4 +220,7 @@ __all__ = [
     "ma_cross_signal",
     "train_test_split",
     "make_sequence_arrays",
+    "apply_evolved_features",
 ]
+
+# Evolved features will be appended below by ``FeatureEvolver``.
