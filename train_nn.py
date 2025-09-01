@@ -1075,7 +1075,7 @@ if __name__ == "__main__":
     if args.fine_tune:
         cfg["fine_tune"] = True
     if args.tune:
-        from tuning.hyperopt import tune_transformer
+        from tuning.distributed_search import tune_transformer
 
         tune_transformer(cfg)
     else:
