@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING, Dict, List, Tuple
 import numpy as np
 from sklearn.decomposition import PCA
 
+try:  # optional numba for heavy loops
+    from numba import njit
+except Exception:  # pragma: no cover - numba optional
+    njit = None
+
 from utils.data_backend import get_dataframe_module
 from analysis.garch_vol import garch_volatility as _cpu_garch_volatility
 from analysis.kalman_filter import kalman_smooth
@@ -421,6 +426,49 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+if njit is not None:
+
+    @njit
+    def _rolling_corr_nb(values: np.ndarray, window: int) -> np.ndarray:
+        T, N = values.shape
+        out = np.full((T, N, N), np.nan)
+        cumsum = np.empty((T, N))
+        cumsum2 = np.empty((T, N))
+        cross = np.empty((T, N, N))
+        cumsum[0] = values[0]
+        cumsum2[0] = values[0] * values[0]
+        cross[0] = np.outer(values[0], values[0])
+        for t in range(1, T):
+            v = values[t]
+            cumsum[t] = cumsum[t - 1] + v
+            cumsum2[t] = cumsum2[t - 1] + v * v
+            cross[t] = cross[t - 1] + np.outer(v, v)
+        zero_vec = np.zeros(N)
+        zero_mat = np.zeros((N, N))
+        for t in range(window - 1, T):
+            start = t - window + 1
+            sum_x = cumsum[t] - (cumsum[start - 1] if start > 0 else zero_vec)
+            sum_x2 = cumsum2[t] - (cumsum2[start - 1] if start > 0 else zero_vec)
+            sum_xy = cross[t] - (cross[start - 1] if start > 0 else zero_mat)
+            cov = (sum_xy - np.outer(sum_x, sum_x) / window) / (window - 1)
+            var = (sum_x2 - (sum_x ** 2) / window) / (window - 1)
+            std = np.sqrt(var)
+            out[t] = cov / (std[:, None] * std[None, :])
+        return out
+
+else:
+
+    def _rolling_corr_nb(values: np.ndarray, window: int) -> np.ndarray:
+        T, N = values.shape
+        out = np.full((T, N, N), np.nan)
+        for t in range(window - 1, T):
+            window_vals = values[t - window + 1 : t + 1]
+            cov = np.cov(window_vals, rowvar=False)
+            std = np.sqrt(np.diag(cov))
+            out[t] = cov / (std[:, None] * std[None, :])
+        return out
+
+
 def add_cross_asset_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute cross-asset statistics between symbol pairs.
 
@@ -443,36 +491,47 @@ def add_cross_asset_features(df: pd.DataFrame) -> pd.DataFrame:
     pivot_mid = df.pivot_table(index="Timestamp", columns="Symbol", values="mid")
     pivot_ret = df.pivot_table(index="Timestamp", columns="Symbol", values="return")
 
-    feat: Dict[str, pd.Series] = {}
     symbols = list(pivot_mid.columns)
-    for i, s1 in enumerate(symbols):
-        for s2 in symbols[i + 1 :]:
-            # Rolling correlation of returns
-            corr = pivot_ret[s1].rolling(30).corr(pivot_ret[s2])
-            feat[f"{s1}_{s2}_corr_30"] = corr
-
-            # Spread between mid prices
-            spread = pivot_mid[s1] - pivot_mid[s2]
-            feat[f"{s1}_{s2}_spread"] = spread
-
-            # Cointegration p-value (constant across time)
-            try:
-                from statsmodels.tsa.stattools import coint  # type: ignore
-
-                aligned = pivot_mid[[s1, s2]].dropna()
-                if len(aligned) > 30:
-                    _, pval, _ = coint(aligned[s1], aligned[s2])
-                else:
-                    pval = np.nan
-            except Exception:  # pragma: no cover - optional dependency
-                pval = np.nan
-            feat[f"{s1}_{s2}_coint_p"] = pd.Series(pval, index=pivot_mid.index)
-
-    if not feat:
+    n = len(symbols)
+    if n < 2:
         return df
 
-    feat_df = pd.DataFrame(feat, index=pivot_mid.index).reset_index()
-    df = df.merge(feat_df, on="Timestamp", how="left")
+    # Upper triangle indices for all unique symbol pairs
+    i_idx, j_idx = np.triu_indices(n, k=1)
+
+    # Vectorized spreads using broadcasting
+    mid_vals = pivot_mid.values
+    spreads = mid_vals[:, i_idx] - mid_vals[:, j_idx]
+    spread_cols = [f"{symbols[i]}_{symbols[j]}_spread" for i, j in zip(i_idx, j_idx)]
+
+    # Vectorized rolling correlations
+    ret_vals = pivot_ret.values.astype(float)
+    corr_matrix = _rolling_corr_nb(ret_vals, 30)
+    corr_pairs = corr_matrix[:, i_idx, j_idx]
+    corr_cols = [f"{symbols[i]}_{symbols[j]}_corr_30" for i, j in zip(i_idx, j_idx)]
+
+    feat_df = pd.DataFrame(
+        np.column_stack([spreads, corr_pairs]),
+        index=pivot_mid.index,
+        columns=spread_cols + corr_cols,
+    )
+
+    # Cointegration p-value (constant across time) - requires per-pair loop
+    for i, j in zip(i_idx, j_idx):
+        s1, s2 = symbols[i], symbols[j]
+        try:  # pragma: no cover - optional dependency
+            from statsmodels.tsa.stattools import coint  # type: ignore
+
+            aligned = pivot_mid[[s1, s2]].dropna()
+            if len(aligned) > 30:
+                _, pval, _ = coint(aligned[s1], aligned[s2])
+            else:
+                pval = np.nan
+        except Exception:  # pragma: no cover - optional dependency
+            pval = np.nan
+        feat_df[f"{s1}_{s2}_coint_p"] = pval
+
+    df = df.merge(feat_df.reset_index(), on="Timestamp", how="left")
     return df
 
 
