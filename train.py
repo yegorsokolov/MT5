@@ -616,7 +616,7 @@ if __name__ == "__main__":
     ray_init()
     try:
         if args.tune:
-            from tuning.hyperopt import tune_lgbm
+            from tuning.distributed_search import tune_lgbm
 
             cfg = load_config()
             tune_lgbm(cfg)
