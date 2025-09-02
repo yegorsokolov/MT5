@@ -19,6 +19,7 @@ class TradingEnv(gym.Env):
         df: pd.DataFrame,
         features: List[str],
         macro_features: List[str] | None = None,
+        news_window: int = 0,
         max_position: float = 1.0,
         transaction_cost: float = 0.0001,
         risk_penalty: float = 0.1,
@@ -39,6 +40,24 @@ class TradingEnv(gym.Env):
         wide = df.set_index(["Timestamp", "Symbol"])[features + ["mid"]].unstack("Symbol")
         wide.columns = [f"{sym}_{feat}" for feat, sym in wide.columns]
         wide = wide.dropna()
+
+        self.news_window = news_window
+        self.news_feature_cols: list[str] = []
+        if news_window > 0:
+            try:
+                news_wide = (
+                    df.set_index(["Timestamp", "Symbol"])["news_movement_score"]
+                    .unstack("Symbol")
+                    .reindex(wide.index)
+                    .fillna(0.0)
+                )
+            except KeyError:
+                news_wide = pd.DataFrame(0.0, index=wide.index, columns=self.symbols)
+            for sym in self.symbols:
+                for k in range(news_window):
+                    col = f"{sym}_news_{k}"
+                    wide[col] = news_wide[sym].shift(k).fillna(0.0).values
+                    self.news_feature_cols.append(col)
 
         macro_features = macro_features or []
         self.features = features
@@ -73,6 +92,7 @@ class TradingEnv(gym.Env):
         for feat in features:
             self.feature_cols.extend([f"{sym}_{feat}" for sym in self.symbols])
         self.feature_cols.extend(macro_features)
+        self.feature_cols.extend(self.news_feature_cols)
         self.spread_cols = []
         self.market_impact_cols: list[str | None] = []
         for sym in self.symbols:
