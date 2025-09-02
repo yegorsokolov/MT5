@@ -10,10 +10,10 @@ import numpy as np
 import pandas as pd
 
 from brokers import connection_manager as conn_mgr
-import MetaTrader5 as mt5  # type: ignore
+from brokers import mt5_direct
 
 from utils import load_config
-from execution import ExecutionEngine
+from execution import ExecutionEngine, place_order
 from utils.resource_monitor import monitor
 try:
     from utils.alerting import send_alert
@@ -55,7 +55,7 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 # initialize connection manager with primary MetaTrader5 broker
-conn_mgr.init([mt5])
+conn_mgr.init([mt5_direct])
 exec_engine = ExecutionEngine()
 
 try:  # pragma: no cover - orchestrator may be stubbed in tests
@@ -208,6 +208,9 @@ async def dispatch_signals(queue, df: pd.DataFrame) -> None:
                 mid=mid,
                 strategy=strategy,
             )
+            symbol = getattr(row, "Symbol", getattr(row, "symbol", None))
+            if symbol:
+                place_order(symbol=symbol, side=side, volume=size)
 
 
 async def tick_producer(
@@ -292,7 +295,7 @@ async def train_realtime():
 
         symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
-        signal_backend = cfg.get("signal_backend", "zmq")
+        signal_backend = cfg.get("signal_backend", "none")
         queue = None
         if signal_backend in {"kafka", "redis"}:
             queue = get_signal_backend(cfg)

@@ -29,7 +29,6 @@ dependencies = [
     "scikit-optimize",
     "scipy",
     "river",
-    "pyzmq",
     "fastapi",
     "uvicorn",
     "mlflow",
