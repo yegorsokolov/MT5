@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Update package list and install core packages
 sudo apt-get update
-sudo apt-get install -y python3-dev build-essential libzmq3-dev git wine
+sudo apt-get install -y python3-dev build-essential git wine
 
 # Install NVIDIA drivers if a GPU is detected
 if command -v nvidia-smi >/dev/null 2>&1; then

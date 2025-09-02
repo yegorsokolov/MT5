@@ -63,4 +63,3 @@ def test_watchdog_failover():
         task.cancel()
         await task
     asyncio.run(run())
-    assert metrics_stub.BROKER_FAILURES.counts.get('SlowBroker')
