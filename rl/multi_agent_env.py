@@ -30,6 +30,7 @@ class MultiAgentTradingEnv(MultiAgentEnv):
         self,
         df: pd.DataFrame,
         features: List[str],
+        macro_features: List[str] | None = None,
         max_position: float = 1.0,
         transaction_cost: float = 0.0001,
         risk_penalty: float = 0.1,
@@ -39,14 +40,24 @@ class MultiAgentTradingEnv(MultiAgentEnv):
         if "Symbol" not in df.columns:
             raise ValueError("DataFrame must contain a 'Symbol' column")
         self.symbols = sorted(df["Symbol"].unique())
-        wide = (
-            df.set_index(["Timestamp", "Symbol"])[features + ["mid"]].unstack("Symbol")
-        )
+        wide = df.set_index(["Timestamp", "Symbol"])[features + ["mid"]].unstack("Symbol")
         wide.columns = [f"{sym}_{feat}" for feat, sym in wide.columns]
-        wide = wide.dropna().reset_index(drop=True)
+        wide = wide.dropna()
 
-        self.df = wide
+        macro_features = macro_features or []
+        macro_df = pd.DataFrame()
+        if macro_features:
+            macro_df = (
+                df.set_index("Timestamp")[macro_features]
+                .groupby("Timestamp")
+                .first()
+            )
+            if not macro_df.empty:
+                wide = wide.join(macro_df, how="left")
+
+        self.df = wide.reset_index(drop=True)
         self.features = features
+        self.macro_features = macro_features
         self.max_position = max_position
         self.transaction_cost = transaction_cost
         self.risk_penalty = risk_penalty
@@ -54,7 +65,8 @@ class MultiAgentTradingEnv(MultiAgentEnv):
 
         self.price_cols = [f"{sym}_mid" for sym in self.symbols]
         self.feature_cols: Dict[str, List[str]] = {
-            sym: [f"{sym}_{feat}" for feat in features] for sym in self.symbols
+            sym: [f"{sym}_{feat}" for feat in features] + macro_features
+            for sym in self.symbols
         }
         self.n_symbols = len(self.symbols)
         self.agents = list(self.symbols)
@@ -75,7 +87,7 @@ class MultiAgentTradingEnv(MultiAgentEnv):
                 sym: spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(len(features),),
+                    shape=(len(features) + len(macro_features),),
                     dtype=np.float32,
                 )
                 for sym in self.symbols
