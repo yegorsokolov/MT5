@@ -34,13 +34,7 @@ try:  # optional import for hierarchical PPO
 except Exception:  # pragma: no cover - algorithm may not be available
     HierarchicalPPO = None  # type: ignore
 import asyncio
-from signal_queue import (
-    get_async_publisher,
-    publish_dataframe_async,
-    get_signal_backend,
-    get_publisher,
-    request_history,
-)
+from signal_queue import publish_dataframe_async, get_signal_backend
 from models.ensemble import EnsembleModel
 from models import model_store
 
@@ -48,10 +42,6 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-def fetch_history(symbol: str, timeframe: str, start: str, end: str, path: str = "history_request.csv") -> pd.DataFrame:
-    """Helper to request historical rates from the EA."""
-    with get_publisher() as sock:
-        return request_history(sock, symbol, timeframe, start, end, path)
 
 
 def load_models(paths, versions=None):
@@ -546,22 +536,10 @@ def main():
     log_df["prob"] = combined
     log_predictions(log_df)
     fmt = os.getenv("SIGNAL_FORMAT", "protobuf")
-    backend = cfg.get("signal_backend", "zmq").lower()
-
-    if backend == "zmq":
-        async def _publish():
-            async with get_async_publisher() as pub:
-                await publish_dataframe_async(pub, out, fmt=fmt)
-
-        asyncio.run(_publish())
-        logger.info("Signals published via ZeroMQ (%s)", fmt)
-    else:
-        queue = get_signal_backend(cfg)
-        if queue is None:
-            raise ValueError(f"Unknown signal backend: {backend}")
-        queue.publish_dataframe(out, fmt=fmt)
-        queue.close()
-        logger.info("Signals published via %s (%s)", backend, fmt)
+    queue = get_signal_backend(cfg)
+    if queue is not None:
+        asyncio.run(publish_dataframe_async(queue, out, fmt=fmt))
+        logger.info("Signals published")
 
     # Persist runtime state for recovery on next startup
     try:
