@@ -76,7 +76,10 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     external datasets such as fundamentals, options implied volatility and
     on-chain metrics.  These heavier data sources are only loaded when the
     :class:`utils.resource_monitor.ResourceMonitor` reports sufficient
-    capabilities to avoid overwhelming constrained environments.
+    capabilities to avoid overwhelming constrained environments.  The final
+    feature set is then passed through :func:`analysis.feature_gate.select` to
+    drop low-importance or heavy features for the current capability tier and
+    market regime, ensuring consistent behaviour across runs.
     """
 
     for compute in get_feature_pipeline():
