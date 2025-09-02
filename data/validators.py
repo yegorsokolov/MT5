@@ -38,6 +38,9 @@ FEATURE_SCHEMA = pa.DataFrameSchema(
         "cpi": pa.Column(float, required=False, nullable=True),
         "interest_rate": pa.Column(float, required=False, nullable=True),
         "esg_score": pa.Column(float, required=False, nullable=True),
+        "shipping_metric": pa.Column(float, required=False, nullable=True),
+        "retail_sales": pa.Column(float, required=False, nullable=True),
+        "temperature": pa.Column(float, required=False, nullable=True),
     },
     coerce=True,
 )
