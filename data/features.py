@@ -117,9 +117,6 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
                 "net_income",
                 "pe_ratio",
                 "dividend_yield",
-                "gdp",
-                "cpi",
-                "interest_rate",
             ]:
                 if col not in df.columns:
                     df[col] = 0.0
@@ -132,10 +129,16 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
                 "net_income",
                 "pe_ratio",
                 "dividend_yield",
-                "gdp",
-                "cpi",
-                "interest_rate",
             ]:
+                if col not in df.columns:
+                    df[col] = 0.0
+        try:
+            from .macro_features import load_macro_features
+
+            df = load_macro_features(df)
+        except Exception:
+            logger.debug("macro feature merge failed", exc_info=True)
+            for col in ["macro_gdp", "macro_cpi", "macro_interest_rate"]:
                 if col not in df.columns:
                     df[col] = 0.0
     if tier in {"gpu", "hpc"}:
