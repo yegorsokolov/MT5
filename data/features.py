@@ -23,6 +23,50 @@ from utils.resource_monitor import monitor
 logger = logging.getLogger(__name__)
 
 
+def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Merge alternative datasets into ``df``.
+
+    This function loads shipping metrics, retail transactions and
+    weather series (as well as legacy options/on-chain/ESG metrics) using
+    :func:`data.alt_data_loader.load_alt_data` and performs a
+    ``merge_asof`` on ``Timestamp`` and ``Symbol``.  Missing columns are
+    forward filled and remaining gaps replaced with ``0`` so downstream
+    models can rely on their presence.
+    """
+
+    if "Symbol" not in df.columns:
+        return df
+
+    from .alt_data_loader import load_alt_data
+
+    alt = load_alt_data(sorted(df["Symbol"].unique()))
+    if not alt.empty:
+        alt = alt.rename(columns={"Date": "alt_date"})
+        df = pd.merge_asof(
+            df.sort_values("Timestamp"),
+            alt.sort_values("alt_date"),
+            left_on="Timestamp",
+            right_on="alt_date",
+            by="Symbol",
+            direction="backward",
+        ).drop(columns=["alt_date"])
+
+    for col in [
+        "implied_vol",
+        "active_addresses",
+        "esg_score",
+        "shipping_metric",
+        "retail_sales",
+        "temperature",
+    ]:
+        if col not in df.columns:
+            df[col] = 0.0
+        else:
+            df[col] = df[col].ffill().fillna(0.0)
+
+    return df
+
+
 def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """Generate model features by executing registered modules sequentially.
 
@@ -93,33 +137,19 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             ]:
                 if col not in df.columns:
                     df[col] = 0.0
-
     if tier in {"gpu", "hpc"}:
         try:
-            from .alt_data_loader import load_alt_data
-
-            if "Symbol" in df.columns:
-                alt = load_alt_data(sorted(df["Symbol"].unique()))
-            else:
-                alt = pd.DataFrame()
-            if not alt.empty and "Symbol" in df.columns:
-                alt = alt.rename(columns={"Date": "alt_date"})
-                df = pd.merge_asof(
-                    df.sort_values("Timestamp"),
-                    alt.sort_values("alt_date"),
-                    left_on="Timestamp",
-                    right_on="alt_date",
-                    by="Symbol",
-                    direction="backward",
-                ).drop(columns=["alt_date"])
-            for col in ["implied_vol", "active_addresses", "esg_score"]:
-                if col not in df.columns:
-                    df[col] = 0.0
-                else:
-                    df[col] = df[col].ffill().fillna(0.0)
+            df = add_alt_features(df)
         except Exception:
             logger.debug("alternative data merge failed", exc_info=True)
-            for col in ["implied_vol", "active_addresses", "esg_score"]:
+            for col in [
+                "implied_vol",
+                "active_addresses",
+                "esg_score",
+                "shipping_metric",
+                "retail_sales",
+                "temperature",
+            ]:
                 if col not in df.columns:
                     df[col] = 0.0
 
