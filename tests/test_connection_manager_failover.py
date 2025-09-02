@@ -22,10 +22,20 @@ data_pkg.trade_log = types.SimpleNamespace(
         sync_mt5_positions=lambda *a, **k: None,
     )
 )
+data_pkg.feature_scaler = types.SimpleNamespace(
+    FeatureScaler=types.SimpleNamespace(
+        load=lambda *a, **k: types.SimpleNamespace(
+            partial_fit=lambda *a, **k: None,
+            transform=lambda x: x,
+            save=lambda *a, **k: None,
+        )
+    )
+)
 sys.modules['data'] = data_pkg
 sys.modules['data.features'] = data_pkg.features
 sys.modules['data.sanitize'] = data_pkg.sanitize
 sys.modules['data.trade_log'] = data_pkg.trade_log
+sys.modules['data.feature_scaler'] = data_pkg.feature_scaler
 sys.modules['signal_queue'] = types.SimpleNamespace(get_signal_backend=lambda cfg: None)
 sys.modules['metrics'] = types.SimpleNamespace(
     RECONNECT_COUNT=types.SimpleNamespace(inc=lambda: None),
@@ -33,6 +43,8 @@ sys.modules['metrics'] = types.SimpleNamespace(
     TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
     FEATURE_ANOMALIES=types.SimpleNamespace(inc=lambda: None),
     RESOURCE_RESTARTS=types.SimpleNamespace(inc=lambda: None),
+    QUEUE_DEPTH=types.SimpleNamespace(set=lambda v: None),
+    BATCH_LATENCY=types.SimpleNamespace(set=lambda v: None),
     BROKER_LATENCY_MS=types.SimpleNamespace(labels=lambda **k: types.SimpleNamespace(set=lambda v: None)),
     BROKER_FAILURES=types.SimpleNamespace(labels=lambda **k: types.SimpleNamespace(inc=lambda: None)),
     SLIPPAGE_BPS=types.SimpleNamespace(set=lambda v: None),
@@ -43,13 +55,63 @@ sys.modules['prometheus_client'] = types.SimpleNamespace(Counter=lambda *a, **k:
 sys.modules['analysis.anomaly_detector'] = types.SimpleNamespace(
     detect_anomalies=lambda df, quarantine_path=None, counter=None: (df, [])
 )
+analytics_pkg = types.ModuleType('analytics')
+analytics_pkg.metrics_store = types.SimpleNamespace(
+    record_metric=lambda *a, **k: None,
+    TS_PATH=Path('metrics.parquet'),
+)
+sys.modules['analytics'] = analytics_pkg
+sys.modules['analytics.metrics_store'] = analytics_pkg.metrics_store
+
+
+class _DummySpan:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        pass
+
+
+class _DummyTracer:
+    def start_as_current_span(self, name):
+        return _DummySpan()
+
+
+class _DummyCounter:
+    def add(self, value):
+        pass
+
+
+class _DummyHistogram:
+    def record(self, value):
+        pass
+
+
+class _DummyMeter:
+    def create_counter(self, *a, **k):
+        return _DummyCounter()
+
+    def create_histogram(self, *a, **k):
+        return _DummyHistogram()
+
+
+sys.modules['telemetry'] = types.SimpleNamespace(
+    get_tracer=lambda name=None: _DummyTracer(),
+    get_meter=lambda name=None: _DummyMeter(),
+)
 
 # Stub MetaTrader5 so realtime_train imports cleanly
 sys.modules['MetaTrader5'] = types.SimpleNamespace(
     initialize=lambda: True,
     COPY_TICKS_ALL=0,
+    ORDER_TYPE_BUY=0,
+    ORDER_TYPE_SELL=1,
+    TRADE_ACTION_DEAL=0,
+    symbol_select=lambda *a, **k: True,
+    symbol_info_tick=lambda s: types.SimpleNamespace(bid=1.0, ask=1.1),
     copy_ticks_from=lambda *a, **k: [],
-    positions_get=lambda: [],
+    positions_get=lambda **k: [],
+    order_send=lambda *a, **k: True,
 )
 
 from brokers import connection_manager as cm

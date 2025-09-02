@@ -24,7 +24,6 @@ sys.modules.setdefault(
 )
 sys.modules.setdefault("tqdm", types.SimpleNamespace())
 sys.modules.setdefault("river", types.SimpleNamespace())
-sys.modules.setdefault("pyzmq", types.SimpleNamespace())
 sys.modules.setdefault("kafka", types.SimpleNamespace())
 sys.modules.setdefault("redis", types.SimpleNamespace())
 sys.modules.setdefault("uvloop", types.SimpleNamespace())

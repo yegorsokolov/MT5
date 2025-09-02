@@ -11,19 +11,21 @@ The solution is split into two components:
 
 1. **Python toolkit** — handles data preprocessing, feature engineering, machine
    learning and backtesting using the provided CSV history files.
-2. **MQL5 Expert Advisor** — a lightweight EA that loads model signals and
-   executes trades with a dynamic trailing stop while respecting FTMO style risk
-    limits.  Risk controls enforce maximum daily loss and overall drawdown in the
-    EA itself and are configurable via `config.yaml`. Position sizing can
-    automatically adjust based on recent volatility or the realised Sharpe ratio
-    to better match current market conditions. Additional checks compute a
-     99% value-at-risk and a simple stress-loss estimate so trading is paused
-     when tail risk grows beyond the configured thresholds. The latest version
-     also monitors conditional value-at-risk (expected shortfall) and applies a
-     regime-switching volatility model so position sizes adapt when markets
-     transition between calm and turbulent periods. A filtered VaR calculation
-     now uses an exponentially weighted variance controlled by the `var_decay`
-     parameter.
+2. **Python trading backend** — uses the MetaTrader5 Python package directly
+   for order execution. Risk controls such as maximum daily loss and
+   drawdown limits remain configurable via ``config.yaml`` and are enforced
+   before sending orders. Position sizing can automatically adjust based on
+   recent volatility or the realised Sharpe ratio to better match current
+   market conditions. Additional checks compute a 99% value‑at‑risk and a
+   simple stress‑loss estimate so trading is paused when tail risk grows
+   beyond the configured thresholds. The latest version also monitors
+   conditional value‑at‑risk (expected shortfall) and applies a
+   regime‑switching volatility model so position sizes adapt when markets
+   transition between calm and turbulent periods. A filtered VaR calculation
+   now uses an exponentially weighted variance controlled by the
+   ``var_decay`` parameter.
+   Historical ticks can be retrieved directly using
+   ``brokers.mt5_direct.copy_ticks_from`` for fully Python-based backtesting.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
 4. **Auto optimiser** — uses **scikit-optimize** to search signal thresholds,
@@ -527,19 +529,9 @@ the bot will continually adapt to market conditions.
 
 The EA script `AdaptiveEA.mq5` demonstrates how to load predictions
 produced by the Python model and place trades with a context aware trailing
-stop.  `RealtimeEA.mq5` extends this idea by automatically running `git pull`
-on initialisation so the latest model from GitHub is used.
-
-Both experts expose a `ZmqAddress` input allowing you to change the
-subscriber endpoint. By default this is `tcp://localhost:5555` and matches the
-address used by `generate_signals.py`.
-
-Both EAs subscribe to a ZeroMQ topic to receive probability signals from the
-Python models. This decouples the EA from the file system so predictions arrive
-in realtime without relying on `signals.csv` on disk. If the EA misses a
-timestamp it simply uses the next received message.
-The queue implementation now uses asynchronous sockets which further reduces
-latency and eliminates file polling entirely.
+stop. Trading no longer relies on MQL Expert Advisors; signals are transmitted
+directly from Python to MetaTrader5 via the ``mt5_direct`` broker module.
+This removes the external messaging bridge and simplifies deployment.
 
 `generate_signals.py` merges ML probabilities with a moving average
 crossover and RSI filter so trades are only taken when multiple conditions
@@ -699,8 +691,7 @@ cluster's ingress.
 
 Liveness and readiness probes now call `scripts/healthcheck.py` so Kubernetes can
 restart unhealthy pods. Configuration values such as the path to `config.yaml`
-or the ZeroMQ address can be overridden via environment variables defined in the
-deployment manifest.
+can be overridden via environment variables defined in the deployment manifest.
 
 ## Remote Management API
 
