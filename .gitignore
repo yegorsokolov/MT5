@@ -35,6 +35,7 @@ models/*
 !models/exit_survival.py
 !models/news_meta_label.py
 !models/ftrl.py
+!models/feature_autoencoder.py
 __pycache__/
 logs/
 analysis/news_impact.parquet
