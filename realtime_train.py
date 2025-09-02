@@ -34,8 +34,49 @@ from metrics import (
     BATCH_LATENCY,
 )
 
-from telemetry import get_tracer, get_meter
-from analytics.metrics_store import record_metric, TS_PATH
+try:
+    from telemetry import get_tracer, get_meter
+except Exception:  # pragma: no cover - fallback if telemetry not installed
+    def get_tracer(name: str):  # type: ignore
+        class _Span:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class _Tracer:
+            def start_as_current_span(self, *a, **k):
+                return _Span()
+
+        return _Tracer()
+
+    def get_meter(name: str):  # type: ignore
+        class _Counter:
+            def add(self, *a, **k):
+                return None
+
+        class _Histogram:
+            def record(self, *a, **k):
+                return None
+
+        class _Meter:
+            def create_counter(self, *a, **k):
+                return _Counter()
+
+            def create_histogram(self, *a, **k):
+                return _Histogram()
+
+        return _Meter()
+
+try:
+    from analytics.metrics_store import record_metric, TS_PATH
+except Exception:  # pragma: no cover - fallback if analytics not installed
+    TS_PATH = Path(".")
+
+    def record_metric(*a, **k):  # type: ignore
+        return None
+
 from analysis.data_quality import apply_quality_checks
 from analysis.domain_adapter import DomainAdapter
 
@@ -53,10 +94,29 @@ _empty_batch_count = 0
 
 setup_logging()
 logger = logging.getLogger(__name__)
-
-# initialize connection manager with primary MetaTrader5 broker
-conn_mgr.init([mt5_direct])
 exec_engine = ExecutionEngine()
+
+
+def _ensure_conn_mgr() -> None:
+    """Initialise the connection manager if it hasn't been already."""
+    if getattr(conn_mgr, "_manager", None) is None:
+        conn_mgr.init([mt5_direct])
+
+
+def _ensure_data_downloaded(cfg: dict, root: Path) -> None:
+    """Download required datasets for configured symbols if missing."""
+    try:
+        from data.history import load_history_config
+    except Exception:
+        return
+    symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
+    for sym in symbols:
+        pq_path = root / "data" / f"{sym}_history.parquet"
+        if not pq_path.exists():
+            try:
+                load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
+            except Exception as e:
+                logger.warning("Failed to download history for %s: %s", sym, e)
 
 try:  # pragma: no cover - orchestrator may be stubbed in tests
     from core.orchestrator import Orchestrator
@@ -93,6 +153,7 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
     global _empty_batch_count
     with tracer.start_as_current_span("fetch_ticks"):
         for attempt in range(retries):
+            _ensure_conn_mgr()
             broker = conn_mgr.get_active_broker()
             ticks = await asyncio.to_thread(
                 broker.copy_ticks_from, symbol, int(time.time()) - n, n, broker.COPY_TICKS_ALL
@@ -279,6 +340,12 @@ async def tick_worker(
 @log_exceptions
 async def train_realtime():
     cfg = load_config()
+    root = Path(__file__).resolve().parent
+    _ensure_data_downloaded(cfg, root)
+    input("Please log into your MetaTrader 5 terminal and press Enter to continue...")
+    while not mt5_direct.is_terminal_logged_in():
+        input("MetaTrader 5 terminal not logged in. Log in and press Enter to retry...")
+    conn_mgr.init([mt5_direct])
     with tracer.start_as_current_span("train_realtime"):
         if watchdog.max_rss_mb or watchdog.max_cpu_pct:
             watchdog.alert_callback = lambda msg: asyncio.create_task(
@@ -287,7 +354,6 @@ async def train_realtime():
         seed = cfg.get("seed", 42)
         random.seed(seed)
         np.random.seed(seed)
-        root = Path(__file__).resolve().parent
         scaler_path = root / "scaler.pkl"
         scaler = FeatureScaler.load(scaler_path)
         adapter_path = root / "domain_adapter.pkl"
