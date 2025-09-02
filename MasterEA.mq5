@@ -81,6 +81,47 @@ void WriteLog(string event, double val=0.0)
    FileClose(fh);
 }
 
+ENUM_TIMEFRAMES TfFromString(string tf)
+{
+   if(tf=="M1")  return(PERIOD_M1);
+   if(tf=="M5")  return(PERIOD_M5);
+   if(tf=="M15") return(PERIOD_M15);
+   if(tf=="M30") return(PERIOD_M30);
+   if(tf=="H1")  return(PERIOD_H1);
+   if(tf=="H4")  return(PERIOD_H4);
+   if(tf=="D1")  return(PERIOD_D1);
+   if(tf=="W1")  return(PERIOD_W1);
+   if(tf=="MN1") return(PERIOD_MN1);
+   return(PERIOD_CURRENT);
+}
+
+void HandleHistoryRequest(string sym,string tf,string start_s,string end_s,string path)
+{
+   ENUM_TIMEFRAMES timeframe = TfFromString(tf);
+   datetime start = StringToTime(start_s);
+   datetime end   = StringToTime(end_s);
+   if(!HistorySelect(start,end))
+      return;
+   MqlRates rates[];
+   int copied = CopyRates(sym,timeframe,start,end,rates);
+   if(copied<=0)
+      return;
+   if(path=="")
+      path="history_request.csv";
+   int fh = FileOpen(path,FILE_WRITE|FILE_CSV|FILE_TXT|FILE_ANSI);
+   if(fh==INVALID_HANDLE)
+      return;
+   FileWrite(fh,"time","open","high","low","close","tick_volume","spread","real_volume");
+   for(int i=0;i<copied;i++)
+   {
+      FileWrite(fh,
+                TimeToString(rates[i].time,TIME_DATE|TIME_SECONDS),
+                rates[i].open,rates[i].high,rates[i].low,rates[i].close,
+                rates[i].tick_volume,rates[i].spread,rates[i].real_volume);
+   }
+   FileClose(fh);
+}
+
 bool UpdateSignal()
 {
    uchar buf[];
@@ -91,6 +132,12 @@ bool UpdateSignal()
    string msg_symbol = "";
    datetime msg_time = 0;
    double msg_prob = 0.0;
+   string cmd="";
+   string hist_symbol="";
+   string hist_tf="";
+   string hist_start="";
+   string hist_end="";
+   string hist_path="";
    int pos=0;
    while(pos < len)
    {
@@ -120,6 +167,48 @@ bool UpdateSignal()
          pos+=l;
          msg_prob=StrToDouble(pr);
       }
+      else if(field==10 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
+         cmd=CharArrayToString(buf,pos,l);
+         pos+=l;
+      }
+      else if(field==11 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
+         hist_symbol=CharArrayToString(buf,pos,l);
+         pos+=l;
+      }
+      else if(field==12 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
+         hist_tf=CharArrayToString(buf,pos,l);
+         pos+=l;
+      }
+      else if(field==13 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
+         hist_start=CharArrayToString(buf,pos,l);
+         pos+=l;
+      }
+      else if(field==14 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
+         hist_end=CharArrayToString(buf,pos,l);
+         pos+=l;
+      }
+      else if(field==15 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
+         hist_path=CharArrayToString(buf,pos,l);
+         pos+=l;
+      }
       else if(wire==2)
       {
          int l=0,shift=0,b;
@@ -134,6 +223,11 @@ bool UpdateSignal()
          pos+=8;
       else if(wire==5)
          pos+=4;
+   }
+   if(cmd=="history_request")
+   {
+      HandleHistoryRequest(hist_symbol,hist_tf,hist_start,hist_end,hist_path);
+      return(true);
    }
    for(int i=0;i<ArraySize(states);i++)
    {
