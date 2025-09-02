@@ -160,26 +160,31 @@ class ResourceMonitor:
         except Exception:
             self.logger.debug("pandas not installed; cannot set dtype backend")
 
+    async def probe(self) -> None:
+        """Refresh capabilities and broadcast any changes to subscribers."""
+
+        self.capabilities = self._probe()
+        new_tier = self.capabilities.capability_tier()
+        self.capability_tier = new_tier
+        # Notify subscribers even if the tier did not change so they can
+        # reconsider heavier models when hardware improves within the same tier.
+        await self._notify(new_tier)
+        self.logger.info(
+            "Refreshed resource capabilities: %s (tier=%s)",
+            self.capabilities,
+            self.capability_tier,
+        )
+        try:
+            from risk_manager import risk_manager
+
+            risk_manager.rebalance_budgets()
+        except Exception:
+            self.logger.debug("Risk budget rebalance failed", exc_info=True)
+
     async def _periodic_probe(self) -> None:
         while True:
             await asyncio.sleep(24 * 60 * 60)
-            self.capabilities = self._probe()
-            new_tier = self.capabilities.capability_tier()
-            self.capability_tier = new_tier
-            # Notify subscribers even if the tier did not change so they can
-            # reconsider heavier models when hardware improves within the same tier.
-            await self._notify(new_tier)
-            self.logger.info(
-                "Refreshed resource capabilities: %s (tier=%s)",
-                self.capabilities,
-                self.capability_tier,
-            )
-            try:
-                from risk_manager import risk_manager
-
-                risk_manager.rebalance_budgets()
-            except Exception:
-                self.logger.debug("Risk budget rebalance failed", exc_info=True)
+            await self.probe()
 
     async def _watch_usage(self) -> None:
         proc = psutil.Process()

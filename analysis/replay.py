@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 import pandas as pd
-
+import logging
 
 from analytics.metrics_store import record_metric
 
@@ -26,6 +26,8 @@ try:  # optional if backend not configured
     from core import state_sync
 except Exception:  # pragma: no cover - optional dependency
     state_sync = None
+
+logger = logging.getLogger(__name__)
 
 REPLAY_DIR = Path(__file__).resolve().parent.parent / "reports" / "replays"
 REPLAY_DIR.mkdir(parents=True, exist_ok=True)
@@ -308,12 +310,19 @@ async def watch_upgrades(threshold: float = 0.05) -> None:
 
     from model_registry import ModelRegistry
     from utils.resource_monitor import monitor
+    from features import report_status
 
     monitor.start()
     registry = ModelRegistry(auto_refresh=False)
     queue = monitor.subscribe()
     prev_models: Dict[str, str] = {
         task: registry.get(task) for task in registry.selected
+    }
+    status = report_status()
+    prev_features = {
+        f["name"]
+        for f in status.get("features", [])
+        if f.get("status") == "active"
     }
 
     while True:
@@ -325,15 +334,31 @@ async def watch_upgrades(threshold: float = 0.05) -> None:
         current: Dict[str, str] = {
             task: registry.get(task) for task in registry.selected
         }
+        status = report_status()
+        active_features = {
+            f["name"]
+            for f in status.get("features", [])
+            if f.get("status") == "active"
+        }
+        new_features = active_features - prev_features
         new_models: List[str] = [
             m for t, m in current.items() if prev_models.get(t) != m
         ]
-        if new_models:
+        if new_models or new_features:
             from .replay_trades import replay_trades
 
-            replay_trades(new_models)
+            replay_trades(list(current.values()))
             _flag_discrepancies(threshold)
-            reprocess(REPLAY_DIR)
+            summary = reprocess(REPLAY_DIR)
+            logger.info(
+                "Active features after upgrade: %s", sorted(active_features)
+            )
+            try:
+                record_metric("active_feature_count", len(active_features))
+                if not summary.empty:
+                    record_metric("replay_sharpe_new", float(summary["sharpe_new"].iloc[0]))
+            except Exception:
+                pass
 
         # Check for newly synthesised strategies
         from strategy.router import StrategyRouter
@@ -357,6 +382,7 @@ async def watch_upgrades(threshold: float = 0.05) -> None:
             replay_strategies(candidates)
 
         prev_models = current
+        prev_features = active_features
 
 
 def main() -> None:  # pragma: no cover - CLI entry
