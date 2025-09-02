@@ -58,6 +58,7 @@ from rl.trading_env import (
     RLLibTradingEnv,
 )
 from rl.risk_shaped_env import RiskShapedTradingEnv
+from rl.macro_reward_wrapper import MacroRewardWrapper
 from rl.multi_agent_env import MultiAgentTradingEnv
 
 try:
@@ -430,9 +431,11 @@ def main(
     cvar_env_penalty = 0.0 if cfg.get("risk_objective") == "cvar" else cfg.get("rl_cvar_penalty", 0.0)
 
     def maybe_wrap(env: gym.Env) -> gym.Env:
+        if cfg.get("macro_reward"):
+            env = MacroRewardWrapper(env)
         if cfg.get("risk_objective") == "cvar":
             from rl.risk_cvar import CVaRRewardWrapper
-            return CVaRRewardWrapper(
+            env = CVaRRewardWrapper(
                 env,
                 penalty=cfg.get("rl_cvar_penalty", 0.0),
                 window=cfg.get("rl_cvar_window", 30),
@@ -659,7 +662,7 @@ def main(
         if cfg.get("multi_agent"):
             def env_creator(env_config=None):
                 env_i = MultiAgentTradingEnv(**env_kwargs)
-                return env_i
+                return maybe_wrap(env_i)
 
             temp_env = env_creator()
             policies = {
@@ -1250,6 +1253,11 @@ if __name__ == "__main__":
         help="Train using risk shaped trading environment",
     )
     parser.add_argument(
+        "--macro-reward",
+        action="store_true",
+        help="Enable macro-aware reward shaping",
+    )
+    parser.add_argument(
         "--objectives",
         nargs="+",
         default=["return"],
@@ -1291,6 +1299,8 @@ if __name__ == "__main__":
         cfg["risk_objective"] = args.risk_objective
     if args.risk_shaped:
         cfg["risk_shaped"] = True
+    if args.macro_reward:
+        cfg["macro_reward"] = True
     if args.offline_pretrain:
         cfg["offline_pretrain"] = True
     if args.inverse_reward:
