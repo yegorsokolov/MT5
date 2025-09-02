@@ -11,7 +11,7 @@ or heavy features are dropped depending on hardware capability tiers.
 from pathlib import Path
 import json
 import logging
-from typing import Iterable, List, Tuple
+from typing import List, Tuple
 
 import pandas as pd
 from sklearn.feature_selection import mutual_info_classif

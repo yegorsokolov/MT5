@@ -16,10 +16,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from analysis import feature_gate
 
 
-def _make_df(f2_correlated: bool) -> pd.DataFrame:
+def _make_df(f2_correlated: bool, heavy_correlated: bool = False) -> pd.DataFrame:
     rng = np.random.default_rng(0)
     ret = rng.normal(size=200)
     y = (np.roll(ret, -1) > 0).astype(float)
+    heavy = (
+        y + rng.normal(scale=0.01, size=200) if heavy_correlated else rng.normal(size=200)
+    )
     df = pd.DataFrame(
         {
             "Timestamp": pd.date_range("2024", periods=200, freq="T"),
@@ -28,8 +31,8 @@ def _make_df(f2_correlated: bool) -> pd.DataFrame:
             "f1": y + rng.normal(scale=0.01, size=200),
             # f2 is either noise or also correlated
             "f2": (y + rng.normal(scale=0.01, size=200)) if f2_correlated else rng.normal(size=200),
-            # heavy feature should always be removed on lite tier
-            "heavy_feat": rng.normal(size=200),
+            # heavy feature should be dropped on lite tier regardless of importance
+            "heavy_feat": heavy,
             "market_regime": 0,
         }
     )
@@ -53,3 +56,21 @@ def test_feature_gate_persistence(tmp_path: Path):
 
     assert selected2 == selected1
     assert list(filtered1.columns) == list(filtered2.columns)
+
+
+def test_tier_specific_heavy_feature(tmp_path: Path):
+    df = _make_df(f2_correlated=False, heavy_correlated=True)
+
+    std_dir = tmp_path / "std"
+    filtered_std, selected_std = feature_gate.select(
+        df, "standard", 0, store_dir=std_dir
+    )
+    assert "heavy_feat" in selected_std
+    assert "heavy_feat" in filtered_std.columns
+
+    lite_dir = tmp_path / "lite"
+    filtered_lite, selected_lite = feature_gate.select(
+        df, "lite", 0, store_dir=lite_dir
+    )
+    assert "heavy_feat" not in selected_lite
+    assert "heavy_feat" not in filtered_lite.columns
