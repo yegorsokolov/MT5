@@ -215,6 +215,32 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             logger.debug("news movement merge failed", exc_info=True)
             df["news_movement_score"] = 0.0
         try:
+            from news.sentiment_score import load_vectors as load_news_vectors
+
+            vectors = load_news_vectors()
+            if not vectors.empty and "Symbol" in df.columns:
+                vectors = vectors.rename(
+                    columns={"symbol": "Symbol", "timestamp": "news_time"}
+                )
+                df = pd.merge_asof(
+                    df.sort_values("Timestamp"),
+                    vectors.sort_values("news_time"),
+                    left_on="Timestamp",
+                    right_on="news_time",
+                    by="Symbol",
+                    direction="backward",
+                ).drop(columns=["news_time"])
+            for k in range(3):
+                if f"news_sentiment_{k}" not in df.columns:
+                    df[f"news_sentiment_{k}"] = 0.0
+                if f"news_impact_{k}" not in df.columns:
+                    df[f"news_impact_{k}"] = 0.0
+        except Exception:
+            logger.debug("news sentiment merge failed", exc_info=True)
+            for k in range(3):
+                df[f"news_sentiment_{k}"] = 0.0
+                df[f"news_impact_{k}"] = 0.0
+        try:
             df = add_corporate_actions(df)
         except Exception:
             logger.debug("corporate actions merge failed", exc_info=True)
