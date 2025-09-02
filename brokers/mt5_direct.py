@@ -3,7 +3,13 @@ import logging
 from typing import List
 
 import MetaTrader5 as _mt5
-from utils.data_backend import get_dataframe_module
+try:  # allow import to be stubbed in tests
+    from utils.data_backend import get_dataframe_module
+except Exception:  # pragma: no cover - fallback for tests
+    import pandas as _pd  # type: ignore
+
+    def get_dataframe_module():  # type: ignore
+        return _pd
 
 pd = get_dataframe_module()
 import pandas as _pd
@@ -13,13 +19,13 @@ IS_CUDF = pd.__name__ == "cudf"
 logger = logging.getLogger(__name__)
 
 # Expose key constants for consumers
-COPY_TICKS_ALL = _mt5.COPY_TICKS_ALL
-ORDER_TYPE_BUY = _mt5.ORDER_TYPE_BUY
-ORDER_TYPE_SELL = _mt5.ORDER_TYPE_SELL
-TRADE_ACTION_DEAL = _mt5.TRADE_ACTION_DEAL
+COPY_TICKS_ALL = getattr(_mt5, "COPY_TICKS_ALL", 0)
+ORDER_TYPE_BUY = getattr(_mt5, "ORDER_TYPE_BUY", 0)
+ORDER_TYPE_SELL = getattr(_mt5, "ORDER_TYPE_SELL", 0)
+TRADE_ACTION_DEAL = getattr(_mt5, "TRADE_ACTION_DEAL", 0)
 
 # Re-export utility functions used elsewhere
-symbol_info_tick = _mt5.symbol_info_tick
+symbol_info_tick = getattr(_mt5, "symbol_info_tick", lambda *a, **k: None)
 
 
 def _to_datetime(arg, *args, **kwargs):
@@ -56,6 +62,18 @@ def initialize(**kwargs) -> bool:
     The function returns ``True`` on success, ``False`` otherwise.
     """
     return bool(_mt5.initialize(**kwargs))
+
+
+def is_terminal_logged_in() -> bool:
+    """Return ``True`` if the MetaTrader5 terminal is logged in."""
+    try:
+        if not initialize():
+            return False
+        info = _mt5.account_info()
+        _mt5.shutdown()
+        return info is not None
+    except Exception:
+        return False
 
 
 def order_send(request):
