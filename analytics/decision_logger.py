@@ -20,6 +20,7 @@ def log(
     position_size: float | None = None,
     contributions: Dict[str, float] | None = None,
     reason: str | None = None,
+    news: list[dict] | None = None,
 ) -> None:
     """Enrich ``df`` with contextual fields and append to the decision log.
 
@@ -37,6 +38,8 @@ def log(
         Top SHAP/feature contributions or rule triggers.
     reason:
         Optional natural-language explanation of the decision.
+    news:
+        List of relevant headlines with ``title``, ``sentiment``, ``impact`` and ``url``.
     """
 
     if df.empty:
@@ -52,6 +55,8 @@ def log(
         out["contribs"] = [contributions] if len(out) == 1 else [contributions] * len(out)
     if reason is not None:
         out["reason"] = reason
+    if news:
+        out["news"] = [news] if len(out) == 1 else [news] * len(out)
     try:
         log_decision(out)
     except Exception:
