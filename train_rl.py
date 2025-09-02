@@ -454,6 +454,8 @@ def main(
         objective_weights=cfg.get("rl_objective_weights"),
         exit_penalty=cfg.get("rl_exit_penalty", 0.001),
     )
+    if cfg.get("use_news"):
+        env_kwargs["news_window"] = cfg.get("news_window", 5)
     objectives = env_kwargs.get("objectives")
     if objectives is None:
         objectives = ["pnl", "hold_cost"]
@@ -919,6 +921,7 @@ def main(
                 cvar_window=cfg.get("rl_cvar_window", 30),
                 objectives=cfg.get("rl_objectives", ["return"]),
                 objective_weights=cfg.get("rl_objective_weights"),
+                news_window=env_kwargs.get("news_window", 0),
             )
             evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
             eval_returns = np.array(eval_env.portfolio_returns)
@@ -948,6 +951,12 @@ def main(
                 else:
                     cvar = 0.0
             mlflow.log_metric("cvar", cvar)
+            if cfg.get("use_news"):
+                record_metric("news_reward", cumulative_return, path=TS_PATH)
+                record_metric("news_sharpe", sharpe, path=TS_PATH)
+            else:
+                record_metric("baseline_reward", cumulative_return, path=TS_PATH)
+                record_metric("baseline_sharpe", sharpe, path=TS_PATH)
 
             # train risk management policy
             returns = df.sort_index()["return"].dropna()
@@ -1258,6 +1267,11 @@ if __name__ == "__main__":
         help="Enable macro-aware reward shaping",
     )
     parser.add_argument(
+        "--use-news",
+        action="store_true",
+        help="Include rolling news scores as features",
+    )
+    parser.add_argument(
         "--objectives",
         nargs="+",
         default=["return"],
@@ -1318,6 +1332,8 @@ if __name__ == "__main__":
         cfg["meta_train"] = True
     if args.fine_tune:
         cfg["fine_tune"] = True
+    if args.use_news:
+        cfg["use_news"] = True
     if args.tune:
         from tuning.distributed_search import tune_rl
 
