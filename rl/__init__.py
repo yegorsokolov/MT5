@@ -12,6 +12,7 @@ from .trading_env import (
     RLLibTradingEnv,
 )
 from .risk_shaped_env import RiskShapedTradingEnv
+from .macro_reward_wrapper import MacroRewardWrapper
 from .multi_agent_env import MultiAgentTradingEnv
 from .distributional_agent import DistributionalAgent, MeanAgent
 
@@ -22,6 +23,7 @@ __all__ = [
     "Transition",
     "TradingEnv",
     "RiskShapedTradingEnv",
+    "MacroRewardWrapper",
     "DiscreteTradingEnv",
     "HierarchicalTradingEnv",
     "RLLibTradingEnv",
