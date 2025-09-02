@@ -11,6 +11,7 @@ from .trading_env import (
     HierarchicalTradingEnv,
     RLLibTradingEnv,
 )
+from .risk_shaped_env import RiskShapedTradingEnv
 from .multi_agent_env import MultiAgentTradingEnv
 from .distributional_agent import DistributionalAgent, MeanAgent
 
@@ -20,6 +21,7 @@ __all__ = [
     "WorldModelEnv",
     "Transition",
     "TradingEnv",
+    "RiskShapedTradingEnv",
     "DiscreteTradingEnv",
     "HierarchicalTradingEnv",
     "RLLibTradingEnv",

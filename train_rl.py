@@ -57,6 +57,7 @@ from rl.trading_env import (
     HierarchicalTradingEnv,
     RLLibTradingEnv,
 )
+from rl.risk_shaped_env import RiskShapedTradingEnv
 from rl.multi_agent_env import MultiAgentTradingEnv
 
 try:
@@ -457,6 +458,7 @@ def main(
         if "risk" not in objectives:
             objectives.append("risk")
     env_kwargs["objectives"] = objectives
+    env_cls = RiskShapedTradingEnv if cfg.get("risk_shaped") else TradingEnv
 
     def _policy_kwargs(scale: float) -> dict:
         if monitor.capabilities.capability_tier() == "lite":
@@ -467,7 +469,7 @@ def main(
         return {"net_arch": arch}
 
     if algo == "PPO":
-        env = TradingEnv(**env_kwargs)
+        env = env_cls(**env_kwargs)
         env = maybe_wrap(env)
         algo_class = PPO
         policy_type = PositionClosePolicy
@@ -482,7 +484,7 @@ def main(
             policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "RECURRENTPPO":
-        env = TradingEnv(**env_kwargs)
+        env = env_cls(**env_kwargs)
         env = maybe_wrap(env)
         algo_class = RecurrentPPO
         policy_type = "MlpLstmPolicy"
@@ -497,7 +499,7 @@ def main(
             policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "A2C":
-        env = TradingEnv(**env_kwargs)
+        env = env_cls(**env_kwargs)
         env = maybe_wrap(env)
         algo_class = A2C
         policy_type = PositionClosePolicy
@@ -516,7 +518,7 @@ def main(
         n_envs = min(n_envs, os.cpu_count() or 1)
 
         def make_env():
-            env_i = TradingEnv(**env_kwargs)
+            env_i = env_cls(**env_kwargs)
             return maybe_wrap(env_i)
 
         if n_envs == 1:
@@ -536,7 +538,7 @@ def main(
             policy_kwargs=_policy_kwargs(scale_factor),
         )
     elif algo == "SAC":
-        env = TradingEnv(**env_kwargs)
+        env = env_cls(**env_kwargs)
         env = maybe_wrap(env)
         per_kwargs = {}
         if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"] and PrioritizedReplayBuffer:
@@ -572,7 +574,7 @@ def main(
                 policy_kwargs=_policy_kwargs(scale_factor),
             )
     elif algo == "TRPO":
-        env = TradingEnv(**env_kwargs)
+        env = env_cls(**env_kwargs)
         env = maybe_wrap(env)
         algo_class = TRPO
         policy_type = PositionClosePolicy
@@ -903,7 +905,7 @@ def main(
             # evaluate trained policy
             eval_size = max(2, len(df) // 5)
             eval_df = df.tail(eval_size).reset_index(drop=True)
-            eval_env = TradingEnv(
+            eval_env = env_cls(
                 eval_df,
                 features,
                 max_position=cfg.get("rl_max_position", 1.0),
@@ -1243,6 +1245,11 @@ if __name__ == "__main__":
         help="Apply specified risk objective to rewards",
     )
     parser.add_argument(
+        "--risk-shaped",
+        action="store_true",
+        help="Train using risk shaped trading environment",
+    )
+    parser.add_argument(
         "--objectives",
         nargs="+",
         default=["return"],
@@ -1282,6 +1289,8 @@ if __name__ == "__main__":
         cfg["graph_path"] = args.graph_path
     if args.risk_objective:
         cfg["risk_objective"] = args.risk_objective
+    if args.risk_shaped:
+        cfg["risk_shaped"] = True
     if args.offline_pretrain:
         cfg["offline_pretrain"] = True
     if args.inverse_reward:
