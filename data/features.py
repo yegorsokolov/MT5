@@ -144,6 +144,30 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             for col in ["macro_gdp", "macro_cpi", "macro_interest_rate"]:
                 if col not in df.columns:
                     df[col] = 0.0
+        try:
+            from news.stock_headlines import load_scores as load_headline_scores
+
+            if "Symbol" in df.columns:
+                headlines = load_headline_scores()
+            else:
+                headlines = pd.DataFrame()
+            if not headlines.empty and "Symbol" in df.columns:
+                headlines = headlines.rename(
+                    columns={"symbol": "Symbol", "timestamp": "headline_time"}
+                )
+                df = pd.merge_asof(
+                    df.sort_values("Timestamp"),
+                    headlines.sort_values("headline_time"),
+                    left_on="Timestamp",
+                    right_on="headline_time",
+                    by="Symbol",
+                    direction="backward",
+                ).drop(columns=["headline_time"])
+            if "news_movement_score" not in df.columns:
+                df["news_movement_score"] = 0.0
+        except Exception:
+            logger.debug("news movement merge failed", exc_info=True)
+            df["news_movement_score"] = 0.0
     if tier in {"gpu", "hpc"}:
         try:
             df = add_alt_features(df)
