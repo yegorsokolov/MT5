@@ -194,6 +194,67 @@ async def get_async_subscriber(connect_address: str | None = None, topic: str = 
         sock.close()
 
 
+def _encode_field(field: int, value: str) -> bytes:
+    """Encode a simple length-delimited field for ZeroMQ messages."""
+    data = value.encode("utf-8")
+    key = (field << 3) | 2
+    out = bytearray([key])
+    length = len(data)
+    while True:
+        b = length & 0x7F
+        length >>= 7
+        out.append(b | (0x80 if length else 0))
+        if not length:
+            break
+    out.extend(data)
+    return bytes(out)
+
+
+def request_history(
+    sock: zmq.Socket,
+    symbol: str,
+    timeframe: str,
+    start: str,
+    end: str,
+    path: str = "history_request.csv",
+) -> pd.DataFrame:
+    """Send a history request command and return the resulting dataframe.
+
+    Parameters
+    ----------
+    sock: zmq.Socket
+        ZeroMQ publisher socket used for sending the request.
+    symbol: str
+        Instrument symbol to fetch.
+    timeframe: str
+        Timeframe string such as ``"M1"`` or ``"H1"``.
+    start: str
+        Start timestamp in ``YYYY.MM.DD HH:MM`` format.
+    end: str
+        End timestamp in the same format.
+    path: str, optional
+        Location where the EA will write the resulting CSV file.
+    """
+
+    msg = b"".join(
+        [
+            _encode_field(10, "history_request"),
+            _encode_field(11, symbol),
+            _encode_field(12, timeframe),
+            _encode_field(13, start),
+            _encode_field(14, end),
+            _encode_field(15, path),
+        ]
+    )
+    sock.send(msg)
+    file_path = Path(path)
+    for _ in range(100):
+        if file_path.exists():
+            return pd.read_csv(file_path)
+        time.sleep(0.1)
+    raise FileNotFoundError(path)
+
+
 def publish_dataframe(sock: zmq.Socket, df: pd.DataFrame, fmt: str = "protobuf") -> None:
     """Publish rows of a dataframe as JSON or Protobuf messages."""
     global _QUEUE_DEPTH
