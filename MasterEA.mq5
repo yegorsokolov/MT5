@@ -1,12 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                                  AdaptiveEA.mq5  |
-//|                        Example Expert Advisor using ML signals   |
-//|                        Receives signals via ZeroMQ queue         |
+//|                                                  MasterEA.mq5    |
+//|          Consolidated Expert Advisor processing multiple pairs   |
+//|          Receives signals via ZeroMQ queue                       |
 //+------------------------------------------------------------------+
 #property copyright "Yegor Sokolov"
 #property version   "1.00"
 #property strict
-
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -26,6 +25,7 @@ int  zmq_close(int sock);
 
 string LogFile = "logs/ea_trades.csv";
 
+input string SymbolList = "EURUSD,GBPUSD";
 input string ZmqAddress = "tcp://localhost:5555"; // address of the signal queue
 input double RiskPerTrade = 0.01;
 input int TrailingStopPips = 20;
@@ -44,10 +44,12 @@ input int    ShortVolPeriod    = 10;     // short-term volatility bars
 input int    LongVolPeriod     = 50;     // long-term volatility bars
 input int    SignalTimeTolerance = 60;   // seconds tolerance for matching signals
 
+string   symbols[];
+double   last_prob[];
+datetime last_sig_time[];
+
 int      zmq_ctx       = 0;
 int      zmq_sock      = 0;
-double   last_prob     = 0.0;
-datetime last_sig_time = 0;
 
 double peak_equity = 0.0;
 double day_start_equity = 0.0;
@@ -69,7 +71,6 @@ void WriteLog(string event, double val=0.0)
    FileClose(fh);
 }
 
-
 bool UpdateSignal()
 {
    uchar buf[];
@@ -77,6 +78,9 @@ bool UpdateSignal()
    int len = zmq_recv(zmq_sock,buf,ArraySize(buf),ZMQ_DONTWAIT);
    if(len<=0)
       return(false);
+   string msg_symbol = "";
+   datetime msg_time = 0;
+   double msg_prob = 0.0;
    int pos=0;
    while(pos < len)
    {
@@ -85,25 +89,30 @@ bool UpdateSignal()
       int wire=key & 7;
       if(field==1 && wire==2)
       {
-         int l=0,shift=0;
-         int b;
+         int l=0,shift=0,b;
          do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
          string ts=CharArrayToString(buf,pos,l);
          pos+=l;
-         last_sig_time=StringToTime(ts);
+         msg_time=StringToTime(ts);
+      }
+      else if(field==2 && wire==2)
+      {
+         int l=0,shift=0,b;
+         do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
+         msg_symbol=CharArrayToString(buf,pos,l);
+         pos+=l;
       }
       else if(field==3 && wire==2)
       {
-         int l=0,shift=0;
-         int b;
+         int l=0,shift=0,b;
          do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
          string pr=CharArrayToString(buf,pos,l);
          pos+=l;
-         last_prob=StrToDouble(pr);
+         msg_prob=StrToDouble(pr);
       }
       else if(wire==2)
       {
-         int l=0,shift=0; int b;
+         int l=0,shift=0,b;
          do { b=buf[pos++]; l|=(b & 0x7F)<<shift; shift+=7; } while(b & 0x80);
          pos+=l;
       }
@@ -116,24 +125,69 @@ bool UpdateSignal()
       else if(wire==5)
          pos+=4;
    }
-   return(true);
+   for(int i=0;i<ArraySize(symbols);i++)
+   {
+      if(symbols[i]==msg_symbol)
+      {
+         last_sig_time[i]=msg_time;
+         last_prob[i]=msg_prob;
+         return(true);
+      }
+   }
+   return(false);
 }
 
-double CalculateRiskFactor()
+double RegimeMultiplier(string sym)
 {
-   int count=MathMin(RiskLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   int short_n=MathMin(ShortVolPeriod,iBars(sym,PERIOD_CURRENT)-1);
+   int long_n=MathMin(LongVolPeriod,iBars(sym,PERIOD_CURRENT)-1);
+   if(long_n<=1 || short_n<=1)
+      return(1.0);
+   double mean_s=0.0, mean_l=0.0;
+   for(int i=0;i<short_n;i++)
+      mean_s+=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
+   mean_s/=short_n;
+   for(int i=0;i<long_n;i++)
+      mean_l+=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
+   mean_l/=long_n;
+   double var_s=0.0, var_l=0.0;
+   for(int i=0;i<short_n;i++)
+   {
+      double r=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
+      var_s+=MathPow(r-mean_s,2);
+   }
+   for(int i=0;i<long_n;i++)
+   {
+      double r=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
+      var_l+=MathPow(r-mean_l,2);
+   }
+   double sd_s=MathSqrt(var_s/short_n);
+   double sd_l=MathSqrt(var_l/long_n);
+   if(sd_l==0.0)
+      return(1.0);
+   double ratio=sd_s/sd_l;
+   if(ratio>1.5)
+      return(0.5);
+   if(ratio<0.7)
+      return(1.2);
+   return(1.0);
+}
+
+double CalculateRiskFactor(string sym)
+{
+   int count=MathMin(RiskLookbackBars,iBars(sym,PERIOD_CURRENT)-1);
    if(count<=1)
       return(1.0);
 
    double mean=0.0;
    for(int i=0;i<count;i++)
-      mean+=(Close[i]-Close[i+1])/Close[i+1];
+      mean+=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
    mean/=count;
 
    double var=0.0;
    for(int i=0;i<count;i++)
    {
-      double ret=(Close[i]-Close[i+1])/Close[i+1];
+      double ret=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
       var+=MathPow(ret-mean,2);
    }
    double sd=MathSqrt(var/count);
@@ -151,7 +205,7 @@ double CalculateRiskFactor()
       factor=1.0/(1.0+sd*100.0);
    }
 
-   double regime = RegimeMultiplier();
+   double regime = RegimeMultiplier(sym);
 
    if(factor<MinRiskFactor)
       factor=MinRiskFactor;
@@ -161,68 +215,30 @@ double CalculateRiskFactor()
    return(factor*regime);
 }
 
-double RegimeMultiplier()
+double CalculateVaR(string sym)
 {
-   int short_n=MathMin(ShortVolPeriod,Bars(Symbol(),PERIOD_CURRENT)-1);
-   int long_n=MathMin(LongVolPeriod,Bars(Symbol(),PERIOD_CURRENT)-1);
-   if(long_n<=1 || short_n<=1)
-      return(1.0);
-
-   double mean_s=0.0, mean_l=0.0;
-   for(int i=0;i<short_n;i++)
-      mean_s+=(Close[i]-Close[i+1])/Close[i+1];
-   mean_s/=short_n;
-   for(int i=0;i<long_n;i++)
-      mean_l+=(Close[i]-Close[i+1])/Close[i+1];
-   mean_l/=long_n;
-
-   double var_s=0.0, var_l=0.0;
-   for(int i=0;i<short_n;i++)
-   {
-      double r=(Close[i]-Close[i+1])/Close[i+1];
-      var_s+=MathPow(r-mean_s,2);
-   }
-   for(int i=0;i<long_n;i++)
-   {
-      double r=(Close[i]-Close[i+1])/Close[i+1];
-      var_l+=MathPow(r-mean_l,2);
-   }
-   double sd_s=MathSqrt(var_s/short_n);
-   double sd_l=MathSqrt(var_l/long_n);
-   if(sd_l==0.0)
-      return(1.0);
-   double ratio=sd_s/sd_l;
-   if(ratio>1.5)
-      return(0.5);
-   if(ratio<0.7)
-      return(1.2);
-   return(1.0);
-}
-
-double CalculateVaR()
-{
-   int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   int count=MathMin(VarLookbackBars,iBars(sym,PERIOD_CURRENT)-1);
    if(count<=1)
       return(0.0);
    double arr[];
    ArrayResize(arr,count);
    for(int i=0;i<count;i++)
-      arr[i]=(Close[i]-Close[i+1])/Close[i+1];
+      arr[i]=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
    ArraySort(arr,WHOLE_ARRAY,0,MODE_ASCEND);
    int idx=(int)MathFloor(0.01*count);
    double var=-arr[idx]*100.0;
    return(var);
 }
 
-double CalculateCVaR()
+double CalculateCVaR(string sym)
 {
-   int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   int count=MathMin(VarLookbackBars,iBars(sym,PERIOD_CURRENT)-1);
    if(count<=1)
       return(0.0);
    double arr[];
    ArrayResize(arr,count);
    for(int i=0;i<count;i++)
-      arr[i]=(Close[i]-Close[i+1])/Close[i+1];
+      arr[i]=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
    ArraySort(arr,WHOLE_ARRAY,0,MODE_ASCEND);
    int idx=(int)MathFloor(0.01*count);
    double sum=0.0;
@@ -232,9 +248,9 @@ double CalculateCVaR()
    return(cvar);
 }
 
-double CalculateFilteredVaR()
+double CalculateFilteredVaR(string sym)
 {
-   int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   int count=MathMin(VarLookbackBars,iBars(sym,PERIOD_CURRENT)-1);
    if(count<=1)
       return(0.0);
    double decay=VarDecay;
@@ -243,7 +259,7 @@ double CalculateFilteredVaR()
    double mean=0.0;
    for(int i=0;i<count;i++)
    {
-      double r=(Close[i]-Close[i+1])/Close[i+1];
+      double r=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
       mean+=weight*r;
       sum_w+=weight;
       weight*=decay;
@@ -255,7 +271,7 @@ double CalculateFilteredVaR()
    double var=0.0;
    for(int i=0;i<count;i++)
    {
-      double r=(Close[i]-Close[i+1])/Close[i+1];
+      double r=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
       var+=weight*MathPow(r-mean,2);
       sum_w+=weight;
       weight*=decay;
@@ -266,19 +282,19 @@ double CalculateFilteredVaR()
    return(var_pct);
 }
 
-double CalculateStressLoss()
+double CalculateStressLoss(string sym)
 {
-   int count=MathMin(VarLookbackBars,Bars(Symbol(),PERIOD_CURRENT)-1);
+   int count=MathMin(VarLookbackBars,iBars(sym,PERIOD_CURRENT)-1);
    if(count<=1)
       return(0.0);
    double mean=0.0;
    for(int i=0;i<count;i++)
-      mean+=(Close[i]-Close[i+1])/Close[i+1];
+      mean+=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
    mean/=count;
    double variance=0.0;
    for(int i=0;i<count;i++)
    {
-      double r=(Close[i]-Close[i+1])/Close[i+1];
+      double r=(iClose(sym,PERIOD_CURRENT,i)-iClose(sym,PERIOD_CURRENT,i+1))/iClose(sym,PERIOD_CURRENT,i+1);
       variance+=MathPow(r-mean,2);
    }
    double sd=MathSqrt(variance/count);
@@ -287,11 +303,15 @@ double CalculateStressLoss()
 
 void CloseAllPositions()
 {
-   while(PositionSelect(Symbol()))
+   for(int s=0; s<ArraySize(symbols); s++)
    {
-      ulong ticket=PositionGetTicket(0);
-      trade.PositionClose(ticket);
-      WriteLog("close", ticket);
+      string sym = symbols[s];
+      while(PositionSelect(sym))
+      {
+         ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+         trade.PositionClose(ticket);
+         WriteLog("close_"+sym, ticket);
+      }
    }
 }
 
@@ -311,25 +331,40 @@ void UpdateRisk()
 
    double day_loss_pct=(equity-day_start_equity)/day_start_equity*100.0;
    double drawdown_pct=(equity-peak_equity)/peak_equity*100.0;
-   double var_pct=CalculateFilteredVaR();
-   double cvar_pct=CalculateCVaR();
-   double stress_pct=CalculateStressLoss();
-  if(day_loss_pct<=-MaxDailyLoss || drawdown_pct<=-MaxDrawdown)
-  {
+
+   double var_pct=0.0, cvar_pct=0.0, stress_pct=0.0;
+   for(int i=0;i<ArraySize(symbols);i++)
+   {
+      var_pct=MathMax(var_pct, CalculateFilteredVaR(symbols[i]));
+      cvar_pct=MathMax(cvar_pct, CalculateCVaR(symbols[i]));
+      stress_pct=MathMax(stress_pct, CalculateStressLoss(symbols[i]));
+   }
+   if(day_loss_pct<=-MaxDailyLoss || drawdown_pct<=-MaxDrawdown)
+   {
       CloseAllPositions();
       trading_allowed=false;
       WriteLog("risk_pause", day_loss_pct);
-  }
-  if(var_pct>MaxVaR || stress_pct>MaxStressLoss || cvar_pct>MaxCVaR)
-  {
+   }
+   if(var_pct>MaxVaR || stress_pct>MaxStressLoss || cvar_pct>MaxCVaR)
+   {
       CloseAllPositions();
       trading_allowed=false;
       WriteLog("risk_pause", var_pct);
-  }
+   }
 }
 
 int OnInit()
 {
+   int n = StringSplit(SymbolList, ',', symbols);
+   ArrayResize(last_prob,n);
+   ArrayResize(last_sig_time,n);
+   for(int i=0;i<n;i++)
+   {
+      StringTrimLeft(symbols[i]);
+      StringTrimRight(symbols[i]);
+      last_prob[i]=0.0;
+      last_sig_time[i]=0;
+   }
    zmq_ctx  = zmq_ctx_new();
    zmq_sock = zmq_socket(zmq_ctx,ZMQ_SUB);
    zmq_connect(zmq_sock,ZmqAddress);
@@ -355,29 +390,35 @@ void OnTick()
    if(!trading_allowed)
       return;
 
-   UpdateSignal();
-   if(TimeCurrent()-last_sig_time>SignalTimeTolerance)
-      return;
-   double prob = last_prob;
+   while(UpdateSignal()){}
 
-   if(PositionSelect(Symbol())==false && prob>0.55)
+   for(int i=0;i<ArraySize(symbols);i++)
    {
-      double risk_factor=CalculateRiskFactor();
-      double volume=NormalizeDouble(AccountBalance()*RiskPerTrade*risk_factor/1000,2);
-      trade.Buy(volume,NULL,Ask,0,0);
-      WriteLog("open", prob);
-   }
+      string sym = symbols[i];
+      if(TimeCurrent()-last_sig_time[i]>SignalTimeTolerance)
+         continue;
+      double prob = last_prob[i];
 
-   if(PositionSelect(Symbol()))
-   {
-      ulong ticket=PositionGetTicket(0);
-      double stop=PositionGetDouble(POSITION_SL);
-      double price=SymbolInfoDouble(Symbol(),SYMBOL_BID);
-      double new_stop=price - TrailingStopPips*_Point;
-      if(new_stop>stop)
+      if(!PositionSelect(sym) && prob>0.55)
       {
-         trade.PositionModify(ticket,new_stop,0);
-         WriteLog("trailing_stop", new_stop);
+         double risk_factor=CalculateRiskFactor(sym);
+         double volume=NormalizeDouble(AccountBalance()*RiskPerTrade*risk_factor/1000,2);
+         trade.Buy(volume,sym,SymbolInfoDouble(sym,SYMBOL_ASK),0,0);
+         WriteLog("open_"+sym, prob);
+      }
+
+      if(PositionSelect(sym))
+      {
+         ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+         double stop=PositionGetDouble(POSITION_SL);
+         double price=SymbolInfoDouble(sym,SYMBOL_BID);
+         double point=SymbolInfoDouble(sym,SYMBOL_POINT);
+         double new_stop=price - TrailingStopPips*point;
+         if(new_stop>stop)
+         {
+            trade.PositionModify(ticket,new_stop,0);
+            WriteLog("trailing_stop_"+sym, new_stop);
+         }
       }
    }
 }
