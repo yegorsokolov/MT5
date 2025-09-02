@@ -47,7 +47,7 @@ except Exception:  # pragma: no cover - pandas may not be installed
     pd_mod.DataFrame = lambda data=None: _DF(data or [])
     pd_mod.date_range = lambda start=None, periods=0, freq=None: [0] * periods
 pd_mod.__spec__ = importlib.machinery.ModuleSpec("pandas", loader=None)
-sys.modules.setdefault("pandas", pd_mod)
+sys.modules["pandas"] = pd_mod
 
 import joblib as _joblib_real
 sys.modules.setdefault("joblib", _joblib_real)
