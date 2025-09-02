@@ -1,0 +1,60 @@
+"""Scraper for CNBC's Baltic Dry Index (.BADI)."""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime, UTC
+from typing import List, Dict
+
+from bs4 import BeautifulSoup
+
+from . import fetch_with_cache
+
+URL = "https://www.cnbc.com/quotes/.BADI"
+
+
+def _extract_price(html: str) -> float:
+    soup = BeautifulSoup(html, "html.parser")
+    tag = soup.find("span", {"data-field": "Last"})
+    if tag:
+        text = tag.get_text(strip=True)
+    else:
+        match = re.search(r"[0-9,.]+", soup.get_text())
+        if not match:
+            raise ValueError("Price not found")
+        text = match.group(0)
+    return float(text.replace(",", ""))
+
+
+def parse(html: str) -> List[Dict[str, object]]:
+    price = _extract_price(html)
+    return [
+        {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "symbol": ".BADI",
+            "value": price,
+            "source": "CNBC",
+        }
+    ]
+
+
+async def fetch(force_refresh: bool = False, client=None) -> List[Dict[str, object]]:
+    raw = await fetch_with_cache(URL, "cnbc_badi.html", client, force_refresh)
+    return parse(raw)
+
+
+async def main(force_refresh: bool = False) -> None:
+    data = await fetch(force_refresh=force_refresh)
+    import json as _json
+
+    print(_json.dumps(data, indent=2))
+
+
+if __name__ == "__main__":
+    import argparse
+    import asyncio
+
+    parser = argparse.ArgumentParser(description="CNBC BADI scraper")
+    parser.add_argument("--refresh", action="store_true", help="Ignore cache and refetch")
+    args = parser.parse_args()
+    asyncio.run(main(force_refresh=args.refresh))
