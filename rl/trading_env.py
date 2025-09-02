@@ -18,6 +18,7 @@ class TradingEnv(gym.Env):
         self,
         df: pd.DataFrame,
         features: List[str],
+        macro_features: List[str] | None = None,
         max_position: float = 1.0,
         transaction_cost: float = 0.0001,
         risk_penalty: float = 0.1,
@@ -37,10 +38,22 @@ class TradingEnv(gym.Env):
         self.symbols = sorted(df["Symbol"].unique())
         wide = df.set_index(["Timestamp", "Symbol"])[features + ["mid"]].unstack("Symbol")
         wide.columns = [f"{sym}_{feat}" for feat, sym in wide.columns]
-        wide = wide.dropna().reset_index(drop=True)
+        wide = wide.dropna()
 
-        self.df = wide
+        macro_features = macro_features or []
         self.features = features
+        self.macro_features = macro_features
+        macro_df = pd.DataFrame()
+        if macro_features:
+            macro_df = (
+                df.set_index("Timestamp")[macro_features]
+                .groupby("Timestamp")
+                .first()
+            )
+
+        if not macro_df.empty:
+            wide = wide.join(macro_df, how="left")
+        self.df = wide.reset_index(drop=True)
         self.max_position = max_position
         self.transaction_cost = transaction_cost
         self.risk_penalty = risk_penalty
@@ -59,6 +72,7 @@ class TradingEnv(gym.Env):
         self.feature_cols = []
         for feat in features:
             self.feature_cols.extend([f"{sym}_{feat}" for sym in self.symbols])
+        self.feature_cols.extend(macro_features)
         self.spread_cols = []
         self.market_impact_cols: list[str | None] = []
         for sym in self.symbols:
