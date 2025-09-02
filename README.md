@@ -521,9 +521,9 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. To view experiment history run `scripts/mlflow_ui.sh` and open `http://localhost:5000`.
 14. **Upload logs** –
    1. Start `python scripts/hourly_log_push.py` in a separate window. This
-      script commits and pushes the `logs/` folder every hour so log history is
-      archived automatically. Use Windows Task Scheduler to launch it at logon
-      for unattended operation.
+      script copies entries from `logs/` into the `Run logs/` folder and pushes
+      it every hour so log history is archived automatically. Use Windows Task
+      Scheduler to launch it at logon for unattended operation.
 
 15. **Keep it running** –
    1. Create scheduled tasks that start both `python realtime_train.py` and the
