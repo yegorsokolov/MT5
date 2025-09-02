@@ -19,6 +19,7 @@ from features.cross_asset import (
     add_cross_asset_features,
 )
 from utils.resource_monitor import monitor
+from analysis import feature_gate
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,13 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             FEATURE_SCHEMA.validate(df, lazy=True)
         except Exception:
             logger.debug("feature validation failed", exc_info=True)
+
+    # Drop features based on capability tier and regime specific gating.  The
+    # gate is computed offline and persisted for deterministic behaviour, so at
+    # runtime we simply apply the stored selection without recomputing
+    # importances.
+    regime_id = int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
+    df, _ = feature_gate.select(df, tier, regime_id, persist=False)
 
     return df
 
