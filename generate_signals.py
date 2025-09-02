@@ -38,12 +38,20 @@ from signal_queue import (
     get_async_publisher,
     publish_dataframe_async,
     get_signal_backend,
+    get_publisher,
+    request_history,
 )
 from models.ensemble import EnsembleModel
 from models import model_store
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def fetch_history(symbol: str, timeframe: str, start: str, end: str, path: str = "history_request.csv") -> pd.DataFrame:
+    """Helper to request historical rates from the EA."""
+    with get_publisher() as sock:
+        return request_history(sock, symbol, timeframe, start, end, path)
 
 
 def load_models(paths, versions=None):
