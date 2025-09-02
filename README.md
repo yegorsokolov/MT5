@@ -25,6 +25,7 @@ The solution is split into two components:
    now uses an exponentially weighted variance controlled by the
    ``var_decay`` parameter.
    Historical ticks can be retrieved directly using
+   ``brokers.mt5_direct.fetch_history`` for arbitrary symbols or
    ``brokers.mt5_direct.copy_ticks_from`` for fully Python-based backtesting.
 3. **Realtime trainer** — a Python script that fetches live ticks from MT5,
    incrementally retrains the model and commits updates to this GitHub repo.
@@ -363,7 +364,14 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    ```
 
 2. Place historical CSV files under `data/`, specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`, **or** define `api_history` entries to fetch ticks directly from your MetaTrader&nbsp;5 terminal. Existing CSV files can be converted to Parquet using `python scripts/migrate_to_parquet.py`.
-   The MT5 history center provides free tick data once you have logged in to a broker through the terminal.
+   The MT5 history center provides free tick data once you have logged in to a broker through the terminal. Programmatic access is also available via a helper that auto-selects symbols and handles chunked downloads:
+
+   ```python
+   from datetime import datetime
+   from brokers.mt5_direct import fetch_history
+
+   df = fetch_history("EURUSD", datetime(2024, 1, 1), datetime(2024, 1, 2))
+   ```
 3. The realtime trainer stores ticks in a DuckDB database located at `data/realtime.duckdb`. The database is created automatically the first time you run the script and old rows beyond the `realtime_window` setting are pruned on each update.
 4. Set `use_feature_cache: true` in `config.yaml` to cache engineered features in `data/features.duckdb`. The cache is reused when the input history hasn't changed.
 5. Optionally configure `feature_service_url` and `feature_service_api_key` to
