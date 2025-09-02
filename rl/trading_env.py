@@ -37,7 +37,14 @@ class TradingEnv(gym.Env):
         if "Symbol" not in df.columns:
             raise ValueError("DataFrame must contain a 'Symbol' column")
         self.symbols = sorted(df["Symbol"].unique())
-        wide = df.set_index(["Timestamp", "Symbol"])[features + ["mid"]].unstack("Symbol")
+        vector_feats = [
+            c
+            for c in df.columns
+            if c.startswith("news_sentiment_") or c.startswith("news_impact_")
+        ]
+
+        base_cols = features + ["mid"] + vector_feats
+        wide = df.set_index(["Timestamp", "Symbol"])[base_cols].unstack("Symbol")
         wide.columns = [f"{sym}_{feat}" for feat, sym in wide.columns]
         wide = wide.dropna()
 
@@ -57,6 +64,13 @@ class TradingEnv(gym.Env):
                 for k in range(news_window):
                     col = f"{sym}_news_{k}"
                     wide[col] = news_wide[sym].shift(k).fillna(0.0).values
+                    self.news_feature_cols.append(col)
+
+        # Include precomputed news sentiment/impact vectors if present
+        for feat in vector_feats:
+            for sym in self.symbols:
+                col = f"{sym}_{feat}"
+                if col in wide.columns:
                     self.news_feature_cols.append(col)
 
         macro_features = macro_features or []
