@@ -1,35 +1,39 @@
 import csv
 import json
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable, Awaitable
 
 import requests
 from bs4 import BeautifulSoup
 
+from .scrapers import forexfactory_news, cbc, cnn, reuters, yahoo
+
+
+DEFAULT_SCRAPERS = [
+    forexfactory_news.fetch,
+    cbc.fetch,
+    cnn.fetch,
+    reuters.fetch,
+    yahoo.fetch,
+]
+
 
 class NewsAggregator:
-    """Aggregate economic calendar events from multiple sources.
+    """Aggregate economic and headline news from multiple sources.
 
-    Events are cached on disk in JSON format.  Each event has the
-    following schema::
-
-        {
-            "id": str,                # source specific identifier if available
-            "timestamp": datetime,    # UTC timestamp
-            "currency": str,
-            "event": str,
-            "actual": Optional[str],
-            "forecast": Optional[str],
-            "importance": Optional[str],
-            "sources": List[str],    # provenance information
-        }
+    Events are cached on disk in JSON format.  Historical behaviour for the
+    economic calendar aggregation is preserved for backwards compatibility.
+    Additional functionality is provided for aggregating headline news across
+    a variety of scrapers.
     """
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Optional[Path] = None, ttl_hours: int = 24):
         self.cache_dir = Path(cache_dir) if cache_dir else Path("data/news_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cache_file = self.cache_dir / "news.json"
+        self.ttl = timedelta(hours=ttl_hours)
 
     # ------------------------------------------------------------------
     # Cache handling
@@ -57,11 +61,26 @@ class NewsAggregator:
         with self.cache_file.open("w", encoding="utf-8") as f:
             json.dump(serialisable, f, ensure_ascii=False, indent=2)
 
+    def _apply_ttl(self, events: List[Dict]) -> List[Dict]:
+        cutoff = datetime.now(timezone.utc) - self.ttl
+        return [ev for ev in events if ev.get("timestamp") and ev["timestamp"] >= cutoff]
+
     # ------------------------------------------------------------------
     def get_news(self, start: datetime, end: datetime) -> List[Dict]:
         """Return cached news events within the inclusive [start, end] range."""
         events = self._load_cache()
         return [ev for ev in events if start <= ev["timestamp"] <= end]
+
+    def get_symbol_news(self, symbol: str, start: datetime, end: datetime) -> List[Dict]:
+        events = self._load_cache()
+        results: List[Dict] = []
+        for ev in events:
+            ts = ev.get("timestamp")
+            if not ts:
+                continue
+            if start <= ts <= end and symbol in ev.get("symbols", []):
+                results.append(ev)
+        return results
 
     # ------------------------------------------------------------------
     # Fetching logic
@@ -94,6 +113,20 @@ class NewsAggregator:
         events = self._dedupe(events)
         self._save_cache(events)
         return events
+
+    async def refresh(self, scrapers: Optional[List[Callable[[], Awaitable[List[Dict]]]]] = None) -> List[Dict]:
+        """Fetch headline news from scrapers asynchronously and update cache."""
+        scrapers = scrapers or DEFAULT_SCRAPERS
+        existing = self._load_cache()
+        results = await asyncio.gather(*[scraper() for scraper in scrapers], return_exceptions=True)
+        new_events: List[Dict] = []
+        for res in results:
+            if isinstance(res, list):
+                new_events.extend(res)
+        combined = self._dedupe_news(existing + new_events)
+        combined = self._apply_ttl(combined)
+        self._save_cache(combined)
+        return combined
 
     # ------------------------------------------------------------------
     # Parsing helpers
@@ -211,6 +244,21 @@ class NewsAggregator:
                         existing[field] = ev[field]
             else:
                 deduped[key] = ev
+        return list(deduped.values())
+
+    def _dedupe_news(self, events: List[Dict]) -> List[Dict]:
+        """Deduplicate headline news by (symbol, title, timestamp)."""
+        deduped: Dict[tuple, Dict] = {}
+        for ev in events:
+            symbols = ev.get("symbols", []) or []
+            for sym in symbols:
+                key = (sym, ev.get("title"), ev.get("timestamp"))
+                existing = deduped.get(key)
+                if existing:
+                    merged = set(existing.get("symbols", [])) | set(symbols)
+                    existing["symbols"] = list(merged)
+                else:
+                    deduped[key] = ev
         return list(deduped.values())
 
 

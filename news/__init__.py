@@ -1,6 +1,17 @@
-"""News impact model utilities."""
+"""News utilities package.
 
-from .impact_model import get_impact
+The package historically exposes an ``impact_model`` that depends on
+``scikit-learn``.  For lightweight environments (such as the unit tests in
+this kata) that dependency may be missing.  To keep imports lightweight we
+attempt to import the heavy modules lazily and fall back to no-op stubs when
+unavailable.
+"""
+
+try:  # optional dependency used in some environments
+    from .impact_model import get_impact  # type: ignore
+except Exception:  # pragma: no cover - optional
+    def get_impact(*args, **kwargs):  # type: ignore
+        raise RuntimeError("impact model unavailable")
 
 try:  # optional dependency used in some environments
     from . import sentiment_fusion  # type: ignore
