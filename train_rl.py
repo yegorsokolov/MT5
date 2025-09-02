@@ -206,7 +206,7 @@ def offline_pretrain(
     dataset = OfflineDataset(EventStore(store_path) if store_path else EventStore())
     if len(dataset) == 0:
         dataset.close()
-        return
+        return 0.0
     policy = getattr(model, "policy", model)
 
     try:  # prefer torch if available
@@ -215,6 +215,7 @@ def offline_pretrain(
         if hasattr(policy, "parameters"):
             optimizer = LookaheadAdamW(policy.parameters(), lr=lr)
             loss_fn = torch.nn.MSELoss()
+            final_loss = 0.0
             for i in range(max(1, epochs)):
                 for obs, actions, _, _, _ in dataset.iter_batches(batch_size):
                     obs_t = torch.as_tensor(obs, dtype=torch.float32)
@@ -224,9 +225,20 @@ def offline_pretrain(
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
+                    final_loss = float(loss)
+                mlflow.log_metric("pretrain_loss", final_loss, step=i)
                 mlflow.log_metric("pretrain_lr", optimizer.get_lr(), step=i)
+            losses: List[float] = []
+            for obs, actions, _, _, _ in dataset.iter_batches(batch_size):
+                obs_t = torch.as_tensor(obs, dtype=torch.float32)
+                act_t = torch.as_tensor(actions, dtype=torch.float32)
+                with torch.no_grad():
+                    pred = policy(obs_t)
+                    losses.append(loss_fn(pred, act_t).item())
+            final_loss = sum(losses) / max(len(losses), 1)
+            mlflow.log_metric("pretrain_final_loss", final_loss)
             dataset.close()
-            return
+            return float(final_loss)
     except Exception:  # pragma: no cover - torch not available
         pass
 
@@ -244,7 +256,19 @@ def offline_pretrain(
                 b -= lr * 2 * grad
     policy.weight = w
     policy.bias = b
+    err = 0.0
+    for s in dataset.samples:
+        x = float(s.obs[0] if isinstance(s.obs, (list, tuple)) else s.obs)
+        y = float(s.action[0] if isinstance(s.action, (list, tuple)) else s.action)
+        pred = w * x + b
+        err += (pred - y) ** 2
+    final_loss = err / max(1, len(dataset.samples))
+    try:
+        mlflow.log_metric("pretrain_final_loss", final_loss)
+    except Exception:
+        pass
     dataset.close()
+    return float(final_loss)
 
 
 def self_optimize(model: object, env: object, cfg: dict) -> None:
