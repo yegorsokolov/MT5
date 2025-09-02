@@ -68,6 +68,52 @@ def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_corporate_actions(df: pd.DataFrame) -> pd.DataFrame:
+    """Merge dividend, split and ownership data into ``df``.
+
+    The function loads corporate action datasets via
+    :func:`data.corporate_actions.load_corporate_actions` and performs a
+    ``merge_asof`` on ``Timestamp`` and ``Symbol``.  Missing columns are
+    forward filled with ``0`` to provide stable inputs for downstream
+    models.  The loader is marked with ``min_capability='standard'`` so
+    constrained environments can omit these heavier features.
+    """
+
+    if "Symbol" not in df.columns:
+        return df
+
+    from .corporate_actions import load_corporate_actions
+
+    actions = load_corporate_actions(sorted(df["Symbol"].unique()))
+    if not actions.empty:
+        actions = actions.rename(columns={"Date": "corp_date"})
+        df = pd.merge_asof(
+            df.sort_values("Timestamp"),
+            actions.sort_values("corp_date"),
+            left_on="Timestamp",
+            right_on="corp_date",
+            by="Symbol",
+            direction="backward",
+        ).drop(columns=["corp_date"])
+
+    for col in [
+        "dividend",
+        "split",
+        "insider_trades",
+        "institutional_holdings",
+    ]:
+        if col not in df.columns:
+            df[col] = 0.0
+        else:
+            df[col] = df[col].ffill().fillna(0.0)
+
+    return df
+
+
+# Minimum capability required for corporate actions
+add_corporate_actions.min_capability = "standard"  # type: ignore[attr-defined]
+
+
 def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """Generate model features by executing registered modules sequentially.
 
@@ -168,6 +214,18 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         except Exception:
             logger.debug("news movement merge failed", exc_info=True)
             df["news_movement_score"] = 0.0
+        try:
+            df = add_corporate_actions(df)
+        except Exception:
+            logger.debug("corporate actions merge failed", exc_info=True)
+            for col in [
+                "dividend",
+                "split",
+                "insider_trades",
+                "institutional_holdings",
+            ]:
+                if col not in df.columns:
+                    df[col] = 0.0
     if tier in {"gpu", "hpc"}:
         try:
             df = add_alt_features(df)
