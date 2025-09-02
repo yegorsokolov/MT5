@@ -75,6 +75,8 @@ def save_runtime_state(
     last_timestamp: str,
     open_positions: list[dict[str, Any]],
     model_versions: list[str],
+    model_weights: dict[str, Any] | None = None,
+    feature_scalers: dict[str, Any] | None = None,
 ) -> Path:
     """Persist runtime trading state to the MT5 bot directory.
 
@@ -86,6 +88,10 @@ def save_runtime_state(
         List of dictionaries describing currently open positions.
     model_versions:
         List of model version identifiers in use.
+    model_weights:
+        Optional mapping of model identifiers to their serialized weights.
+    feature_scalers:
+        Optional mapping of feature scaler objects used in preprocessing.
 
     Returns
     -------
@@ -99,6 +105,10 @@ def save_runtime_state(
         "open_positions": open_positions,
         "model_versions": model_versions,
     }
+    if model_weights is not None:
+        state["model_weights"] = model_weights
+    if feature_scalers is not None:
+        state["feature_scalers"] = feature_scalers
     joblib.dump(state, _STATE_FILE)
     return _STATE_FILE
 
@@ -111,9 +121,16 @@ def load_runtime_state() -> dict[str, Any] | None:
     if not _STATE_FILE.exists():
         return None
     try:
-        return joblib.load(_STATE_FILE)
+        state: dict[str, Any] = joblib.load(_STATE_FILE)
     except Exception:
         return None
+
+    state.setdefault("last_timestamp", "")
+    state.setdefault("open_positions", [])
+    state.setdefault("model_versions", [])
+    state.setdefault("model_weights", {})
+    state.setdefault("feature_scalers", {})
+    return state
 
 
 # ---------------------------------------------------------------------------
