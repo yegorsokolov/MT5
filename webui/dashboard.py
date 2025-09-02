@@ -137,6 +137,20 @@ def main() -> None:
             except Exception:
                 pass
 
+        feat_file = Path("reports/feature_status/latest.json")
+        if feat_file.exists():
+            try:
+                feat_data = json.loads(feat_file.read_text())
+                st.subheader("Feature Availability")
+                table = pd.DataFrame(feat_data.get("features", []))
+                if not table.empty:
+                    st.table(table[["name", "status"]])
+                suggestion = feat_data.get("suggestion")
+                if suggestion:
+                    st.info(suggestion)
+            except Exception:
+                pass
+
         st.subheader("Backup Status")
         bstatus = Path("reports/backup_status.json")
         if bstatus.exists():
