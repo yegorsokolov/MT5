@@ -26,6 +26,7 @@ int  zmq_close(int sock);
 string LogFile = "logs/ea_trades.csv";
 
 input string SymbolList = "EURUSD,GBPUSD";
+input string ChartTemplate = "MasterEA.tpl"; // template applied to newly opened charts
 input string ZmqAddress = "tcp://localhost:5555"; // address of the signal queue
 input double RiskPerTrade = 0.01;
 input int TrailingStopPips = 20;
@@ -45,6 +46,7 @@ input int    LongVolPeriod     = 50;     // long-term volatility bars
 input int    SignalTimeTolerance = 60;   // seconds tolerance for matching signals
 
 string   symbols[];
+long     chart_ids[];
 double   last_prob[];
 datetime last_sig_time[];
 
@@ -358,12 +360,31 @@ int OnInit()
    int n = StringSplit(SymbolList, ',', symbols);
    ArrayResize(last_prob,n);
    ArrayResize(last_sig_time,n);
+   ArrayResize(chart_ids,n);
    for(int i=0;i<n;i++)
    {
       StringTrimLeft(symbols[i]);
       StringTrimRight(symbols[i]);
       last_prob[i]=0.0;
       last_sig_time[i]=0;
+      chart_ids[i]=0;
+      if(!SymbolSelect(symbols[i],true))
+      {
+         PrintFormat("Symbol %s not found in this terminal",symbols[i]);
+         continue;
+      }
+      long id=ChartOpen(symbols[i],PERIOD_CURRENT);
+      if(id==0)
+      {
+         PrintFormat("Failed to open chart for %s (err %d)",symbols[i],GetLastError());
+         continue;
+      }
+      chart_ids[i]=id;
+      if(StringLen(ChartTemplate)>0)
+      {
+         if(!ChartApplyTemplate(id,ChartTemplate))
+            PrintFormat("Template %s could not be applied to %s (err %d)",ChartTemplate,symbols[i],GetLastError());
+      }
    }
    zmq_ctx  = zmq_ctx_new();
    zmq_sock = zmq_socket(zmq_ctx,ZMQ_SUB);
@@ -375,8 +396,18 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
+   for(int i=0;i<ArraySize(chart_ids);i++)
+      if(chart_ids[i]>0)
+         ChartClose(chart_ids[i]);
    if(zmq_sock!=0) zmq_close(zmq_sock);
    if(zmq_ctx!=0)  zmq_ctx_term(zmq_ctx);
+}
+
+void RefreshCharts()
+{
+   for(int i=0;i<ArraySize(chart_ids);i++)
+      if(chart_ids[i]>0)
+         ChartRedraw(chart_ids[i]);
 }
 
 void OnTick()
