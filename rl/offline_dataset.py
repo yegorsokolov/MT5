@@ -22,9 +22,10 @@ class OfflineDataset:
     """Load experiences from the :mod:`event_store`.
 
     Events are expected to have type ``"experience"`` with payload
-    containing ``obs``, ``action``, ``reward``, ``next_obs`` and ``done``
-    fields.  The dataset keeps the transitions in memory and can yield
-    mini-batches for simple offline training loops.
+    containing ``state``/``obs``, ``action`` and ``reward`` fields and
+    optionally ``next_state``/``next_obs`` and ``done``.  The dataset keeps
+    the transitions in memory and can yield mini-batches for simple offline
+    training loops.
     """
 
     def __init__(self, store: EventStore | str | Path | None = None) -> None:
@@ -43,10 +44,10 @@ class OfflineDataset:
             pl = ev["payload"]
             self.samples.append(
                 Experience(
-                    obs=pl.get("obs", []),
+                    obs=pl.get("obs") or pl.get("state", []),
                     action=pl.get("action", []),
                     reward=float(pl.get("reward", 0.0)),
-                    next_obs=pl.get("next_obs", []),
+                    next_obs=pl.get("next_obs") or pl.get("next_state", []),
                     done=bool(pl.get("done", False)),
                 )
             )
@@ -55,7 +56,12 @@ class OfflineDataset:
         return len(self.samples)
 
     def iter_batches(self, batch_size: int) -> Iterable[Tuple[List, List, List, List, List]]:
-        """Yield mini-batches of experiences."""
+        """Yield mini-batches of experiences.
+
+        The iterator returns tuples ``(states, actions, rewards, next_states,
+        dones)`` where ``next_states`` and ``dones`` may be empty when the
+        underlying events only contain ``state``, ``action`` and ``reward``.
+        """
         for i in range(0, len(self.samples), batch_size):
             batch = self.samples[i : i + batch_size]
             yield (
