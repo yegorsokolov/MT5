@@ -25,7 +25,7 @@ int  zmq_close(int sock);
 
 string LogFile = "logs/ea_trades.csv";
 
-input string SymbolList = "EURUSD,GBPUSD";
+input string ManagedSymbols = "EURUSD,GBPUSD"; // comma-separated symbols to manage
 input string ChartTemplate = "MasterEA.tpl"; // template applied to newly opened charts
 input string ZmqAddress = "tcp://localhost:5555"; // address of the signal queue
 input double RiskPerTrade = 0.01;
@@ -45,10 +45,18 @@ input int    ShortVolPeriod    = 10;     // short-term volatility bars
 input int    LongVolPeriod     = 50;     // long-term volatility bars
 input int    SignalTimeTolerance = 60;   // seconds tolerance for matching signals
 
-string   symbols[];
-long     chart_ids[];
-double   last_prob[];
-datetime last_sig_time[];
+struct SymbolState
+{
+   string   symbol;
+   long     chart_id;
+   double   last_prob;
+   datetime last_sig_time;
+   ulong    ticket;
+   double   trailing_stop;
+   double   risk_limit;
+};
+
+SymbolState states[];
 
 int      zmq_ctx       = 0;
 int      zmq_sock      = 0;
@@ -127,12 +135,12 @@ bool UpdateSignal()
       else if(wire==5)
          pos+=4;
    }
-   for(int i=0;i<ArraySize(symbols);i++)
+   for(int i=0;i<ArraySize(states);i++)
    {
-      if(symbols[i]==msg_symbol)
+      if(states[i].symbol==msg_symbol)
       {
-         last_sig_time[i]=msg_time;
-         last_prob[i]=msg_prob;
+         states[i].last_sig_time=msg_time;
+         states[i].last_prob=msg_prob;
          return(true);
       }
    }
@@ -305,15 +313,18 @@ double CalculateStressLoss(string sym)
 
 void CloseAllPositions()
 {
-   for(int s=0; s<ArraySize(symbols); s++)
+   for(int s=0; s<ArraySize(states); s++)
    {
-      string sym = symbols[s];
+      string sym = states[s].symbol;
+      SymbolSelect(sym,true);
       while(PositionSelect(sym))
       {
          ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
          trade.PositionClose(ticket);
          WriteLog("close_"+sym, ticket);
       }
+      states[s].ticket=0;
+      states[s].trailing_stop=0.0;
    }
 }
 
@@ -335,11 +346,12 @@ void UpdateRisk()
    double drawdown_pct=(equity-peak_equity)/peak_equity*100.0;
 
    double var_pct=0.0, cvar_pct=0.0, stress_pct=0.0;
-   for(int i=0;i<ArraySize(symbols);i++)
+   for(int i=0;i<ArraySize(states);i++)
    {
-      var_pct=MathMax(var_pct, CalculateFilteredVaR(symbols[i]));
-      cvar_pct=MathMax(cvar_pct, CalculateCVaR(symbols[i]));
-      stress_pct=MathMax(stress_pct, CalculateStressLoss(symbols[i]));
+      string sym = states[i].symbol;
+      var_pct=MathMax(var_pct, CalculateFilteredVaR(sym));
+      cvar_pct=MathMax(cvar_pct, CalculateCVaR(sym));
+      stress_pct=MathMax(stress_pct, CalculateStressLoss(sym));
    }
    if(day_loss_pct<=-MaxDailyLoss || drawdown_pct<=-MaxDrawdown)
    {
@@ -357,33 +369,36 @@ void UpdateRisk()
 
 int OnInit()
 {
-   int n = StringSplit(SymbolList, ',', symbols);
-   ArrayResize(last_prob,n);
-   ArrayResize(last_sig_time,n);
-   ArrayResize(chart_ids,n);
+   string tmp[];
+   int n = StringSplit(ManagedSymbols, ',', tmp);
+   ArrayResize(states,n);
    for(int i=0;i<n;i++)
    {
-      StringTrimLeft(symbols[i]);
-      StringTrimRight(symbols[i]);
-      last_prob[i]=0.0;
-      last_sig_time[i]=0;
-      chart_ids[i]=0;
-      if(!SymbolSelect(symbols[i],true))
+      StringTrimLeft(tmp[i]);
+      StringTrimRight(tmp[i]);
+      states[i].symbol=tmp[i];
+      states[i].last_prob=0.0;
+      states[i].last_sig_time=0;
+      states[i].ticket=0;
+      states[i].trailing_stop=0.0;
+      states[i].risk_limit=0.0;
+      states[i].chart_id=0;
+      if(!SymbolSelect(states[i].symbol,true))
       {
-         PrintFormat("Symbol %s not found in this terminal",symbols[i]);
+         PrintFormat("Symbol %s not found in this terminal",states[i].symbol);
          continue;
       }
-      long id=ChartOpen(symbols[i],PERIOD_CURRENT);
+      long id=ChartOpen(states[i].symbol,PERIOD_CURRENT);
       if(id==0)
       {
-         PrintFormat("Failed to open chart for %s (err %d)",symbols[i],GetLastError());
+         PrintFormat("Failed to open chart for %s (err %d)",states[i].symbol,GetLastError());
          continue;
       }
-      chart_ids[i]=id;
+      states[i].chart_id=id;
       if(StringLen(ChartTemplate)>0)
       {
          if(!ChartApplyTemplate(id,ChartTemplate))
-            PrintFormat("Template %s could not be applied to %s (err %d)",ChartTemplate,symbols[i],GetLastError());
+            PrintFormat("Template %s could not be applied to %s (err %d)",ChartTemplate,states[i].symbol,GetLastError());
       }
    }
    zmq_ctx  = zmq_ctx_new();
@@ -396,18 +411,18 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
-   for(int i=0;i<ArraySize(chart_ids);i++)
-      if(chart_ids[i]>0)
-         ChartClose(chart_ids[i]);
+   for(int i=0;i<ArraySize(states);i++)
+      if(states[i].chart_id>0)
+         ChartClose(states[i].chart_id);
    if(zmq_sock!=0) zmq_close(zmq_sock);
    if(zmq_ctx!=0)  zmq_ctx_term(zmq_ctx);
 }
 
 void RefreshCharts()
 {
-   for(int i=0;i<ArraySize(chart_ids);i++)
-      if(chart_ids[i]>0)
-         ChartRedraw(chart_ids[i]);
+   for(int i=0;i<ArraySize(states);i++)
+      if(states[i].chart_id>0)
+         ChartRedraw(states[i].chart_id);
 }
 
 void OnTick()
@@ -423,24 +438,32 @@ void OnTick()
 
    while(UpdateSignal()){}
 
-   for(int i=0;i<ArraySize(symbols);i++)
+   for(int i=0;i<ArraySize(states);i++)
    {
-      string sym = symbols[i];
-      if(TimeCurrent()-last_sig_time[i]>SignalTimeTolerance)
+      string sym = states[i].symbol;
+      if(TimeCurrent()-states[i].last_sig_time>SignalTimeTolerance)
          continue;
-      double prob = last_prob[i];
+      SymbolSelect(sym,true);
+      double prob = states[i].last_prob;
 
       if(!PositionSelect(sym) && prob>0.55)
       {
          double risk_factor=CalculateRiskFactor(sym);
          double volume=NormalizeDouble(AccountBalance()*RiskPerTrade*risk_factor/1000,2);
-         trade.Buy(volume,sym,SymbolInfoDouble(sym,SYMBOL_ASK),0,0);
-         WriteLog("open_"+sym, prob);
+         states[i].risk_limit=volume;
+         if(trade.Buy(volume,sym,SymbolInfoDouble(sym,SYMBOL_ASK),0,0))
+         {
+            if(PositionSelect(sym))
+               states[i].ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+            states[i].trailing_stop=0.0;
+            WriteLog("open_"+sym, prob);
+         }
       }
 
       if(PositionSelect(sym))
       {
          ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+         states[i].ticket=ticket;
          double stop=PositionGetDouble(POSITION_SL);
          double price=SymbolInfoDouble(sym,SYMBOL_BID);
          double point=SymbolInfoDouble(sym,SYMBOL_POINT);
@@ -448,6 +471,7 @@ void OnTick()
          if(new_stop>stop)
          {
             trade.PositionModify(ticket,new_stop,0);
+            states[i].trailing_stop=new_stop;
             WriteLog("trailing_stop_"+sym, new_stop);
          }
       }
