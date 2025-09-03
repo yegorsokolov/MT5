@@ -42,6 +42,25 @@ NEWS_REPLAY_DIR = (
 )
 NEWS_REPLAY_DIR.mkdir(parents=True, exist_ok=True)
 
+def reprocess_trades() -> None:
+    """Re-run logged decisions through currently selected models."""
+    from log_utils import read_decisions
+    from state_manager import load_replay_timestamp, save_replay_timestamp
+    from model_registry import select_models
+    from analysis.replay_trades import replay_trades
+    decisions = read_decisions()
+    if decisions.empty:
+        return
+    last_ts = load_replay_timestamp()
+    if last_ts:
+        decisions = decisions[decisions["timestamp"] > pd.to_datetime(last_ts)]
+    if decisions.empty:
+        return
+    versions = select_models()
+    replay_trades(versions)
+    save_replay_timestamp(decisions["timestamp"].max().isoformat())
+
+
 
 
 def _risk_metrics(returns: Iterable[float]) -> Dict[str, float]:
