@@ -18,7 +18,7 @@ from features.cross_asset import (
     add_index_features,
     add_cross_asset_features,
 )
-from utils.resource_monitor import monitor
+from utils.resource_monitor import monitor, ResourceCapabilities
 from analysis import feature_gate
 
 logger = logging.getLogger(__name__)
@@ -141,6 +141,25 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         plugins = []
     for plugin in plugins:
         df = plugin(df, adjacency_matrices=adjacency)
+
+    # Optionally compute cross-spectral coherence features on capable machines
+    try:
+        from analysis import cross_spectral
+
+        caps = getattr(
+            monitor,
+            "capabilities",
+            ResourceCapabilities(cpus=1, memory_gb=0.0, has_gpu=False, gpu_count=0),
+        )
+        req = getattr(cross_spectral, "REQUIREMENTS", caps)
+        if (
+            caps.cpus >= req.cpus
+            and caps.memory_gb >= req.memory_gb
+            and (caps.has_gpu or not req.has_gpu)
+        ):
+            df = cross_spectral.compute(df)
+    except Exception:
+        logger.debug("cross spectral computation failed", exc_info=True)
 
     tier = getattr(monitor, "capability_tier", "lite")
     if tier in {"standard", "gpu", "hpc"}:
