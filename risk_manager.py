@@ -92,7 +92,7 @@ class RiskManager:
         self._last_regime: int | None = None
         self.tail_threshold = tail_threshold or max_drawdown
         self.tail_prob_limit = tail_prob_limit
-        self.quiet_windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+        self.quiet_windows: list[dict] = []
         self.net_exposure = NetExposure(
             max_long=max_long_exposure, max_short=max_short_exposure
         )
@@ -142,33 +142,38 @@ class RiskManager:
                 )
             )
             return 0.0
-        for start, end in self.quiet_windows:
+        for window in self.quiet_windows:
+            start = window.get("start")
+            end = window.get("end")
             if start <= ts <= end:
-                try:
-                    record_metric("trades_skipped_news", 1)
-                except Exception:
-                    pass
-                decision_logger.log(
-                    pd.DataFrame(
-                        [
-                            {
-                                "timestamp": ts.isoformat(),
-                                "symbol": symbol,
-                                "event": "skip",
-                                "position_size": 0.0,
-                                "reason": "quiet_window",
-                            }
-                        ]
+                currencies = set(window.get("currencies", []))
+                symbols_meta = set(window.get("symbols", []))
+                if symbol in symbols_meta or any(c in symbol for c in currencies):
+                    try:
+                        record_metric("trades_skipped_news", 1, {"symbol": symbol})
+                    except Exception:
+                        pass
+                    decision_logger.log(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "timestamp": ts.isoformat(),
+                                    "symbol": symbol,
+                                    "event": "skip",
+                                    "position_size": 0.0,
+                                    "reason": "quiet_window",
+                                }
+                            ]
+                        )
                     )
-                )
-                return 0.0
+                    return 0.0
         impact, uncert = get_impact(symbol, ts)
         if uncert > _UNCERTAINTY_THRESHOLD:
             size *= _DOWNSCALE
         if impact is not None and abs(impact) > _IMPACT_THRESHOLD:
             if impact * direction < 0:
                 try:
-                    record_metric("trades_skipped_news", 1)
+                    record_metric("trades_skipped_news", 1, {"symbol": symbol})
                 except Exception:
                     pass
                 decision_logger.log(
@@ -222,10 +227,13 @@ class RiskManager:
         )
         return size
 
-    def set_quiet_windows(
-        self, windows: list[tuple[pd.Timestamp, pd.Timestamp]]
-    ) -> None:
-        """Define trading blackout periods around high-impact news."""
+    def set_quiet_windows(self, windows: list[dict]) -> None:
+        """Define trading blackout periods around high-impact news.
+
+        Each window should be a mapping with ``start`` and ``end`` timestamps
+        and optional ``currencies`` and ``symbols`` lists describing the
+        affected instruments.
+        """
         self.quiet_windows = windows
 
     def update(

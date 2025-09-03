@@ -140,6 +140,7 @@ def test_prompt_and_persist(monkeypatch, tmp_path):
     import importlib
     monkeypatch.setattr("builtins.input", fake_input)
     monkeypatch.setattr(state_manager, "_STATE_DIR", tmp_path)
+    monkeypatch.setattr(state_manager, "_RISK_FILE", tmp_path / "user_risk.pkl")
     orig_loader = state_manager.load_user_risk
     monkeypatch.setattr(state_manager, "load_user_risk", lambda: None)
     monkeypatch.setenv("SKIP_USER_RISK_PROMPT", "1")
@@ -174,11 +175,18 @@ def test_quiet_window_minutes():
 
         def get_news(self, start, end):
             ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            return [{"importance": "High", "timestamp": ts}]
+            return [{"importance": "red", "timestamp": ts, "currencies": ["USD"]}]
 
     windows = _compute_quiet_windows(DummyAgg(), 20)
     ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    assert windows == [(ts - timedelta(minutes=20), ts + timedelta(minutes=20))]
+    assert windows == [
+        {
+            "start": ts - timedelta(minutes=20),
+            "end": ts + timedelta(minutes=20),
+            "currencies": ["USD"],
+            "symbols": [],
+        }
+    ]
     rm = RiskManager(max_drawdown=100, max_total_drawdown=1000)
     rm.set_quiet_windows(windows)
     size = rm.adjust_size("EURUSD", 1.0, ts, 1)
