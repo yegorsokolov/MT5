@@ -58,24 +58,17 @@ def cleanup_checkpoints() -> None:
         except Exception:
             logger.exception("Failed removing checkpoint %s", ckpt)
 
-def resource_reprobe() -> None:
+async def resource_reprobe() -> None:
     """Refresh resource capability information."""
     try:
         from utils.resource_monitor import monitor
 
-        monitor.capabilities = monitor._probe()
-        logger.info("Refreshed resource capabilities: %s", monitor.capabilities)
+        await monitor.probe()
     except Exception:
         logger.exception("Resource reprobe failed")
     try:
-        from analysis.reprocess_trades import reprocess_trades
-
-        reprocess_trades()
-        logger.info("Trade reprocessing completed")
-    except Exception:
-        logger.exception("Trade reprocessing failed")
-    try:
         import pandas as pd
+        import numpy as np
         from analysis.domain_adapter import DomainAdapter
         from monitor_drift import DRIFT_METRICS
 

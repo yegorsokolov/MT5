@@ -522,3 +522,16 @@ class ModelRegistry:
             self.logger.info("Reverting to previous model %s for %s", prev.name, task)
             self.selected[task] = prev
             del self._previous[task]
+
+
+# ---------------------------------------------------------------------------
+# Module-level helper for convenient selection refresh
+# ---------------------------------------------------------------------------
+_GLOBAL_REGISTRY = ModelRegistry(monitor, auto_refresh=False)
+
+
+def select_models() -> list[str]:
+    """Refresh and return the active model variant names."""
+
+    _GLOBAL_REGISTRY.refresh()
+    return [_GLOBAL_REGISTRY.get(task) for task in _GLOBAL_REGISTRY.selected]
