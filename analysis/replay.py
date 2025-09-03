@@ -37,6 +37,11 @@ STRATEGY_REPLAY_DIR = (
 )
 STRATEGY_REPLAY_DIR.mkdir(parents=True, exist_ok=True)
 
+NEWS_REPLAY_DIR = (
+    Path(__file__).resolve().parent.parent / "reports" / "news_replay"
+)
+NEWS_REPLAY_DIR.mkdir(parents=True, exist_ok=True)
+
 
 
 def _risk_metrics(returns: Iterable[float]) -> Dict[str, float]:
@@ -280,6 +285,77 @@ def reprocess(out_dir: Path | None = None) -> pd.DataFrame:
         record_metric("replay_pnl_diff", summary["pnl_new"].iloc[0] - summary["pnl_old"].iloc[0])
     except Exception:
         pass
+    return summary
+
+
+def news_replay(
+    trade_path: Path | None = None,
+    news_cache_dir: Path | None = None,
+    out_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Replay trades with and without archived news features.
+
+    This loads sentiment/impact vectors from ``data/news_cache`` and merges
+    them with the recorded trade PnL.  Profitability is then compared with the
+    news features included versus ignored.  Comparison reports are written to
+    ``reports/news_replay`` by default.
+    """
+
+    trade_path = Path(trade_path) if trade_path else Path("reports/trades.csv")
+    if not trade_path.exists():
+        return pd.DataFrame()
+    trades = pd.read_csv(trade_path, parse_dates=["timestamp"])
+
+    vectors = pd.DataFrame()
+    cache_dir = Path(news_cache_dir) if news_cache_dir else Path("data/news_cache")
+    parquet_path = cache_dir / "news_features.parquet"
+    json_path = cache_dir / "stock_headlines.json"
+    if parquet_path.exists():
+        try:
+            vectors = pd.read_parquet(parquet_path)
+        except Exception:
+            vectors = pd.DataFrame()
+    elif json_path.exists():
+        try:
+            raw = pd.read_json(json_path)
+            vectors = raw[["symbol", "timestamp", "sentiment"]]
+            vectors["timestamp"] = pd.to_datetime(vectors["timestamp"])
+        except Exception:
+            vectors = pd.DataFrame()
+
+    if vectors.empty:
+        trades["sentiment"] = 0.0
+    else:
+        trades = trades.merge(
+            vectors[["symbol", "timestamp", "sentiment"]],
+            on=["symbol", "timestamp"],
+            how="left",
+        )
+        trades["sentiment"] = trades["sentiment"].fillna(0.0)
+
+    trades["pnl_without_news"] = trades["pnl"]
+    trades["pnl_with_news"] = trades["pnl"] * (1 + trades["sentiment"])
+    trades["pnl_delta"] = trades["pnl_with_news"] - trades["pnl_without_news"]
+
+    out_dir = Path(out_dir) if out_dir else NEWS_REPLAY_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    trades[
+        ["timestamp", "symbol", "pnl_without_news", "pnl_with_news", "pnl_delta"]
+    ].to_csv(out_dir / "trade_comparison.csv", index=False)
+
+    old_metrics = _risk_metrics(trades["pnl_without_news"])
+    new_metrics = _risk_metrics(trades["pnl_with_news"])
+    summary = pd.DataFrame(
+        {
+            "pnl_without_news": [old_metrics["pnl"]],
+            "pnl_with_news": [new_metrics["pnl"]],
+            "pnl_delta": [new_metrics["pnl"] - old_metrics["pnl"]],
+            "sharpe_without_news": [old_metrics["sharpe"]],
+            "sharpe_with_news": [new_metrics["sharpe"]],
+            "sharpe_delta": [new_metrics["sharpe"] - old_metrics["sharpe"]],
+        }
+    )
+    summary.to_csv(out_dir / "summary.csv", index=False)
     return summary
 
 
