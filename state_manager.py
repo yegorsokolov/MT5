@@ -134,6 +134,39 @@ def load_runtime_state() -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# User-specified risk limits
+# ---------------------------------------------------------------------------
+_RISK_FILE = _STATE_DIR / "user_risk.pkl"
+
+
+def save_user_risk(
+    daily_drawdown: float, total_drawdown: float, news_blackout_minutes: int
+) -> Path:
+    """Persist user-provided risk parameters."""
+
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    data = {
+        "daily_drawdown": daily_drawdown,
+        "total_drawdown": total_drawdown,
+        "news_blackout_minutes": news_blackout_minutes,
+    }
+    joblib.dump(data, _RISK_FILE)
+    return _RISK_FILE
+
+
+def load_user_risk() -> dict[str, Any] | None:
+    """Load previously saved risk parameters if present."""
+
+    if not _RISK_FILE.exists():
+        return None
+    try:
+        data: dict[str, Any] = joblib.load(_RISK_FILE)
+    except Exception:
+        return None
+    return data
+
+
+# ---------------------------------------------------------------------------
 # Strategy router state persistence
 # ---------------------------------------------------------------------------
 _ROUTER_FILE = _STATE_DIR / "router_state.pkl"
