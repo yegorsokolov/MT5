@@ -431,6 +431,9 @@ class RiskManager:
             if hist
         }
         budgets = self.budget_allocator.allocate(returns)
+        # Ensure every known bot receives an entry, even if no history yet
+        for bot in self._bot_pnl_history:
+            budgets.setdefault(bot, 0.0)
 
         # If factor exposures are supplied, derive a covariance matrix from them
         # to better reflect cross-asset correlations.  This provides a more
