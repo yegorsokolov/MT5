@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Iterable
 
+
 try:
     from utils import load_config
 except Exception:  # pragma: no cover - config loading optional
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 _loop: asyncio.AbstractEventLoop | None = None
 _started = False
 _tasks: list[asyncio.Future] = []
+_last_retrain_ts: str | None = None
 
 async def _runner(name: str, interval: float, func: Callable[[], None | asyncio.Future]) -> None:
     # delay first run by ``interval`` to avoid heavy startup work
@@ -41,6 +43,65 @@ def _schedule_jobs(jobs: Iterable[tuple[str, Callable[[], None | asyncio.Future]
         task = asyncio.run_coroutine_threadsafe(_runner(name, 24 * 60 * 60, func), _loop)
         _tasks.append(task)
         logger.info("Scheduled job: %s", name)
+
+
+def _training_cmd(model: str) -> list[str]:
+    if model == "nn":
+        return ["python", "train_nn.py", "--resume-online"]
+    if model == "rl":
+        return ["python", "train_rl.py"]
+    return ["python", "train.py", "--resume-online"]
+
+
+def process_retrain_events(store: EventStore | None = None) -> None:
+    """Consume retrain events and launch training scripts."""
+    from analytics.metrics_store import log_retrain_outcome
+    if store is None:
+        from event_store import EventStore
+
+        store = EventStore()
+
+    global _last_retrain_ts
+    for ev in store.iter_events("retrain"):
+        ts = ev["timestamp"]
+        if _last_retrain_ts is not None and ts <= _last_retrain_ts:
+            continue
+        payload = ev.get("payload", {})
+        model = payload.get("model", "classic")
+        cmd = _training_cmd(model)
+        env = os.environ.copy()
+        ckpt = payload.get("checkpoint_dir")
+        if ckpt:
+            env["CHECKPOINT_DIR"] = ckpt
+        try:
+            subprocess.run(cmd, check=True, env=env)
+            log_retrain_outcome(model, "success")
+        except Exception:
+            logger.exception("Retraining failed for %s", model)
+            try:
+                log_retrain_outcome(model, "failed")
+            except Exception:
+                pass
+        _last_retrain_ts = ts
+
+
+def subscribe_retrain_events(store: EventStore | None = None, interval: float = 60.0) -> None:
+    """Start background task that checks for retrain events."""
+    if store is None:
+        from event_store import EventStore
+
+        store = EventStore()
+
+    async def _watch() -> None:
+        while True:
+            process_retrain_events(store)
+            await asyncio.sleep(interval)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    loop.create_task(_watch())
 
 def cleanup_checkpoints() -> None:
     """Remove old checkpoints, keeping the most recent files."""
@@ -321,6 +382,11 @@ def start_scheduler() -> None:
         return
     cfg = load_config()
     s_cfg = cfg.get("scheduler", {}) if isinstance(cfg, dict) else {}
+    if s_cfg.get("retrain_events", True):
+        try:
+            subscribe_retrain_events()
+        except Exception:
+            logger.exception("Retrain event subscription failed")
     jobs: list[tuple[str, Callable[[], None | asyncio.Future]]] = []
     if s_cfg.get("resource_reprobe", True):
         jobs.append(("resource_reprobe", resource_reprobe))
@@ -372,4 +438,6 @@ __all__ = [
     "update_regime_performance",
     "rebuild_news_vectors",
     "reevaluate_world_model",
+    "process_retrain_events",
+    "subscribe_retrain_events",
 ]
