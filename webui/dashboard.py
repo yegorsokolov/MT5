@@ -82,11 +82,26 @@ def main() -> None:
     # Overview tab
     with tabs[0]:
         metrics = fetch_json("/risk/status", api_key)
-        col1, col2, col3, col4 = st.columns(4)
+        fund_df = query_metrics("expected_funding_cost")
+        margin_req_df = query_metrics("margin_required")
+        margin_avail_df = query_metrics("margin_available")
+        fund_val = float(fund_df["value"].iloc[-1]) if not fund_df.empty else 0.0
+        margin_req_val = (
+            float(margin_req_df["value"].iloc[-1]) if not margin_req_df.empty else 0.0
+        )
+        margin_avail_val = (
+            float(margin_avail_df["value"].iloc[-1])
+            if not margin_avail_df.empty
+            else 0.0
+        )
+        col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
         col1.metric("PnL", metrics.get("daily_loss", 0))
         col2.metric("Exposure", metrics.get("exposure", 0))
         col3.metric("VaR", metrics.get("var", 0))
         col4.metric("Trading Halted", metrics.get("trading_halted", False))
+        col5.metric("Funding Cost", fund_val)
+        col6.metric("Margin Req.", margin_req_val)
+        col7.metric("Free Margin", margin_avail_val)
 
         exp_file = Path("reports/currency_exposure/latest.json")
         if exp_file.exists():

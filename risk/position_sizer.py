@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import logging
 
 from analytics.metrics_store import record_metric
+from risk.funding_costs import fetch_funding_info
 
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ class PositionSizer:
         prob : float
             Expected win probability of the trade.
         symbol : str, optional
-            Asset symbol used when ``weights`` were supplied.
+            Asset symbol used when ``weights`` were supplied and to fetch funding info.
         volatility, var, es : float, optional
             Risk inputs used depending on the configured ``method``.
         confidence : float, default 1.0
@@ -96,6 +97,21 @@ class PositionSizer:
             size *= slip_factor
         if liquidity is not None:
             size = min(size, liquidity)
+        fund_cost = 0.0
+        margin_required = 0.0
+        margin_avail = self.capital
+        if symbol is not None:
+            try:
+                info = fetch_funding_info(symbol)
+                fund_cost = abs(size) * info.swap_rate
+                size = max(0.0, size - fund_cost)
+                margin_required = abs(size) * info.margin_requirement
+                margin_avail = info.available_margin
+                if info.margin_requirement > 0 and margin_required > margin_avail:
+                    size = margin_avail / info.margin_requirement
+                    margin_required = margin_avail
+            except Exception:
+                pass
         try:
             record_metric("target_risk", target)
             record_metric("realized_risk", realized)
@@ -103,6 +119,9 @@ class PositionSizer:
             record_metric("adj_realized_risk", realized * confidence)
             record_metric("slip_adj_target_risk", target * confidence * slip_factor)
             record_metric("slip_adj_realized_risk", realized * confidence * slip_factor)
+            record_metric("expected_funding_cost", fund_cost)
+            record_metric("margin_required", margin_required)
+            record_metric("margin_available", margin_avail)
         except Exception:
             pass
         logger.info(
