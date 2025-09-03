@@ -20,6 +20,20 @@ DEFAULT_SCRAPERS = [
 ]
 
 
+def _normalise_importance(value: Optional[str]) -> Optional[str]:
+    """Return a colour-coded importance level."""
+
+    if not value:
+        return value
+    val = str(value).strip().lower()
+    mapping = {
+        "high": "red",
+        "medium": "orange",
+        "low": "yellow",
+    }
+    return mapping.get(val, val)
+
+
 class NewsAggregator:
     """Aggregate economic and headline news from multiple sources.
 
@@ -151,10 +165,12 @@ class NewsAggregator:
                         "id": eid,
                         "timestamp": ts,
                         "currency": currency,
+                        "currencies": [currency] if currency else [],
                         "event": title,
                         "actual": actual,
                         "forecast": forecast,
-                        "importance": impact,
+                        "importance": _normalise_importance(impact),
+                        "symbols": [],
                         "sources": [source],
                     }
                 )
@@ -178,10 +194,12 @@ class NewsAggregator:
                         "id": eid,
                         "timestamp": ts,
                         "currency": currency,
+                        "currencies": [currency] if currency else [],
                         "event": title,
                         "actual": row.get("actual"),
                         "forecast": row.get("forecast"),
-                        "importance": row.get("impact"),
+                        "importance": _normalise_importance(row.get("impact")),
+                        "symbols": [],
                         "sources": [source],
                     }
                 )
@@ -205,15 +223,18 @@ class NewsAggregator:
                 actual_cell = row.find(class_="calendar__actual")
                 forecast_cell = row.find(class_="calendar__forecast")
                 importance = row.get("data-impact")
+                cur = currency_cell.get_text(strip=True) if currency_cell else None
                 events.append(
                     {
                         "id": eid,
                         "timestamp": ts,
-                        "currency": currency_cell.get_text(strip=True) if currency_cell else None,
+                        "currency": cur,
+                        "currencies": [cur] if cur else [],
                         "event": event_cell.get_text(strip=True) if event_cell else None,
                         "actual": actual_cell.get_text(strip=True) if actual_cell else None,
                         "forecast": forecast_cell.get_text(strip=True) if forecast_cell else None,
-                        "importance": importance,
+                        "importance": _normalise_importance(importance),
+                        "symbols": [],
                         "sources": [source],
                     }
                 )
@@ -242,6 +263,10 @@ class NewsAggregator:
                 for field in ["actual", "forecast", "importance"]:
                     if not existing.get(field) and ev.get(field):
                         existing[field] = ev[field]
+                for field in ["currencies", "symbols"]:
+                    if ev.get(field):
+                        merged = set(existing.get(field, [])) | set(ev.get(field, []))
+                        existing[field] = list(merged)
             else:
                 deduped[key] = ev
         return list(deduped.values())
