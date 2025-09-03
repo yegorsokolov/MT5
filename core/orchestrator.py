@@ -26,6 +26,27 @@ from strategy.shadow_runner import ShadowRunner
 from strategy.evolution_lab import EvolutionLab
 
 
+def _compute_quiet_windows(
+    agg: NewsAggregator, minutes: int
+) -> list[tuple[datetime, datetime]]:
+    """Return quiet trading windows around high-impact events."""
+    now = datetime.now(timezone.utc)
+    try:
+        agg.fetch()
+    except Exception:
+        pass
+    events = agg.get_news(now, now + timedelta(days=1))
+    windows: list[tuple[datetime, datetime]] = []
+    for ev in events:
+        imp = str(ev.get("importance", "")).lower()
+        ts = ev.get("timestamp")
+        if ts and imp.startswith("high"):
+            start = ts - timedelta(minutes=minutes)
+            end = ts + timedelta(minutes=minutes)
+            windows.append((start, end))
+    return windows
+
+
 class Orchestrator:
     """Central coordinator for resource-aware components."""
 
@@ -182,22 +203,10 @@ class Orchestrator:
     async def _update_quiet_windows(self) -> None:
         """Refresh quiet trading windows around high-impact news events."""
         agg = NewsAggregator()
+        minutes = int(os.getenv("NEWS_BLACKOUT_MINUTES", "30"))
         while True:
             try:
-                now = datetime.now(timezone.utc)
-                try:
-                    agg.fetch()
-                except Exception:
-                    pass
-                events = agg.get_news(now, now + timedelta(days=1))
-                windows: list[tuple[datetime, datetime]] = []
-                for ev in events:
-                    imp = str(ev.get("importance", "")).lower()
-                    ts = ev.get("timestamp")
-                    if ts and imp.startswith("high"):
-                        start = ts - timedelta(minutes=30)
-                        end = ts + timedelta(minutes=30)
-                        windows.append((start, end))
+                windows = _compute_quiet_windows(agg, minutes)
                 if hasattr(risk_manager, "set_quiet_windows"):
                     risk_manager.set_quiet_windows(windows)
                 record_metric("quiet_windows", len(windows))
