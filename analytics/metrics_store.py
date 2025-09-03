@@ -163,3 +163,20 @@ def query_metrics(
                 break
     return df.reset_index(drop=True)
 
+
+def log_retrain_outcome(model: str, status: str) -> None:
+    """Record the outcome of a retraining run.
+
+    Parameters
+    ----------
+    model:
+        Identifier of the model being retrained (e.g. ``"classic"``, ``"nn"`` or ``"rl"``).
+    status:
+        Outcome string such as ``"success"`` or ``"failed"``.
+    """
+
+    record_metric(
+        "retrain_outcome",
+        1.0 if status == "success" else 0.0,
+        {"model": model, "status": status},
+    )
