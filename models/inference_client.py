@@ -12,7 +12,11 @@ import os
 import time
 from typing import Any, List, Mapping, Sequence
 
-import pandas as pd
+try:  # pragma: no cover - pandas optional in tests
+    import pandas as pd
+except Exception:  # pragma: no cover
+    pd = None  # type: ignore
+
 import requests
 
 try:  # pragma: no cover - optional dependency
@@ -62,8 +66,14 @@ class InferenceClient:
 
     # ------------------------------------------------------------------
     def _to_records(self, features: Any) -> List[Mapping[str, Any]]:
-        if isinstance(features, pd.DataFrame):
-            return features.to_dict(orient="records")
+        df_type = getattr(pd, "DataFrame", None)
+        try:
+            if df_type is not None and isinstance(features, df_type):  # type: ignore[arg-type]
+                return features.to_dict(orient="records")
+        except TypeError:  # pandas may be stubbed with callables
+            pass
+        if hasattr(features, "to_dict"):
+            return features.to_dict(orient="records")  # type: ignore[call-arg]
         if isinstance(features, Sequence):
             return list(features)  # type: ignore[arg-type]
         raise TypeError(f"Unsupported features type: {type(features)!r}")
