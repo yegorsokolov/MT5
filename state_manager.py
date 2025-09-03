@@ -134,6 +134,28 @@ def load_runtime_state() -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# Replay state persistence
+# ---------------------------------------------------------------------------
+_REPLAY_TS_FILE = _STATE_DIR / "last_replay_timestamp.txt"
+
+
+def save_replay_timestamp(ts: str) -> Path:
+    """Persist the timestamp of the last reprocessed decision."""
+
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _REPLAY_TS_FILE.write_text(ts)
+    return _REPLAY_TS_FILE
+
+
+def load_replay_timestamp() -> str:
+    """Return the last reprocessed decision timestamp if available."""
+
+    if not _REPLAY_TS_FILE.exists():
+        return ""
+    return _REPLAY_TS_FILE.read_text().strip()
+
+
+# ---------------------------------------------------------------------------
 # User-specified risk limits
 # ---------------------------------------------------------------------------
 _RISK_FILE = _STATE_DIR / "user_risk.pkl"

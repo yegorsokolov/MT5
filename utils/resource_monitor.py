@@ -163,6 +163,7 @@ class ResourceMonitor:
     async def probe(self) -> None:
         """Refresh capabilities and broadcast any changes to subscribers."""
 
+        old_tier = self.capability_tier
         self.capabilities = self._probe()
         new_tier = self.capabilities.capability_tier()
         self.capability_tier = new_tier
@@ -180,6 +181,15 @@ class ResourceMonitor:
             risk_manager.rebalance_budgets()
         except Exception:
             self.logger.debug("Risk budget rebalance failed", exc_info=True)
+        try:
+            from model_registry import TIERS, select_models
+            from analysis import replay
+
+            if TIERS.get(new_tier, 0) > TIERS.get(old_tier, 0):
+                select_models()
+                await asyncio.to_thread(replay.reprocess_trades)
+        except Exception:
+            self.logger.debug("Model reload or replay failed", exc_info=True)
 
     async def _periodic_probe(self) -> None:
         while True:
