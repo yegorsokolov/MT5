@@ -1,6 +1,10 @@
 import sys
 from pathlib import Path
 
+# Remove stubbed SciPy modules so real implementations load
+for mod in ["scipy", "scipy.stats"]:
+    sys.modules.pop(mod, None)
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from strategy.router import StrategyRouter

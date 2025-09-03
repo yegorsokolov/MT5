@@ -1,57 +1,39 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import sys
 from pathlib import Path
 
+# Ensure real SciPy is available (conftest stubs a minimal version)
+for mod in ["scipy", "scipy.stats"]:
+    sys.modules.pop(mod, None)
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import dataset
+from strategy.pair_trading import find_cointegrated_pairs, generate_signals
 
 
-def _base_cfg():
-    return {
-        "use_pair_trading": True,
-        "pair_z_window": 5,
-        "pair_long_threshold": -1.0,
-        "pair_short_threshold": 1.0,
-        "use_atr": False,
-        "use_donchian": False,
-    }
-
-
-def build_df():
+def build_df() -> pd.DataFrame:
+    """Construct synthetic cointegrated price series."""
+    rng = np.random.default_rng(0)
     n = 300
     ts = pd.date_range("2020-01-01", periods=n, freq="min")
-    price_a = np.linspace(1.0, 2.0, n)
-    price_b = 2 * price_a
-    price_b[250:260] += 2  # temporary divergence after initial burn-in
-    df_a = pd.DataFrame({
-        "Timestamp": ts,
-        "Symbol": "A",
-        "Bid": price_a,
-        "Ask": price_a + 0.0001,
-    })
-    df_b = pd.DataFrame({
-        "Timestamp": ts,
-        "Symbol": "B",
-        "Bid": price_b,
-        "Ask": price_b + 0.0001,
-    })
+    noise = rng.normal(0, 0.1, size=n)
+    price_a = noise.cumsum() + 100
+    price_b = 2 * price_a + rng.normal(0, 0.1, size=n)
+    price_b[250:260] += 2  # temporary divergence
+    df_a = pd.DataFrame({"Timestamp": ts, "Symbol": "A", "Bid": price_a})
+    df_b = pd.DataFrame({"Timestamp": ts, "Symbol": "B", "Bid": price_b})
     return pd.concat([df_a, df_b], ignore_index=True)
 
 
-def test_pair_trading_features(monkeypatch):
-    monkeypatch.setattr(dataset, "get_events", lambda past_events=False: [])
-    monkeypatch.setattr(dataset, "add_news_sentiment_features", lambda df: df.assign(news_sentiment=0.0))
-    monkeypatch.setattr(dataset, "add_index_features", lambda df: df.assign(sp500_ret=0.0, sp500_vol=0.0, vix_ret=0.0, vix_vol=0.0))
-
-    import utils
-    monkeypatch.setattr(utils, "load_config", _base_cfg)
-
+def test_signal_generation_and_pnl():
     df = build_df()
-    out = dataset.make_features(df)
-    assert any(col.startswith("pair_z_A_B") for col in out.columns)
-    assert "pair_long" in out.columns
-    assert "pair_short" in out.columns
-    assert (out["pair_long"] + out["pair_short"]).notnull().all()
-
+    pairs = find_cointegrated_pairs(df, significance=0.2)
+    assert any({"A", "B"} == {p[0], p[1]} for p in pairs)
+    result = generate_signals(df, window=5, entry_z=1.0, exit_z=0.0, significance=0.2)
+    out = result.df
+    assert "pair_z_A_B" in out.columns
+    # Ensure at least one trade signal was generated
+    assert out["pair_long"].sum() > 0 or out["pair_short"].sum() > 0
+    # PnL should be non-zero when trades occur
+    assert abs(out["pair_pnl"].sum()) > 0
