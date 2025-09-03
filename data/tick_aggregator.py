@@ -92,6 +92,57 @@ def _convert_ticks(ticks: Any) -> pd.DataFrame:
     return df
 
 
+def compute_spread_matrix(prices: dict[str, Any]) -> pd.DataFrame:
+    """Return pairwise absolute mid-price deltas between brokers.
+
+    Parameters
+    ----------
+    prices:
+        Mapping of broker name to either a ``(bid, ask)`` tuple, a single
+        numeric mid price or a dataframe containing ``Bid`` and ``Ask``
+        columns.  Only the most recent row of dataframes is considered.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Square matrix whose ``i, j`` entry contains ``|mid_i - mid_j|`` for the
+        corresponding brokers.  Missing brokers or empty inputs result in an
+        empty dataframe.
+    """
+
+    if not prices:
+        return pd.DataFrame()
+
+    mids: dict[str, float] = {}
+    for name, value in prices.items():
+        bid: float
+        ask: float
+        if isinstance(value, pd.DataFrame):
+            if value.empty:
+                continue
+            row = value.iloc[-1]
+            bid = float(row.get("Bid", row.get("bid", 0.0)))
+            ask = float(row.get("Ask", row.get("ask", bid)))
+        else:
+            try:
+                bid, ask = value  # type: ignore[misc]
+            except Exception:
+                bid = ask = float(value)  # treat as mid price
+        mids[name] = (bid + ask) / 2.0
+
+    if not mids:
+        return pd.DataFrame()
+
+    brokers = list(mids)
+    data = []
+    for a in brokers:
+        row: list[float] = []
+        for b in brokers:
+            row.append(abs(mids[a] - mids[b]))
+        data.append(row)
+    return pd.DataFrame(data, index=brokers, columns=brokers)
+
+
 @dataclass
 class TickAggregator:
     """Aggregate ticks from two broker sources."""
@@ -186,4 +237,5 @@ __all__ = [
     "fetch_ticks",
     "divergence_alerts",
     "DivergenceEvent",
+    "compute_spread_matrix",
 ]
