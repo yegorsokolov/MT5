@@ -4,6 +4,8 @@ from pathlib import Path
 import os
 import random
 import logging
+import argparse
+import sys
 from typing import Callable, List
 
 import numpy as np
@@ -117,6 +119,10 @@ def _ensure_data_downloaded(cfg: dict, root: Path) -> None:
                 load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
             except Exception as e:
                 logger.warning("Failed to download history for %s: %s", sym, e)
+from user_risk_inputs import configure_user_risk
+
+if os.getenv("SKIP_USER_RISK_PROMPT", "0") != "1":
+    configure_user_risk(sys.argv[1:])
 
 try:  # pragma: no cover - orchestrator may be stubbed in tests
     from core.orchestrator import Orchestrator

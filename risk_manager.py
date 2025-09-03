@@ -41,6 +41,7 @@ _DOWNSCALE = float(os.getenv("NEWS_IMPACT_DOWNSCALE", "0.5"))
 class RiskMetrics:
     exposure: float = 0.0
     daily_loss: float = 0.0
+    total_drawdown: float = 0.0
     var: float = 0.0
     risk_of_ruin: float = 0.0
     tail_prob: float = 0.0
@@ -54,6 +55,7 @@ class RiskManager:
     def __init__(
         self,
         max_drawdown: float,
+        max_total_drawdown: float | None = None,
         max_var: float = float("inf"),
         var_window: int = 100,
         tail_hedger: "TailHedger" | None = None,
@@ -69,6 +71,9 @@ class RiskManager:
         instrument_currencies: Dict[str, str] | None = None,
     ) -> None:
         self.max_drawdown = max_drawdown
+        self.max_total_drawdown = (
+            float("inf") if max_total_drawdown is None else max_total_drawdown
+        )
         self.max_var = max_var
         self.var_window = var_window
         self.metrics = RiskMetrics()
@@ -94,6 +99,8 @@ class RiskManager:
         self.currency_exposure = CurrencyExposure(
             base_currency, instrument_currencies or {}
         )
+        self.equity = initial_capital
+        self.peak_equity = self.equity
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""
@@ -241,6 +248,9 @@ class RiskManager:
             exposure = self.currency_exposure.convert(None, exposure)
             self.metrics.exposure += exposure
         self.metrics.daily_loss += pnl
+        self.equity += pnl
+        self.peak_equity = max(self.peak_equity, self.equity)
+        self.metrics.total_drawdown = self.peak_equity - self.equity
         self._pnl_history.append(pnl)
         self._ewma_pnl_history = [
             h * (1 - self.ewma_alpha) for h in self._ewma_pnl_history
@@ -300,6 +310,11 @@ class RiskManager:
             breach_reason = (
                 f"max drawdown exceeded: {self.metrics.daily_loss:.2f}"
                 f" <= {-self.max_drawdown}"
+            )
+        elif self.metrics.total_drawdown >= self.max_total_drawdown:
+            breach_reason = (
+                "total drawdown exceeded: "
+                f"{self.metrics.total_drawdown:.2f} >= {self.max_total_drawdown}"
             )
         elif self.metrics.var > self.max_var:
             breach_reason = (
@@ -458,6 +473,7 @@ class RiskManager:
 from risk.tail_hedger import TailHedger
 
 MAX_DRAWDOWN = float(os.getenv("MAX_PORTFOLIO_DRAWDOWN", "1e9"))
+MAX_TOTAL_DRAWDOWN = float(os.getenv("MAX_TOTAL_DRAWDOWN", "1e9"))
 MAX_VAR = float(os.getenv("MAX_VAR", "1e9"))
 TAIL_HEDGE_VAR = float(os.getenv("TAIL_HEDGE_VAR", str(MAX_VAR)))
 RISK_OF_RUIN_THRESHOLD = float(os.getenv("RISK_OF_RUIN_THRESHOLD", "1.0"))
@@ -468,7 +484,8 @@ EWMA_ALPHA = float(os.getenv("EWMA_ALPHA", "0.06"))
 
 risk_manager = RiskManager(
     MAX_DRAWDOWN,
-    MAX_VAR,
+    max_total_drawdown=MAX_TOTAL_DRAWDOWN,
+    max_var=MAX_VAR,
     ewma_alpha=EWMA_ALPHA,
     risk_of_ruin_threshold=RISK_OF_RUIN_THRESHOLD,
     initial_capital=INITIAL_CAPITAL,
