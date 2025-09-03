@@ -20,6 +20,7 @@ sys.modules["telemetry"] = types.SimpleNamespace(
 from model_registry import ModelRegistry, ResourceCapabilities
 from services.inference_server import app
 import importlib.util
+import requests
 
 # Import inference_client without triggering heavy imports from ``models``
 ic_spec = importlib.util.spec_from_file_location(
@@ -69,6 +70,12 @@ def test_remote_prediction_path(monkeypatch):
 
     monkeypatch.setattr(ic.requests, "post", fake_post)
     monkeypatch.setattr(ic.requests, "get", fake_get)
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(
+        "services.worker_manager.get_worker_manager",
+        lambda: types.SimpleNamespace(record_request=lambda *a, **k: None),
+    )
     monitor = DummyMonitor(
         ResourceCapabilities(cpus=1, memory_gb=1, has_gpu=False, gpu_count=0)
     )

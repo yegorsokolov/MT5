@@ -1,32 +1,55 @@
+"""Client for the lightweight :mod:`services.inference_server`.
+
+This module provides a minimal helper used by :class:`model_registry.ModelRegistry`
+to offload predictions to a remote inference server when the local machine lacks
+the required resources for a full sized model.  The interface intentionally
+mimics that of a local model's ``predict`` method so callers can swap between
+local and remote execution transparently.
+"""
+
+from __future__ import annotations
+
 import os
 import time
 from typing import Any, Iterable, List, Mapping, Sequence
 
-import pandas as pd
+try:  # pragma: no cover - pandas is optional for the tests
+    import pandas as pd
+except Exception:  # pragma: no cover
+    pd = None  # type: ignore
+
 import requests
 
 from services.worker_manager import get_worker_manager
 
-REMOTE_URL = os.getenv("REMOTE_MODEL_URL", "http://localhost:8000/predict")
+# Base URL of the remote inference service.  Only the ``/predict`` endpoint is
+# used by the tests but a ``/health`` check is also available on the server.
+_BASE_URL = os.getenv("INFERENCE_SERVER_URL", "http://localhost:8000")
 
 
 def _to_records(features: Any) -> List[Mapping[str, Any]]:
     """Return *features* as a list of records suitable for JSON encoding.
 
     ``features`` may be a pandas ``DataFrame`` or any iterable of mappings.
+    The pandas dependency is optional; if unavailable the function falls back
+    to duck-typing via ``to_dict``.
     """
-    if isinstance(features, pd.DataFrame):
-        return features.to_dict(orient="records")
+
+    df_type = getattr(pd, "DataFrame", None)
+    try:
+        if df_type is not None and isinstance(features, df_type):  # type: ignore[arg-type]
+            return features.to_dict(orient="records")
+    except TypeError:  # pandas may be stubbed with a callable
+        pass
+    if hasattr(features, "to_dict"):
+        return features.to_dict(orient="records")  # type: ignore[call-arg]
     if isinstance(features, Sequence):
         return list(features)  # type: ignore[arg-type]
-    raise TypeError("Unsupported features type: %r" % (type(features),))
+    raise TypeError(f"Unsupported features type: {type(features)!r}")
 
 
-def predict_remote(model_name: str, features: Any) -> List[float]:
-    """Return predictions from a remote model via REST.
-
-    The call latency is reported to the :class:`services.worker_manager.WorkerManager`
-    so the system can scale worker processes based on demand.
+def predict(model_name: str, features: Any) -> List[float]:
+    """Return predictions for ``features`` from a remote model.
 
     Parameters
     ----------
@@ -35,10 +58,11 @@ def predict_remote(model_name: str, features: Any) -> List[float]:
     features:
         Feature matrix as a pandas ``DataFrame`` or an iterable of dicts.
     """
+
     start = time.perf_counter()
     try:
         payload = {"model_name": model_name, "features": _to_records(features)}
-        resp = requests.post(REMOTE_URL, json=payload, timeout=10)
+        resp = requests.post(f"{_BASE_URL}/predict", json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         preds = data.get("predictions", [])
@@ -47,4 +71,12 @@ def predict_remote(model_name: str, features: Any) -> List[float]:
         return preds
     finally:
         latency = time.perf_counter() - start
+        # Record latency so the worker manager can adjust scaling decisions
         get_worker_manager().record_request("remote_client", latency)
+
+
+# Backwards compatibility for older code paths
+predict_remote = predict
+
+
+__all__ = ["predict", "predict_remote"]
