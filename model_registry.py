@@ -7,12 +7,14 @@ import sys
 import weakref
 import gc
 import time
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 import types
 
 import joblib
+from prediction_cache import PredictionCache
 
 from analysis.inference_latency import InferenceLatency
 from analytics.metrics_store import model_cache_hit, model_unload
@@ -168,6 +170,7 @@ class ModelRegistry:
         auto_refresh: bool = True,
         latency: Optional[InferenceLatency] = None,
         cfg: Optional[Dict[str, Any]] = None,
+        cache: Optional[PredictionCache] = None,
     ) -> None:
         self.monitor = monitor
         self.selected: Dict[str, ModelVariant] = {}
@@ -183,6 +186,7 @@ class ModelRegistry:
         self.latency = latency or InferenceLatency()
         self.cfg = cfg or {}
         self._cache_ttl = float(self.cfg.get("model_cache_ttl", 0))
+        self.cache = cache or PredictionCache(0)
         self.breach_checks = 3
         self.recovery_checks = 5
         self._latency_breach: Dict[str, int] = {}
@@ -431,16 +435,48 @@ class ModelRegistry:
         with tracer.start_as_current_span("predict_mixture"):
             return self.moe.predict(history, regime, self.monitor.capabilities)
 
+    # ------------------------------------------------------------------
+    def _feature_hash(self, features: Any) -> int:
+        """Return a stable hash for ``features`` used by the prediction cache."""
+        if hasattr(features, "to_dict"):
+            records = features.to_dict(orient="records")
+        elif isinstance(features, Sequence):
+            records = list(features)
+        else:
+            records = [features]
+        return hash(json.dumps(records, sort_keys=True))
+
     def predict(self, task: str, features: Any, loader=None) -> Any:
         """Return predictions for ``task`` using local or remote models."""
-
         model_name = self.get(task)
         with tracer.start_as_current_span("predict"):
+            variant = self._variant_by_name.get(model_name)
             remote_variant = self._remote_variant(task)
-            active_name = remote_variant.name if remote_variant else model_name
+            use_remote = False
+            remote_name = model_name
+
+            if variant and not variant.is_supported(self.monitor.capabilities):
+                use_remote = True
+                remote_name = variant.name
+            elif remote_variant is not None:
+                use_remote = True
+                remote_name = remote_variant.name
+
+            active_name = remote_name if use_remote else model_name
+
+            key = None
+            if self.cache.maxsize > 0:
+                try:
+                    key = self._feature_hash(features)
+                    cached = self.cache.get(key)
+                    if cached is not None:
+                        return cached
+                except Exception:
+                    key = None
+
             start = time.perf_counter()
             try:
-                if remote_variant is not None:
+                if use_remote:
                     import importlib.util
 
                     spec = importlib.util.spec_from_file_location(
@@ -449,7 +485,7 @@ class ModelRegistry:
                     rc = importlib.util.module_from_spec(spec)
                     assert spec and spec.loader
                     spec.loader.exec_module(rc)  # type: ignore
-                    result = rc.predict_remote(remote_variant.name, features)
+                    result = rc.predict(remote_name, features)
                 else:
                     model = loader(model_name) if loader else self._load_model(model_name)
                     if hasattr(model, "predict_proba"):
@@ -460,6 +496,9 @@ class ModelRegistry:
                 elapsed = time.perf_counter() - start
                 self.latency.record(active_name, elapsed)
                 self._check_latency(task, active_name)
+
+            if key is not None:
+                self.cache.set(key, result)
             return result
 
     # ------------------------------------------------------------------

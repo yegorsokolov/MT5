@@ -1,3 +1,22 @@
+import sys
+from pathlib import Path
+import types
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+import metrics
+
+
+class _Counter:
+    def __init__(self) -> None:
+        self._value = types.SimpleNamespace(val=0, set=lambda v: setattr(self._value, "val", v), get=lambda: self._value.val)
+
+    def inc(self) -> None:
+        self._value.set(self._value.get() + 1)
+
+
+metrics.PRED_CACHE_HIT = _Counter()
+
 from prediction_cache import PredictionCache
 from metrics import PRED_CACHE_HIT
 
