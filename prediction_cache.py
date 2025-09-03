@@ -22,9 +22,12 @@ class PredictionCache:
     def __init__(self, maxsize: int = 256, policy: str = "lru") -> None:
         self.maxsize = maxsize
         self.policy = policy.lower()
-        self._data: "OrderedDict[int, float]" = OrderedDict()
+        # Store arbitrary prediction results keyed by integer hashes.  ``Any`` is
+        # used for the value type so callers can cache lists, numpy arrays or
+        # scalars without type restrictions.
+        self._data: "OrderedDict[int, Any]" = OrderedDict()
 
-    def get(self, key: int) -> float | None:
+    def get(self, key: int) -> Any | None:
         """Return cached value for ``key`` if present."""
         val = self._data.get(key)
         if val is not None:
@@ -33,7 +36,7 @@ class PredictionCache:
                 self._data.move_to_end(key)
         return val
 
-    def set(self, key: int, value: float) -> None:
+    def set(self, key: int, value: Any) -> None:
         """Insert ``value`` for ``key`` respecting the cache size."""
         if self.maxsize <= 0:
             return
