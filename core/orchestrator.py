@@ -28,7 +28,7 @@ from strategy.evolution_lab import EvolutionLab
 
 def _compute_quiet_windows(
     agg: NewsAggregator, minutes: int
-) -> list[tuple[datetime, datetime]]:
+) -> list[dict]:
     """Return quiet trading windows around high-impact events."""
     now = datetime.now(timezone.utc)
     try:
@@ -36,14 +36,21 @@ def _compute_quiet_windows(
     except Exception:
         pass
     events = agg.get_news(now, now + timedelta(days=1))
-    windows: list[tuple[datetime, datetime]] = []
+    windows: list[dict] = []
     for ev in events:
         imp = str(ev.get("importance", "")).lower()
         ts = ev.get("timestamp")
-        if ts and imp.startswith("high"):
+        if ts and (imp.startswith("high") or imp.startswith("red")):
             start = ts - timedelta(minutes=minutes)
             end = ts + timedelta(minutes=minutes)
-            windows.append((start, end))
+            currencies = ev.get("currencies")
+            if not currencies:
+                cur = ev.get("currency")
+                currencies = [cur] if cur else []
+            symbols = ev.get("symbols", []) or []
+            windows.append(
+                {"start": start, "end": end, "currencies": currencies, "symbols": symbols}
+            )
     return windows
 
 
