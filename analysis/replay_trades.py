@@ -46,7 +46,16 @@ def replay_trades(model_versions: List[str]) -> None:
     if not models:
         return
 
-    exclude = {"timestamp", "event", "Symbol", "prob", "algorithm", "position_size", "reason"}
+    exclude = {
+        "timestamp",
+        "event",
+        "Symbol",
+        "prob",
+        "algorithm",
+        "position_size",
+        "reason",
+        "issues",
+    }
     feature_cols = [c for c in preds.columns if c not in exclude]
 
     summary_rows = []
@@ -56,7 +65,7 @@ def replay_trades(model_versions: List[str]) -> None:
         except Exception:  # pragma: no cover - defensive
             continue
         base_cols = ["timestamp", "Symbol", "prob"]
-        for col in ["algorithm", "position_size", "reason"]:
+        for col in ["algorithm", "position_size", "reason", "issues"]:
             if col in preds.columns:
                 base_cols.append(col)
         comp = preds[base_cols].copy()
