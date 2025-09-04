@@ -1,4 +1,5 @@
 """Signal queue built on the shared :mod:`services.message_bus`."""
+
 from __future__ import annotations
 
 import asyncio
@@ -23,10 +24,24 @@ def get_signal_backend(cfg: Dict[str, Any] | None = None) -> MessageBus:
 
 # ---------------------------------------------------------------------------
 
+
+def _wrap_ci(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Wrap prediction rows with credible intervals if present."""
+
+    if {"pred", "ci_lower", "ci_upper"}.issubset(row):
+        row = row.copy()
+        row["prediction"] = {
+            "mean": row.pop("pred"),
+            "lower": row.pop("ci_lower"),
+            "upper": row.pop("ci_upper"),
+        }
+    return row
+
+
 def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
     """Synchronously publish each row of ``df`` to the signals topic."""
 
-    rows = df.to_dict(orient="records")
+    rows = [_wrap_ci(r) for r in df.to_dict(orient="records")]
 
     async def _pub() -> None:
         for row in rows:
@@ -35,15 +50,19 @@ def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> N
     asyncio.run(_pub())
 
 
-async def publish_dataframe_async(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
+async def publish_dataframe_async(
+    bus: MessageBus, df: pd.DataFrame, fmt: str = "json"
+) -> None:
     """Asynchronously publish each row of ``df`` to the signals topic."""
 
-    rows = df.to_dict(orient="records")
+    rows = [_wrap_ci(r) for r in df.to_dict(orient="records")]
     for row in rows:
         await bus.publish(Topics.SIGNALS, row)
 
 
-async def iter_messages(bus: MessageBus, fmt: str = "json", sizer=None) -> AsyncGenerator[Dict[str, Any], None]:
+async def iter_messages(
+    bus: MessageBus, fmt: str = "json", sizer=None
+) -> AsyncGenerator[Dict[str, Any], None]:
     """Yield messages from the signals topic."""
 
     async for msg in bus.subscribe(Topics.SIGNALS):
