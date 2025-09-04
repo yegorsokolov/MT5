@@ -60,6 +60,7 @@ from rl.trading_env import (
 from rl.risk_shaped_env import RiskShapedTradingEnv
 from rl.macro_reward_wrapper import MacroRewardWrapper
 from rl.multi_agent_env import MultiAgentTradingEnv
+from rl.constrained_agent import ConstrainedAgent
 
 try:
     import gymnasium as gymn
@@ -1119,6 +1120,8 @@ def main(
 def launch(cfg: dict | None = None) -> float:
     if cfg is None:
         cfg = load_config()
+    if cfg.get("constrained"):
+        return train_constrained(cfg)
     if cfg.get("rl_exec"):
         return train_execution(cfg)
     if cfg.get("graph_rl"):
@@ -1140,6 +1143,25 @@ def launch(cfg: dict | None = None) -> float:
         return 0.0
     else:
         return main(0, 1, cfg)
+
+
+def train_constrained(cfg: dict) -> float:
+    """Train :class:`ConstrainedAgent` on a tiny synthetic environment.
+
+    The routine demonstrates how risk budgets can be enforced using a primal–
+    dual update.  Rewards and costs are generated from a two-action toy
+    environment where one action is riskier but higher reward.  The agent learns
+    to respect ``cfg['risk_budget']`` by adjusting its dual variable.
+    """
+
+    budget = cfg.get("risk_budget", 0.0)
+    risk_mgr = cfg.get("risk_manager")
+    agent = ConstrainedAgent(n_actions=2, risk_budget=budget, risk_manager=risk_mgr)
+    for _ in range(cfg.get("constrained_steps", 100)):
+        action = agent.act(None)
+        reward, cost = ((1.0, 0.1) if action == 0 else (2.0, 0.5))
+        agent.update(action, reward, cost)
+    return agent.lambda_
 
 
 def train_graph_rl(cfg: dict) -> float:
@@ -1286,6 +1308,16 @@ if __name__ == "__main__":
         help="Train using risk shaped trading environment",
     )
     parser.add_argument(
+        "--risk-budget",
+        type=float,
+        help="Portfolio risk threshold for constrained agents",
+    )
+    parser.add_argument(
+        "--constrained",
+        action="store_true",
+        help="Enable constrained policy optimisation",
+    )
+    parser.add_argument(
         "--macro-reward",
         action="store_true",
         help="Enable macro-aware reward shaping",
@@ -1337,6 +1369,10 @@ if __name__ == "__main__":
         cfg["risk_objective"] = args.risk_objective
     if args.risk_shaped:
         cfg["risk_shaped"] = True
+    if args.risk_budget is not None:
+        cfg["risk_budget"] = args.risk_budget
+    if args.constrained:
+        cfg["constrained"] = True
     if args.macro_reward:
         cfg["macro_reward"] = True
     if args.offline_pretrain:
