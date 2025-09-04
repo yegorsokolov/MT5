@@ -3,9 +3,12 @@ import logging
 import time
 from typing import Any, List, Optional
 
+from analytics.metrics_store import query_metrics
+
 from metrics import BROKER_FAILURES, BROKER_LATENCY_MS
 
 logger = logging.getLogger(__name__)
+
 
 class ConnectionManager:
     """Maintain connections to multiple broker backends.
@@ -27,13 +30,44 @@ class ConnectionManager:
         self._failure_counts = {i: 0 for i in range(len(brokers))}
         self._connect_first_available()
 
-    def _connect_first_available(self) -> None:
-        """Initialize the first available broker."""
+    def _rank_broker_indices(self) -> List[int]:
+        """Return broker indices ordered by historical latency/slippage."""
+
+        scores = {}
         for i, broker in enumerate(self._brokers):
+            name = getattr(broker, "__name__", broker.__class__.__name__)
+            try:
+                lat_df = query_metrics("broker_fill_latency_ms", tags={"broker": name})
+                lat = (
+                    float(lat_df["value"].mean()) if not lat_df.empty else float("inf")
+                )
+                slip_df = query_metrics("broker_slippage_bps", tags={"broker": name})
+                slip = (
+                    float(abs(slip_df["value"].mean()))
+                    if not slip_df.empty
+                    else float("inf")
+                )
+                scores[i] = lat + slip
+            except Exception:
+                scores[i] = float("inf")
+        ranked = sorted(scores, key=lambda k: scores[k])
+        return (
+            ranked
+            if any(v != float("inf") for v in scores.values())
+            else list(range(len(self._brokers)))
+        )
+
+    def _connect_first_available(self) -> None:
+        """Initialize the best available broker based on recorded metrics."""
+
+        for i in self._rank_broker_indices():
+            broker = self._brokers[i]
             try:
                 if broker.initialize():
                     self._active_index = i
-                    logger.info("Connected to broker %s", getattr(broker, "__name__", broker))
+                    logger.info(
+                        "Connected to broker %s", getattr(broker, "__name__", broker)
+                    )
                     return
             except Exception:
                 logger.exception("Failed to initialize broker %s", broker)
@@ -51,19 +85,21 @@ class ConnectionManager:
         """
         if self._active_index is None:
             return False
-        num = len(self._brokers)
-        for offset in range(1, num + 1):
-            idx = (self._active_index + offset) % num
+        indices = [i for i in self._rank_broker_indices() if i != self._active_index]
+        for idx in indices:
             broker = self._brokers[idx]
             try:
                 if broker.initialize():
                     self._active_index = idx
                     logger.warning(
-                        "Failover: switched to broker %s", getattr(broker, "__name__", broker)
+                        "Failover: switched to broker %s",
+                        getattr(broker, "__name__", broker),
                     )
                     return True
             except Exception:
-                logger.exception("Failed to initialize broker %s during failover", broker)
+                logger.exception(
+                    "Failed to initialize broker %s during failover", broker
+                )
         logger.error("All brokers failed during failover")
         return False
 
@@ -89,7 +125,9 @@ class ConnectionManager:
                         if asyncio.iscoroutinefunction(func):
                             await asyncio.wait_for(func(), timeout=timeout)
                         else:
-                            await asyncio.wait_for(asyncio.to_thread(func), timeout=timeout)
+                            await asyncio.wait_for(
+                                asyncio.to_thread(func), timeout=timeout
+                            )
                         latency = (time.perf_counter() - start) * 1000
                         BROKER_LATENCY_MS.labels(broker=name).set(latency)
                         if latency > latency_threshold_ms:
@@ -100,12 +138,16 @@ class ConnectionManager:
                     except Exception:
                         BROKER_FAILURES.labels(broker=name).inc()
                         self._failure_counts[i] += 1
-                    if i == self._active_index and self._failure_counts[i] >= failure_threshold:
+                    if (
+                        i == self._active_index
+                        and self._failure_counts[i] >= failure_threshold
+                    ):
                         self.failover()
                         self._failure_counts[i] = 0
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
             pass
+
 
 _manager: Optional[ConnectionManager] = None
 

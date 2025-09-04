@@ -1,10 +1,16 @@
 """Simple execution engine that supports different scheduling strategies."""
+
 from __future__ import annotations
 
 import logging
 from collections import deque
 from time import perf_counter
 from typing import Deque, Iterable, List, Optional
+
+import pandas as pd
+
+from brokers import connection_manager as conn_mgr
+from analysis.broker_tca import broker_tca
 
 from .algorithms import twap_schedule, vwap_schedule
 from .rl_executor import RLExecutor
@@ -15,6 +21,7 @@ from metrics import SLIPPAGE_BPS, REALIZED_SLIPPAGE_BPS
 try:  # optional dependency
     from utils.resource_monitor import monitor
 except Exception:  # pragma: no cover - light fallback
+
     class _Cap:
         @staticmethod
         def capability_tier() -> str:
@@ -90,10 +97,15 @@ class ExecutionEngine:
             Configured slippage assumption for logging/metrics.
         """
 
+        order_ts = pd.Timestamp.utcnow()
         start = perf_counter()
         strat = strategy.lower()
 
-        params = self.optimizer.get_params() if self.optimizer else {"limit_offset": 0.0, "slice_size": None}
+        params = (
+            self.optimizer.get_params()
+            if self.optimizer
+            else {"limit_offset": 0.0, "slice_size": None}
+        )
         limit_offset = float(params.get("limit_offset", 0.0) or 0.0)
         slice_size = params.get("slice_size")
 
@@ -101,7 +113,9 @@ class ExecutionEngine:
         if self.rl_executor is not None:
             tier = getattr(monitor.capabilities, "capability_tier", lambda: "lite")()
             if strat == "rl" or (
-                tier != "lite" and quantity >= self.rl_threshold and strat not in {"twap", "vwap"}
+                tier != "lite"
+                and quantity >= self.rl_threshold
+                and strat not in {"twap", "vwap"}
             ):
                 use_rl = True
 
@@ -142,23 +156,36 @@ class ExecutionEngine:
                 avail = bid_vol
                 price = bid
                 sign = -1
-            adj_price = price * (1 + sign * (expected_slippage_bps + limit_offset) / 10000.0)
+            adj_price = price * (
+                1 + sign * (expected_slippage_bps + limit_offset) / 10000.0
+            )
             fill_qty = min(qty, avail)
             if fill_qty <= 0:
                 continue
             filled += fill_qty
             price_accum += fill_qty * adj_price
 
-        avg_price = price_accum / filled if filled else (ask if side.lower() == "buy" else bid)
+        avg_price = (
+            price_accum / filled if filled else (ask if side.lower() == "buy" else bid)
+        )
         realized = (avg_price - mid) / mid * sign * 10000.0 if mid else 0.0
         latency = perf_counter() - start
         depth = ask_vol if side.lower() == "buy" else bid_vol
+        fill_ts = order_ts + pd.to_timedelta(latency, unit="s")
+        try:
+            broker = conn_mgr.get_active_broker()
+            name = getattr(broker, "__name__", broker.__class__.__name__)
+            broker_tca.record(name, order_ts, fill_ts, realized)
+        except Exception:
+            pass
         try:
             record_fill(slippage=realized, latency=latency, depth=depth)
         except Exception:
             pass
         logger.info(
-            "Slippage expected %.2f bps vs realized %.2f bps", expected_slippage_bps, realized
+            "Slippage expected %.2f bps vs realized %.2f bps",
+            expected_slippage_bps,
+            realized,
         )
         try:
             SLIPPAGE_BPS.set(expected_slippage_bps)
