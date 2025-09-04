@@ -10,6 +10,7 @@ import yaml
 
 from analytics.metrics_store import MetricsStore, query_metrics
 from analytics.regime_performance_store import RegimePerformanceStore
+from analytics.issue_client import load_default as issue_client
 from log_utils import read_decisions
 
 from config_schema import ConfigSchema
@@ -110,6 +111,12 @@ def main() -> None:
         col5.metric("Funding Cost", fund_val)
         col6.metric("Margin Req.", margin_req_val)
         col7.metric("Free Margin", margin_avail_val)
+
+        client = issue_client()
+        open_issues = client.list_open()
+        if open_issues:
+            st.subheader("Open Issues")
+            st.table(pd.DataFrame(open_issues)[["id", "event", "status"]])
 
         rate_df = query_metrics("tick_anomaly_rate")
         if not rate_df.empty:
