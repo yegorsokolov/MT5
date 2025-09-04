@@ -21,6 +21,7 @@ def log(
     contributions: Dict[str, float] | None = None,
     reason: str | None = None,
     news: list[dict] | None = None,
+    issue_ids: list[str] | str | None = None,
 ) -> None:
     """Enrich ``df`` with contextual fields and append to the decision log.
 
@@ -40,6 +41,10 @@ def log(
         Optional natural-language explanation of the decision.
     news:
         List of relevant headlines with ``title``, ``sentiment``, ``impact`` and ``url``.
+    issue_ids:
+        Optional identifier or list of identifiers from the central issue
+        tracker associated with this decision.  Stored under the ``issues``
+        column in the decision log.
     """
 
     if df.empty:
@@ -57,6 +62,10 @@ def log(
         out["reason"] = reason
     if news:
         out["news"] = [news] if len(out) == 1 else [news] * len(out)
+    if issue_ids is not None:
+        if isinstance(issue_ids, str):
+            issue_ids = [issue_ids]
+        out["issues"] = [issue_ids] if len(out) == 1 else [issue_ids] * len(out)
     try:
         log_decision(out)
     except Exception:

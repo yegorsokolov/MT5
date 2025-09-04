@@ -158,6 +158,8 @@ def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
                 "market_basket": decisions.get("market_basket", 0),
             }
         )
+        if "issues" in decisions.columns:
+            comp["issues"] = decisions["issues"]
         try:
             comp.to_parquet(STRATEGY_REPLAY_DIR / f"{sid}.parquet", index=False)
         except Exception:
