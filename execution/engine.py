@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from time import perf_counter
 from typing import Deque, Iterable, List, Optional
 
 from .algorithms import twap_schedule, vwap_schedule
 from .rl_executor import RLExecutor
+from .execution_optimizer import ExecutionOptimizer
+from .fill_history import record_fill
 from metrics import SLIPPAGE_BPS, REALIZED_SLIPPAGE_BPS
 
 try:  # optional dependency
@@ -37,10 +40,16 @@ class ExecutionEngine:
         volume_window: int = 20,
         rl_executor: Optional[RLExecutor] = None,
         rl_threshold: float = 0.0,
+        optimizer: Optional[ExecutionOptimizer] = None,
     ) -> None:
         self.recent_volume: Deque[float] = deque(maxlen=volume_window)
         self.rl_executor = rl_executor
         self.rl_threshold = rl_threshold
+        self.optimizer = optimizer or ExecutionOptimizer()
+        try:
+            self.optimizer.schedule_nightly()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     def record_volume(self, volume: float) -> None:
@@ -81,7 +90,12 @@ class ExecutionEngine:
             Configured slippage assumption for logging/metrics.
         """
 
+        start = perf_counter()
         strat = strategy.lower()
+
+        params = self.optimizer.get_params() if self.optimizer else {"limit_offset": 0.0, "slice_size": None}
+        limit_offset = float(params.get("limit_offset", 0.0) or 0.0)
+        slice_size = params.get("slice_size")
 
         use_rl = False
         if self.rl_executor is not None:
@@ -107,6 +121,13 @@ class ExecutionEngine:
         elif strat == "twap":
             intervals = max(len(self.recent_volume), 1)
             slices = twap_schedule(quantity, intervals)
+        elif slice_size:
+            slices: List[float] = []
+            remaining = quantity
+            while remaining > 0:
+                take = min(remaining, slice_size)
+                slices.append(take)
+                remaining -= take
         else:
             slices = [quantity]
 
@@ -121,7 +142,7 @@ class ExecutionEngine:
                 avail = bid_vol
                 price = bid
                 sign = -1
-            adj_price = price * (1 + sign * expected_slippage_bps / 10000.0)
+            adj_price = price * (1 + sign * (expected_slippage_bps + limit_offset) / 10000.0)
             fill_qty = min(qty, avail)
             if fill_qty <= 0:
                 continue
@@ -130,6 +151,12 @@ class ExecutionEngine:
 
         avg_price = price_accum / filled if filled else (ask if side.lower() == "buy" else bid)
         realized = (avg_price - mid) / mid * sign * 10000.0 if mid else 0.0
+        latency = perf_counter() - start
+        depth = ask_vol if side.lower() == "buy" else bid_vol
+        try:
+            record_fill(slippage=realized, latency=latency, depth=depth)
+        except Exception:
+            pass
         logger.info(
             "Slippage expected %.2f bps vs realized %.2f bps", expected_slippage_bps, realized
         )
