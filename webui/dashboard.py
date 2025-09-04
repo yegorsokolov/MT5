@@ -103,6 +103,12 @@ def main() -> None:
         col6.metric("Margin Req.", margin_req_val)
         col7.metric("Free Margin", margin_avail_val)
 
+        rate_df = query_metrics("tick_anomaly_rate")
+        if not rate_df.empty:
+            rate = float(rate_df["value"].iloc[-1])
+            if rate > 0:
+                st.error(f"Tick anomaly rate {rate:.2%}")
+
         exp_file = Path("reports/currency_exposure/latest.json")
         if exp_file.exists():
             try:
