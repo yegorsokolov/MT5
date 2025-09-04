@@ -55,7 +55,7 @@ def _training_cmd(model: str) -> list[str]:
 
 def process_retrain_events(store: EventStore | None = None) -> None:
     """Consume retrain events and launch training scripts."""
-    from analytics.metrics_store import log_retrain_outcome
+    from analytics.metrics_aggregator import log_retrain_outcome
     if store is None:
         from event_store import EventStore
 

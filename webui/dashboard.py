@@ -8,7 +8,7 @@ import requests
 import streamlit as st
 import yaml
 
-from analytics.metrics_store import MetricsStore, query_metrics
+from analytics.metrics_aggregator import query_metrics
 from analytics.regime_performance_store import RegimePerformanceStore
 from analytics.issue_client import load_default as issue_client
 from log_utils import read_decisions
@@ -217,13 +217,17 @@ def main() -> None:
 
     # Performance tab
     with tabs[1]:
-        store = MetricsStore()
-        df = store.load()
-        if not df.empty:
+        ret_df = query_metrics("return")
+        sharpe_df = query_metrics("sharpe")
+        draw_df = query_metrics("drawdown")
+        if not ret_df.empty or not sharpe_df.empty or not draw_df.empty:
             st.subheader("Daily Metrics")
-            st.line_chart(df["return"], height=150)
-            st.line_chart(df["sharpe"], height=150)
-            st.line_chart(df["drawdown"], height=150)
+            if not ret_df.empty:
+                st.line_chart(ret_df.set_index("timestamp")["value"], height=150)
+            if not sharpe_df.empty:
+                st.line_chart(sharpe_df.set_index("timestamp")["value"], height=150)
+            if not draw_df.empty:
+                st.line_chart(draw_df.set_index("timestamp")["value"], height=150)
 
         # Model vs. Market section
         reg_store = RegimePerformanceStore()
