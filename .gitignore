@@ -39,6 +39,7 @@ models/*
 !models/ftrl.py
 !models/feature_autoencoder.py
 !models/slimmable_network.py
+!models/residual_learner.py
 __pycache__/
 logs/
 analysis/news_impact.parquet
