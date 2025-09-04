@@ -21,6 +21,9 @@ from model_registry import ModelRegistry, ResourceCapabilities
 import model_registry as mr
 import time
 from analysis.inference_latency import InferenceLatency
+import numpy as np
+import pytest
+from models import residual_learner
 
 
 @dataclass
@@ -134,4 +137,25 @@ def test_latency_watchdog_downgrades_and_recovers(monkeypatch, caplog) -> None:
     registry.predict("rl_policy", None, loader=fast_loader)
     assert registry.get("rl_policy") == "rl_medium"
     assert any("Latency normalised" in rec.message for rec in caplog.records)
+
+
+def test_residual_prediction_added() -> None:
+    monitor = DummyMonitor(
+        ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=True, gpu_count=1)
+    )
+    registry = ModelRegistry(monitor, auto_refresh=False)
+    registry._remote_variant = lambda task: None
+    features = np.array([[0.0], [1.0], [2.0]])
+    base = np.zeros(3)
+    target = np.array([1.0, 2.0, 3.0])
+    residual_learner.train(features, base, target, "rl_medium")
+
+    class BaseModel:
+        def predict(self, feats):
+            return np.array([0.0])
+
+    pred = registry.predict(
+        "rl_policy", np.array([[0.0]]), loader=lambda name: BaseModel()
+    )
+    assert float(np.asarray(pred)) == pytest.approx(1.0, rel=1e-3)
 

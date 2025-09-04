@@ -18,6 +18,7 @@ from prediction_cache import PredictionCache
 
 from analysis.inference_latency import InferenceLatency
 from analytics.metrics_store import model_cache_hit, model_unload
+from models import residual_learner
 
 # ``models.mixture_of_experts`` depends on no heavy libraries but importing the
 # ``models`` package would trigger optional imports like ``torch``. Import the
@@ -333,6 +334,10 @@ class ModelRegistry:
             model = joblib.load(path)
             self._models[name] = model
             self._finalizers[name] = weakref.finalize(model, self._models.pop, name, None)
+            try:
+                residual_learner.train_from_cache(name)
+            except Exception:  # pragma: no cover - training is best effort
+                self.logger.exception("Residual training failed for %s", name)
         else:
             model_cache_hit()
         self._last_used[name] = time.time()
@@ -492,6 +497,13 @@ class ModelRegistry:
                         result = model.predict_proba(features)
                     else:
                         result = model.predict(features)
+                try:
+                    residual_model = residual_learner.load(active_name)
+                    if residual_model is not None:
+                        residual = residual_learner.predict(features, result, residual_model)
+                        result = result + residual
+                except Exception:  # pragma: no cover - best effort
+                    self.logger.exception("Residual inference failed for %s", active_name)
             finally:
                 elapsed = time.perf_counter() - start
                 self.latency.record(active_name, elapsed)
