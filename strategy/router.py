@@ -20,6 +20,7 @@ import pandas as pd
 from analysis.algorithm_rating import load_ratings
 from analysis.rationale_scorer import load_algorithm_win_rates
 from analytics.regime_performance_store import RegimePerformanceStore
+from analytics.metrics_aggregator import record_metric
 from state_manager import load_router_state, save_router_state
 from models.ftrl import FTRLModel
 from utils.resource_monitor import monitor
@@ -390,6 +391,13 @@ class StrategyRouter:
             sharpe,
             drawdown,
         ]
+        tags = {"instrument": instrument, "basket": basket, "algorithm": algorithm}
+        try:
+            record_metric("strategy_pnl", float(arr.sum()), tags)
+            record_metric("strategy_sharpe", sharpe, tags)
+            record_metric("strategy_drawdown", drawdown, tags)
+        except Exception:
+            pass
         try:
             self.scoreboard_path.parent.mkdir(parents=True, exist_ok=True)
             self.scoreboard.to_parquet(self.scoreboard_path)
