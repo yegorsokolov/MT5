@@ -28,6 +28,7 @@ from models.build_model import build_model, compute_scale_factor
 from models.hier_forecast import HierarchicalForecaster
 from models.quantize import apply_quantization
 from models.contrastive_encoder import initialize_model_with_contrastive
+from models.slimmable_network import SlimmableNetwork
 from analysis.feature_selector import select_features
 from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
@@ -92,6 +93,20 @@ def _load_donor_state_dict(symbol: str):
             if isinstance(state, dict):
                 return state
     return None
+
+
+def select_width_multiplier(widths: list[float]) -> float:
+    """Return the widest width multiplier supported by local resources."""
+
+    tier = monitor.capabilities.capability_tier()
+    widths = sorted(widths)
+    if tier in ("gpu", "hpc"):
+        return widths[-1]
+    if tier == "standard":
+        for w in reversed(widths):
+            if w <= 0.5:
+                return w
+    return widths[0]
 
 
 def batch_size_backoff(cfg: dict, train_step: Callable[[int, int], T]) -> T:
@@ -537,6 +552,19 @@ def main(
                 quantiles=quantiles,
             )
             model = TemporalFusionTransformer(tft_cfg).to(device)
+        elif cfg.get("slimmable"):
+            width_multipliers = cfg.get("width_multipliers", [0.25, 0.5, 1.0])
+            model = SlimmableNetwork(
+                len(features),
+                cfg.get("d_model", 64),
+                width_multipliers=width_multipliers,
+            ).to(device)
+            chosen_width = select_width_multiplier(width_multipliers)
+            model.set_width(chosen_width)
+            architecture_history.append(
+                {"timestamp": datetime.utcnow().isoformat(), "width_mult": chosen_width}
+            )
+            logger.info("Selected width multiplier %s", chosen_width)
         else:
             model = build_model(
                 len(features),
@@ -549,6 +577,31 @@ def main(
 
         def _watch_model() -> None:
             if isinstance(model, HierarchicalForecaster):
+                return
+            if isinstance(model, SlimmableNetwork):
+                async def _watch() -> None:
+                    q = monitor.subscribe()
+                    nonlocal model
+                    while True:
+                        await q.get()
+                        new_width = select_width_multiplier(list(model.width_multipliers))
+                        if new_width != model.active_multiplier:
+                            model.set_width(new_width)
+                            architecture_history.append(
+                                {
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "width_mult": new_width,
+                                }
+                            )
+                            logger.info(
+                                "Adjusted width multiplier to %s", new_width
+                            )
+
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.get_event_loop()
+                loop.create_task(_watch())
                 return
 
             async def _watch() -> None:
@@ -885,13 +938,37 @@ def main(
             mlflow.log_metric("best_val_loss", best_val_loss)
             logger.info("Model saved to %s", model_path)
             mlflow.log_artifact(str(model_path))
-            version_id = model_store.save_model(
-                joblib.load(model_path),
-                cfg,
-                {"val_loss": best_val_loss, "test_accuracy": acc},
-                architecture_history=architecture_history,
-                features=features,
-            )
+            saved_state = joblib.load(model_path)
+            base_model = model.module if isinstance(model, DDP) else model
+            if isinstance(base_model, SlimmableNetwork):
+                version_id = model_store.save_model(
+                    saved_state,
+                    {**cfg, "width_mult": base_model.active_multiplier},
+                    {"val_loss": best_val_loss, "test_accuracy": acc},
+                    architecture_history=architecture_history,
+                    features=features,
+                )
+                for mult, state in base_model.export_slices().items():
+                    if mult == base_model.active_multiplier:
+                        continue
+                    slice_path = root / f"model_transformer_{mult}x.pt"
+                    joblib.dump(state, slice_path)
+                    mlflow.log_artifact(str(slice_path))
+                    model_store.save_model(
+                        joblib.load(slice_path),
+                        {**cfg, "width_mult": mult},
+                        {"val_loss": best_val_loss, "test_accuracy": acc},
+                        architecture_history=architecture_history,
+                        features=features,
+                    )
+            else:
+                version_id = model_store.save_model(
+                    saved_state,
+                    cfg,
+                    {"val_loss": best_val_loss, "test_accuracy": acc},
+                    architecture_history=architecture_history,
+                    features=features,
+                )
             logger.info("Registered model version %s", version_id)
             if use_tft:
                 quantile_preds = []
