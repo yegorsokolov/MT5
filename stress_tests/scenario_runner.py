@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Tuple, Optional
 import pandas as pd
 import numpy as np
 
+from analytics.metrics_store import record_metric
 from risk_manager import risk_manager
 
 
@@ -24,9 +25,11 @@ class ScenarioResult:
     """Result of a single stress scenario run."""
 
     scenario: str
+    pnl: float
     max_drawdown: float
     recovery_days: int
     liquidity_impact: float
+    hedging_effectiveness: float
     action: str
 
 
@@ -72,6 +75,7 @@ class StressScenarioRunner:
     # ------------------------------------------------------------------
     def run(
         self,
+        scenario_generator: Optional[object] = None,
         synthetic_generator: Optional[object] = None,
         n_synthetic: int = 0,
     ) -> Dict[str, List[ScenarioResult]]:
@@ -79,10 +83,13 @@ class StressScenarioRunner:
 
         Parameters
         ----------
+        scenario_generator:
+            Optional ``ScenarioGenerator`` used to create additional shocked
+            scenarios from the base PnL series.
         synthetic_generator:
-            Optional object exposing a ``generate(length: int) -> ArrayLike`` method.
-            When provided, additional synthetic PnL paths will be generated and
-            evaluated alongside historical scenarios.
+            Optional object exposing a ``generate(length: int) -> ArrayLike``
+            method.  When provided, additional synthetic PnL paths will be
+            generated and evaluated alongside historical scenarios.
         n_synthetic:
             Number of synthetic paths to generate for each strategy.  Ignored if
             ``synthetic_generator`` is ``None``.
@@ -92,34 +99,68 @@ class StressScenarioRunner:
             pnl = self._load_pnl(path)
             results: List[ScenarioResult] = []
 
+            # Baseline metrics
+            base_result = self._evaluate(pnl, "baseline", None)
+            base_drawdown = base_result.max_drawdown
+            results.append(base_result)
+
             for label, (start, end) in CRISIS_PERIODS.items():
                 segment = pnl.loc[start:end]
                 if not segment.empty:
-                    results.append(self._evaluate(segment, label))
+                    results.append(self._evaluate(segment, label, base_drawdown))
 
             # Synthetic shock: large drop on first observation
             shock_size = self.thresholds.get("shock_size", 0.1)
             shocked = pnl.copy()
             if not shocked.empty:
                 shocked.iloc[0] -= shock_size
-            results.append(self._evaluate(shocked, "synthetic"))
+            results.append(self._evaluate(shocked, "synthetic", base_drawdown))
+
+            # Additional user defined scenarios
+            if scenario_generator is not None:
+                generated = scenario_generator.generate_pnl(pnl)
+                for label, series in generated.items():
+                    results.append(self._evaluate(series, label, base_drawdown))
 
             # Optional GAN/diffusion generated paths
             if synthetic_generator is not None and n_synthetic > 0:
                 for i in range(n_synthetic):
                     synthetic = synthetic_generator.generate(len(pnl))
                     syn_series = pd.Series(synthetic, index=pnl.index)
-                    results.append(self._evaluate(syn_series, f"synthetic_path_{i}"))
+                    results.append(
+                        self._evaluate(syn_series, f"synthetic_path_{i}", base_drawdown)
+                    )
+
+            for r in results:
+                record_metric(
+                    "stress_pnl", r.pnl, {"strategy": name, "scenario": r.scenario}
+                )
+                record_metric(
+                    "stress_drawdown",
+                    r.max_drawdown,
+                    {"strategy": name, "scenario": r.scenario},
+                )
+                record_metric(
+                    "stress_hedge_eff",
+                    r.hedging_effectiveness,
+                    {"strategy": name, "scenario": r.scenario},
+                )
 
             all_results[name] = results
             self._save_report(name, results)
             self._apply_actions(results)
         return all_results
 
-    def _evaluate(self, pnl: pd.Series, scenario: str) -> ScenarioResult:
+    def _evaluate(
+        self, pnl: pd.Series, scenario: str, base_drawdown: Optional[float]
+    ) -> ScenarioResult:
         max_dd = self._max_drawdown(pnl)
         recovery = self._recovery_time(pnl)
         liquidity = self._liquidity_impact(pnl)
+        pnl_total = float(pnl.sum())
+        hedging = 1.0
+        if base_drawdown and base_drawdown != 0:
+            hedging = 1.0 - (-max_dd) / base_drawdown
         action = "ok"
         if max_dd < -self.thresholds["max_drawdown"] or liquidity > self.thresholds["max_liquidity"]:
             action = "disable"
@@ -127,9 +168,11 @@ class StressScenarioRunner:
             action = "adjust"
         return ScenarioResult(
             scenario=scenario,
+            pnl=pnl_total,
             max_drawdown=-max_dd,
             recovery_days=recovery,
             liquidity_impact=liquidity,
+            hedging_effectiveness=hedging,
             action=action,
         )
 
@@ -147,4 +190,11 @@ class StressScenarioRunner:
             risk_manager.max_drawdown = min(
                 risk_manager.max_drawdown, self.thresholds["max_drawdown"] * 0.5
             )
+        for r in results:
+            if r.action != "ok":
+                record_metric(
+                    "stress_risk_alert",
+                    r.max_drawdown,
+                    {"scenario": r.scenario, "action": r.action},
+                )
 
