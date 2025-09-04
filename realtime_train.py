@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - utils may be stubbed in tests
 
 from data.features import make_features
 from log_utils import setup_logging, log_exceptions
-from signal_queue import get_signal_backend
+from signal_queue import get_signal_backend, publish_dataframe_async
 from data.sanitize import sanitize_ticks
 from data.feature_scaler import FeatureScaler
 from metrics import (
@@ -253,12 +253,12 @@ def apply_liquidity_adjustment(
     return df
 
 
-async def dispatch_signals(queue, df: pd.DataFrame) -> None:
-    """Asynchronously dispatch signals to the provided queue."""
+async def dispatch_signals(bus, df: pd.DataFrame) -> None:
+    """Asynchronously dispatch signals to the message bus."""
     with tracer.start_as_current_span("dispatch_signals"):
-        if queue is None or df.empty:
+        if bus is None or df.empty:
             return
-        await asyncio.to_thread(queue.publish_dataframe, df)
+        await publish_dataframe_async(bus, df)
 
         tier = getattr(monitor, "capability_tier", "lite")
         strategy = "ioc" if tier == "lite" else "vwap"
@@ -376,10 +376,10 @@ async def train_realtime():
         symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
         signal_backend = cfg.get("signal_backend", "none")
-        queue = None
-        if signal_backend in {"kafka", "redis"}:
-            queue = get_signal_backend(cfg)
-            logger.info("Using %s backend for signal queue", signal_backend)
+        bus = None
+        if signal_backend != "none":
+            bus = get_signal_backend(cfg)
+            logger.info("Using %s backend for signal bus", signal_backend)
 
         async def process_batch(batch: pd.DataFrame) -> None:
             feats = await generate_features(batch)
@@ -392,7 +392,7 @@ async def train_realtime():
                 feats[num_cols] = scaler.transform(feats[num_cols])
                 feats[num_cols] = adapter.transform(feats[num_cols])
                 scaler.save(scaler_path)
-            await dispatch_signals(queue, feats)
+            await dispatch_signals(bus, feats)
 
         tick_queue: asyncio.Queue = asyncio.Queue()
         producer = asyncio.create_task(

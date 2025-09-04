@@ -1,45 +1,50 @@
-"""Lightweight in-memory signal queue without external dependencies."""
+"""Signal queue built on the shared :mod:`services.message_bus`."""
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Any
+from typing import Any, AsyncGenerator, Dict
 
 import pandas as pd
 
+from services.message_bus import Topics, get_message_bus, MessageBus
 
-class InMemoryQueue:
-    """A minimal async queue for passing signal dataframes."""
-
-    def __init__(self) -> None:
-        self._queue: asyncio.Queue[list[dict[str, Any]]] = asyncio.Queue()
-
-    def publish_dataframe(self, df: pd.DataFrame, fmt: str = "json") -> None:
-        self._queue.put_nowait(df.to_dict(orient="records"))
-
-    async def publish_dataframe_async(self, df: pd.DataFrame, fmt: str = "json") -> None:
-        self.publish_dataframe(df, fmt)
-
-    async def iter_messages(self) -> AsyncGenerator[dict[str, Any], None]:
-        while True:
-            batch = await self._queue.get()
-            for msg in batch:
-                yield msg
+# ``_ROUTER`` is retained for compatibility with modules that import it.  The
+# message bus supersedes the old ZeroMQ based router so it is simply ``None``
+# here.
+_ROUTER = None
 
 
-def get_signal_backend(cfg: dict | None = None) -> InMemoryQueue:
-    """Return a simple in-memory backend for signals."""
-    return InMemoryQueue()
+def get_signal_backend(cfg: Dict[str, Any] | None = None) -> MessageBus:
+    """Return a :class:`MessageBus` instance for publishing signals."""
+
+    backend = (cfg or {}).get("signal_backend") if cfg else None
+    return get_message_bus(backend)
 
 
-def publish_dataframe(sock: InMemoryQueue, df: pd.DataFrame, fmt: str = "json") -> None:
-    sock.publish_dataframe(df, fmt)
+# ---------------------------------------------------------------------------
+
+def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
+    """Synchronously publish each row of ``df`` to the signals topic."""
+
+    rows = df.to_dict(orient="records")
+
+    async def _pub() -> None:
+        for row in rows:
+            await bus.publish(Topics.SIGNALS, row)
+
+    asyncio.run(_pub())
 
 
-async def publish_dataframe_async(sock: InMemoryQueue, df: pd.DataFrame, fmt: str = "json") -> None:
-    await sock.publish_dataframe_async(df, fmt)
+async def publish_dataframe_async(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
+    """Asynchronously publish each row of ``df`` to the signals topic."""
+
+    rows = df.to_dict(orient="records")
+    for row in rows:
+        await bus.publish(Topics.SIGNALS, row)
 
 
-async def iter_messages(sock: InMemoryQueue, fmt: str = "json", sizer=None) -> AsyncGenerator[dict, None]:
-    async for msg in sock.iter_messages():
+async def iter_messages(bus: MessageBus, fmt: str = "json", sizer=None) -> AsyncGenerator[Dict[str, Any], None]:
+    """Yield messages from the signals topic."""
+
+    async for msg in bus.subscribe(Topics.SIGNALS):
         yield msg
