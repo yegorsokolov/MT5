@@ -10,8 +10,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+import logging
+import importlib.util
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+try:  # pragma: no cover - fallback when package import fails
+    from analysis.ensemble_diversity import error_correlation_matrix
+except Exception:  # noqa: BLE001
+    spec = importlib.util.spec_from_file_location(
+        "ensemble_diversity",
+        Path(__file__).resolve().parents[1] / "analysis" / "ensemble_diversity.py",
+    )
+    _mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(_mod)  # type: ignore[assignment]
+    error_correlation_matrix = _mod.error_correlation_matrix
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,13 +74,23 @@ class EnsembleModel:
             ])
         raise AttributeError("Model does not support prediction: %r" % (model,))
 
-    def predict(self, df: pd.DataFrame) -> Dict[str, np.ndarray]:
-        """Return per-model and ensemble probabilities for ``df``."""
+    def predict(
+        self, df: pd.DataFrame, y_true: Iterable[float] | None = None
+    ) -> Dict[str, np.ndarray]:
+        """Return per-model and ensemble probabilities for ``df``.
+
+        If ``y_true`` is provided, error correlations are used to favour less
+        correlated models. Resulting weights and validation metric improvements
+        are logged.
+        """
+
         per_model = {
             name: self._predict_single(model, df)
             for name, model in self.models.items()
         }
         arr = np.vstack(list(per_model.values()))
+        names = list(per_model.keys())
+        truth = np.asarray(y_true) if y_true is not None else None
 
         if self.meta_model is not None:
             meta_X = arr.T
@@ -73,11 +100,39 @@ class EnsembleModel:
                 ensemble = ensemble[:, -1]
         else:
             if self.weights:
-                w = np.array([self.weights.get(name, 1.0) for name in per_model])
-                w = w / w.sum()
+                base_w = np.array([self.weights.get(name, 1.0) for name in names])
+                base_w = base_w / base_w.sum()
             else:
-                w = np.ones(len(per_model)) / len(per_model)
+                base_w = np.ones(len(per_model)) / len(per_model)
+            w = base_w
+
+            if truth is not None and len(per_model) > 1:
+                corr = error_correlation_matrix(per_model, truth).abs()
+                np.fill_diagonal(corr.values, np.nan)
+                mean_corr = np.nanmean(corr.values, axis=1)
+                diversity = np.clip(1 - mean_corr, 0.0, None)
+                w = base_w * diversity
+                if np.allclose(w.sum(), 0.0):
+                    w = base_w
+                else:
+                    w = w / w.sum()
+                logger.info(
+                    "Diversity-adjusted weights: %s",
+                    {n: float(val) for n, val in zip(names, w)},
+                )
+
             ensemble = np.average(arr, axis=0, weights=w)
+
+            if truth is not None and len(per_model) > 1:
+                baseline = np.average(arr, axis=0, weights=base_w)
+                base_mse = float(np.mean((baseline - truth) ** 2))
+                adj_mse = float(np.mean((ensemble - truth) ** 2))
+                logger.info(
+                    "Validation MSE: %.6f -> %.6f (Δ=%.6f)",
+                    base_mse,
+                    adj_mse,
+                    base_mse - adj_mse,
+                )
 
         per_model["ensemble"] = ensemble
         return per_model
