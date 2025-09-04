@@ -133,6 +133,24 @@ def main() -> None:
             except Exception:
                 pass
 
+        expm_file = Path("reports/exposure_matrix/latest.json")
+        if expm_file.exists():
+            try:
+                mat = pd.read_json(expm_file)
+                if not mat.empty:
+                    st.subheader("Exposure Heatmap")
+                    try:
+                        import seaborn as sns  # type: ignore
+                        import matplotlib.pyplot as plt  # type: ignore
+
+                        fig, ax = plt.subplots()
+                        sns.heatmap(mat, ax=ax, cmap="RdBu", center=0)
+                        st.pyplot(fig)
+                    except Exception:
+                        st.dataframe(mat)
+            except Exception:
+                pass
+
         bots = fetch_json("/bots", api_key)
         st.subheader("Running Bots")
         for bid, info in bots.items():
