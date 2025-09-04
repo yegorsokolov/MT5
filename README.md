@@ -133,6 +133,14 @@ environment and start a training run. Adjust the final command for backtesting
 or signal generation as needed. Optional components can be installed via
 extras, for example `pip install .[rl]` or `pip install .[heavy]`.
 
+### Pre-commit hooks
+
+Install the git hooks to automatically run formatting, linting and type checks:
+
+```bash
+pip install pre-commit && pre-commit install
+```
+
 After adding new data, track it with `dvc add` and upload it to the configured
 remote using `dvc push`.
 

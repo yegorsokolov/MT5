@@ -37,7 +37,7 @@ jobs:
         - name: Install linting and test tools
           run: |
             pip install .[test]
-            pip install ruff flake8 mypy
+            pip install pre-commit
 
         - name: Ensure config docs up to date
           run: |
@@ -46,9 +46,14 @@ jobs:
 
         - name: Run linters and type checks
           run: |
-            ruff check .
-            flake8 .
-            mypy .
+            if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+              CHANGED_FILES=$(git diff --name-only origin/${GITHUB_BASE_REF}... | tr '\n' ' ')
+            else
+              CHANGED_FILES=$(git diff --name-only HEAD^ | tr '\n' ' ')
+            fi
+            if [ -n "$CHANGED_FILES" ]; then
+              pre-commit run --files $CHANGED_FILES
+            fi
 
         - name: Run quality checks and tests
           run: |
