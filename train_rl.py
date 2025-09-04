@@ -13,6 +13,7 @@ import pandas as pd
 import random
 import torch
 import pickle
+
 try:  # optional dependency
     from utils.lr_scheduler import LookaheadAdamW
 except Exception:  # pragma: no cover - utils may be stubbed
@@ -27,6 +28,7 @@ import gym
 from gym import spaces
 from datetime import datetime
 from stable_baselines3 import PPO, SAC, A2C
+
 try:
     from stable_baselines3.common.policies import ActorCriticPolicy
 except Exception:  # pragma: no cover - optional dependency
@@ -39,6 +41,7 @@ except Exception:  # pragma: no cover - optional dependency
 from stable_baselines3.common.evaluation import evaluate_policy
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
+
 try:  # optional dependency
     from torch.utils.data import DataLoader, TensorDataset
 except Exception:  # pragma: no cover - torch not available
@@ -72,9 +75,10 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     PrioritizedReplayBuffer = None  # type: ignore
 
-import mlflow
+from analytics import mlflow_client as mlflow
 from utils import load_config
 from state_manager import save_checkpoint, load_latest_checkpoint
+
 try:
     from utils.resource_monitor import monitor  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -88,6 +92,7 @@ from data.history import (
     save_history_parquet,
     load_history_config,
 )
+
 try:
     from models import model_store  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -95,57 +100,75 @@ except Exception:  # pragma: no cover - optional dependency
 from data.features import make_features
 from analytics.metrics_store import record_metric, TS_PATH
 from analysis import model_card
+
 try:  # optional dependency
     from models.distillation import distill_teacher_student
 except Exception:  # pragma: no cover
+
     def distill_teacher_student(*a, **k):  # type: ignore
         return None
+
 
 try:  # optional dependency
     from models.build_model import build_model, compute_scale_factor
 except Exception:  # pragma: no cover
+
     def build_model(*a, **k):  # type: ignore
         return object()
 
     def compute_scale_factor() -> float:  # type: ignore
         return 1.0
 
+
 try:  # optional dependency
     from models.quantize import apply_quantization
 except Exception:  # pragma: no cover
+
     def apply_quantization(model, *a, **k):  # type: ignore
         return model
+
 
 try:  # optional dependency
     from models.contrastive_encoder import initialize_model_with_contrastive
 except Exception:  # pragma: no cover
+
     def initialize_model_with_contrastive(model):  # type: ignore
         return model
+
+
 try:
     from analysis.regime_detection import periodic_reclassification  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
+
     def periodic_reclassification(df, step=500):  # type: ignore
         return df
+
+
 from rl.hierarchical_agent import (
     HierarchicalAgent,
     EpsilonGreedyManager,
     TrendPolicy,
     MeanReversionPolicy,
 )
+
 try:  # optional dependency
     from rl.graph_agent import GraphAgent
 except Exception:  # pragma: no cover - torch may be stubbed
     GraphAgent = None  # type: ignore
 from execution.rl_executor import RLExecutor
 import argparse
+
 try:
     import torch.distributed as dist
     import torch.multiprocessing as mp
     from torch.nn.parallel import DistributedDataParallel as DDP
 except Exception:  # pragma: no cover - optional dependency
     dist = mp = None  # type: ignore
+
     class DDP:  # type: ignore
         pass
+
+
 from ray_utils import (
     init as ray_init,
     shutdown as ray_shutdown,
@@ -154,6 +177,7 @@ from ray_utils import (
 )
 from rl.offline_dataset import OfflineDataset
 from event_store import EventStore
+
 try:  # optional dependency
     from rl.world_model import WorldModel, Transition
 except Exception:  # pragma: no cover - world model optional
@@ -161,10 +185,12 @@ except Exception:  # pragma: no cover - world model optional
 try:  # optional dependency
     from core.orchestrator import Orchestrator
 except Exception:  # pragma: no cover
+
     class Orchestrator:  # type: ignore
         @staticmethod
         def start() -> None:  # pragma: no cover - simple stub
             return None
+
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 
@@ -314,7 +340,9 @@ def self_optimize(model: object, env: object, cfg: dict) -> None:
     mean_r = float(rewards.mean()) if rewards.size else 0.0
     if model_store is not None:
         try:
-            model_store.save_replay_stats({"mean_reward": mean_r, "count": len(transitions)})
+            model_store.save_replay_stats(
+                {"mean_reward": mean_r, "count": len(transitions)}
+            )
         except Exception:  # pragma: no cover - optional
             pass
 
@@ -331,11 +359,10 @@ def self_optimize(model: object, env: object, cfg: dict) -> None:
                     except Exception:  # pragma: no cover - optional
                         pass
 
+
 setup_logging()
 logger = logging.getLogger(__name__)
 Orchestrator.start()
-
-
 
 
 @log_exceptions
@@ -365,9 +392,7 @@ def main(
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
     if rank == 0:
-        mlflow.set_tracking_uri(f"file:{(root / 'logs' / 'mlruns').resolve()}")
-        mlflow.set_experiment("training_rl")
-        mlflow.start_run()
+        mlflow.start_run("training_rl", cfg)
 
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
@@ -406,6 +431,7 @@ def main(
     if "volume_ratio" in df.columns:
         features.extend(["volume_ratio", "volume_imbalance"])
     from analysis import meta_learning
+
     if cfg.get("meta_train"):
         X_all = df[features].values.astype(np.float32)
         y_all = (df["return"].shift(-1) > 0).astype(np.float32).values[:-1]
@@ -433,7 +459,9 @@ def main(
         new_state, _ = meta_learning.fine_tune_model(
             state, dataset, lambda: meta_learning._LinearModel(len(features))
         )
-        meta_learning.save_meta_weights(new_state, "rl_policy", regime=f"regime_{current_regime}")
+        meta_learning.save_meta_weights(
+            new_state, "rl_policy", regime=f"regime_{current_regime}"
+        )
         return 0.0
 
     graph_model = None
@@ -453,19 +481,23 @@ def main(
         algo = "A2C" if size == "lite" else "PPO"
     else:
         algo = algo_cfg
-    cvar_env_penalty = 0.0 if cfg.get("risk_objective") == "cvar" else cfg.get("rl_cvar_penalty", 0.0)
+    cvar_env_penalty = (
+        0.0 if cfg.get("risk_objective") == "cvar" else cfg.get("rl_cvar_penalty", 0.0)
+    )
 
     def maybe_wrap(env: gym.Env) -> gym.Env:
         if cfg.get("macro_reward"):
             env = MacroRewardWrapper(env)
         if cfg.get("risk_objective") == "cvar":
             from rl.risk_cvar import CVaRRewardWrapper
+
             env = CVaRRewardWrapper(
                 env,
                 penalty=cfg.get("rl_cvar_penalty", 0.0),
                 window=cfg.get("rl_cvar_window", 30),
             )
         return env
+
     env_kwargs = dict(
         df=df,
         features=features,
@@ -571,7 +603,10 @@ def main(
         env = env_cls(**env_kwargs)
         env = maybe_wrap(env)
         per_kwargs = {}
-        if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"] and PrioritizedReplayBuffer:
+        if (
+            TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]
+            and PrioritizedReplayBuffer
+        ):
             per_kwargs = {
                 "replay_buffer_class": PrioritizedReplayBuffer,
                 "replay_buffer_kwargs": {
@@ -640,7 +675,10 @@ def main(
         env = DiscreteTradingEnv(**env_kwargs)
         env = maybe_wrap(env)
         per_kwargs = {}
-        if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"] and PrioritizedReplayBuffer:
+        if (
+            TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]
+            and PrioritizedReplayBuffer
+        ):
             per_kwargs = {
                 "replay_buffer_class": PrioritizedReplayBuffer,
                 "replay_buffer_kwargs": {
@@ -687,6 +725,7 @@ def main(
         rllib_algo = cfg.get("rllib_algorithm", "PPO").upper()
 
         if cfg.get("multi_agent"):
+
             def env_creator(env_config=None):
                 env_i = MultiAgentTradingEnv(**env_kwargs)
                 return maybe_wrap(env_i)
@@ -719,6 +758,7 @@ def main(
                 .seed(seed)
             )
         else:
+
             def env_creator(env_config=None):
                 env_i = RLLibTradingEnv(**env_kwargs)
                 return maybe_wrap(env_i)
@@ -751,12 +791,17 @@ def main(
     else:
         raise ValueError(f"Unknown rl_algorithm {algo}")
 
-    if algo != "RLLIB" and hasattr(model, "policy") and hasattr(model.policy, "optimizer"):
+    if (
+        algo != "RLLIB"
+        and hasattr(model, "policy")
+        and hasattr(model.policy, "optimizer")
+    ):
         model.policy.optimizer = LookaheadAdamW(
             model.policy.parameters(), lr=cfg.get("rl_learning_rate", 3e-4)
         )
 
     if algo != "RLLIB":
+
         def _watch_model() -> None:
             async def _watch() -> None:
                 q = monitor.subscribe()
@@ -780,7 +825,10 @@ def main(
                         model = model_new
                         scale_factor = new_scale
                         architecture_history.append(
-                            {"timestamp": datetime.utcnow().isoformat(), "scale_factor": scale_factor}
+                            {
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "scale_factor": scale_factor,
+                            }
                         )
                         logger.info(
                             "Hot-reloaded RL model with scale factor %s", scale_factor
@@ -827,7 +875,11 @@ def main(
         checkpoint = model.save(str(root / "model_rllib"))
         logger.info("RLlib model saved to %s", checkpoint)
         version_id = model_store.save_model(
-            Path(checkpoint), cfg, {}, architecture_history=architecture_history, features=features
+            Path(checkpoint),
+            cfg,
+            {},
+            architecture_history=architecture_history,
+            features=features,
         )
         logger.info("Registered model version %s", version_id)
         ray.shutdown()
@@ -884,7 +936,9 @@ def main(
                             reset_num_timesteps=False,
                         )
                     except TypeError:  # pragma: no cover - stub algos
-                        model.learn(total_timesteps=int(cfg.get("world_model_steps", 1000)))
+                        model.learn(
+                            total_timesteps=int(cfg.get("world_model_steps", 1000))
+                        )
                     if hasattr(model, "set_env"):
                         model.set_env(env)
                 dataset.close()
@@ -1159,7 +1213,7 @@ def train_constrained(cfg: dict) -> float:
     agent = ConstrainedAgent(n_actions=2, risk_budget=budget, risk_manager=risk_mgr)
     for _ in range(cfg.get("constrained_steps", 100)):
         action = agent.act(None)
-        reward, cost = ((1.0, 0.1) if action == 0 else (2.0, 0.5))
+        reward, cost = (1.0, 0.1) if action == 0 else (2.0, 0.5)
         agent.update(action, reward, cost)
     return agent.lambda_
 
@@ -1268,13 +1322,17 @@ if __name__ == "__main__":
         help="Train a distributional (quantile-based) agent",
     )
     parser.add_argument(
-        "--rl-exec", action="store_true", help="Train RL execution policy",
+        "--rl-exec",
+        action="store_true",
+        help="Train RL execution policy",
     )
     parser.add_argument(
         "--graph-model", action="store_true", help="Use GraphNet as policy backbone"
     )
     parser.add_argument(
-        "--graph-rl", action="store_true", help="Enable graph-based RL agent",
+        "--graph-rl",
+        action="store_true",
+        help="Enable graph-based RL agent",
     )
     parser.add_argument(
         "--graph-path",
