@@ -1,4 +1,5 @@
 from .router import StrategyRouter
+from .fuzzy_consensus import FuzzyConsensus
 
 try:  # optional imports to avoid heavy dependencies during tests
     from .performance_monitor import PerformanceMonitor
@@ -7,4 +8,10 @@ try:  # optional imports to avoid heavy dependencies during tests
 except Exception:  # pragma: no cover - optional at runtime
     PerformanceMonitor = BayesianWeighting = EvolutionLab = None
 
-__all__ = ["StrategyRouter", "PerformanceMonitor", "BayesianWeighting", "EvolutionLab"]
+__all__ = [
+    "StrategyRouter",
+    "PerformanceMonitor",
+    "BayesianWeighting",
+    "EvolutionLab",
+    "FuzzyConsensus",
+]
