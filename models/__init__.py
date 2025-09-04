@@ -94,6 +94,10 @@ try:  # optional torch dependency
     from .tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 except Exception:  # pragma: no cover - torch may be missing
     TemporalFusionTransformer = TFTConfig = QuantileLoss = None
+try:  # optional torch dependency
+    from .slimmable_network import SlimmableNetwork
+except Exception:  # pragma: no cover - torch may be missing
+    SlimmableNetwork = None
 
 __all__ = [
     "EnsembleModel",
@@ -106,5 +110,6 @@ __all__ = [
     "TemporalFusionTransformer",
     "TFTConfig",
     "QuantileLoss",
+    "SlimmableNetwork",
     "LazyModel",
 ]
