@@ -14,7 +14,8 @@ from sklearn.metrics import classification_report
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMClassifier
-import mlflow
+from analytics import mlflow_client as mlflow
+from datetime import datetime
 
 from data.feature_scaler import FeatureScaler
 
@@ -33,7 +34,7 @@ try:
 except Exception:  # noqa: E722
     shap = None
 
-from utils import load_config, mlflow_run
+from utils import load_config
 from utils.resource_monitor import monitor
 from data.history import (
     load_history_parquet,
@@ -101,7 +102,9 @@ def _load_donor_booster(symbol: str):
         syms = cfg.get("symbols") or [cfg.get("symbol")]
         if syms and symbol in syms:
             model, _ = model_store.load_model(meta["version_id"])
-            clf = model.named_steps.get("clf") if hasattr(model, "named_steps") else None
+            clf = (
+                model.named_steps.get("clf") if hasattr(model, "named_steps") else None
+            )
             if clf and hasattr(clf, "booster_"):
                 return clf.booster_
     return None
@@ -164,53 +167,52 @@ def main(
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
     scaler_path = root / "scaler.pkl"
+    start_time = datetime.now()
 
     donor_booster = _load_donor_booster(transfer_from) if transfer_from else None
 
-    with mlflow_run("training", cfg):
-        if df_override is not None:
-            df = df_override
-        else:
-            symbols = cfg.get("symbols") or [cfg.get("symbol")]
-            all_dfs = []
-            chunk_size = cfg.get("stream_chunk_size", 100_000)
-            stream = cfg.get("stream_history", False)
-            for sym in symbols:
-                if stream:
-                    pq_path = root / "data" / f"{sym}_history.parquet"
-                    if pq_path.exists():
-                        for chunk in load_history_iter(pq_path, chunk_size):
-                            chunk["Symbol"] = sym
-                            all_dfs.append(chunk)
-                    else:
-                        df_sym = load_history_config(
-                            sym, cfg, root, validate=cfg.get("validate", False)
-                        )
-                        df_sym["Symbol"] = sym
-                        all_dfs.append(df_sym)
+    mlflow.start_run("training", cfg)
+    if df_override is not None:
+        df = df_override
+    else:
+        symbols = cfg.get("symbols") or [cfg.get("symbol")]
+        all_dfs = []
+        chunk_size = cfg.get("stream_chunk_size", 100_000)
+        stream = cfg.get("stream_history", False)
+        for sym in symbols:
+            if stream:
+                pq_path = root / "data" / f"{sym}_history.parquet"
+                if pq_path.exists():
+                    for chunk in load_history_iter(pq_path, chunk_size):
+                        chunk["Symbol"] = sym
+                        all_dfs.append(chunk)
                 else:
                     df_sym = load_history_config(
                         sym, cfg, root, validate=cfg.get("validate", False)
                     )
                     df_sym["Symbol"] = sym
                     all_dfs.append(df_sym)
+            else:
+                df_sym = load_history_config(
+                    sym, cfg, root, validate=cfg.get("validate", False)
+                )
+                df_sym["Symbol"] = sym
+                all_dfs.append(df_sym)
 
-            df = pd.concat(all_dfs, ignore_index=True)
-            save_history_parquet(df, root / "data" / "history.parquet")
+        df = pd.concat(all_dfs, ignore_index=True)
+        save_history_parquet(df, root / "data" / "history.parquet")
 
-            df = make_features(df, validate=cfg.get("validate", False))
-            adapter_path = root / "domain_adapter.pkl"
-            adapter = DomainAdapter.load(adapter_path)
-            num_cols = df.select_dtypes(np.number).columns
-            if len(num_cols) > 0:
-                adapter.fit_source(df[num_cols])
-                df[num_cols] = adapter.transform(df[num_cols])
-                adapter.save(adapter_path)
-            df = periodic_reclassification(
-                df, step=cfg.get("regime_reclass_period", 500)
-            )
-            if "Symbol" in df.columns:
-                df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+        df = make_features(df, validate=cfg.get("validate", False))
+        adapter_path = root / "domain_adapter.pkl"
+        adapter = DomainAdapter.load(adapter_path)
+        num_cols = df.select_dtypes(np.number).columns
+        if len(num_cols) > 0:
+            adapter.fit_source(df[num_cols])
+            df[num_cols] = adapter.transform(df[num_cols])
+            adapter.save(adapter_path)
+        df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
+        if "Symbol" in df.columns:
+            df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
     features = [
         "return",
@@ -237,6 +239,11 @@ def main(
         features.extend(["volume_ratio", "volume_imbalance"])
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
+
+    if df_override is not None:
+        mlflow.log_param("data_source", "override")
+    else:
+        mlflow.log_param("data_source", "config")
 
     df["tb_label"] = triple_barrier(
         df["mid"],
@@ -549,7 +556,11 @@ def main(
         aggregate_report,
         root / "reports" / "model_cards",
     )
-
+    mlflow.log_metric(
+        "runtime",
+        (datetime.now() - start_time).total_seconds(),
+    )
+    mlflow.end_run()
     return float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
 
 

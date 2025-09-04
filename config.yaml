@@ -9,6 +9,10 @@ pred_cache_size: 256
 pred_cache_policy: lru
 log_forward:
   url: ""
+mlflow:
+  tracking_uri: ""
+  username: ""
+  password: ""
 alerting:
   slack_webhook: "secret://SLACK_WEBHOOK"
   smtp:
@@ -173,4 +177,3 @@ scheduler:
   checkpoint_cleanup: true
   diagnostics: true
   backups: true
-

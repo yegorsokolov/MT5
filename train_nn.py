@@ -10,7 +10,7 @@ from typing import Callable, TypeVar, Any
 
 import joblib
 import math
-import mlflow
+from analytics import mlflow_client as mlflow
 import numpy as np
 import pandas as pd
 import torch
@@ -40,7 +40,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     shap = None
 
-from utils import load_config, mlflow_run
+from utils import load_config
 from utils.resource_monitor import monitor
 from state_manager import save_checkpoint, load_latest_checkpoint
 from data.history import (
@@ -312,44 +312,45 @@ def main(
     device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
+    start_time = datetime.now()
 
-    with mlflow_run("training_nn", cfg):
-        symbols = cfg.get("symbols") or [cfg.get("symbol")]
-        dfs = []
-        chunk_size = cfg.get("stream_chunk_size", 100_000)
-        stream = cfg.get("stream_history", False)
-        for sym in symbols:
-            if stream:
-                pq_path = root / "data" / f"{sym}_history.parquet"
-                if pq_path.exists():
-                    for chunk in load_history_iter(pq_path, chunk_size):
-                        chunk["Symbol"] = sym
-                        dfs.append(chunk)
-                else:
-                    df_sym = load_history_config(
-                        sym, cfg, root, validate=cfg.get("validate", False)
-                    )
-                    df_sym["Symbol"] = sym
-                    dfs.append(df_sym)
+    mlflow.start_run("training_nn", cfg)
+    symbols = cfg.get("symbols") or [cfg.get("symbol")]
+    dfs = []
+    chunk_size = cfg.get("stream_chunk_size", 100_000)
+    stream = cfg.get("stream_history", False)
+    for sym in symbols:
+        if stream:
+            pq_path = root / "data" / f"{sym}_history.parquet"
+            if pq_path.exists():
+                for chunk in load_history_iter(pq_path, chunk_size):
+                    chunk["Symbol"] = sym
+                    dfs.append(chunk)
             else:
                 df_sym = load_history_config(
                     sym, cfg, root, validate=cfg.get("validate", False)
                 )
                 df_sym["Symbol"] = sym
                 dfs.append(df_sym)
+        else:
+            df_sym = load_history_config(
+                sym, cfg, root, validate=cfg.get("validate", False)
+            )
+            df_sym["Symbol"] = sym
+            dfs.append(df_sym)
 
-        df = make_features(
-            pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False)
-        )
-        adapter_path = root / "domain_adapter.pkl"
-        adapter = DomainAdapter.load(adapter_path)
-        num_cols = df.select_dtypes(np.number).columns
-        if len(num_cols) > 0:
-            adapter.fit_source(df[num_cols])
-            df[num_cols] = adapter.transform(df[num_cols])
-            adapter.save(adapter_path)
-        if "Symbol" in df.columns:
-            df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+    df = make_features(
+        pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False)
+    )
+    adapter_path = root / "domain_adapter.pkl"
+    adapter = DomainAdapter.load(adapter_path)
+    num_cols = df.select_dtypes(np.number).columns
+    if len(num_cols) > 0:
+        adapter.fit_source(df[num_cols])
+        df[num_cols] = adapter.transform(df[num_cols])
+        adapter.save(adapter_path)
+    if "Symbol" in df.columns:
+        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
         df["tb_label"] = triple_barrier(
             df["mid"],
@@ -400,7 +401,9 @@ def main(
         workers = cfg.get("num_workers") or monitor.capabilities.cpus
 
         def _preflight(bs: int, _ebs: int) -> None:
-            torch.empty((bs, seq_len, len(features)), dtype=torch.float32, device=device)
+            torch.empty(
+                (bs, seq_len, len(features)), dtype=torch.float32, device=device
+            )
 
         batch_size_backoff(cfg, _preflight)
         batch_size = cfg["batch_size"]
@@ -422,8 +425,12 @@ def main(
                 if "SymbolCode" in test_df.columns
                 else test_df
             )
-            X_tr, y_tr = make_sequence_arrays(train_sym, features, seq_len, label_col="tb_label")
-            X_te, y_te = make_sequence_arrays(test_sym, features, seq_len, label_col="tb_label")
+            X_tr, y_tr = make_sequence_arrays(
+                train_sym, features, seq_len, label_col="tb_label"
+            )
+            X_te, y_te = make_sequence_arrays(
+                test_sym, features, seq_len, label_col="tb_label"
+            )
             if len(X_tr) == 0 or len(X_te) == 0:
                 continue
             X_tr, X_va, y_tr, y_va = sk_train_test_split(
@@ -444,7 +451,9 @@ def main(
                 torch.tensor(y_te, dtype=torch.float32),
             )
             sampler = (
-                DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
+                DistributedSampler(
+                    train_ds, num_replicas=world_size, rank=rank, shuffle=True
+                )
                 if world_size > 1
                 else None
             )
@@ -465,6 +474,7 @@ def main(
             tasks_list.append((train_ds, val_ds))
 
         from analysis import meta_learning
+
         if cfg.get("meta_train"):
             state = meta_learning.meta_train_transformer(
                 tasks_list, lambda: meta_learning._LinearModel(len(features))
@@ -474,7 +484,11 @@ def main(
         if cfg.get("fine_tune"):
             from torch.utils.data import TensorDataset
 
-            regime = int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
+            regime = (
+                int(df["market_regime"].iloc[-1])
+                if "market_regime" in df.columns
+                else 0
+            )
             mask = (
                 df["market_regime"] == regime
                 if "market_regime" in df.columns
@@ -532,9 +546,11 @@ def main(
                 num_regimes=num_regimes,
             ).to(device)
         model = initialize_model_with_contrastive(model)
+
         def _watch_model() -> None:
             if isinstance(model, HierarchicalForecaster):
                 return
+
             async def _watch() -> None:
                 q = monitor.subscribe()
                 nonlocal model, scale_factor
@@ -553,7 +569,10 @@ def main(
                         model.load_state_dict(state, strict=False)
                         scale_factor = new_scale
                         architecture_history.append(
-                            {"timestamp": datetime.utcnow().isoformat(), "scale_factor": scale_factor}
+                            {
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "scale_factor": scale_factor,
+                            }
                         )
                         logger.info(
                             "Hot-reloaded model with scale factor %s", scale_factor
@@ -649,7 +668,9 @@ def main(
             model.train()
             optim.zero_grad()
             iterators = _iter_loaders()
-            pbar = tqdm(range(steps_per_epoch), desc=f"Epoch {epoch+1}", disable=rank != 0)
+            pbar = tqdm(
+                range(steps_per_epoch), desc=f"Epoch {epoch+1}", disable=rank != 0
+            )
             for step in pbar:
                 losses = []
                 for code, it in iterators.items():
@@ -667,7 +688,9 @@ def main(
                                 losses.append(loss_fn(preds, yb.float()))
                             else:
                                 preds = model(xb) if use_tft else model(xb, code)
-                                losses.append(loss_fn(preds, yb.float() if use_tft else yb))
+                                losses.append(
+                                    loss_fn(preds, yb.float() if use_tft else yb)
+                                )
                     else:
                         if isinstance(model, HierarchicalForecaster):
                             preds = model(xb)
@@ -933,9 +956,15 @@ def main(
                 logger.info("Distilled student model saved to %s", student_path)
             if cfg.get("feature_importance", False):
                 report_dir = root / "reports"
-                X_sample_np = X_sample[: cfg.get("shap_samples", 100)] if X_sample is not None else None
+                X_sample_np = (
+                    X_sample[: cfg.get("shap_samples", 100)]
+                    if X_sample is not None
+                    else None
+                )
                 if X_sample_np is not None:
-                    log_shap_importance(model, X_sample_np, features, report_dir, device)
+                    log_shap_importance(
+                        model, X_sample_np, features, report_dir, device
+                    )
 
             model_card.generate(
                 cfg,
@@ -985,6 +1014,8 @@ def main(
     if world_size > 1:
         dist.destroy_process_group()
 
+    mlflow.log_metric("runtime", (datetime.now() - start_time).total_seconds())
+    mlflow.end_run()
     return acc
 
 
