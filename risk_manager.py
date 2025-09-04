@@ -16,6 +16,7 @@ from analytics.metrics_aggregator import record_metric
 from analytics import decision_logger
 from portfolio.robust_optimizer import RobustOptimizer
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
+from analysis.exposure_matrix import ExposureMatrix
 
 try:
     from news.impact_model import get_impact
@@ -105,12 +106,21 @@ class RiskManager:
         self.currency_exposure = CurrencyExposure(
             base_currency, instrument_currencies or {}
         )
+        self.exposure_matrix = ExposureMatrix()
         self.equity = initial_capital
         self.peak_equity = self.equity
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""
         self.tail_hedger = hedger
+
+    def _current_positions(self) -> Dict[str, float]:
+        """Return dictionary of net exposures per symbol."""
+
+        return {
+            s: self.net_exposure.long.get(s, 0.0) - self.net_exposure.short.get(s, 0.0)
+            for s in set(self.net_exposure.long) | set(self.net_exposure.short)
+        }
 
     def adjust_size(
         self,
@@ -376,11 +386,17 @@ class RiskManager:
                 ]
             )
         )
-        net = {
-            s: self.net_exposure.long.get(s, 0.0) - self.net_exposure.short.get(s, 0.0)
-            for s in set(self.net_exposure.long) | set(self.net_exposure.short)
-        }
+        net = self._current_positions()
         self.currency_exposure.snapshot(net)
+        self.exposure_matrix.snapshot(net)
+
+    def record_returns(self, returns: Dict[str, float]) -> None:
+        """Record asset returns and update correlation/exposure matrices."""
+
+        self.net_exposure.record_returns(returns)
+        self.exposure_matrix.update_returns(returns)
+        net = self._current_positions()
+        self.exposure_matrix.snapshot(net)
 
     async def monitor(self, queue: "asyncio.Queue[tuple[str, float, float]]") -> None:
         """Consume trade/PnL events from ``queue`` and update metrics."""
