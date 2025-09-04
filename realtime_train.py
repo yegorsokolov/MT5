@@ -17,11 +17,14 @@ from brokers import mt5_direct
 from utils import load_config
 from execution import ExecutionEngine, place_order
 from utils.resource_monitor import monitor
+
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
+
     def send_alert(msg: str) -> None:  # type: ignore
         return
+
 
 from data.features import make_features
 from log_utils import setup_logging, log_exceptions
@@ -39,6 +42,7 @@ from metrics import (
 try:
     from telemetry import get_tracer, get_meter
 except Exception:  # pragma: no cover - fallback if telemetry not installed
+
     def get_tracer(name: str):  # type: ignore
         class _Span:
             def __enter__(self):
@@ -71,6 +75,7 @@ except Exception:  # pragma: no cover - fallback if telemetry not installed
 
         return _Meter()
 
+
 try:
     from analytics.metrics_store import record_metric, TS_PATH
 except Exception:  # pragma: no cover - fallback if analytics not installed
@@ -79,9 +84,11 @@ except Exception:  # pragma: no cover - fallback if analytics not installed
     def record_metric(*a, **k):  # type: ignore
         return None
 
+
 from analysis.data_quality import apply_quality_checks
 from analysis.domain_adapter import DomainAdapter
 from analysis import tick_anomaly_detector
+from analysis.broker_tca import broker_tca
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -120,6 +127,8 @@ def _ensure_data_downloaded(cfg: dict, root: Path) -> None:
                 load_history_config(sym, cfg, root, validate=cfg.get("validate", False))
             except Exception as e:
                 logger.warning("Failed to download history for %s: %s", sym, e)
+
+
 from user_risk_inputs import configure_user_risk
 
 if os.getenv("SKIP_USER_RISK_PROMPT", "0") != "1":
@@ -127,13 +136,16 @@ if os.getenv("SKIP_USER_RISK_PROMPT", "0") != "1":
 
 try:  # pragma: no cover - orchestrator may be stubbed in tests
     from core.orchestrator import Orchestrator
+
     orchestrator = Orchestrator.start()
     watchdog = orchestrator.monitor
 except Exception:  # pragma: no cover
     import types
 
     orchestrator = None
-    watchdog = types.SimpleNamespace(max_rss_mb=None, max_cpu_pct=None, capabilities=None)
+    watchdog = types.SimpleNamespace(
+        max_rss_mb=None, max_cpu_pct=None, capabilities=None
+    )
 
 if os.name != "nt" and getattr(watchdog, "capabilities", None):
     if watchdog.capabilities.cpus > 1:  # pragma: no cover - depends on host
@@ -163,11 +175,17 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
             _ensure_conn_mgr()
             broker = conn_mgr.get_active_broker()
             ticks = await asyncio.to_thread(
-                broker.copy_ticks_from, symbol, int(time.time()) - n, n, broker.COPY_TICKS_ALL
+                broker.copy_ticks_from,
+                symbol,
+                int(time.time()) - n,
+                n,
+                broker.COPY_TICKS_ALL,
             )
             if ticks is None:
                 logger.warning(
-                    "Failed to fetch ticks for %s on attempt %d, attempting failover", symbol, attempt + 1
+                    "Failed to fetch ticks for %s on attempt %d, attempting failover",
+                    symbol,
+                    attempt + 1,
                 )
                 RECONNECT_COUNT.inc()
                 conn_mgr.failover()
@@ -175,10 +193,14 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
                 continue
             if len(ticks) == 0:
                 _empty_batch_count += 1
-                record_metric("fetch_empty_batches", _empty_batch_count, tags={"symbol": symbol})
+                record_metric(
+                    "fetch_empty_batches", _empty_batch_count, tags={"symbol": symbol}
+                )
                 if _empty_batch_count >= max_empty:
                     logger.error(
-                        "No ticks received for %s after %d empty batches", symbol, _empty_batch_count
+                        "No ticks received for %s after %d empty batches",
+                        symbol,
+                        _empty_batch_count,
                     )
                     send_alert(
                         f"No ticks received for {symbol} after {_empty_batch_count} attempts"
@@ -192,7 +214,9 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
             _empty_batch_count = 0
             df = pd.DataFrame(ticks)
             df["Timestamp"] = pd.to_datetime(df["time"], unit="s")
-            df.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
+            df.rename(
+                columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True
+            )
             df = df[["Timestamp", "Bid", "Ask", "Volume"]]
             df["BidVolume"] = df["Volume"]
             df["AskVolume"] = df["Volume"]
@@ -207,7 +231,9 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
             df, anomalies = tick_anomaly_detector.filter(df, symbol)
             if anomalies:
                 rate = anomalies / max(ticks_before, 1)
-                record_metric("tick_anomalies_total", anomalies, tags={"symbol": symbol})
+                record_metric(
+                    "tick_anomalies_total", anomalies, tags={"symbol": symbol}
+                )
                 record_metric("tick_anomaly_rate", rate, tags={"symbol": symbol})
                 send_alert(f"{symbol} tick anomaly rate {rate:.2%}")
             _ticks_counter.add(len(df))
@@ -285,7 +311,20 @@ async def dispatch_signals(bus, df: pd.DataFrame) -> None:
             )
             symbol = getattr(row, "Symbol", getattr(row, "symbol", None))
             if symbol:
+                order_ts = pd.Timestamp.utcnow()
+                start = time.perf_counter()
                 place_order(symbol=symbol, side=side, volume=size)
+                latency = time.perf_counter() - start
+                fill_ts = order_ts + pd.to_timedelta(latency, unit="s")
+                price = ask if side.lower() == "buy" else bid
+                sign = 1 if side.lower() == "buy" else -1
+                realized = (price - mid) / mid * sign * 10000.0 if mid else 0.0
+                try:
+                    broker = conn_mgr.get_active_broker()
+                    name = getattr(broker, "__name__", broker.__class__.__name__)
+                    broker_tca.record(name, order_ts, fill_ts, realized)
+                except Exception:
+                    pass
 
 
 async def tick_producer(
@@ -301,7 +340,9 @@ async def tick_producer(
                 await asyncio.sleep(0.1)
                 continue
             tick_frames = []
-            fetch_results = await asyncio.gather(*(fetch_fn(sym, 500) for sym in symbols))
+            fetch_results = await asyncio.gather(
+                *(fetch_fn(sym, 500) for sym in symbols)
+            )
             for sym, ticks in zip(symbols, fetch_results):
                 if not ticks.empty:
                     ticks["Symbol"] = sym
