@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import List
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
@@ -31,6 +33,10 @@ class ConfigSchema(BaseModel):
         None,
         description="Remote log forwarding configuration, e.g. {'url': 'http://host'}",
     )
+    mlflow: MLflowConfig | None = Field(
+        None,
+        description="MLflow tracking configuration including remote server credentials",
+    )
 
     model_config = ConfigDict(extra="allow")
 
@@ -40,3 +46,13 @@ class ConfigSchema(BaseModel):
         if not v:
             raise ValueError("symbols must contain at least one symbol")
         return v
+
+
+class MLflowConfig(BaseModel):
+    """Optional MLflow tracking server configuration."""
+
+    tracking_uri: str | None = Field(
+        None, description="Remote MLflow tracking URI, e.g. http://mlflow:5000"
+    )
+    username: str | None = Field(None, description="MLflow tracking server username")
+    password: str | None = Field(None, description="MLflow tracking server password")

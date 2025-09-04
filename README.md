@@ -495,6 +495,50 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
       This trains a small transformer on sequences of the same features and saves `model_transformer.pt`.
    3. After either script finishes you will see the resulting model file under the project folder.
    4. To browse logged runs start `scripts/mlflow_ui.sh` and open `http://localhost:5000` in your browser.
+
+### Remote MLflow Tracking
+
+To centralise experiment history, run an MLflow tracking server and point the
+application at it via `config.yaml`.
+
+**Docker**
+
+```bash
+docker run -d -p 5000:5000 \
+  -e MLFLOW_BACKEND_STORE_URI=sqlite:///mlflow.db \
+  -e MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts \
+  -v $(pwd)/mlflow:/mlflow \
+  --name mlflow mlfloworg/mlflow:2.8.1 \
+  mlflow server --host 0.0.0.0
+```
+
+**systemd**
+
+```
+[Unit]
+Description=MLflow Tracking Server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/mlflow server --host 0.0.0.0 --port 5000 \
+  --backend-store-uri sqlite:///mlflow.db --default-artifact-root /var/mlflow
+WorkingDirectory=/var/mlflow
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start with `systemctl enable --now mlflow`.
+
+Configure the client in `config.yaml`:
+
+```yaml
+mlflow:
+  tracking_uri: "http://your-server:5000"
+  username: "secret://MLFLOW_USER"
+  password: "secret://MLFLOW_PASS"
+```
 9. **Copy the EA** –
    1. Open MetaTrader 5 and click **File → Open Data Folder**.
    2. Run `python scripts/setup_terminal.py "<path-to-terminal>"` to automatically place `AdaptiveEA.mq5` and `RealtimeEA.mq5` inside `MQL5/Experts`.

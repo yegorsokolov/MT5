@@ -6,9 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import optuna
-import mlflow
-
-from utils import mlflow_run
+from analytics import mlflow_client as mlflow
 
 
 def _study(storage: Path, name: str) -> optuna.Study:
@@ -48,10 +46,11 @@ def tune_lgbm(cfg: dict, n_trials: int = 20) -> None:
         cfg_trial.update(params)
         return float(train_main(cfg_trial))
 
-    with mlflow_run("tuning", cfg):
-        study.optimize(objective, n_trials=n_trials)
-        mlflow.log_params(study.best_params)
-        mlflow.log_metric("best_f1", study.best_value)
+    mlflow.start_run("tuning", cfg)
+    study.optimize(objective, n_trials=n_trials)
+    mlflow.log_params(study.best_params)
+    mlflow.log_metric("best_f1", study.best_value)
+    mlflow.end_run()
 
 
 def tune_transformer(cfg: dict, n_trials: int = 20) -> None:
@@ -73,10 +72,11 @@ def tune_transformer(cfg: dict, n_trials: int = 20) -> None:
         cfg_trial["ddp"] = False
         return float(nn_launch(cfg_trial))
 
-    with mlflow_run("tuning", cfg):
-        study.optimize(objective, n_trials=n_trials)
-        mlflow.log_params(study.best_params)
-        mlflow.log_metric("best_accuracy", study.best_value)
+    mlflow.start_run("tuning", cfg)
+    study.optimize(objective, n_trials=n_trials)
+    mlflow.log_params(study.best_params)
+    mlflow.log_metric("best_accuracy", study.best_value)
+    mlflow.end_run()
 
 
 def tune_rl(cfg: dict, n_trials: int = 20) -> None:
@@ -97,10 +97,11 @@ def tune_rl(cfg: dict, n_trials: int = 20) -> None:
         cfg_trial["ddp"] = False
         return float(rl_launch(cfg_trial))
 
-    with mlflow_run("tuning", cfg):
-        study.optimize(objective, n_trials=n_trials)
-        mlflow.log_params(study.best_params)
-        mlflow.log_metric("best_return", study.best_value)
+    mlflow.start_run("tuning", cfg)
+    study.optimize(objective, n_trials=n_trials)
+    mlflow.log_params(study.best_params)
+    mlflow.log_metric("best_return", study.best_value)
+    mlflow.end_run()
 
 
 __all__ = ["tune_lgbm", "tune_transformer", "tune_rl"]
