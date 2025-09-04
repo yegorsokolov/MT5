@@ -81,6 +81,7 @@ except Exception:  # pragma: no cover - fallback if analytics not installed
 
 from analysis.data_quality import apply_quality_checks
 from analysis.domain_adapter import DomainAdapter
+from analysis import tick_anomaly_detector
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -202,6 +203,13 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
                 logger.info("Realtime data quality: %s", report)
                 for k, v in report.items():
                     record_metric(f"data_quality_{k}", v, tags={"source": "realtime"})
+            ticks_before = len(df)
+            df, anomalies = tick_anomaly_detector.filter(df, symbol)
+            if anomalies:
+                rate = anomalies / max(ticks_before, 1)
+                record_metric("tick_anomalies_total", anomalies, tags={"symbol": symbol})
+                record_metric("tick_anomaly_rate", rate, tags={"symbol": symbol})
+                send_alert(f"{symbol} tick anomaly rate {rate:.2%}")
             _ticks_counter.add(len(df))
             return df
         return pd.DataFrame()
