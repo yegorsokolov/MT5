@@ -18,6 +18,7 @@ import numpy as np
 API_URL = os.getenv("REMOTE_API_URL", "https://localhost:8000")
 CERT_PATH = os.getenv("API_CERT", "certs/api.crt")
 
+
 @st.cache_data
 def load_current_config() -> Dict[str, Any]:
     cfg_file = Path("config.yaml")
@@ -26,17 +27,20 @@ def load_current_config() -> Dict[str, Any]:
             return yaml.safe_load(f) or {}
     return {}
 
+
 @st.cache_data
 def schema_table(current: Dict[str, Any]):
     rows = []
     for name, field in ConfigSchema.model_fields.items():
         default = field.default if field.default is not None else "required"
-        rows.append({
-            "parameter": name,
-            "description": field.description or "",
-            "default": default,
-            "current": current.get(name, default),
-        })
+        rows.append(
+            {
+                "parameter": name,
+                "description": field.description or "",
+                "default": default,
+                "current": current.get(name, default),
+            }
+        )
     return rows
 
 
@@ -52,7 +56,9 @@ def _ssl_opts():
 
 def fetch_json(path: str, api_key: str) -> Dict[str, Any]:
     try:
-        resp = requests.get(f"{API_URL}{path}", headers=_auth_headers(api_key), **_ssl_opts())
+        resp = requests.get(
+            f"{API_URL}{path}", headers=_auth_headers(api_key), **_ssl_opts()
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception:
@@ -61,7 +67,9 @@ def fetch_json(path: str, api_key: str) -> Dict[str, Any]:
 
 def post_json(path: str, api_key: str):
     try:
-        resp = requests.post(f"{API_URL}{path}", headers=_auth_headers(api_key), **_ssl_opts())
+        resp = requests.post(
+            f"{API_URL}{path}", headers=_auth_headers(api_key), **_ssl_opts()
+        )
         resp.raise_for_status()
         return True
     except Exception:
@@ -121,7 +129,7 @@ def main() -> None:
         bots = fetch_json("/bots", api_key)
         st.subheader("Running Bots")
         for bid, info in bots.items():
-            c1, c2, c3 = st.columns([3,1,1])
+            c1, c2, c3 = st.columns([3, 1, 1])
             running = info.get("running")
             c1.write(f"{bid} (restarts: {info.get('restart_count',0)})")
             if running:
@@ -135,7 +143,7 @@ def main() -> None:
                 st.download_button(
                     label=f"Download {bid} logs",
                     data=log_data.get("logs", ""),
-                    file_name=f"{bid}.log"
+                    file_name=f"{bid}.log",
                 )
 
         cp_file = Path("reports/change_points/latest.json")
@@ -172,6 +180,22 @@ def main() -> None:
             except Exception:
                 pass
 
+        energy_file = Path("reports/energy/latest.json")
+        if energy_file.exists():
+            try:
+                energy = json.loads(energy_file.read_text())
+                st.subheader("Energy Usage")
+                mods = energy.get("usage", {}).get("modules", {})
+                for mod, stats in mods.items():
+                    st.write(
+                        f"{mod}: CPU {stats.get('cpu_avg',0):.1f}% | Power {stats.get('power_avg',0):.1f}"
+                    )
+                decisions = energy.get("decisions", [])
+                if decisions:
+                    st.warning(f"Throttling active: {', '.join(decisions)}")
+            except Exception:
+                pass
+
         st.subheader("Backup Status")
         bstatus = Path("reports/backup_status.json")
         if bstatus.exists():
@@ -198,9 +222,7 @@ def main() -> None:
         reg_store = RegimePerformanceStore()
         reg_df = reg_store.load()
         corr_file = Path("reports/performance_correlations.parquet")
-        corr_df = (
-            pd.read_parquet(corr_file) if corr_file.exists() else pd.DataFrame()
-        )
+        corr_df = pd.read_parquet(corr_file) if corr_file.exists() else pd.DataFrame()
         if not reg_df.empty:
             st.subheader("Model vs. Market")
             regimes = sorted(reg_df["regime"].unique())
@@ -212,9 +234,9 @@ def main() -> None:
             st.line_chart(pnl_pivot, height=150)
 
             sharpe_vals = sub.groupby("model")["pnl_daily"].apply(
-                lambda x: np.sqrt(252) * x.mean() / x.std(ddof=0)
-                if x.std(ddof=0)
-                else 0.0
+                lambda x: (
+                    np.sqrt(252) * x.mean() / x.std(ddof=0) if x.std(ddof=0) else 0.0
+                )
             )
             st.bar_chart(sharpe_vals, height=150)
 
@@ -245,9 +267,7 @@ def main() -> None:
                                     f"{feat} ({row['pearson']:.2f} vs {mean:.2f})"
                                 )
                     if alerts:
-                        st.error(
-                            "Correlation divergence: " + ", ".join(alerts)
-                        )
+                        st.error("Correlation divergence: " + ", ".join(alerts))
 
             # Drill-down metrics for each model
             dd_model = st.selectbox(
@@ -265,15 +285,15 @@ def main() -> None:
                 mdf["prev_regime"].notna() & (mdf["prev_regime"] != mdf["regime"])
             ]
             if not transitions.empty:
-                trans_perf = transitions.groupby([
-                    "prev_regime",
-                    "regime",
-                ])["pnl_daily"].mean()
+                trans_perf = transitions.groupby(
+                    [
+                        "prev_regime",
+                        "regime",
+                    ]
+                )["pnl_daily"].mean()
                 st.subheader("Regime Transition PnL")
                 st.table(
-                    trans_perf.reset_index().rename(
-                        columns={"pnl_daily": "mean_pnl"}
-                    )
+                    trans_perf.reset_index().rename(columns={"pnl_daily": "mean_pnl"})
                 )
 
         pnl = query_metrics("pnl", tags={"summary": "daily"})
@@ -310,7 +330,9 @@ def main() -> None:
         fid = query_metrics("feature_importance_drift")
         if not fid.empty:
             st.subheader("Feature Importance Drift")
-            pivot = fid.pivot_table(index="timestamp", columns="feature", values="value")
+            pivot = fid.pivot_table(
+                index="timestamp", columns="feature", values="value"
+            )
             st.line_chart(pivot, height=150)
 
         skipped = query_metrics("trades_skipped_news")
@@ -363,7 +385,11 @@ def main() -> None:
                     st.subheader("Replay Risk Comparison")
                     cols = st.columns(len(rcomp))
                     for col, row in zip(cols, rcomp.itertuples(index=False)):
-                        col.metric(row.metric.capitalize(), f"{row.replay:.2f}", f"{row.delta:+.2f}")
+                        col.metric(
+                            row.metric.capitalize(),
+                            f"{row.replay:.2f}",
+                            f"{row.delta:+.2f}",
+                        )
                     st.table(rcomp)
             except Exception:
                 pass
@@ -422,7 +448,9 @@ def main() -> None:
         if not sboard.empty:
             if "instrument" not in sboard.columns:
                 sboard["instrument"] = "N/A"
-            instruments = ["All"] + sorted(map(str, sboard["instrument"].dropna().unique()))
+            instruments = ["All"] + sorted(
+                map(str, sboard["instrument"].dropna().unique())
+            )
             inst = st.selectbox("Instrument", instruments, key="bs-inst")
             if inst != "All":
                 sboard = sboard[sboard["instrument"].astype(str) == inst]
@@ -432,22 +460,49 @@ def main() -> None:
             trade_path = Path("reports/trades.csv")
             if trade_path.exists():
                 try:
-                    trades = pd.read_csv(trade_path, parse_dates=["exit_time"], infer_datetime_format=True)
+                    trades = pd.read_csv(
+                        trade_path,
+                        parse_dates=["exit_time"],
+                        infer_datetime_format=True,
+                    )
                     if "model" in trades.columns and "algorithm" not in trades.columns:
                         trades.rename(columns={"model": "algorithm"}, inplace=True)
-                    group_cols = [c for c in ["instrument", "market_basket", "algorithm"] if c in trades.columns]
+                    group_cols = [
+                        c
+                        for c in ["instrument", "market_basket", "algorithm"]
+                        if c in trades.columns
+                    ]
                     if group_cols:
-                        trade_counts = trades.groupby(group_cols).size().reset_index(name="obs")
+                        trade_counts = (
+                            trades.groupby(group_cols).size().reset_index(name="obs")
+                        )
                         if "pnl" in trades.columns and "exit_time" in trades.columns:
-                            recent = trades[trades["exit_time"] >= pd.Timestamp.utcnow() - pd.Timedelta(days=30)]
-                            trend = recent.groupby(group_cols)["pnl"].sum().reset_index(name="pnl_30d")
-                            trade_counts = trade_counts.merge(trend, on=group_cols, how="left")
+                            recent = trades[
+                                trades["exit_time"]
+                                >= pd.Timestamp.utcnow() - pd.Timedelta(days=30)
+                            ]
+                            trend = (
+                                recent.groupby(group_cols)["pnl"]
+                                .sum()
+                                .reset_index(name="pnl_30d")
+                            )
+                            trade_counts = trade_counts.merge(
+                                trend, on=group_cols, how="left"
+                            )
                 except Exception:
                     trade_counts = pd.DataFrame()
                     trades = pd.DataFrame()
 
             if not trade_counts.empty:
-                sboard = sboard.merge(trade_counts, on=[c for c in ["instrument", "market_basket", "algorithm"] if c in sboard.columns and c in trade_counts.columns], how="left")
+                sboard = sboard.merge(
+                    trade_counts,
+                    on=[
+                        c
+                        for c in ["instrument", "market_basket", "algorithm"]
+                        if c in sboard.columns and c in trade_counts.columns
+                    ],
+                    how="left",
+                )
 
             sboard["obs"] = sboard.get("obs", 0).fillna(0).astype(int)
             sboard["pnl_30d"] = sboard.get("pnl_30d", 0.0).fillna(0.0)
@@ -458,10 +513,17 @@ def main() -> None:
             counts_by_basket = sboard.groupby("market_basket")["obs"].sum()
             low = counts_by_basket[counts_by_basket < 5]
             if not low.empty:
-                st.warning("Insufficient data for baskets: " + ", ".join(map(str, low.index)))
+                st.warning(
+                    "Insufficient data for baskets: " + ", ".join(map(str, low.index))
+                )
 
             # Alert on top strategy change
-            tops = sboard.sort_values("sharpe", ascending=False).dropna(subset=["sharpe"]).groupby("market_basket").first()
+            tops = (
+                sboard.sort_values("sharpe", ascending=False)
+                .dropna(subset=["sharpe"])
+                .groupby("market_basket")
+                .first()
+            )
             prev_tops = st.session_state.get("_prev_tops", {})
             changes = []
             for basket, row in tops.iterrows():
@@ -475,7 +537,9 @@ def main() -> None:
                 st.error("Top strategy changed: " + ", ".join(changes))
 
             # Heatmap of Sharpe ratios
-            pivot = sboard.pivot_table(index="market_basket", columns="algorithm", values="sharpe")
+            pivot = sboard.pivot_table(
+                index="market_basket", columns="algorithm", values="sharpe"
+            )
             try:
                 import seaborn as sns  # type: ignore
                 import matplotlib.pyplot as plt  # type: ignore
@@ -488,9 +552,15 @@ def main() -> None:
 
             st.dataframe(sboard)
             csv = sboard.to_csv(index=False).encode("utf-8")
-            st.download_button("Download Report", csv, file_name="basket_strategy_metrics.csv")
+            st.download_button(
+                "Download Report", csv, file_name="basket_strategy_metrics.csv"
+            )
 
-            if not trades.empty and "exit_time" in trades.columns and "pnl" in trades.columns:
+            if (
+                not trades.empty
+                and "exit_time" in trades.columns
+                and "pnl" in trades.columns
+            ):
                 baskets = sorted(sboard["market_basket"].dropna().unique())
                 if baskets:
                     bsel = st.selectbox("Basket Trend", baskets, key="bs-trend")
@@ -498,8 +568,16 @@ def main() -> None:
                     if inst != "All" and "instrument" in btrades.columns:
                         btrades = btrades[btrades["instrument"].astype(str) == inst]
                     if not btrades.empty:
-                        daily = btrades.groupby([pd.Grouper(key="exit_time", freq="D"), "algorithm"])["pnl"].sum().reset_index()
-                        trend_pivot = daily.pivot_table(index="exit_time", columns="algorithm", values="pnl")
+                        daily = (
+                            btrades.groupby(
+                                [pd.Grouper(key="exit_time", freq="D"), "algorithm"]
+                            )["pnl"]
+                            .sum()
+                            .reset_index()
+                        )
+                        trend_pivot = daily.pivot_table(
+                            index="exit_time", columns="algorithm", values="pnl"
+                        )
                         st.line_chart(trend_pivot, height=150)
 
         for name in ["gaps", "zscore", "median"]:
@@ -529,12 +607,21 @@ def main() -> None:
             st.session_state["logs"] = fetch_json("/logs", api_key)
         logs = st.session_state.get("logs", fetch_json("/logs", api_key))
         st.text_area("Recent Logs", logs.get("logs", ""), height=300)
-        st.download_button("Download Logs", logs.get("logs", ""), file_name="system.log")
+        st.download_button(
+            "Download Logs", logs.get("logs", ""), file_name="system.log"
+        )
         dec = read_decisions()
         if not dec.empty:
             cols = [
                 c
-                for c in ["timestamp", "event", "Symbol", "algorithm", "position_size", "reason"]
+                for c in [
+                    "timestamp",
+                    "event",
+                    "Symbol",
+                    "algorithm",
+                    "position_size",
+                    "reason",
+                ]
                 if c in dec.columns
             ]
             st.subheader("Recent Decisions")
@@ -546,7 +633,9 @@ def main() -> None:
         service = st.text_input("Service", "mt5")
         if st.button("Load Traces"):
             try:
-                resp = requests.get(f"{jaeger}/api/traces", params={"service": service, "limit": 20})
+                resp = requests.get(
+                    f"{jaeger}/api/traces", params={"service": service, "limit": 20}
+                )
                 resp.raise_for_status()
                 st.session_state["trace_data"] = resp.json().get("data", [])
             except Exception:
@@ -559,7 +648,9 @@ def main() -> None:
                 log_path = Path("logs/app.log")
                 if log_path.exists():
                     lines = [
-                        line for line in log_path.read_text().splitlines() if tid and tid in line
+                        line
+                        for line in log_path.read_text().splitlines()
+                        if tid and tid in line
                     ]
                     st.text("\n".join(lines))
                 else:
