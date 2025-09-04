@@ -12,7 +12,7 @@ from risk import risk_of_ruin
 from risk.budget_allocator import BudgetAllocator
 from risk.net_exposure import NetExposure
 from risk.currency_exposure import CurrencyExposure
-from analytics.metrics_store import record_metric
+from analytics.metrics_aggregator import record_metric
 from analytics import decision_logger
 from portfolio.robust_optimizer import RobustOptimizer
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
