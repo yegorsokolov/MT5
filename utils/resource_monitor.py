@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Awaitable, Set, Dict
+from typing import Optional, Callable, Awaitable, Set, Dict, Deque
 
 import psutil
+
 try:
     import torch
 except Exception:  # pragma: no cover - torch optional
@@ -80,9 +82,43 @@ class ResourceMonitor:
         self._breach_checks = 0
         self._breach_threshold = int(max(breach_duration / sample_interval, 1))
         self.alert_callback = alert_callback
-        self.latest_usage: Dict[str, float] = {}
+        self.latest_usage: Dict[str, object] = {}
         self._tick_start: Optional[float] = None
         self.tick_to_signal_latency: float = 0.0
+        self._module_procs: Dict[str, psutil.Process] = {}
+        self._module_samples: Dict[str, Dict[str, Deque[float]]] = {}
+        self._module_averages: Dict[str, Dict[str, float]] = {}
+        self._module_window = 12
+
+    def register_module(self, name: str, pid: Optional[int] = None) -> None:
+        """Track CPU usage for an additional module/process.
+
+        Parameters
+        ----------
+        name:
+            Identifier for the module being monitored.
+        pid:
+            Optional process ID.  Defaults to the current process.
+        """
+
+        if name in self._module_procs:
+            return
+        try:
+            proc = psutil.Process(pid) if pid is not None else psutil.Process()
+            proc.cpu_percent()
+        except Exception:
+            return
+        self._module_procs[name] = proc
+        self._module_samples[name] = {
+            "cpu": deque(maxlen=self._module_window),
+            "power": deque(maxlen=self._module_window),
+        }
+        self._module_averages[name] = {"cpu_avg": 0.0, "power_avg": 0.0}
+
+    def module_averages(self) -> Dict[str, Dict[str, float]]:
+        """Return rolling average metrics for registered modules."""
+
+        return self._module_averages
 
     def mark_tick(self) -> None:
         """Record the arrival time of the latest tick."""
@@ -199,23 +235,32 @@ class ResourceMonitor:
     async def _watch_usage(self) -> None:
         proc = psutil.Process()
         proc.cpu_percent()
+        for mod_proc in self._module_procs.values():
+            try:
+                mod_proc.cpu_percent()
+            except Exception:
+                pass
         prev_net = self._read_net_bytes()
         prev_disk = psutil.disk_io_counters()
         while True:
             await asyncio.sleep(self.sample_interval)
             rss = proc.memory_info().rss / (1024**2)
             cpu = proc.cpu_percent()
+            power = cpu
             recv, sent = self._read_net_bytes()
             disk = psutil.disk_io_counters()
             net_rx = (recv - prev_net[0]) / self.sample_interval
             net_tx = (sent - prev_net[1]) / self.sample_interval
             disk_read = (disk.read_bytes - prev_disk.read_bytes) / self.sample_interval
-            disk_write = (disk.write_bytes - prev_disk.write_bytes) / self.sample_interval
+            disk_write = (
+                disk.write_bytes - prev_disk.write_bytes
+            ) / self.sample_interval
             prev_net = (recv, sent)
             prev_disk = disk
             try:
                 record_metric("rss_usage_mb", rss)
                 record_metric("cpu_usage_pct", cpu)
+                record_metric("power_proxy", power)
                 record_metric("net_rx_bytes", net_rx)
                 record_metric("net_tx_bytes", net_tx)
                 record_metric("disk_read_bytes", disk_read)
@@ -225,11 +270,43 @@ class ResourceMonitor:
             usage = {
                 "rss_mb": rss,
                 "cpu_pct": cpu,
+                "power_proxy": power,
                 "net_rx": net_rx,
                 "net_tx": net_tx,
                 "disk_read": disk_read,
                 "disk_write": disk_write,
             }
+            modules: Dict[str, Dict[str, float]] = {}
+            for name, mproc in list(self._module_procs.items()):
+                try:
+                    m_cpu = mproc.cpu_percent()
+                except Exception:
+                    continue
+                m_power = m_cpu
+                samples = self._module_samples.get(name)
+                if samples is None:
+                    continue
+                samples["cpu"].append(m_cpu)
+                samples["power"].append(m_power)
+                cpu_avg = sum(samples["cpu"]) / len(samples["cpu"])
+                power_avg = sum(samples["power"]) / len(samples["power"])
+                self._module_averages[name] = {
+                    "cpu_avg": cpu_avg,
+                    "power_avg": power_avg,
+                }
+                modules[name] = {
+                    "cpu_pct": m_cpu,
+                    "power_proxy": m_power,
+                    "cpu_avg": cpu_avg,
+                    "power_avg": power_avg,
+                }
+                try:
+                    record_metric(f"module_cpu_pct_{name}", m_cpu)
+                    record_metric(f"module_power_proxy_{name}", m_power)
+                except Exception:
+                    pass
+            if modules:
+                usage["modules"] = modules
             self.latest_usage = usage
             await self._notify_usage(usage)
             reasons = []
