@@ -16,16 +16,22 @@ from analytics.metrics_aggregator import record_metric
 from analytics import decision_logger
 from portfolio.robust_optimizer import RobustOptimizer
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
+
 try:
     from news.impact_model import get_impact
 except Exception:  # pragma: no cover - optional dependency
+
     def get_impact(*args, **kwargs):  # type: ignore
         return 0.0, 0.0
+
+
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
+
     def send_alert(msg: str) -> None:  # type: ignore
         return
+
 
 if TYPE_CHECKING:  # pragma: no cover - used only for typing
     from risk.tail_hedger import TailHedger
@@ -107,7 +113,12 @@ class RiskManager:
         self.tail_hedger = hedger
 
     def adjust_size(
-        self, symbol: str, size: float, timestamp: str | pd.Timestamp, direction: int
+        self,
+        symbol: str,
+        size: float,
+        timestamp: str | pd.Timestamp,
+        direction: int,
+        cred_interval: tuple[float, float] | None = None,
     ) -> float:
         """Return size adjusted for predicted news impact.
 
@@ -123,6 +134,10 @@ class RiskManager:
             +1 for long trades, -1 for shorts.
         """
         ts = pd.Timestamp(timestamp)
+        if cred_interval is not None:
+            lower, upper = cred_interval
+            width = abs(upper - lower)
+            size *= max(0.0, 1 - width)
         if self.metrics.trading_halted:
             try:
                 record_metric("trades_skipped_halt", 1)
@@ -298,7 +313,9 @@ class RiskManager:
             self.metrics.risk_of_ruin = float(
                 risk_of_ruin(returns, self.initial_capital)
             )
-            if self._ewma_factor_history and len(self._ewma_factor_history) == len(self._ewma_pnl_history):
+            if self._ewma_factor_history and len(self._ewma_factor_history) == len(
+                self._ewma_pnl_history
+            ):
                 factors_df = pd.DataFrame(self._ewma_factor_history)
                 from portfolio.factor_risk import FactorRisk
 
@@ -360,8 +377,7 @@ class RiskManager:
             )
         )
         net = {
-            s: self.net_exposure.long.get(s, 0.0)
-            - self.net_exposure.short.get(s, 0.0)
+            s: self.net_exposure.long.get(s, 0.0) - self.net_exposure.short.get(s, 0.0)
             for s in set(self.net_exposure.long) | set(self.net_exposure.short)
         }
         self.currency_exposure.snapshot(net)
@@ -520,5 +536,6 @@ def subscribe_to_broker_alerts(rm: RiskManager | None = None) -> asyncio.Task | 
     except RuntimeError:
         loop = asyncio.get_event_loop()
     return loop.create_task(rm.watch_feed_divergence(queue))
+
 
 start_scheduler()
