@@ -1,11 +1,10 @@
 import os
 import pytest
-from .utils import run_smoke, ResourceCapabilities
+from .utils import run_smoke
 
 pytestmark = pytest.mark.skipif(os.getenv("RESOURCE_TIER") != "standard", reason="Resource tier mismatch")
 
 
-def test_mid_cpu() -> None:
-    caps = ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=False, gpu_count=0)
+def test_mid_cpu(standard_caps) -> None:
     expected = {"sentiment": "sentiment_small", "rl_policy": "rl_small"}
-    run_smoke(caps, "standard", expected)
+    run_smoke(standard_caps, "standard", expected)
