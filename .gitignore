@@ -38,6 +38,7 @@ models/*
 !models/news_meta_label.py
 !models/ftrl.py
 !models/feature_autoencoder.py
+!models/slimmable_network.py
 __pycache__/
 logs/
 analysis/news_impact.parquet
