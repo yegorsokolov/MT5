@@ -75,7 +75,24 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     PrioritizedReplayBuffer = None  # type: ignore
 
-from analytics import mlflow_client as mlflow
+try:
+    from analytics import mlflow_client as mlflow
+except Exception:  # pragma: no cover - analytics optional in tests
+    try:  # fall back to direct mlflow import if available
+        import mlflow  # type: ignore
+    except Exception:  # pragma: no cover - mlflow missing
+        from types import SimpleNamespace
+
+        mlflow = SimpleNamespace(  # type: ignore
+            set_tracking_uri=lambda *a, **k: None,
+            set_experiment=lambda *a, **k: None,
+            start_run=lambda *a, **k: None,
+            log_param=lambda *a, **k: None,
+            log_artifact=lambda *a, **k: None,
+            end_run=lambda *a, **k: None,
+            log_metric=lambda *a, **k: None,
+            __spec__=SimpleNamespace(),
+        )
 from utils import load_config
 from state_manager import save_checkpoint, load_latest_checkpoint
 
@@ -99,7 +116,11 @@ except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
 from data.features import make_features
 from analytics.metrics_store import record_metric, TS_PATH
-from analysis import model_card
+
+try:
+    from analysis import model_card
+except Exception:  # pragma: no cover - optional dependency
+    model_card = SimpleNamespace(log_model_card=lambda *a, **k: None)
 
 try:  # optional dependency
     from models.distillation import distill_teacher_student
@@ -155,7 +176,10 @@ try:  # optional dependency
     from rl.graph_agent import GraphAgent
 except Exception:  # pragma: no cover - torch may be stubbed
     GraphAgent = None  # type: ignore
-from execution.rl_executor import RLExecutor
+try:  # optional executor for live trading integration
+    from execution.rl_executor import RLExecutor
+except Exception:  # pragma: no cover - optional dependency
+    RLExecutor = SimpleNamespace(run=lambda *a, **k: None)
 import argparse
 
 try:
@@ -254,7 +278,8 @@ def offline_pretrain(
                     optimizer.step()
                     final_loss = float(loss)
                 mlflow.log_metric("pretrain_loss", final_loss, step=i)
-                mlflow.log_metric("pretrain_lr", optimizer.get_lr(), step=i)
+                lr_now = getattr(optimizer, "get_lr", lambda: lr)()
+                mlflow.log_metric("pretrain_lr", lr_now, step=i)
             losses: List[float] = []
             for obs, actions, _, _, _ in dataset.iter_batches(batch_size):
                 obs_t = torch.as_tensor(obs, dtype=torch.float32)
@@ -264,6 +289,10 @@ def offline_pretrain(
                     losses.append(loss_fn(pred, act_t).item())
             final_loss = sum(losses) / max(len(losses), 1)
             mlflow.log_metric("pretrain_final_loss", final_loss)
+            try:  # persist metrics locally if metrics store available
+                record_metric("pretrain_final_loss", final_loss, path=TS_PATH)
+            except Exception:  # pragma: no cover - metrics store optional
+                pass
             dataset.close()
             return float(final_loss)
     except Exception:  # pragma: no cover - torch not available
@@ -293,6 +322,10 @@ def offline_pretrain(
     try:
         mlflow.log_metric("pretrain_final_loss", final_loss)
     except Exception:
+        pass
+    try:
+        record_metric("pretrain_final_loss", final_loss, path=TS_PATH)
+    except Exception:  # pragma: no cover - metrics store optional
         pass
     dataset.close()
     return float(final_loss)
