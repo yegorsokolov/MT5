@@ -87,7 +87,7 @@ except Exception:  # pragma: no cover - fallback if analytics not installed
 
 from analysis.data_quality import apply_quality_checks
 from analysis.domain_adapter import DomainAdapter
-from analysis import tick_anomaly_detector
+from analysis import tick_anomaly_detector, pipeline_anomaly
 from analysis.broker_tca import broker_tca
 
 tracer = get_tracer(__name__)
@@ -236,6 +236,9 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
                 )
                 record_metric("tick_anomaly_rate", rate, tags={"symbol": symbol})
                 send_alert(f"{symbol} tick anomaly rate {rate:.2%}")
+            if not pipeline_anomaly.validate(df):
+                logger.warning("Pipeline anomaly detected for %s ticks; dropping batch", symbol)
+                return pd.DataFrame()
             _ticks_counter.add(len(df))
             return df
         return pd.DataFrame()
@@ -433,6 +436,9 @@ async def train_realtime():
                 feats[num_cols] = scaler.transform(feats[num_cols])
                 feats[num_cols] = adapter.transform(feats[num_cols])
                 scaler.save(scaler_path)
+            if not pipeline_anomaly.validate(feats):
+                logger.warning("Pipeline anomaly detected in features; dropping batch")
+                return
             await dispatch_signals(bus, feats)
 
         tick_queue: asyncio.Queue = asyncio.Queue()
