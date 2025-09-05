@@ -10,7 +10,7 @@ import time
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 import types
 
 import joblib
@@ -172,6 +172,7 @@ class ModelRegistry:
         latency: Optional[InferenceLatency] = None,
         cfg: Optional[Dict[str, Any]] = None,
         cache: Optional[PredictionCache] = None,
+        regime_getter: Callable[[], int] | None = None,
     ) -> None:
         self.monitor = monitor
         self.selected: Dict[str, ModelVariant] = {}
@@ -190,6 +191,7 @@ class ModelRegistry:
         self.cache = cache or PredictionCache(0)
         self.breach_checks = 3
         self.recovery_checks = 5
+        self.regime_getter = regime_getter or (lambda: 0)
         self._latency_breach: Dict[str, int] = {}
         self._latency_recover: Dict[str, int] = {}
         self._latency_history: Dict[str, List[ModelVariant]] = {}
@@ -276,6 +278,10 @@ class ModelRegistry:
                 self.logger.info("Resource capabilities refreshed; re-evaluating models")
             self._pick_models()
             self._purge_unused()
+            try:
+                self.reload_tuned_params()
+            except Exception:  # pragma: no cover - safety
+                pass
             prev = tier
 
     def get(self, task: str) -> str:
@@ -292,6 +298,35 @@ class ModelRegistry:
             self._evict_oversized()
             self._pick_models()
             self._purge_unused()
+            try:
+                self.reload_tuned_params()
+            except Exception:  # pragma: no cover - safety
+                pass
+
+    def reload_tuned_params(self) -> None:
+        """Reload latest tuned hyper-parameters for the current regime."""
+
+        regime = int(self.regime_getter())
+        try:  # pragma: no cover - optional persistence
+            from models import model_store
+            from models.hot_reload import hot_reload
+
+            store = model_store._ensure_store()  # type: ignore[attr-defined]
+            latest = None
+            for path in sorted(store.glob("tuned_*.json"), reverse=True):
+                try:
+                    with open(path) as fh:
+                        meta = json.load(fh)
+                except Exception:
+                    continue
+                if int(meta.get("regime", -1)) == regime:
+                    latest = meta
+                    break
+            if latest and "params" in latest:
+                hot_reload(latest["params"])
+                self.logger.info("Reloaded tuned params for regime %s", regime)
+        except Exception:
+            self.logger.debug("No tuned params for regime %s", regime)
 
     def report_failure(self, task: str) -> None:
         """Report that the active model for ``task`` has crashed.
