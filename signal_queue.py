@@ -9,6 +9,8 @@ import pandas as pd
 
 from services.message_bus import Topics, get_message_bus, MessageBus
 
+from analysis import pipeline_anomaly
+
 # ``_ROUTER`` is retained for compatibility with modules that import it.  The
 # message bus supersedes the old ZeroMQ based router so it is simply ``None``
 # here.
@@ -41,6 +43,8 @@ def _wrap_ci(row: Dict[str, Any]) -> Dict[str, Any]:
 def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
     """Synchronously publish each row of ``df`` to the signals topic."""
 
+    if df.empty or not pipeline_anomaly.validate(df):
+        return
     rows = [_wrap_ci(r) for r in df.to_dict(orient="records")]
 
     async def _pub() -> None:
@@ -55,6 +59,8 @@ async def publish_dataframe_async(
 ) -> None:
     """Asynchronously publish each row of ``df`` to the signals topic."""
 
+    if df.empty or not pipeline_anomaly.validate(df):
+        return
     rows = [_wrap_ci(r) for r in df.to_dict(orient="records")]
     for row in rows:
         await bus.publish(Topics.SIGNALS, row)
