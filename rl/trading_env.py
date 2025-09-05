@@ -7,6 +7,13 @@ import pandas as pd
 import gym
 from gym import spaces
 
+try:  # optional torch dependency
+    import torch
+    from models.orderbook_gnn import OrderBookGNN, build_orderbook_graph
+except Exception:  # pragma: no cover - torch may be missing
+    torch = None  # type: ignore
+    OrderBookGNN = build_orderbook_graph = None  # type: ignore
+
 from analytics.metrics_store import record_metric, TS_PATH
 from rl.multi_objective import weighted_sum
 
@@ -20,6 +27,8 @@ class TradingEnv(gym.Env):
         features: List[str],
         macro_features: List[str] | None = None,
         news_window: int = 0,
+        orderbook_depth: int = 0,
+        use_orderbook_gnn: bool | None = None,
         max_position: float = 1.0,
         transaction_cost: float = 0.0001,
         risk_penalty: float = 0.1,
@@ -87,6 +96,28 @@ class TradingEnv(gym.Env):
         if not macro_df.empty:
             wide = wide.join(macro_df, how="left")
         self.df = wide.reset_index(drop=True)
+        self.orderbook_depth = orderbook_depth
+        self.use_orderbook_gnn = use_orderbook_gnn
+        self.orderbook_cols: list[str] = []
+        self.orderbook_gnn = None
+        self.embedding_dim = 0
+        if orderbook_depth > 0:
+            for sym in self.symbols:
+                for side in ("bid", "ask"):
+                    for lvl in range(orderbook_depth):
+                        for field in ("px", "sz"):
+                            col = f"{sym}_{side}_{field}_{lvl}"
+                            if col not in self.df.columns:
+                                raise ValueError(f"Missing column {col}")
+                            self.orderbook_cols.append(col)
+            if self.use_orderbook_gnn is None:
+                self.use_orderbook_gnn = bool(torch and torch.cuda.is_available())
+            if self.use_orderbook_gnn and torch is not None and OrderBookGNN is not None:
+                self.orderbook_gnn = OrderBookGNN(in_channels=3, hidden_channels=16)
+                self.embedding_dim = self.orderbook_gnn.hidden_channels
+            else:
+                self.use_orderbook_gnn = False
+                self.embedding_dim = orderbook_depth * 4
         self.max_position = max_position
         self.transaction_cost = transaction_cost
         self.risk_penalty = risk_penalty
@@ -107,6 +138,8 @@ class TradingEnv(gym.Env):
             self.feature_cols.extend([f"{sym}_{feat}" for sym in self.symbols])
         self.feature_cols.extend(macro_features)
         self.feature_cols.extend(self.news_feature_cols)
+        if self.orderbook_depth > 0 and not self.use_orderbook_gnn:
+            self.feature_cols.extend(self.orderbook_cols)
         self.spread_cols = []
         self.market_impact_cols: list[str | None] = []
         for sym in self.symbols:
@@ -144,10 +177,13 @@ class TradingEnv(gym.Env):
                 shape=(self.n_symbols * 2,),
                 dtype=np.float32,
             )
+        obs_dim = len(self.feature_cols)
+        if self.orderbook_depth > 0 and self.use_orderbook_gnn:
+            obs_dim += self.n_symbols * self.embedding_dim
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(len(self.feature_cols),),
+            shape=(obs_dim,),
             dtype=np.float32,
         )
         self.start_equity = 1.0
@@ -159,8 +195,38 @@ class TradingEnv(gym.Env):
         self.peak_equity = self.start_equity
         self.positions = np.zeros(self.n_symbols, dtype=np.float32)
         self.portfolio_returns: list[float] = []
-        obs = self.df.loc[self.i, self.feature_cols].values.astype(np.float32)
-        return obs
+        base = self.df.loc[self.i, self.feature_cols].values.astype(np.float32)
+        if self.orderbook_depth > 0 and self.use_orderbook_gnn:
+            base = np.concatenate([base, self._orderbook_embedding(self.i)])
+        return base
+
+    def _orderbook_embedding(self, idx: int) -> np.ndarray:
+        embeds: list[np.ndarray] = []
+        if torch is None or self.orderbook_gnn is None:
+            return np.zeros(self.n_symbols * self.embedding_dim, dtype=np.float32)
+        for sym in self.symbols:
+            bids = []
+            asks = []
+            for lvl in range(self.orderbook_depth):
+                bids.append(
+                    [
+                        float(self.df.loc[idx, f"{sym}_bid_px_{lvl}"]),
+                        float(self.df.loc[idx, f"{sym}_bid_sz_{lvl}"]),
+                    ]
+                )
+                asks.append(
+                    [
+                        float(self.df.loc[idx, f"{sym}_ask_px_{lvl}"]),
+                        float(self.df.loc[idx, f"{sym}_ask_sz_{lvl}"]),
+                    ]
+                )
+            bids_t = torch.tensor(bids, dtype=torch.float32)
+            asks_t = torch.tensor(asks, dtype=torch.float32)
+            x, edge_index = build_orderbook_graph(bids_t, asks_t)
+            with torch.no_grad():
+                emb = self.orderbook_gnn(x, edge_index).cpu().numpy()
+            embeds.append(emb)
+        return np.concatenate(embeds).astype(np.float32)
 
     def step(self, action):
         done = False
@@ -250,6 +316,8 @@ class TradingEnv(gym.Env):
         if self.i >= len(self.df) - 1:
             done = True
         next_obs = self.df.loc[self.i, self.feature_cols].values.astype(np.float32)
+        if self.orderbook_depth > 0 and self.use_orderbook_gnn:
+            next_obs = np.concatenate([next_obs, self._orderbook_embedding(self.i)])
 
         self.peak_equity = max(self.peak_equity, self.equity)
         drawdown = (self.equity - self.peak_equity) / self.peak_equity
