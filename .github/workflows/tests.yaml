@@ -58,7 +58,7 @@ jobs:
         - name: Run quality checks and tests
           run: |
             python scripts/check_skeletons.py
-            pytest -q
+            pytest -q --ignore=tests/resource_tiers --ignore=tests/e2e
 
         - name: Run resource tier smoke tests
           run: |
@@ -70,6 +70,9 @@ jobs:
               fi
             done
             exit $failed
+
+        - name: Run orchestrator tier e2e tests
+          run: pytest -q tests/e2e
 
         - name: Check data version hashes
           run: python scripts/check_data_versions.py
