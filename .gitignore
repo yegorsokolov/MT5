@@ -38,6 +38,7 @@ models/*
 !models/news_meta_label.py
 !models/ftrl.py
 !models/feature_autoencoder.py
+!models/orderbook_gnn.py
 !models/bayesian_forecast.py
 !models/slimmable_network.py
 !models/residual_learner.py
