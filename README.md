@@ -925,25 +925,37 @@ upload logs periodically, schedule the script with cron, for example:
 0 * * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/upload_logs.py
 ```
 
-## Docker images
+## Docker image
 
-The `docker/` directory contains separate CPU and GPU Dockerfiles. Each sets a
-default `RESOURCE_TIER` so software inside the container automatically adjusts
-to the available resources. Build the images with:
+The `docker/Dockerfile` builds a reproducible environment with core
+dependencies. GPU extras can be enabled through build arguments:
 
 ```bash
-docker build -f docker/Dockerfile.cpu -t mt5:cpu .
-docker build -f docker/Dockerfile.gpu -t mt5:gpu .
+# CPU-only image
+docker build -f docker/Dockerfile -t mt5:latest .
+
+# GPU-enabled image
+docker build \
+  -f docker/Dockerfile \
+  --build-arg BASE_IMAGE=nvidia/cuda:12.1.1-runtime-ubuntu22.04 \
+  --build-arg INSTALL_GPU_EXTRAS=true \
+  -t mt5:gpu .
 ```
 
-Run the full stack with docker compose:
+CI publishes this image to GitHub Container Registry so it can be pulled
+directly:
+
+```bash
+docker run --rm ghcr.io/OWNER/mt5:latest python -m utils.environment
+```
+
+The `docker-compose.yml` file launches the remote API, Streamlit dashboard and
+risk manager services with `./checkpoints` and `./logs` mounted for persistent
+storage:
 
 ```bash
 docker-compose up --build
 ```
-
-The compose file launches the remote API, Streamlit dashboard and risk manager
-services with `./checkpoints` and `./logs` mounted for persistent storage.
 
 ## gRPC Management API
 
