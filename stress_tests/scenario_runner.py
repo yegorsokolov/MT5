@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Optional
+from typing import Dict, Iterable, List, Tuple, Optional, Any
 
 import pandas as pd
 import numpy as np
@@ -36,11 +36,20 @@ class ScenarioResult:
 class StressScenarioRunner:
     """Replay crisis periods and shocks on recorded strategy PnL."""
 
-    def __init__(self, strategies: Dict[str, Path], thresholds: Dict[str, float]) -> None:
+    def __init__(
+        self,
+        strategies: Dict[str, Path],
+        thresholds: Dict[str, float],
+        report_dir: Path | str = "reports/stress",
+        scenario_report_dir: Path | str = "reports/scenario_tests",
+    ) -> None:
         self.strategies = strategies
         self.thresholds = thresholds
-        self.report_dir = Path("reports/stress")
+        self.report_dir = Path(report_dir)
         self.report_dir.mkdir(parents=True, exist_ok=True)
+        # Separate directory used for audit of generated scenario paths
+        self.scenario_report_dir = Path(scenario_report_dir)
+        self.scenario_report_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # Loading and basic metric calculations
@@ -98,6 +107,7 @@ class StressScenarioRunner:
         for name, path in self.strategies.items():
             pnl = self._load_pnl(path)
             results: List[ScenarioResult] = []
+            generated_paths: Dict[str, List[float]] = {}
 
             # Baseline metrics
             base_result = self._evaluate(pnl, "baseline", None)
@@ -121,15 +131,16 @@ class StressScenarioRunner:
                 generated = scenario_generator.generate_pnl(pnl)
                 for label, series in generated.items():
                     results.append(self._evaluate(series, label, base_drawdown))
+                    generated_paths[label] = [float(x) for x in series]
 
             # Optional GAN/diffusion generated paths
             if synthetic_generator is not None and n_synthetic > 0:
                 for i in range(n_synthetic):
                     synthetic = synthetic_generator.generate(len(pnl))
                     syn_series = pd.Series(synthetic, index=pnl.index)
-                    results.append(
-                        self._evaluate(syn_series, f"synthetic_path_{i}", base_drawdown)
-                    )
+                    label = f"synthetic_path_{i}"
+                    results.append(self._evaluate(syn_series, label, base_drawdown))
+                    generated_paths[label] = [float(x) for x in synthetic]
 
             for r in results:
                 record_metric(
@@ -148,6 +159,17 @@ class StressScenarioRunner:
 
             all_results[name] = results
             self._save_report(name, results)
+            if generated_paths:
+                meta: Dict[str, Any] = {
+                    "scenario_generator": type(scenario_generator).__name__
+                    if scenario_generator
+                    else None,
+                    "synthetic_generator": type(synthetic_generator).__name__
+                    if synthetic_generator
+                    else None,
+                    "n_synthetic": n_synthetic,
+                }
+                self._save_scenario_report(name, results, meta, generated_paths)
             self._apply_actions(results)
         return all_results
 
@@ -181,6 +203,24 @@ class StressScenarioRunner:
         data = [asdict(r) for r in results]
         with (self.report_dir / f"{name}_{ts}.json").open("w") as f:
             json.dump(data, f, indent=2)
+
+    def _save_scenario_report(
+        self,
+        name: str,
+        results: Iterable[ScenarioResult],
+        metadata: Dict[str, Any],
+        paths: Dict[str, List[float]],
+    ) -> None:
+        """Persist scenario metadata and outcomes for audit."""
+
+        ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        payload = {
+            "metadata": metadata,
+            "results": [asdict(r) for r in results],
+            "paths": paths,
+        }
+        with (self.scenario_report_dir / f"{name}_{ts}.json").open("w") as f:
+            json.dump(payload, f, indent=2)
 
     def _apply_actions(self, results: Iterable[ScenarioResult]) -> None:
         actions = {r.action for r in results}
