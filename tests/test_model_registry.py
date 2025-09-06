@@ -47,6 +47,15 @@ def test_initial_selection() -> None:
     assert registry.get("trade_exit") == "exit_transformer"
 
 
+def test_distilled_variant_selected() -> None:
+    monitor = DummyMonitor(
+        ResourceCapabilities(cpus=4, memory_gb=16, has_gpu=False, gpu_count=0)
+    )
+    registry = ModelRegistry(monitor, auto_refresh=False)
+    assert registry.get("rl_policy") == "rl_large_distilled"
+    assert registry.get("trade_exit") == "exit_transformer_distilled"
+
+
 def test_fallback_on_refresh() -> None:
     monitor = DummyMonitor(
         ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=True, gpu_count=1)

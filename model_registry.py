@@ -139,6 +139,11 @@ MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
             "rl_medium_quantized",
         ),
         ModelVariant(
+            "rl_large_distilled",
+            ResourceCapabilities(4, 16, False, gpu_count=0),
+            "rl_large_distilled_quantized",
+        ),
+        ModelVariant(
             "rl_small",
             ResourceCapabilities(2, 4, False, gpu_count=0),
             "rl_small_quantized",
@@ -151,6 +156,11 @@ MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
             ResourceCapabilities(8, 32, True, gpu_count=1),
             "exit_transformer_quantized",
             remote_only=True,
+        ),
+        ModelVariant(
+            "exit_transformer_distilled",
+            ResourceCapabilities(4, 16, False, gpu_count=0),
+            "exit_transformer_distilled_quantized",
         ),
         ModelVariant(
             "exit_gbm",
