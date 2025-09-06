@@ -72,6 +72,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from core.orchestrator import Orchestrator
 from utils.lr_scheduler import LookaheadAdamW
+from analysis.grad_monitor import GradientMonitor
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -679,6 +680,11 @@ def main(
             )
             federated_client.fetch_global()
         optim = LookaheadAdamW(model.parameters(), lr=1e-3)
+        grad_monitor = GradientMonitor(
+            explode=cfg.get("grad_explode", 1e3),
+            vanish=cfg.get("grad_vanish", 1e-6),
+            out_dir=root / "reports" / "gradients",
+        )
         loss_fn = QuantileLoss(quantiles) if use_tft else torch.nn.BCELoss()
 
         use_amp = cfg.get("use_amp", False)
@@ -778,6 +784,17 @@ def main(
                     scaler.scale(raw_loss / accumulate_steps).backward()
                 else:
                     (raw_loss / accumulate_steps).backward()
+                trend, _ = grad_monitor.track(model.parameters())
+                if trend == "explode":
+                    for group in optim.param_groups:
+                        group["lr"] *= cfg.get("grad_lr_decay", 0.5)
+                    if min(g["lr"] for g in optim.param_groups) < cfg.get("min_lr", 1e-6):
+                        logger.error("Gradient explosion; aborting training")
+                        grad_monitor.plot("nn")
+                        return 0.0
+                elif trend == "vanish":
+                    for group in optim.param_groups:
+                        group["lr"] *= cfg.get("grad_lr_growth", 2.0)
                 if (step + 1) % accumulate_steps == 0 or (step + 1) == steps_per_epoch:
                     if use_amp:
                         scaler.step(optim)
@@ -1113,6 +1130,7 @@ def main(
     if world_size > 1:
         dist.destroy_process_group()
 
+    grad_monitor.plot("nn")
     mlflow.log_metric("runtime", (datetime.now() - start_time).total_seconds())
     mlflow.end_run()
     return acc
