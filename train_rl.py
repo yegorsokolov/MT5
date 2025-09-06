@@ -64,6 +64,7 @@ from rl.risk_shaped_env import RiskShapedTradingEnv
 from rl.macro_reward_wrapper import MacroRewardWrapper
 from rl.multi_agent_env import MultiAgentTradingEnv
 from rl.constrained_agent import ConstrainedAgent
+from rl.meta_controller import MetaControllerDataset, train_meta_controller
 
 try:
     import gymnasium as gymn
@@ -1191,6 +1192,20 @@ def main(
             )
             mlflow.end_run()
 
+    # Optionally train a meta-controller from logged returns
+    if cfg.get("meta_controller") and rank == 0:
+        try:
+            returns_arr = np.array(getattr(env, "portfolio_returns", []), dtype=float)
+            regimes_arr = np.array(getattr(env, "regimes", np.zeros_like(returns_arr)), dtype=float)
+            if returns_arr.size > 0:
+                # Placeholder: assume two base agents where second is inverse of first
+                ret_matrix = np.column_stack([returns_arr, -returns_arr])
+                dataset = MetaControllerDataset(ret_matrix, regimes_arr.reshape(-1, 1))
+                train_meta_controller(dataset, epochs=int(cfg.get("meta_epochs", 10)))
+                logger.info("Meta-controller trained on %d samples", len(returns_arr))
+        except Exception:  # pragma: no cover - best effort
+            logger.exception("Meta-controller training failed")
+
     if cfg.get("export"):
         from models.export import export_pytorch
 
@@ -1428,6 +1443,11 @@ if __name__ == "__main__":
         "--multi-agent", action="store_true", help="Enable multi-agent training"
     )
     parser.add_argument(
+        "--meta-controller",
+        action="store_true",
+        help="Train meta-controller from logged agent returns",
+    )
+    parser.add_argument(
         "--meta-train",
         action="store_true",
         help="Run meta-training to produce meta-initialised RL policy",
@@ -1479,6 +1499,8 @@ if __name__ == "__main__":
         cfg["rl_objectives"] = objs
     if args.multi_agent:
         cfg["multi_agent"] = True
+    if args.meta_controller:
+        cfg["meta_controller"] = True
     if args.meta_train:
         cfg["meta_train"] = True
     if args.fine_tune:
