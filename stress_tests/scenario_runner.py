@@ -153,6 +153,26 @@ class StressScenarioRunner:
                     results.append(self._evaluate(crash_series, label, base_drawdown))
                     generated_paths[label] = [float(x) for x in crash_path]
 
+                # Diffusion based scenarios
+                if hasattr(synthetic_generator, "sample_crash"):
+                    crash = synthetic_generator.sample_crash(len(pnl))
+                    crash_series = pd.Series(crash, index=pnl.index)
+                    label = "diffusion_crash"
+                    results.append(self._evaluate(crash_series, label, base_drawdown))
+                    generated_paths[label] = [float(x) for x in crash]
+                if hasattr(synthetic_generator, "sample_liquidity_freeze"):
+                    freeze = synthetic_generator.sample_liquidity_freeze(len(pnl))
+                    freeze_series = pd.Series(freeze, index=pnl.index)
+                    label = "diffusion_liquidity_freeze"
+                    results.append(self._evaluate(freeze_series, label, base_drawdown))
+                    generated_paths[label] = [float(x) for x in freeze]
+                if hasattr(synthetic_generator, "sample_regime_flip"):
+                    flip = synthetic_generator.sample_regime_flip(len(pnl))
+                    flip_series = pd.Series(flip, index=pnl.index)
+                    label = "diffusion_regime_flip"
+                    results.append(self._evaluate(flip_series, label, base_drawdown))
+                    generated_paths[label] = [float(x) for x in flip]
+
             for r in results:
                 record_metric(
                     "stress_pnl", r.pnl, {"strategy": name, "scenario": r.scenario}
@@ -236,6 +256,7 @@ class StressScenarioRunner:
         actions = {r.action for r in results}
         if "disable" in actions:
             risk_manager.halt()
+            raise RuntimeError("critical stress scenario breach")
         elif "adjust" in actions:
             risk_manager.max_drawdown = min(
                 risk_manager.max_drawdown, self.thresholds["max_drawdown"] * 0.5
