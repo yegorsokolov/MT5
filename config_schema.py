@@ -23,6 +23,11 @@ class ConfigSchema(BaseModel):
     pred_cache_policy: str = Field(
         "lru", description="Eviction policy for prediction cache (lru or fifo)"
     )
+    plugin_cache_ttl: float = Field(
+        0,
+        ge=0,
+        description="Seconds before unused plugins are unloaded from memory",
+    )
     ewma_alpha: float = Field(
         0.06,
         gt=0,
