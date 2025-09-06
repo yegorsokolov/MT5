@@ -102,6 +102,8 @@ class ResourceMonitor:
         self.latest_usage: Dict[str, object] = {}
         self._tick_start: Optional[float] = None
         self.tick_to_signal_latency: float = 0.0
+        self._latency_samples: Deque[float] = deque(maxlen=120)
+        self.avg_latency: float = 0.0
         self._module_procs: Dict[str, psutil.Process] = {}
         self._module_samples: Dict[str, Dict[str, Deque[float]]] = {}
         self._module_averages: Dict[str, Dict[str, float]] = {}
@@ -147,11 +149,24 @@ class ResourceMonitor:
             return
         latency = time.perf_counter() - self._tick_start
         self.tick_to_signal_latency = latency
+        self._latency_samples.append(latency)
+        self.avg_latency = sum(self._latency_samples) / len(self._latency_samples)
         try:
             record_metric("tick_to_signal_latency", latency)
+            record_metric("tick_to_signal_latency_avg", self.avg_latency)
         except Exception:
             pass
         self._tick_start = None
+
+    def latency(self) -> float:
+        """Return average tick-to-signal latency."""
+        if self._latency_samples:
+            return self.avg_latency
+        return self.tick_to_signal_latency
+
+    def latency_exceeded(self, threshold: float) -> bool:
+        """Return True if average latency is above ``threshold``."""
+        return threshold > 0 and self.latency() > threshold
 
     def _parse_cpu_flags(self) -> Set[str]:
         flags: Set[str] = set()
