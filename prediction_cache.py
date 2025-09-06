@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import Any
 
-from metrics import PRED_CACHE_HIT
+from metrics import PRED_CACHE_HIT, PRED_CACHE_HIT_RATIO
 
 
 class PredictionCache:
@@ -26,14 +26,20 @@ class PredictionCache:
         # used for the value type so callers can cache lists, numpy arrays or
         # scalars without type restrictions.
         self._data: "OrderedDict[int, Any]" = OrderedDict()
+        self._hits = 0
+        self._lookups = 0
 
     def get(self, key: int) -> Any | None:
         """Return cached value for ``key`` if present."""
+        self._lookups += 1
         val = self._data.get(key)
         if val is not None:
+            self._hits += 1
             PRED_CACHE_HIT.inc()
             if self.policy == "lru":
                 self._data.move_to_end(key)
+        if self._lookups:
+            PRED_CACHE_HIT_RATIO.set(self._hits / self._lookups)
         return val
 
     def set(self, key: int, value: Any) -> None:
