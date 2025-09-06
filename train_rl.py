@@ -1195,14 +1195,26 @@ def main(
     # Optionally train a meta-controller from logged returns
     if cfg.get("meta_controller") and rank == 0:
         try:
-            returns_arr = np.array(getattr(env, "portfolio_returns", []), dtype=float)
-            regimes_arr = np.array(getattr(env, "regimes", np.zeros_like(returns_arr)), dtype=float)
-            if returns_arr.size > 0:
-                # Placeholder: assume two base agents where second is inverse of first
+            sub_returns = getattr(env, "subpolicy_returns", None)
+            states = getattr(env, "state_embeddings", None)
+            if sub_returns is not None and states is not None:
+                ret_matrix = np.asarray(sub_returns, dtype=float)
+                state_matrix = np.asarray(states, dtype=float)
+            else:
+                # Fallback to single-agent portfolio returns and simple regime feature
+                returns_arr = np.array(getattr(env, "portfolio_returns", []), dtype=float)
+                regimes_arr = np.array(
+                    getattr(env, "regimes", np.zeros_like(returns_arr)), dtype=float
+                )
+                if returns_arr.size == 0:
+                    raise ValueError("No returns logged for meta-controller training")
                 ret_matrix = np.column_stack([returns_arr, -returns_arr])
-                dataset = MetaControllerDataset(ret_matrix, regimes_arr.reshape(-1, 1))
-                train_meta_controller(dataset, epochs=int(cfg.get("meta_epochs", 10)))
-                logger.info("Meta-controller trained on %d samples", len(returns_arr))
+                state_matrix = regimes_arr.reshape(-1, 1)
+            dataset = MetaControllerDataset(ret_matrix, state_matrix)
+            train_meta_controller(dataset, epochs=int(cfg.get("meta_epochs", 10)))
+            logger.info(
+                "Meta-controller trained on %d samples", len(dataset.returns)
+            )
         except Exception:  # pragma: no cover - best effort
             logger.exception("Meta-controller training failed")
 

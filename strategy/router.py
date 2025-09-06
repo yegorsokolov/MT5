@@ -24,7 +24,11 @@ from analytics.metrics_aggregator import record_metric
 from state_manager import load_router_state, save_router_state
 from models.ftrl import FTRLModel
 from utils.resource_monitor import monitor
-from .pair_trading import signal_from_features as pair_signal
+try:  # optional dependency - statsmodels may be missing
+    from .pair_trading import signal_from_features as pair_signal
+except Exception:  # pragma: no cover
+    def pair_signal(*_, **__):
+        return 0.0
 from .fuzzy_consensus import FuzzyConsensus
 
 try:  # optional dependency - meta controller may not be available

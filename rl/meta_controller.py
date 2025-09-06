@@ -17,26 +17,34 @@ try:  # optional dependency - torch may be stubbed in minimal environments
     from torch import nn
 except Exception:  # pragma: no cover - torch not installed in some tests
     torch = None  # type: ignore
-    nn = object  # type: ignore
+    nn = None  # type: ignore
 
 
-class _MLP(nn.Module):  # pragma: no cover - trivial wrapper
-    def __init__(self, in_dim: int, hidden: Iterable[int], out_dim: int) -> None:
-        super().__init__()
-        layers = []
-        last = in_dim
-        for h in hidden:
-            layers.append(nn.Linear(last, h))
-            layers.append(nn.ReLU())
-            last = h
-        layers.append(nn.Linear(last, out_dim))
-        self.net = nn.Sequential(*layers)
+if nn is not None:
+    class _MLP(nn.Module):  # pragma: no cover - trivial wrapper
+        def __init__(self, in_dim: int, hidden: Iterable[int], out_dim: int) -> None:
+            super().__init__()
+            layers = []
+            last = in_dim
+            for h in hidden:
+                layers.append(nn.Linear(last, h))
+                layers.append(nn.ReLU())
+                last = h
+            layers.append(nn.Linear(last, out_dim))
+            self.net = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
-        return self.net(x)
+        def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+            return self.net(x)
+else:  # pragma: no cover - torch not available
+    class _MLP:  # type: ignore
+        def __init__(self, *_, **__):
+            pass
+
+        def forward(self, x):  # pragma: no cover
+            raise RuntimeError("torch is required for MetaController")
 
 
-class MetaController(nn.Module):
+class MetaController(nn.Module if nn is not None else object):
     """A small network that outputs allocation weights for base agents."""
 
     def __init__(
@@ -45,14 +53,16 @@ class MetaController(nn.Module):
         state_dim: int,
         hidden: Optional[Iterable[int]] = None,
     ) -> None:
-        if torch is None:  # pragma: no cover - torch not available
-            raise ImportError("torch is required for MetaController")
-        super().__init__()
-        if hidden is None:
-            hidden = (32, 16)
         self.num_agents = num_agents
         self.state_dim = state_dim
-        self.mlp = _MLP(num_agents + state_dim, hidden, num_agents)
+        if torch is None:
+            # simple lookup table for states -> best agent
+            self.state_to_agent: dict[tuple, int] = {}
+        else:
+            super().__init__()
+            if hidden is None:
+                hidden = (32, 16)
+            self.mlp = _MLP(num_agents + state_dim, hidden, num_agents)
 
     def forward(
         self, returns: torch.Tensor, state: torch.Tensor
@@ -77,14 +87,36 @@ class MetaController(nn.Module):
             Array of shape ``(state_dim,)`` representing the current state
             embedding.
         """
-        if torch is None:  # pragma: no cover
-            raise ImportError("torch is required for MetaController")
+        if torch is None:
+            key = tuple(np.asarray(state).tolist())
+            idx = self.state_to_agent.get(key, int(np.argmax(returns)))
+            weights = np.zeros(self.num_agents, dtype=float)
+            weights[idx] = 1.0
+            return weights
         with torch.no_grad():
             r_t = torch.as_tensor(returns, dtype=torch.float32)
             s_t = torch.as_tensor(state, dtype=torch.float32)
             logits = self.forward(r_t, s_t)
             weights = torch.softmax(logits, dim=-1)
         return weights.cpu().numpy().squeeze()
+
+    # ------------------------------------------------------------------
+    def select(
+        self, returns: np.ndarray, state: np.ndarray, threshold: float = 0.5
+    ) -> np.ndarray:
+        """Return a boolean mask indicating which agents to enable.
+
+        Parameters
+        ----------
+        returns:
+            Estimated returns from each agent.
+        state:
+            State embedding aligned with ``returns``.
+        threshold:
+            Minimum allocation weight required for an agent to be enabled.
+        """
+        weights = self.predict(returns, state)
+        return weights >= threshold
 
 
 @dataclass
@@ -104,8 +136,11 @@ def train_meta_controller(
     return.  A small neural network is trained with a cross-entropy loss where
     the target class is the index of the best-performing agent for each sample.
     """
-    if torch is None:  # pragma: no cover - torch not available
-        raise ImportError("torch is required for MetaController training")
+    if torch is None:  # pragma: no cover - simple fallback without torch
+        model = MetaController(dataset.returns.shape[1], dataset.states.shape[1])
+        for r, s in zip(dataset.returns, dataset.states):
+            model.state_to_agent[tuple(s.tolist())] = int(np.argmax(r))
+        return model
 
     returns = torch.as_tensor(dataset.returns, dtype=torch.float32)
     states = torch.as_tensor(dataset.states, dtype=torch.float32)
