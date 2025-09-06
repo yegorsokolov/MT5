@@ -287,6 +287,9 @@ async def dispatch_signals(bus, df: pd.DataFrame) -> None:
     with tracer.start_as_current_span("dispatch_signals"):
         if bus is None or df.empty:
             return
+        if not pipeline_anomaly.validate(df):
+            logger.warning("Pipeline anomaly detected in dispatch; dropping batch")
+            return
         await publish_dataframe_async(bus, df)
 
         tier = getattr(monitor, "capability_tier", "lite")
