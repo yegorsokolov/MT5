@@ -22,6 +22,7 @@ from features.cross_asset import (
 from utils.resource_monitor import monitor, ResourceCapabilities
 from utils import load_config
 from analysis import feature_gate
+from analysis.data_lineage import log_lineage
 from .expectations import validate_dataframe
 
 logger = logging.getLogger(__name__)
@@ -181,7 +182,13 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """
 
     for compute in get_feature_pipeline():
+        prev_cols = set(df.columns)
         df = compute(df)
+        new_cols = set(df.columns) - prev_cols
+        run_id = df.attrs.get("run_id", "unknown")
+        raw_file = df.attrs.get("source", "unknown")
+        for col in new_cols:
+            log_lineage(run_id, raw_file, compute.__name__, col)
 
     # Allow runtime plugins to extend the feature set
     adjacency = df.attrs.get("adjacency_matrices")
