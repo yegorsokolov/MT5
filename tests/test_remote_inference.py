@@ -26,6 +26,7 @@ import metrics
 # Ensure prediction cache metrics are available without requiring the full
 # prometheus client implementation.
 metrics.PRED_CACHE_HIT = types.SimpleNamespace(inc=lambda: None)
+metrics.PRED_CACHE_HIT_RATIO = types.SimpleNamespace(set=lambda v: None)
 
 
 @dataclass
@@ -79,8 +80,11 @@ def test_remote_fallback_and_cache(monkeypatch):
     key = registry._feature_hash(feats)
     # cache populated after first prediction
     assert key in registry.cache._data
+    assert calls["post"] == 1
     preds2 = registry.predict("sentiment", feats)
     assert preds1 == preds2 == [0.9]
+    # second prediction served from cache, no extra remote call
+    assert calls["post"] == 1
 
 
 class LocalModel:

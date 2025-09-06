@@ -188,7 +188,13 @@ class ModelRegistry:
         self.latency = latency or InferenceLatency()
         self.cfg = cfg or {}
         self._cache_ttl = float(self.cfg.get("model_cache_ttl", 0))
-        self.cache = cache or PredictionCache(0)
+        if cache is not None:
+            self.cache = cache
+        else:
+            self.cache = PredictionCache(
+                int(self.cfg.get("pred_cache_size", 0)),
+                self.cfg.get("pred_cache_policy", "lru"),
+            )
         self.breach_checks = 3
         self.recovery_checks = 5
         self.regime_getter = regime_getter or (lambda: 0)
