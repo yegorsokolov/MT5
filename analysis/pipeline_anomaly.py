@@ -30,6 +30,12 @@ import pandas as pd
 
 from metrics import PIPELINE_ANOMALY_TOTAL, PIPELINE_ANOMALY_RATE
 
+try:  # pragma: no cover - analytics optional
+    from analytics.metrics_store import record_metric
+except Exception:  # pragma: no cover - fallback stub
+    def record_metric(*a, **k):  # type: ignore
+        return None
+
 try:  # pragma: no cover - optional dependency
     from sklearn.ensemble import IsolationForest
 except Exception:  # pragma: no cover - sklearn may be absent in tests
@@ -168,6 +174,8 @@ class PipelineAnomalyDetector:
         PIPELINE_ANOMALY_TOTAL.inc(bad)
         rate = self.anomalies / self.total if self.total else 0.0
         PIPELINE_ANOMALY_RATE.set(rate)
+        record_metric("pipeline_anomaly_total", bad)
+        record_metric("pipeline_anomaly_rate", rate)
         if bad:
             logger.warning("Pipeline anomaly detected: %d rows", bad)
             if quarantine:
