@@ -134,13 +134,24 @@ class StressScenarioRunner:
                     generated_paths[label] = [float(x) for x in series]
 
             # Optional GAN/diffusion generated paths
-            if synthetic_generator is not None and n_synthetic > 0:
-                for i in range(n_synthetic):
-                    synthetic = synthetic_generator.generate(len(pnl))
-                    syn_series = pd.Series(synthetic, index=pnl.index)
-                    label = f"synthetic_path_{i}"
-                    results.append(self._evaluate(syn_series, label, base_drawdown))
-                    generated_paths[label] = [float(x) for x in synthetic]
+            if synthetic_generator is not None:
+                if n_synthetic > 0:
+                    for i in range(n_synthetic):
+                        synthetic = synthetic_generator.generate(len(pnl))
+                        syn_series = pd.Series(synthetic, index=pnl.index)
+                        label = f"synthetic_path_{i}"
+                        results.append(
+                            self._evaluate(syn_series, label, base_drawdown)
+                        )
+                        generated_paths[label] = [float(x) for x in synthetic]
+
+                # One crash/recovery path if the generator supports it
+                if hasattr(synthetic_generator, "sample_crash_recovery"):
+                    crash_path = synthetic_generator.sample_crash_recovery(len(pnl))
+                    crash_series = pd.Series(crash_path, index=pnl.index)
+                    label = "synthetic_crash_recovery"
+                    results.append(self._evaluate(crash_series, label, base_drawdown))
+                    generated_paths[label] = [float(x) for x in crash_path]
 
             for r in results:
                 record_metric(
@@ -159,17 +170,16 @@ class StressScenarioRunner:
 
             all_results[name] = results
             self._save_report(name, results)
-            if generated_paths:
-                meta: Dict[str, Any] = {
-                    "scenario_generator": type(scenario_generator).__name__
-                    if scenario_generator
-                    else None,
-                    "synthetic_generator": type(synthetic_generator).__name__
-                    if synthetic_generator
-                    else None,
-                    "n_synthetic": n_synthetic,
-                }
-                self._save_scenario_report(name, results, meta, generated_paths)
+            meta: Dict[str, Any] = {
+                "scenario_generator": type(scenario_generator).__name__
+                if scenario_generator
+                else None,
+                "synthetic_generator": type(synthetic_generator).__name__
+                if synthetic_generator
+                else None,
+                "n_synthetic": n_synthetic,
+            }
+            self._save_scenario_report(name, results, meta, generated_paths)
             self._apply_actions(results)
         return all_results
 
