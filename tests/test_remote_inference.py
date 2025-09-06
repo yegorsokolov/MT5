@@ -106,3 +106,48 @@ def test_local_path_no_remote_call(monkeypatch):
     preds = registry.predict("sentiment", feats, loader=lambda name: LocalModel())
     assert preds == [0.1]
     assert calls["post"] == 0
+
+
+def test_batched_remote_vs_local(monkeypatch):
+    server_model = DummyModel()
+    monkeypatch.setattr(
+        "services.inference_server._load_model", lambda name: server_model
+    )
+    test_client = TestClient(app)
+    calls = {"post": 0}
+
+    def fake_post(url, json, timeout):
+        calls["post"] += 1
+        resp = test_client.post("/predict", json=json)
+        return types.SimpleNamespace(
+            status_code=resp.status_code,
+            json=resp.json,
+            raise_for_status=lambda: None,
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(
+        "services.worker_manager.get_worker_manager",
+        lambda: types.SimpleNamespace(record_request=lambda *a, **k: None),
+    )
+
+    monitor = DummyMonitor(
+        ResourceCapabilities(cpus=1, memory_gb=1, has_gpu=False, gpu_count=0)
+    )
+    registry = ModelRegistry(monitor, auto_refresh=False, cache=PredictionCache(maxsize=8))
+
+    feats = [{"x": i} for i in range(5)]
+    preds = registry.predict("sentiment", feats, batch_size=2)
+    assert preds == [0.9] * 5
+    # 5 features with batch_size=2 -> 3 remote calls
+    assert calls["post"] == 3
+
+    # Local model should also support batching
+    monitor_local = DummyMonitor(
+        ResourceCapabilities(cpus=32, memory_gb=128, has_gpu=True, gpu_count=1)
+    )
+    registry_local = ModelRegistry(monitor_local, auto_refresh=False, cache=PredictionCache())
+    preds_local = registry_local.predict(
+        "sentiment", feats, loader=lambda name: LocalModel(), batch_size=2
+    )
+    assert preds_local == [0.1] * 5
