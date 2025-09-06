@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 
 from data.versioning import compute_hash
+from analysis.data_lineage import get_lineage
 
 
 def _hash_datasets(paths: Sequence[Path | str]) -> Dict[str, str]:
@@ -23,8 +24,10 @@ def generate(
     config: Dict[str, Any],
     dataset_paths: Sequence[Path | str],
     features: Iterable[str],
+    labels: Iterable[str],
     metrics: Dict[str, Any],
     output_dir: Path | str,
+    run_id: str,
 ) -> tuple[Path, Path]:
     """Create a model card in Markdown and JSON format.
 
@@ -37,10 +40,14 @@ def generate(
         reproducibility.
     features: Iterable[str]
         List of feature names used for training.
+    labels: Iterable[str]
+        Label columns used for training.
     metrics: Dict[str, Any]
         Validation metrics gathered during training.
     output_dir: Path | str
         Directory where the model card files should be written.
+    run_id: str
+        Identifier for the model run used to look up lineage information.
 
     Returns
     -------
@@ -54,12 +61,26 @@ def generate(
 
     dataset_hashes = _hash_datasets(dataset_paths)
 
+    lineage_df = get_lineage(run_id)
+    feature_lineage: Dict[str, Any] = {}
+    label_lineage: Dict[str, Any] = {}
+    for feat in features:
+        feature_lineage[feat] = lineage_df[
+            lineage_df["output_feature"] == feat
+        ].to_dict("records")
+    for lbl in labels:
+        label_lineage[lbl] = lineage_df[
+            lineage_df["output_feature"] == lbl
+        ].to_dict("records")
+
     card: Dict[str, Any] = {
         "generated_at": datetime.utcnow().isoformat(),
         "training_config": config,
         "dataset_hashes": dataset_hashes,
         "features": list(features),
+        "labels": list(labels),
         "metrics": metrics,
+        "lineage": {"features": feature_lineage, "labels": label_lineage},
     }
 
     json_path = out_dir / f"model_card_{timestamp}.json"
@@ -82,6 +103,14 @@ def generate(
     md_lines.append("\n## Features\n")
     for feat in card["features"]:
         md_lines.append(f"- {feat}")
+    md_lines.append("\n## Labels\n")
+    for lbl in card["labels"]:
+        md_lines.append(f"- {lbl}")
+    md_lines.append("\n## Data Lineage\n")
+    for feat, records in card["lineage"]["features"].items():
+        md_lines.append(f"- **{feat}**: {records}")
+    for lbl, records in card["lineage"]["labels"].items():
+        md_lines.append(f"- **{lbl}**: {records}")
     md_lines.extend([
         "\n## Validation Metrics\n",
         "```json",

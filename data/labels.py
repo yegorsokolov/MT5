@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+from analysis.data_lineage import log_lineage
 
 
 def triple_barrier(
@@ -42,6 +43,10 @@ def triple_barrier(
                 outcome = -1
                 break
         labels.iloc[i] = outcome
+
+    run_id = prices.attrs.get("run_id", "unknown")
+    raw_file = prices.attrs.get("source", "unknown")
+    log_lineage(run_id, raw_file, "triple_barrier", "label")
     return labels
 
 __all__ = ["triple_barrier"]
