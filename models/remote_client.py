@@ -48,7 +48,7 @@ def _to_records(features: Any) -> List[Mapping[str, Any]]:
     raise TypeError(f"Unsupported features type: {type(features)!r}")
 
 
-def predict(model_name: str, features: Any) -> List[float]:
+def predict(model_name: str, features: Any, batch_size: int | None = None) -> List[float]:
     """Return predictions for ``features`` from a remote model.
 
     Parameters
@@ -57,22 +57,35 @@ def predict(model_name: str, features: Any) -> List[float]:
         Identifier of the model on the remote server.
     features:
         Feature matrix as a pandas ``DataFrame`` or an iterable of dicts.
+    batch_size:
+        If provided, features are split into batches of this size and sent to
+        the remote server sequentially.  This allows callers to trade off
+        latency for throughput when dealing with large inputs.
     """
 
-    start = time.perf_counter()
-    try:
-        payload = {"model_name": model_name, "features": _to_records(features)}
-        resp = requests.post(f"{_BASE_URL}/predict", json=payload, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        preds = data.get("predictions", [])
-        if not isinstance(preds, list):
-            raise ValueError("Invalid response from remote model")
-        return preds
-    finally:
-        latency = time.perf_counter() - start
-        # Record latency so the worker manager can adjust scaling decisions
-        get_worker_manager().record_request("remote_client", latency)
+    records = _to_records(features)
+    if not records:
+        return []
+    bs = max(1, batch_size or len(records))
+    predictions: List[float] = []
+    for i in range(0, len(records), bs):
+        batch = records[i : i + bs]
+        start = time.perf_counter()
+        try:
+            payload = {"model_name": model_name, "features": batch}
+            resp = requests.post(f"{_BASE_URL}/predict", json=payload, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            preds = data.get("predictions", [])
+            if not isinstance(preds, list):
+                raise ValueError("Invalid response from remote model")
+            predictions.extend(preds)
+        finally:
+            latency = time.perf_counter() - start
+            get_worker_manager().record_request(
+                "remote_client", latency, batch_size=len(batch)
+            )
+    return predictions
 
 
 # Backwards compatibility for older code paths
