@@ -29,6 +29,7 @@ BROKER_FAILURES = Counter('broker_failures', 'Broker heartbeat failures', ['brok
 PLUGIN_RELOADS = Counter('plugin_reloads', 'Total plugin reloads')
 # Prediction cache metrics
 PRED_CACHE_HIT = Counter('pred_cache_hit', 'Predictions served from cache')
+PRED_CACHE_HIT_RATIO = Gauge('pred_cache_hit_ratio', 'Ratio of cache hits to total lookups')
 # Resource utilization metrics
 CPU_USAGE = Gauge('cpu_usage_pct', 'Process CPU utilization percentage')
 RSS_USAGE = Gauge('rss_usage_mb', 'Process resident set size in megabytes')
