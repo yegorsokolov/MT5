@@ -15,6 +15,23 @@ except Exception:  # pragma: no cover - torch optional
 from analytics.metrics_store import record_metric
 
 
+def _plugin_cache_ttl() -> float:
+    """Return plugin cache TTL from configuration."""
+
+    try:
+        import os
+        from pathlib import Path
+        import yaml
+
+        cfg_path = os.getenv("CONFIG_FILE")
+        path = Path(cfg_path) if cfg_path else Path(__file__).resolve().parents[1] / "config.yaml"
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return float(data.get("plugin_cache_ttl", 0) or 0)
+    except Exception:
+        return 0.0
+
+
 @dataclass
 class ResourceCapabilities:
     """Basic view of available system resources."""
@@ -211,6 +228,15 @@ class ResourceMonitor:
             self.capabilities,
             self.capability_tier,
         )
+        ttl = _plugin_cache_ttl()
+        if ttl > 0:
+            try:
+                import importlib
+
+                plugins = importlib.import_module("plugins")
+                plugins.purge_unused_plugins(ttl)
+            except Exception:
+                self.logger.debug("Plugin purge failed", exc_info=True)
         try:
             from risk_manager import risk_manager
 
