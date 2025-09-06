@@ -36,6 +36,7 @@ from .delta_store import DeltaStore
 from utils.resource_monitor import monitor
 from analysis.data_quality import apply_quality_checks
 from analytics.metrics_store import record_metric
+from .expectations import validate_dataframe
 
 logger = logging.getLogger(__name__)
 DATA_VERSIONS_LOG = Path("logs/data_versions.json")
@@ -187,6 +188,9 @@ def load_history(path: Path, validate: bool = False) -> pd.DataFrame:
         for k, v in report.items():
             record_metric(f"data_quality_{k}", v, tags={"source": "history"})
 
+    if validate:
+        validate_dataframe(df, "raw_ticks")
+
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(cache_path, index=False, date_format="%Y%m%d %H:%M:%S:%f")
     _record_data_version(path)
@@ -254,6 +258,9 @@ def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
         logger.info("Data quality report: %s", report)
         for k, v in report.items():
             record_metric(f"data_quality_{k}", v, tags={"source": "history"})
+
+    if validate:
+        validate_dataframe(df, "raw_ticks")
 
     logger.debug("Loaded %d rows from Parquet", len(df))
     return df
