@@ -394,3 +394,26 @@ class ResourceMonitor:
 
 
 monitor = ResourceMonitor()
+
+
+def main() -> None:
+    """Entry point used by the Docker image.
+
+    It simply loads any registered plugins which can enable or disable
+    functionality based on the detected :data:`capability_tier` and prints the
+    tier for visibility.  This keeps the Docker entrypoint lightweight while
+    still allowing the monitor to be invoked as a standalone module.
+    """
+
+    try:
+        from plugins import PLUGIN_SPECS
+
+        for spec in PLUGIN_SPECS:
+            spec.load()
+    except Exception:  # pragma: no cover - plugins are optional
+        pass
+    print(f"Resource tier detected: {monitor.capability_tier}")
+
+
+if __name__ == "__main__":  # pragma: no cover - manual invocation
+    main()
