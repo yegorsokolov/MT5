@@ -96,6 +96,7 @@ except Exception:  # pragma: no cover - analytics optional in tests
         )
 from utils import load_config
 from state_manager import save_checkpoint, load_latest_checkpoint
+from analysis.grad_monitor import GradientMonitor, GradMonitorCallback
 
 try:
     from utils.resource_monitor import monitor  # type: ignore
@@ -244,6 +245,7 @@ def offline_pretrain(
     epochs: int = 10,
     batch_size: int = 32,
     lr: float = 1e-3,
+    grad_monitor: GradientMonitor | None = None,
 ) -> None:
     """Pretrain ``model``'s policy using offline experiences.
 
@@ -276,6 +278,14 @@ def offline_pretrain(
                     loss = loss_fn(pred, act_t)
                     optimizer.zero_grad()
                     loss.backward()
+                    if grad_monitor is not None:
+                        trend, _ = grad_monitor.track(policy.parameters())
+                        if trend == "explode":
+                            for group in optimizer.param_groups:
+                                group["lr"] *= 0.5
+                        elif trend == "vanish":
+                            for group in optimizer.param_groups:
+                                group["lr"] *= 2.0
                     optimizer.step()
                     final_loss = float(loss)
                 mlflow.log_metric("pretrain_loss", final_loss, step=i)
@@ -427,6 +437,18 @@ def main(
     root.joinpath("data").mkdir(exist_ok=True)
     if rank == 0:
         mlflow.start_run("training_rl", cfg)
+
+    grad_monitor = GradientMonitor(
+        explode=cfg.get("grad_explode", 1e3),
+        vanish=cfg.get("grad_vanish", 1e-6),
+        out_dir=root / "reports" / "gradients",
+    )
+    grad_callback = GradMonitorCallback(
+        grad_monitor,
+        check_freq=cfg.get("grad_check_freq", 100),
+        decay=cfg.get("grad_lr_decay", 0.5),
+        growth=cfg.get("grad_lr_growth", 2.0),
+    )
 
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
@@ -943,7 +965,11 @@ def main(
                 logger.exception("Inverse reward pretraining failed")
         elif cfg.get("offline_pretrain"):
             try:
-                offline_pretrain(model, cfg.get("event_store_path"))
+                offline_pretrain(
+                    model,
+                    cfg.get("event_store_path"),
+                    grad_monitor=grad_monitor,
+                )
                 logger.info("Completed offline pretraining using recorded experiences")
             except Exception:
                 logger.exception("Offline pretraining failed")
@@ -968,10 +994,12 @@ def main(
                         model.learn(
                             total_timesteps=int(cfg.get("world_model_steps", 1000)),
                             reset_num_timesteps=False,
+                            callback=grad_callback,
                         )
                     except TypeError:  # pragma: no cover - stub algos
                         model.learn(
-                            total_timesteps=int(cfg.get("world_model_steps", 1000))
+                            total_timesteps=int(cfg.get("world_model_steps", 1000)),
+                            callback=grad_callback,
                         )
                     if hasattr(model, "set_env"):
                         model.set_env(env)
@@ -985,9 +1013,13 @@ def main(
         while current < total_steps:
             learn_steps = min(interval, total_steps - current)
             try:
-                model.learn(total_timesteps=learn_steps, reset_num_timesteps=False)
+                model.learn(
+                    total_timesteps=learn_steps,
+                    reset_num_timesteps=False,
+                    callback=grad_callback,
+                )
             except TypeError:  # pragma: no cover - stub algos may not support kwarg
-                model.learn(total_timesteps=learn_steps)
+                model.learn(total_timesteps=learn_steps, callback=grad_callback)
             current += learn_steps
             if rank == 0 and hasattr(model.policy, "optimizer"):
                 mlflow.log_metric("lr", model.policy.optimizer.get_lr(), step=current)
@@ -1087,7 +1119,9 @@ def main(
                 learning_rate=cfg.get("rl_learning_rate", 3e-4),
                 gamma=cfg.get("rl_gamma", 0.99),
             )
-            risk_model.learn(total_timesteps=cfg.get("rl_steps", 5000))
+            risk_model.learn(
+                total_timesteps=cfg.get("rl_steps", 5000), callback=grad_callback
+            )
             models_dir = root / "models"
             models_dir.mkdir(exist_ok=True)
             risk_model.save(models_dir / "rl_risk_policy")
@@ -1228,6 +1262,7 @@ def main(
     if world_size > 1:
         dist.destroy_process_group()
 
+    grad_monitor.plot("rl")
     return cumulative_return
 
 
