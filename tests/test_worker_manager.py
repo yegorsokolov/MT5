@@ -10,13 +10,23 @@ from services.worker_manager import WorkerManager
 import types, importlib.util
 
 class _Resp:
+    def __init__(self, preds=None):
+        self._preds = preds or []
+
     def raise_for_status(self):
         return None
 
     def json(self):
-        return {}
+        return {"predictions": self._preds}
 
-requests_stub = types.SimpleNamespace(post=lambda *a, **k: _Resp())
+
+def _post(url, json, timeout):
+    # Echo back one prediction per feature to simulate server behaviour
+    feats = json["features"]
+    return _Resp([0.0] * len(feats))
+
+
+requests_stub = types.SimpleNamespace(post=_post)
 sys.modules.setdefault("requests", requests_stub)
 
 _remote_spec = importlib.util.spec_from_file_location(
@@ -45,8 +55,8 @@ def test_worker_manager_scales_on_load(monkeypatch):
 
     # Generate a burst of requests from remote_client and simulated feature_store
     for _ in range(3):
-        predict_remote("m", pd.DataFrame({"a": [1]}))
-        manager.record_request("feature_store", 0.01)
+        predict_remote("m", pd.DataFrame({"a": [1, 2, 3, 4]}), batch_size=2)
+        manager.record_request("feature_store", 0.01, batch_size=1)
 
     assert manager.worker_count > 1
 
@@ -58,5 +68,14 @@ def test_worker_manager_scales_on_load(monkeypatch):
 
     # Metrics should have been recorded
     assert any(m[0] == "worker_count" for m in metrics)
-    assert any(m[0] == "queue_latency" and m[2]["source"] == "remote_client" for m in metrics)
-    assert any(m[0] == "queue_latency" and m[2]["source"] == "feature_store" for m in metrics)
+    assert any(
+        m[0] == "queue_latency" and m[2]["source"] == "remote_client" for m in metrics
+    )
+    assert any(
+        m[0] == "queue_latency" and m[2]["source"] == "feature_store" for m in metrics
+    )
+    # Batching metrics should also be recorded
+    assert any(
+        m[0] == "batch_throughput" and m[2]["source"] == "remote_client"
+        for m in metrics
+    )

@@ -486,8 +486,15 @@ class ModelRegistry:
             records = [features]
         return hash(json.dumps(records, sort_keys=True))
 
-    def predict(self, task: str, features: Any, loader=None) -> Any:
-        """Return predictions for ``task`` using local or remote models."""
+    def predict(
+        self, task: str, features: Any, loader=None, batch_size: int | None = None
+    ) -> Any:
+        """Return predictions for ``task`` using local or remote models.
+
+        ``batch_size`` provides a unified batching interface for both local and
+        remote models.  When provided, inputs are chunked into batches of this
+        size and processed sequentially.
+        """
         model_name = self.get(task)
         with tracer.start_as_current_span("predict"):
             variant = self._variant_by_name.get(model_name)
@@ -525,13 +532,36 @@ class ModelRegistry:
                     rc = importlib.util.module_from_spec(spec)
                     assert spec and spec.loader
                     spec.loader.exec_module(rc)  # type: ignore
-                    result = rc.predict(remote_name, features)
+                    result = rc.predict(remote_name, features, batch_size=batch_size)
                 else:
                     model = loader(model_name) if loader else self._load_model(model_name)
-                    if hasattr(model, "predict_proba"):
-                        result = model.predict_proba(features)
+                    if batch_size is not None and batch_size > 0:
+                        # Process features in batches for local models
+                        if hasattr(features, "iloc"):
+                            feats = features
+                            preds = []
+                            for i in range(0, len(feats), batch_size):
+                                chunk = feats.iloc[i : i + batch_size]
+                                if hasattr(model, "predict_proba"):
+                                    preds.extend(model.predict_proba(chunk))
+                                else:
+                                    preds.extend(model.predict(chunk))
+                            result = preds
+                        else:
+                            records = list(features) if isinstance(features, Sequence) else [features]
+                            preds = []
+                            for i in range(0, len(records), batch_size):
+                                chunk = records[i : i + batch_size]
+                                if hasattr(model, "predict_proba"):
+                                    preds.extend(model.predict_proba(chunk))  # type: ignore[arg-type]
+                                else:
+                                    preds.extend(model.predict(chunk))  # type: ignore[arg-type]
+                            result = preds
                     else:
-                        result = model.predict(features)
+                        if hasattr(model, "predict_proba"):
+                            result = model.predict_proba(features)
+                        else:
+                            result = model.predict(features)
                 try:
                     residual_model = residual_learner.load(active_name)
                     if residual_model is not None:
