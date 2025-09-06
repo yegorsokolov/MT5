@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-python - <<'PY'
-from utils.resource_monitor import monitor
-from plugins import PLUGIN_SPECS
-for spec in PLUGIN_SPECS:
-    spec.load()
-print(f"Resource tier detected: {monitor.capability_tier}")
-PY
+# Detect the resource tier and load any plugins before executing the requested
+# command.  This will print the tier so users can verify which capabilities were
+# detected.
+python -m utils.resource_monitor
 
 exec "$@"
