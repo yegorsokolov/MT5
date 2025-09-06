@@ -156,10 +156,13 @@ def main(
     resume_online: bool = False,
     df_override: pd.DataFrame | None = None,
     transfer_from: str | None = None,
+    use_pseudo_labels: bool = False,
 ) -> float:
     """Train LightGBM model and return weighted F1 score."""
     if cfg is None:
         cfg = load_config()
+    if cfg.get("use_pseudo_labels"):
+        use_pseudo_labels = True
     _subscribe_cpu_updates(cfg)
     seed = cfg.get("seed", 42)
     random.seed(seed)
@@ -257,6 +260,29 @@ def main(
     feat_path.write_text(json.dumps(features))
 
     X = df[features]
+
+    if use_pseudo_labels:
+        pseudo_dir = root / "data" / "pseudo_labels"
+        if pseudo_dir.exists():
+            files = list(pseudo_dir.glob("*.parquet")) + list(
+                pseudo_dir.glob("*.csv")
+            )
+            for p in files:
+                try:
+                    if p.suffix == ".parquet":
+                        df_pseudo = pd.read_parquet(p)
+                    else:
+                        df_pseudo = pd.read_csv(p)
+                except Exception:
+                    continue
+                if "pseudo_label" not in df_pseudo.columns:
+                    continue
+                if not set(features).issubset(df_pseudo.columns):
+                    continue
+                X = pd.concat([X, df_pseudo[features]], ignore_index=True)
+                y = pd.concat(
+                    [y, df_pseudo["pseudo_label"]], ignore_index=True
+                )
 
     if cfg.get("meta_train"):
         from analysis.meta_learning import meta_train_lgbm, save_meta_weights
@@ -569,6 +595,7 @@ def launch(
     export: bool = False,
     resume_online: bool = False,
     transfer_from: str | None = None,
+    use_pseudo_labels: bool = False,
 ) -> list[float]:
     """Launch training locally or across a Ray cluster."""
     if cfg is None:
@@ -586,6 +613,7 @@ def launch(
                     export=export,
                     resume_online=resume_online,
                     transfer_from=transfer_from,
+                    use_pseudo_labels=use_pseudo_labels,
                 )
             )
         return results
@@ -595,6 +623,7 @@ def launch(
             export=export,
             resume_online=resume_online,
             transfer_from=transfer_from,
+            use_pseudo_labels=use_pseudo_labels,
         )
     ]
 
@@ -623,6 +652,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Fine-tune from meta weights on the latest regime",
     )
+    parser.add_argument(
+        "--use-pseudo-labels",
+        action="store_true",
+        help="Include pseudo-labeled samples during training",
+    )
     args = parser.parse_args()
     ray_init()
     try:
@@ -637,11 +671,14 @@ if __name__ == "__main__":
                 cfg["meta_train"] = True
             if args.fine_tune:
                 cfg["fine_tune"] = True
+            if args.use_pseudo_labels:
+                cfg["use_pseudo_labels"] = True
             launch(
                 cfg,
                 export=args.export,
                 resume_online=args.resume_online,
                 transfer_from=args.transfer_from,
+                use_pseudo_labels=args.use_pseudo_labels,
             )
     finally:
         ray_shutdown()
