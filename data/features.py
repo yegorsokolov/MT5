@@ -20,6 +20,7 @@ from features.cross_asset import (
 )
 from utils.resource_monitor import monitor, ResourceCapabilities
 from analysis import feature_gate
+from .expectations import validate_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +354,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     df, _ = feature_gate.select(df, tier, regime_id, persist=False)
 
     df = optimize_dtypes(df)
+
+    if validate:
+        validate_dataframe(df, "engineered_features")
 
     return df
 
