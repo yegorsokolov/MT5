@@ -376,6 +376,28 @@ def main(
 
         train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
 
+        if cfg.get("use_pseudo_labels"):
+            pseudo_dir = root / "data" / "pseudo_labels"
+            if pseudo_dir.exists():
+                files = list(pseudo_dir.glob("*.parquet")) + list(
+                    pseudo_dir.glob("*.csv")
+                )
+                for p in files:
+                    try:
+                        if p.suffix == ".parquet":
+                            df_pseudo = pd.read_parquet(p)
+                        else:
+                            df_pseudo = pd.read_csv(p)
+                    except Exception:
+                        continue
+                    if "pseudo_label" not in df_pseudo.columns:
+                        continue
+                    df_pseudo = df_pseudo.copy()
+                    df_pseudo["tb_label"] = df_pseudo["pseudo_label"]
+                    train_df = pd.concat(
+                        [train_df, df_pseudo], ignore_index=True, sort=False
+                    )
+
         features = [
             "return",
             "ma_5",
@@ -1164,6 +1186,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Fine-tune from meta weights on latest regime",
     )
+    parser.add_argument(
+        "--use-pseudo-labels",
+        action="store_true",
+        help="Include pseudo-labeled samples during training",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -1182,6 +1209,8 @@ if __name__ == "__main__":
         cfg["meta_train"] = True
     if args.fine_tune:
         cfg["fine_tune"] = True
+    if args.use_pseudo_labels:
+        cfg["use_pseudo_labels"] = True
     if args.tune:
         from tuning.distributed_search import tune_transformer
 
