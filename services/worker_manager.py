@@ -12,7 +12,7 @@ request latencies are persisted using :func:`analytics.metrics_store.record_metr
 
 import time
 from collections import defaultdict, deque
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict, Optional, Tuple
 
 from analytics.metrics_store import record_metric
 
@@ -42,7 +42,8 @@ class WorkerManager:
         self.max_workers = max_workers
         self.backend = backend
         self.worker_count = min_workers
-        self._requests: Dict[str, Deque[float]] = defaultdict(deque)
+        # track (timestamp, batch_size) for each request source
+        self._requests: Dict[str, Deque[Tuple[float, int]]] = defaultdict(deque)
         if backend == "ray" and ray is not None:
             try:  # pragma: no cover - defensive
                 ray.init(ignore_reinit_error=True)
@@ -50,23 +51,45 @@ class WorkerManager:
                 pass
 
     # ------------------------------------------------------------------
-    def record_request(self, source: str, latency: float) -> None:
-        """Record a request and update scaling decisions."""
+    def record_request(self, source: str, latency: float, batch_size: int = 1) -> None:
+        """Record a request and update scaling decisions.
+
+        Parameters
+        ----------
+        source:
+            Identifier of the caller submitting the request.
+        latency:
+            Time taken to service the request in seconds.
+        batch_size:
+            Number of items processed in the request.  Used to compute
+            throughput metrics for autoscaling decisions.
+        """
 
         now = time.time()
         q = self._requests[source]
-        q.append(now)
+        q.append((now, batch_size))
         cutoff = now - self.window
-        while q and q[0] < cutoff:
+        while q and q[0][0] < cutoff:
             q.popleft()
         record_metric("queue_latency", latency, tags={"source": source})
+        # Record throughput and batch size for autoscaling decisions
+        if batch_size:
+            throughput = batch_size / latency if latency > 0 else float("inf")
+            record_metric(
+                "batch_throughput", throughput, tags={"source": source}
+            )
+            record_metric("batch_size", float(batch_size), tags={"source": source})
         self._scale()
 
     # ------------------------------------------------------------------
     def _current_rps(self) -> float:
         now = time.time()
         cutoff = now - self.window
-        count = sum(len([t for t in q if t >= cutoff]) for q in self._requests.values())
+        count = 0
+        for q in self._requests.values():
+            while q and q[0][0] < cutoff:
+                q.popleft()
+            count += sum(size for ts, size in q if ts >= cutoff)
         return count / self.window
 
     # ------------------------------------------------------------------
