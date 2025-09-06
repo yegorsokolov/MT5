@@ -17,6 +17,10 @@ from analysis.strategy_evaluator import StrategyEvaluator
 from execution import ExecutionEngine
 from utils.resource_monitor import monitor
 from data.history import load_history_parquet, load_history_config
+try:  # optional simulator for offline experiments
+    from simulation.agent_market import AgentMarketSimulator
+except Exception:  # pragma: no cover - simulator optional
+    AgentMarketSimulator = None  # type: ignore
 from data.features import make_features
 from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 
@@ -239,26 +243,35 @@ def run_backtest(
     return_returns: bool = False,
     external_strategy: str | None = None,
 ) -> dict | tuple[dict, pd.Series]:
-    data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
-    if not data_path.exists():
-        cfg_root = Path(__file__).resolve().parent
-        symbols = cfg.get("symbols") or [cfg.get("symbol")]
-        dfs = []
-        for sym in symbols:
-            df_sym = load_history_config(sym, cfg, cfg_root)
-            df_sym["Symbol"] = sym
-            dfs.append(df_sym)
-        df_all = pd.concat(dfs, ignore_index=True)
-        save_path = data_path
-        save_path.parent.mkdir(exist_ok=True)
-        save_path.unlink(missing_ok=True)
-        df_all.to_parquet(save_path, index=False)
+    if cfg.get("sim_env") and AgentMarketSimulator is not None:
+        sim = AgentMarketSimulator(
+            seed=int(cfg.get("sim_seed", 42)),
+            steps=int(cfg.get("sim_steps", 1000)),
+        )
+        _, book = sim.run()
+        df = sim.to_history_df(book)
+        df["Symbol"] = cfg.get("symbol", "SIM")
+    else:
+        data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
+        if not data_path.exists():
+            cfg_root = Path(__file__).resolve().parent
+            symbols = cfg.get("symbols") or [cfg.get("symbol")]
+            dfs = []
+            for sym in symbols:
+                df_sym = load_history_config(sym, cfg, cfg_root)
+                df_sym["Symbol"] = sym
+                dfs.append(df_sym)
+            df_all = pd.concat(dfs, ignore_index=True)
+            save_path = data_path
+            save_path.parent.mkdir(exist_ok=True)
+            save_path.unlink(missing_ok=True)
+            df_all.to_parquet(save_path, index=False)
 
-    df = load_history_parquet(data_path)
+        df = load_history_parquet(data_path)
+        df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     df = make_features(df)
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
-    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     if external_strategy:
         from strategies.external_adapter import run_external_strategy
 
@@ -283,21 +296,30 @@ def _backtest_window(
 
 def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dict:
     """Perform rolling train/test backtests and aggregate metrics."""
-    data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
-    if not data_path.exists():
-        cfg_root = Path(__file__).resolve().parent
-        symbols = cfg.get("symbols") or [cfg.get("symbol")]
-        dfs = []
-        for sym in symbols:
-            df_sym = load_history_config(sym, cfg, cfg_root)
-            df_sym["Symbol"] = sym
-            dfs.append(df_sym)
-        df_all = pd.concat(dfs, ignore_index=True)
-        data_path.parent.mkdir(exist_ok=True)
-        df_all.to_parquet(data_path, index=False)
+    if cfg.get("sim_env") and AgentMarketSimulator is not None:
+        sim = AgentMarketSimulator(
+            seed=int(cfg.get("sim_seed", 42)),
+            steps=int(cfg.get("sim_steps", 1000)),
+        )
+        _, book = sim.run()
+        df = sim.to_history_df(book)
+        df["Symbol"] = cfg.get("symbol", "SIM")
+    else:
+        data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
+        if not data_path.exists():
+            cfg_root = Path(__file__).resolve().parent
+            symbols = cfg.get("symbols") or [cfg.get("symbol")]
+            dfs = []
+            for sym in symbols:
+                df_sym = load_history_config(sym, cfg, cfg_root)
+                df_sym["Symbol"] = sym
+                dfs.append(df_sym)
+            df_all = pd.concat(dfs, ignore_index=True)
+            data_path.parent.mkdir(exist_ok=True)
+            df_all.to_parquet(data_path, index=False)
 
-    df = load_history_parquet(data_path)
-    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+        df = load_history_parquet(data_path)
+        df = df[df.get("Symbol").isin([cfg.get("symbol")])]
     df = make_features(df)
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
@@ -397,9 +419,16 @@ def main():
         action="store_true",
         help="Run evolutionary multi-objective parameter search",
     )
+    parser.add_argument(
+        "--sim-env",
+        action="store_true",
+        help="Use simulated market data instead of history",
+    )
     args = parser.parse_args()
 
     cfg = load_config()
+    if args.sim_env:
+        cfg["sim_env"] = True
     if args.evo_search:
         from copy import deepcopy
         from tuning.evolutionary_search import run_evolutionary_search
