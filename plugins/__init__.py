@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, List
 
 from analytics.metrics_store import record_metric
+from utils.plugin_security import verify_plugin
 
 try:  # pragma: no cover - optional during tests
     from log_utils import setup_logging
@@ -176,6 +177,13 @@ def _extract_requirements(mod: str) -> tuple[int, float, bool]:
 
 PLUGIN_SPECS: List[PluginSpec] = []
 for _mod in PLUGIN_MODULES:
+    mod_path = Path(__file__).with_name(f"{_mod}.py")
+    try:
+        verify_plugin(mod_path)
+    except Exception as exc:
+        logger.error("Skipping plugin %s due to signature verification failure: %s", _mod, exc)
+        continue
+
     min_cpus, min_mem, req_gpu = _extract_requirements(_mod)
 
     def _loader(mod=_mod):
