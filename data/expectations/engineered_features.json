@@ -1,0 +1,17 @@
+{
+  "expectation_suite_name": "engineered_features",
+  "expectations": [
+    {
+      "expectation_type": "expect_column_to_exist",
+      "kwargs": {"column": "Timestamp"}
+    },
+    {
+      "expectation_type": "expect_table_column_count_to_be_between",
+      "kwargs": {"min_value": 2}
+    },
+    {
+      "expectation_type": "expect_table_row_count_to_be_between",
+      "kwargs": {"min_value": 1}
+    }
+  ]
+}
