@@ -3,6 +3,7 @@
 ARG BASE_IMAGE=python:3.10-slim
 FROM ${BASE_IMAGE}
 
+# Set INSTALL_GPU_EXTRAS=true at build time to install optional GPU features
 ARG INSTALL_GPU_EXTRAS=false
 
 # Ensure Python is available when using non-Python base images

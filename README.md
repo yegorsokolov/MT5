@@ -943,7 +943,16 @@ docker build \
 ```
 
 CI publishes this image to GitHub Container Registry so it can be pulled
-directly:
+directly. The container's entrypoint automatically runs a resource monitor and
+enables any plugins appropriate for the detected hardware tier. Starting an
+interactive Python shell with the preconfigured environment is therefore as
+simple as:
+
+```bash
+docker run --rm ghcr.io/OWNER/mt5:latest
+```
+
+From there you can invoke project modules, for example:
 
 ```bash
 docker run --rm ghcr.io/OWNER/mt5:latest python -m utils.environment
