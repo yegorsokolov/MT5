@@ -12,9 +12,13 @@ from __future__ import annotations
 import importlib
 import logging
 import re
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, List
+
+from analytics.metrics_store import record_metric
 
 try:  # pragma: no cover - optional during tests
     from log_utils import setup_logging
@@ -59,6 +63,7 @@ class PluginSpec:
     requires_gpu: bool = False
     tier: str = "lite"
     _loaded: bool = False
+    last_access: float = 0.0
 
     def _meets_requirements(self) -> bool:
         caps = monitor.capabilities
@@ -81,12 +86,14 @@ class PluginSpec:
         """
 
         if self._loaded:
+            self.last_access = time.time()
             return self.loader()
         if not self._meets_requirements():
             logger.info("Skipping plugin %s: %s", self.name, self._skip_reason)
             return None
         module = self.loader()
         self._loaded = True
+        self.last_access = time.time()
         return module
 
 
@@ -185,6 +192,25 @@ for _mod in PLUGIN_MODULES:
     )
 
 
+def purge_unused_plugins(ttl: float) -> None:
+    """Unload plugins not accessed within ``ttl`` seconds."""
+
+    if ttl <= 0:
+        return
+    now = time.time()
+    for spec in PLUGIN_SPECS:
+        if spec._loaded and now - spec.last_access > ttl:
+            mod_name = f"{__name__}.{spec.name}"
+            if mod_name in sys.modules:
+                del sys.modules[mod_name]
+            spec._loaded = False
+            spec.last_access = 0.0
+            try:
+                record_metric("plugin_unloads", 1.0)
+            except Exception:
+                pass
+
+
 __all__ = [
     "FEATURE_PLUGINS",
     "MODEL_PLUGINS",
@@ -194,4 +220,5 @@ __all__ = [
     "register_model",
     "register_risk_check",
     "PluginSpec",
+    "purge_unused_plugins",
 ]
