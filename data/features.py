@@ -24,6 +24,25 @@ from analysis import feature_gate
 logger = logging.getLogger(__name__)
 
 
+def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Downcast common numeric dtypes to reduce memory usage.
+
+    ``float64`` columns are converted to ``float32`` and ``int64`` columns
+    to ``int32``.  The transformation is applied in-place and the original
+    DataFrame is returned for convenience.
+    """
+
+    float_cols = df.select_dtypes(include=["float64"]).columns
+    int_cols = df.select_dtypes(include=["int64"]).columns
+
+    if len(float_cols) > 0:
+        df[float_cols] = df[float_cols].astype("float32")
+    if len(int_cols) > 0:
+        df[int_cols] = df[int_cols].astype("int32")
+
+    return df
+
+
 def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
     """Merge alternative datasets into ``df``.
 
@@ -301,6 +320,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     # importances.
     regime_id = int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
     df, _ = feature_gate.select(df, tier, regime_id, persist=False)
+
+    df = optimize_dtypes(df)
 
     return df
 
