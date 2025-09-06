@@ -17,30 +17,35 @@ import core.orchestrator as orch
 
 
 @pytest.mark.parametrize(
-    "tier,caps,expected",
+    "tier,caps,expected_models,expected_features",
     [
         (
             "lite",
             ResourceCapabilities(cpus=2, memory_gb=4, has_gpu=False, gpu_count=0),
             {"sentiment": "sentiment_small_quantized", "rl_policy": "rl_small_quantized"},
+            {"cpu_feature"},
         ),
         (
             "standard",
             ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=False, gpu_count=0),
             {"sentiment": "sentiment_small", "rl_policy": "rl_small"},
+            {"cpu_feature"},
         ),
         (
             "gpu",
             ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=True, gpu_count=1),
             {"sentiment": "sentiment_large", "rl_policy": "rl_medium"},
+            {"cpu_feature", "gpu_feature"},
         ),
     ],
 )
 
-def test_orchestrator_tiers(monkeypatch, tier, caps, expected):
+def test_orchestrator_tiers(monkeypatch, tier, caps, expected_models, expected_features):
     # Configure monitor for this tier
     monitor.capabilities = caps
     monitor.capability_tier = tier
+    plugins.monitor.capabilities = caps
+    plugins.monitor.capability_tier = tier
     monkeypatch.setattr(monitor, "start", lambda: None)
 
     # Reload test plugins
@@ -48,6 +53,9 @@ def test_orchestrator_tiers(monkeypatch, tier, caps, expected):
     plugins.MODEL_PLUGINS.clear()
     plugins.RISK_CHECKS.clear()
     plugins._import_plugins(reload=True)
+
+    feat_names = {f.__name__ for f in plugins.FEATURE_PLUGINS}
+    assert feat_names == expected_features
 
     # Stub heavy orchestrator dependencies
     monkeypatch.setattr(orch.state_sync, "pull_event_store", lambda: None)
@@ -101,9 +109,10 @@ def test_orchestrator_tiers(monkeypatch, tier, caps, expected):
     for feat in plugins.FEATURE_PLUGINS:
         data = feat(data)
     assert data, "Feature generation failed"
+    assert expected_features <= set(data.keys())
 
     # Assert correct model variants selected
-    for task, model_name in expected.items():
+    for task, model_name in expected_models.items():
         assert o.registry.get(task) == model_name
 
     # Ensure state replay path invoked
