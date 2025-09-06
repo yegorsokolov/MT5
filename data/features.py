@@ -9,6 +9,7 @@ from typing import List, Tuple
 import numpy as np
 import pandas as pd
 
+from analytics.metrics_store import record_metric
 from features import get_feature_pipeline
 from features.news import (
     add_economic_calendar_features,
@@ -19,10 +20,35 @@ from features.cross_asset import (
     add_cross_asset_features,
 )
 from utils.resource_monitor import monitor, ResourceCapabilities
+from utils import load_config
 from analysis import feature_gate
 from .expectations import validate_dataframe
 
 logger = logging.getLogger(__name__)
+
+try:
+    LATENCY_THRESHOLD = float(load_config().get("latency_threshold", 0.0))
+except Exception:  # pragma: no cover - config may be unavailable
+    LATENCY_THRESHOLD = 0.0
+
+
+def _apply_transform(fn, df):
+    """Apply ``fn`` to ``df`` unless throttled by latency."""
+    latency = getattr(monitor, "latency", lambda: getattr(monitor, "tick_to_signal_latency", 0.0))
+    latency_val = latency() if callable(latency) else latency
+    if LATENCY_THRESHOLD and latency_val > LATENCY_THRESHOLD and getattr(fn, "degradable", False):
+        logger.warning(
+            "Throttling feature %s (latency %.3fs > %.3fs)",
+            fn.__name__,
+            latency_val,
+            LATENCY_THRESHOLD,
+        )
+        try:
+            record_metric("feature_throttled", 1.0, {"feature": fn.__name__})
+        except Exception:
+            pass
+        return df
+    return fn(df)
 
 
 def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
@@ -88,6 +114,10 @@ def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# Mark as degradable for high-latency throttling
+add_alt_features.degradable = True  # type: ignore[attr-defined]
+
+
 def add_corporate_actions(df: pd.DataFrame) -> pd.DataFrame:
     """Merge dividend, split and ownership data into ``df``.
 
@@ -132,6 +162,8 @@ def add_corporate_actions(df: pd.DataFrame) -> pd.DataFrame:
 
 # Minimum capability required for corporate actions
 add_corporate_actions.min_capability = "standard"  # type: ignore[attr-defined]
+# Mark as degradable for latency-based throttling
+add_corporate_actions.degradable = True  # type: ignore[attr-defined]
 
 
 def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
@@ -177,7 +209,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             and caps.memory_gb >= req.memory_gb
             and (caps.has_gpu or not req.has_gpu)
         ):
-            df = cross_spectral.compute(df)
+            cross_spectral.compute.degradable = True  # type: ignore[attr-defined]
+            df = _apply_transform(cross_spectral.compute, df)
     except Exception:
         logger.debug("cross spectral computation failed", exc_info=True)
 
@@ -201,7 +234,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
                 and caps.memory_gb >= req.memory_gb
                 and (caps.has_gpu or not req.has_gpu)
             ):
-                df = mod.compute(df)
+                mod.compute.degradable = True  # type: ignore[attr-defined]
+                df = _apply_transform(mod.compute, df)
             else:
                 for col in cols:
                     if col not in df.columns:
@@ -311,7 +345,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
                 df[f"news_sentiment_{k}"] = 0.0
                 df[f"news_impact_{k}"] = 0.0
         try:
-            df = add_corporate_actions(df)
+            df = _apply_transform(add_corporate_actions, df)
         except Exception:
             logger.debug("corporate actions merge failed", exc_info=True)
             for col in [
@@ -324,7 +358,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
                     df[col] = 0.0
     if tier in {"gpu", "hpc"}:
         try:
-            df = add_alt_features(df)
+            df = _apply_transform(add_alt_features, df)
         except Exception:
             logger.debug("alternative data merge failed", exc_info=True)
             for col in [
