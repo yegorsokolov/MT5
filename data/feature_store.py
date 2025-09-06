@@ -21,6 +21,7 @@ import pandas as pd
 import requests
 from analytics.metrics_store import record_metric
 from services.worker_manager import get_worker_manager
+from analysis.data_lineage import log_lineage
 try:  # pragma: no cover - optional dependency in tests
     from utils.secret_manager import SecretManager
 except Exception:  # pragma: no cover
@@ -170,6 +171,11 @@ class FeatureStore:
         conn.register("feat_df", df)
         conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM feat_df')
         conn.close()
+
+        run_id = df.attrs.get("run_id", "unknown")
+        raw_file = df.attrs.get("source", "unknown")
+        for col in df.columns:
+            log_lineage(run_id, raw_file, "feature_store.save", col)
 
     # ------------------------------------------------------------------
     def get_or_set(
