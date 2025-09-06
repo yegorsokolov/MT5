@@ -180,6 +180,37 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     except Exception:
         logger.debug("cross spectral computation failed", exc_info=True)
 
+    # Merge options implied volatility and skew where resources allow
+    try:
+        from . import options_vol, vol_skew
+
+        caps = getattr(
+            monitor,
+            "capabilities",
+            ResourceCapabilities(cpus=1, memory_gb=0.0, has_gpu=False, gpu_count=0),
+        )
+        modules = [
+            (options_vol, ["implied_vol", "vol_skew"]),
+            (vol_skew, ["vol_skew"]),
+        ]
+        for mod, cols in modules:
+            req = getattr(mod, "REQUIREMENTS", caps)
+            if (
+                caps.cpus >= req.cpus
+                and caps.memory_gb >= req.memory_gb
+                and (caps.has_gpu or not req.has_gpu)
+            ):
+                df = mod.compute(df)
+            else:
+                for col in cols:
+                    if col not in df.columns:
+                        df[col] = 0.0
+    except Exception:
+        logger.debug("options volatility merge failed", exc_info=True)
+        for col in ["implied_vol", "vol_skew"]:
+            if col not in df.columns:
+                df[col] = 0.0
+
     tier = getattr(monitor, "capability_tier", "lite")
     if tier in {"standard", "gpu", "hpc"}:
         try:
