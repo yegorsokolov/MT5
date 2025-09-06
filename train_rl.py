@@ -111,6 +111,11 @@ from data.history import (
     save_history_parquet,
     load_history_config,
 )
+# Simulation environment for offline training
+try:
+    from simulation.agent_market import AgentMarketSimulator
+except Exception:  # pragma: no cover - simulator optional
+    AgentMarketSimulator = None  # type: ignore
 
 try:
     from models import model_store  # type: ignore
@@ -452,12 +457,22 @@ def main(
 
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
-    for sym in symbols:
-        df_sym = load_history_config(
-            sym, cfg, root, validate=cfg.get("validate", False)
-        )
-        df_sym["Symbol"] = sym
-        dfs.append(df_sym)
+    if cfg.get("sim_env") and AgentMarketSimulator is not None:
+        for sym in symbols:
+            sim = AgentMarketSimulator(
+                seed=seed, steps=int(cfg.get("sim_steps", 1000))
+            )
+            _, book = sim.run()
+            df_sym = sim.to_history_df(book)
+            df_sym["Symbol"] = sym
+            dfs.append(df_sym)
+    else:
+        for sym in symbols:
+            df_sym = load_history_config(
+                sym, cfg, root, validate=cfg.get("validate", False)
+            )
+            df_sym["Symbol"] = sym
+            dfs.append(df_sym)
 
     concat_df = pd.concat(dfs, ignore_index=True)
     try:
@@ -1481,6 +1496,11 @@ if __name__ == "__main__":
         help="Include rolling news scores as features",
     )
     parser.add_argument(
+        "--sim-env",
+        action="store_true",
+        help="Use simulated market environment instead of historical data",
+    )
+    parser.add_argument(
         "--objectives",
         nargs="+",
         default=["return"],
@@ -1554,6 +1574,8 @@ if __name__ == "__main__":
         cfg["fine_tune"] = True
     if args.use_news:
         cfg["use_news"] = True
+    if args.sim_env:
+        cfg["sim_env"] = True
     if args.tune:
         from tuning.distributed_search import tune_rl
 
