@@ -53,6 +53,23 @@ def _training_cmd(model: str) -> list[str]:
     return ["python", "train.py", "--resume-online"]
 
 
+def schedule_retrain(
+    model: str = "classic",
+    update_hyperparams: bool = False,
+    store: "EventStore" | None = None,
+) -> None:
+    """Record a retrain event for later processing."""
+    if store is None:
+        from event_store import EventStore
+
+        store = EventStore()
+    payload: dict[str, object] = {"model": model}
+    if update_hyperparams:
+        payload["update_hyperparams"] = True
+    store.record("retrain", payload)
+    logger.info("Scheduled retrain for %s", model)
+
+
 def process_retrain_events(store: EventStore | None = None) -> None:
     """Consume retrain events and launch training scripts."""
     from analytics.metrics_aggregator import log_retrain_outcome
@@ -438,6 +455,7 @@ __all__ = [
     "update_regime_performance",
     "rebuild_news_vectors",
     "reevaluate_world_model",
+    "schedule_retrain",
     "process_retrain_events",
     "subscribe_retrain_events",
 ]
