@@ -1044,32 +1044,31 @@ def main(
                     features=features,
                 )
                 logger.info("Quantized model saved to %s", q_path)
-            if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]:
-                student = TransformerModel(
-                    len(features),
-                    d_model=max(16, cfg.get("d_model", 64) // 2),
-                    nhead=max(1, cfg.get("nhead", 4) // 2),
-                    num_layers=max(1, cfg.get("num_layers", 2) // 2),
-                    num_symbols=num_symbols,
-                    num_regimes=num_regimes,
-                ).to(device)
-                first_loader = next(iter(train_loaders.values()))
-                distill_teacher_student(
-                    model.module if isinstance(model, DDP) else model,
-                    student,
-                    first_loader,
-                    epochs=cfg.get("distill_epochs", 1),
-                )
-                student_path = root / "model_transformer_distilled.pt"
-                joblib.dump(student.state_dict(), student_path)
-                model_store.save_model(
-                    joblib.load(student_path),
-                    {**cfg, "distilled_from": version_id},
-                    {"teacher_accuracy": acc},
-                    architecture_history=architecture_history,
-                    features=features,
-                )
-                logger.info("Distilled student model saved to %s", student_path)
+            student = TransformerModel(
+                len(features),
+                d_model=max(16, cfg.get("d_model", 64) // 2),
+                nhead=max(1, cfg.get("nhead", 4) // 2),
+                num_layers=max(1, cfg.get("num_layers", 2) // 2),
+                num_symbols=num_symbols,
+                num_regimes=num_regimes,
+            ).to(device)
+            first_loader = next(iter(train_loaders.values()))
+            distill_teacher_student(
+                model.module if isinstance(model, DDP) else model,
+                student,
+                first_loader,
+                epochs=cfg.get("distill_epochs", 1),
+            )
+            student_path = root / "model_transformer_distilled.pt"
+            joblib.dump(student.state_dict(), student_path)
+            model_store.save_model(
+                joblib.load(student_path),
+                {**cfg, "distilled_from": version_id},
+                {"teacher_accuracy": acc},
+                architecture_history=architecture_history,
+                features=features,
+            )
+            logger.info("Distilled student model saved to %s", student_path)
             if cfg.get("feature_importance", False):
                 report_dir = root / "reports"
                 X_sample_np = (

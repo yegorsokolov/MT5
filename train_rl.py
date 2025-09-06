@@ -1160,51 +1160,50 @@ def main(
                 artifact = root / "model_rllib"
             else:
                 artifact = root / "model_rl.zip"
-            if TIERS.get(monitor.capabilities.capability_tier(), 0) >= TIERS["gpu"]:
-                student_model = A2C(
-                    "MlpPolicy",
-                    env,
-                    seed=seed,
-                    device=device,
-                    verbose=0,
-                    learning_rate=cfg.get("rl_learning_rate", 3e-4),
-                )
-                obs_samples = []
-                obs = env.reset()
+            student_model = A2C(
+                "MlpPolicy",
+                env,
+                seed=seed,
+                device=device,
+                verbose=0,
+                learning_rate=cfg.get("rl_learning_rate", 3e-4),
+            )
+            obs_samples = []
+            obs = env.reset()
+            if isinstance(obs, tuple):
+                obs = obs[0]
+            for _ in range(min(256, len(df))):
+                obs_samples.append(obs)
+                action, _ = model.predict(obs, deterministic=True)
+                obs, _, done, _ = env.step(action)
                 if isinstance(obs, tuple):
                     obs = obs[0]
-                for _ in range(min(256, len(df))):
-                    obs_samples.append(obs)
-                    action, _ = model.predict(obs, deterministic=True)
-                    obs, _, done, _ = env.step(action)
+                if done:
+                    obs = env.reset()
                     if isinstance(obs, tuple):
                         obs = obs[0]
-                    if done:
-                        obs = env.reset()
-                        if isinstance(obs, tuple):
-                            obs = obs[0]
-                obs_tensor = torch.tensor(np.array(obs_samples), dtype=torch.float32)
-                loader = DataLoader(
-                    TensorDataset(obs_tensor, torch.zeros(len(obs_tensor))),
-                    batch_size=32,
-                )
-                distill_teacher_student(
-                    model.policy,
-                    student_model.policy,
-                    loader,
-                    epochs=cfg.get("distill_epochs", 1),
-                )
-                student_model.save(root / "model_rl_distilled")
-                model_store.save_model(
-                    root / "model_rl_distilled.zip",
-                    {**cfg, "distilled_from": str(artifact)},
-                    {"cumulative_return": cumulative_return},
-                    architecture_history=architecture_history,
-                    features=features,
-                )
-                logger.info(
-                    "Distilled RL policy saved to %s", root / "model_rl_distilled.zip"
-                )
+            obs_tensor = torch.tensor(np.array(obs_samples), dtype=torch.float32)
+            loader = DataLoader(
+                TensorDataset(obs_tensor, torch.zeros(len(obs_tensor))),
+                batch_size=32,
+            )
+            distill_teacher_student(
+                model.policy,
+                student_model.policy,
+                loader,
+                epochs=cfg.get("distill_epochs", 1),
+            )
+            student_model.save(root / "model_rl_distilled")
+            model_store.save_model(
+                root / "model_rl_distilled.zip",
+                {**cfg, "distilled_from": str(artifact)},
+                {"cumulative_return": cumulative_return},
+                architecture_history=architecture_history,
+                features=features,
+            )
+            logger.info(
+                "Distilled RL policy saved to %s", root / "model_rl_distilled.zip"
+            )
             version_id = model_store.save_model(
                 artifact,
                 cfg,
