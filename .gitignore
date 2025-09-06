@@ -9,6 +9,8 @@ data/*
 !data/*.dvc
 !data/graphs/
 !data/graphs/.gitkeep
+!data/expectations/
+!data/expectations/**
 models/*
 !models/multi_head.py
 !models/autoencoders/

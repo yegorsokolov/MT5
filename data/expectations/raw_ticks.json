@@ -1,0 +1,24 @@
+{
+  "expectation_suite_name": "raw_ticks",
+  "expectations": [
+    {
+      "expectation_type": "expect_table_columns_to_match_set",
+      "kwargs": {
+        "column_set": ["Timestamp", "Bid", "Ask"],
+        "exact_match": false
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {"column": "Timestamp"}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {"column": "Bid"}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {"column": "Ask"}
+    }
+  ]
+}
