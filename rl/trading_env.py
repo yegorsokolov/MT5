@@ -101,6 +101,8 @@ class TradingEnv(gym.Env):
         self.orderbook_cols: list[str] = []
         self.orderbook_gnn = None
         self.embedding_dim = 0
+        self.train_orderbook_gnn = False
+        self.device = None
         if orderbook_depth > 0:
             for sym in self.symbols:
                 for side in ("bid", "ask"):
@@ -112,12 +114,22 @@ class TradingEnv(gym.Env):
                             self.orderbook_cols.append(col)
             if self.use_orderbook_gnn is None:
                 self.use_orderbook_gnn = bool(torch and torch.cuda.is_available())
-            if self.use_orderbook_gnn and torch is not None and OrderBookGNN is not None:
-                self.orderbook_gnn = OrderBookGNN(in_channels=3, hidden_channels=16)
+            if (
+                self.use_orderbook_gnn
+                and torch is not None
+                and OrderBookGNN is not None
+                and torch.cuda.is_available()
+            ):
+                self.device = torch.device("cuda")
+                self.orderbook_gnn = OrderBookGNN(in_channels=3, hidden_channels=16).to(
+                    self.device
+                )
                 self.embedding_dim = self.orderbook_gnn.hidden_channels
+                self.train_orderbook_gnn = True
             else:
                 self.use_orderbook_gnn = False
                 self.embedding_dim = orderbook_depth * 4
+                self.device = torch.device("cpu") if torch is not None else None
         self.max_position = max_position
         self.transaction_cost = transaction_cost
         self.risk_penalty = risk_penalty
@@ -220,12 +232,17 @@ class TradingEnv(gym.Env):
                         float(self.df.loc[idx, f"{sym}_ask_sz_{lvl}"]),
                     ]
                 )
-            bids_t = torch.tensor(bids, dtype=torch.float32)
-            asks_t = torch.tensor(asks, dtype=torch.float32)
+            bids_t = torch.tensor(bids, dtype=torch.float32, device=self.device)
+            asks_t = torch.tensor(asks, dtype=torch.float32, device=self.device)
             x, edge_index = build_orderbook_graph(bids_t, asks_t)
-            with torch.no_grad():
-                emb = self.orderbook_gnn(x, edge_index).cpu().numpy()
-            embeds.append(emb)
+            x = x.to(self.device)
+            edge_index = edge_index.to(self.device)
+            if self.train_orderbook_gnn:
+                emb = self.orderbook_gnn(x, edge_index)
+            else:
+                with torch.no_grad():
+                    emb = self.orderbook_gnn(x, edge_index)
+            embeds.append(emb.detach().cpu().numpy())
         return np.concatenate(embeds).astype(np.float32)
 
     def step(self, action):
