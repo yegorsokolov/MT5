@@ -392,9 +392,35 @@ def main():
         dest="external_strategy",
         help="Path to Freqtrade or Backtrader strategy",
     )
+    parser.add_argument(
+        "--evo-search",
+        action="store_true",
+        help="Run evolutionary multi-objective parameter search",
+    )
     args = parser.parse_args()
 
     cfg = load_config()
+    if args.evo_search:
+        from copy import deepcopy
+        from tuning.evolutionary_search import run_evolutionary_search
+
+        def eval_fn(params: dict) -> tuple[float, float, float]:
+            trial_cfg = deepcopy(cfg)
+            trial_cfg.update(params)
+            metrics = run_backtest(trial_cfg, external_strategy=args.external_strategy)
+            return (
+                -float(metrics.get("return", 0.0)),
+                float(metrics.get("max_drawdown", 0.0)),
+                -float(metrics.get("trade_count", metrics.get("trades", 0.0))),
+            )
+
+        space = {
+            "stop_loss": (0.005, 0.05, "float"),
+            "take_profit": (0.005, 0.1, "float"),
+        }
+        run_evolutionary_search(eval_fn, space)
+        return
+
     metrics = run_backtest(cfg, external_strategy=args.external_strategy)
     logger.info("Single period backtest:")
     for k, v in metrics.items():

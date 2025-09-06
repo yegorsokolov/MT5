@@ -1177,6 +1177,11 @@ if __name__ == "__main__":
         "--ddp", action="store_true", help="Enable DistributedDataParallel"
     )
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
+    parser.add_argument(
+        "--evo-search",
+        action="store_true",
+        help="Run evolutionary multi-objective parameter search",
+    )
     parser.add_argument("--export", action="store_true", help="Export model to ONNX")
     parser.add_argument("--quantize", action="store_true", help="Save quantized model")
     parser.add_argument(
@@ -1233,6 +1238,28 @@ if __name__ == "__main__":
         from tuning.distributed_search import tune_transformer
 
         tune_transformer(cfg)
+    elif args.evo_search:
+        from copy import deepcopy
+        from tuning.evolutionary_search import run_evolutionary_search
+        from backtest import run_backtest
+
+        def eval_fn(params: dict) -> tuple[float, float, float]:
+            trial_cfg = deepcopy(cfg)
+            trial_cfg.update(params)
+            launch(trial_cfg)
+            metrics = run_backtest(trial_cfg)
+            return (
+                -float(metrics.get("return", 0.0)),
+                float(metrics.get("max_drawdown", 0.0)),
+                -float(metrics.get("trade_count", metrics.get("trades", 0.0))),
+            )
+
+        space = {
+            "learning_rate": (1e-5, 1e-2, "log"),
+            "num_layers": (1, 4, "int"),
+            "d_model": (32, 256, "int"),
+        }
+        run_evolutionary_search(eval_fn, space)
     else:
         ray_init()
         try:
