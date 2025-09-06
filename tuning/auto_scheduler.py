@@ -15,6 +15,7 @@ try:  # pragma: no cover - ``ray`` is optional
     from ray.tune.search.optuna import OptunaSearch
 except Exception:  # pragma: no cover - fallback to light stub
     from ray_stub import tune  # type: ignore
+
     OptunaSearch = tune.search.optuna.OptunaSearch  # type: ignore
 
 from analysis import regime_detection
@@ -89,7 +90,9 @@ class AutoScheduler:
             from datetime import datetime, timedelta
 
             utc_now = datetime.utcnow()
-            tomorrow = (utc_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            tomorrow = (utc_now + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
             sleep_for = (tomorrow - utc_now).total_seconds()
             await asyncio.sleep(max(0, sleep_for))
             await self.run_once()
@@ -104,8 +107,21 @@ class AutoScheduler:
             self._task = None
 
     async def run_once(self) -> Dict[str, Any]:
+        """Execute a single tuning cycle.
+
+        This function loads the latest data snapshot, detects the current
+        market regime and runs an Optuna/Ray Tune search across
+        ``search_space``.  The best configuration is compared against the
+        incumbent performance stored in :mod:`model_store`.  If the
+        relative improvement exceeds ``margin`` the parameters are
+        persisted and immediately hot reloaded.  The
+        :class:`model_registry.ModelRegistry` will pick up the new
+        parameters during its next daily resource probe.
+        """
+
         data = self.data_loader()
         regime = _current_regime(data)
+        logger.info("Starting tuning run for regime %s", regime)
 
         search_alg = OptunaSearch(metric=self.metric, mode=self.mode)
 
@@ -119,17 +135,24 @@ class AutoScheduler:
             search_alg=search_alg,
         )
         best_config = getattr(analysis, "best_config", {})
-        best_score = getattr(analysis, "best_result", {}).get(self.metric, getattr(analysis, "best_score", 0.0))
+        best_score = getattr(analysis, "best_result", {}).get(
+            self.metric, getattr(analysis, "best_score", 0.0)
+        )
+        logger.info("Tuning completed with best %.4f", best_score)
 
         incumbent = _incumbent_score(regime)
         if incumbent == float("-inf") or best_score >= incumbent * (1 + self.margin):
-            model_store.save_tuned_params({
-                "regime": regime,
-                "params": best_config,
-                "score": best_score,
-            })
+            model_store.save_tuned_params(
+                {
+                    "regime": regime,
+                    "params": best_config,
+                    "score": best_score,
+                }
+            )
             hot_reload(best_config)
-            logger.info("Deployed new params for regime %s score %.4f", regime, best_score)
+            logger.info(
+                "Deployed new params for regime %s score %.4f", regime, best_score
+            )
         else:
             logger.info(
                 "Best %.4f did not beat incumbent %.4f by margin %.3f",
