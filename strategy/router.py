@@ -36,6 +36,22 @@ try:  # optional dependency - meta controller may not be available
 except Exception:  # pragma: no cover - best effort
     MetaController = None  # type: ignore
 
+try:  # pragma: no cover - knowledge graph is optional
+    from analysis.knowledge_graph import (
+        load_knowledge_graph,
+        opportunity_score,
+        risk_score,
+    )
+except Exception:  # pragma: no cover - fall back to no-op implementations
+    def load_knowledge_graph(*_, **__):  # type: ignore
+        return None
+
+    def risk_score(*_, **__):  # type: ignore
+        return 0.0
+
+    def opportunity_score(*_, **__):  # type: ignore
+        return 0.0
+
 FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
 
@@ -43,9 +59,10 @@ Algorithm = Callable[[FeatureDict], float]
 def _feature_vector(features: FeatureDict, factor_names: Iterable[str]) -> np.ndarray:
     """Return feature vector including factor exposures.
 
-    The base features are volatility, trend strength and regime.  Any factor
-    exposures provided under the ``factor_exposures`` key are appended in the
-    order of ``factor_names``.  Missing factors default to zero exposure.
+    The base features are volatility, trend strength, regime and optional
+    graph-derived risk/opportunity signals.  Any factor exposures provided
+    under the ``factor_exposures`` key are appended in the order of
+    ``factor_names``.  Missing factors default to zero exposure.
     """
 
     exposures = features.get("factor_exposures", {}) or {}
@@ -53,6 +70,8 @@ def _feature_vector(features: FeatureDict, factor_names: Iterable[str]) -> np.nd
         features.get("volatility", 0.0),
         features.get("trend_strength", 0.0),
         features.get("regime", 0.0),
+        features.get("graph_risk", 0.0),
+        features.get("graph_opportunity", 0.0),
     ]
     for name in factor_names:
         vec.append(float(exposures.get(name, 0.0)))
@@ -99,9 +118,9 @@ class StrategyRouter:
             self.algorithms["rl_policy"] = self._meta_rl_signal
         for name in self.algorithms:
             self.consensus.weights.setdefault(name, 1.0)
-        # include regime dimension alongside volatility and trend strength and
-        # optional factor exposures
-        self.dim = 3 + len(self.factor_names)
+        # include regime dimension alongside volatility, trend strength,
+        # graph signals and optional factor exposures
+        self.dim = 5 + len(self.factor_names)
         self.A: Dict[str, np.ndarray] = {
             name: np.identity(self.dim) for name in self.algorithms
         }
@@ -125,6 +144,12 @@ class StrategyRouter:
         if self.champion is None and self.algorithms:
             self.champion = next(iter(self.algorithms))
 
+        # Load knowledge graph if available
+        try:  # pragma: no cover - best effort
+            self.knowledge_graph = load_knowledge_graph()
+        except Exception:
+            self.knowledge_graph = None
+
         # Determine whether to use lightweight FTRL models based on capability tier
         if monitor and getattr(monitor, "capability_tier", "") == "lite":
             self.use_ftrl = True
@@ -132,6 +157,21 @@ class StrategyRouter:
             self.ftrl_models = {name: FTRLModel(dim=self.dim) for name in self.algorithms}
         else:
             self.use_ftrl = False
+
+    # ------------------------------------------------------------------
+    def _augment_with_graph(self, features: FeatureDict) -> None:
+        """Augment ``features`` with graph-derived signals if possible."""
+        company = features.get("company") or features.get("asset")
+        if not company or self.knowledge_graph is None:
+            return
+        try:  # pragma: no cover - best effort
+            features["graph_risk"] = risk_score(self.knowledge_graph, str(company))
+            features["graph_opportunity"] = opportunity_score(
+                self.knowledge_graph, str(company)
+            )
+        except Exception:
+            features.setdefault("graph_risk", 0.0)
+            features.setdefault("graph_opportunity", 0.0)
 
     # ------------------------------------------------------------------
     def _meta_rl_signal(self, features: FeatureDict) -> float:
@@ -163,7 +203,7 @@ class StrategyRouter:
             return
         old_dim = self.dim
         self.factor_names = new_names
-        self.dim = 3 + len(self.factor_names)
+        self.dim = 5 + len(self.factor_names)
         if self.dim == old_dim:
             return
         for key in list(self.A.keys()):
@@ -232,6 +272,7 @@ class StrategyRouter:
     def select(self, features: FeatureDict) -> str:
         """Return the algorithm name with the highest score."""
         self._maybe_upgrade_models()
+        self._augment_with_graph(features)
         x = _feature_vector(features, self.factor_names)
         if self.use_ftrl:
             x_vec = x.ravel()
