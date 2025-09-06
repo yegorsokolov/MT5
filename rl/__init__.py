@@ -4,6 +4,7 @@ try:  # optional dependency on gym
     from .risk_cvar import CVaRRewardWrapper
 except Exception:  # pragma: no cover - gym may be stubbed
     CVaRRewardWrapper = object  # type: ignore
+from .meta_controller import MetaController, MetaControllerDataset, train_meta_controller
 from .world_model import WorldModel, WorldModelEnv, Transition
 from .trading_env import (
     TradingEnv,
@@ -30,4 +31,7 @@ __all__ = [
     "MultiAgentTradingEnv",
     "DistributionalAgent",
     "MeanAgent",
+    "MetaController",
+    "MetaControllerDataset",
+    "train_meta_controller",
 ]
