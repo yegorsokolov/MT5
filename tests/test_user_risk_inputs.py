@@ -24,8 +24,9 @@ sys.modules.setdefault("telemetry", telemetry_mod)
 
 scheduler_mod = types.ModuleType("scheduler")
 scheduler_mod.start_scheduler = lambda: None
+scheduler_mod.stop_scheduler = lambda: None
 scheduler_mod.__spec__ = importlib.machinery.ModuleSpec("scheduler", loader=None)
-sys.modules.setdefault("scheduler", scheduler_mod)
+sys.modules["scheduler"] = scheduler_mod
 
 news_mod = types.ModuleType("news.aggregator")
 class _Agg:
@@ -99,6 +100,9 @@ for _n in [
     "RESOURCE_RESTARTS",
     "QUEUE_DEPTH",
     "BATCH_LATENCY",
+    "PRED_CACHE_HIT",
+    "PRED_CACHE_HIT_RATIO",
+    "PLUGIN_RELOADS",
 ]:
     setattr(metrics_mod, _n, types.SimpleNamespace(inc=lambda *a, **k: None))
 metrics_mod.__spec__ = importlib.machinery.ModuleSpec("metrics", loader=None)
