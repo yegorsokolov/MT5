@@ -64,4 +64,7 @@ def build_model(
         num_layers=num_layers,
         num_regimes=num_regimes,
         use_checkpointing=cfg.get("use_checkpointing", False),
+        dropout=cfg.get("dropout", 0.1),
+        ff_dim=cfg.get("ff_dim"),
+        layer_norm=cfg.get("layer_norm", False),
     )
