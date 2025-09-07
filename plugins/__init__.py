@@ -17,9 +17,21 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, List
+import functools
 
 from analytics.metrics_store import record_metric
-from utils.plugin_security import verify_plugin
+# Import plugin security module directly to avoid executing ``utils.__init__``
+try:
+    _ps_spec = importlib.util.spec_from_file_location(
+        "plugin_security", Path(__file__).resolve().parents[0].parent / "utils" / "plugin_security.py"
+    )
+    _ps = importlib.util.module_from_spec(_ps_spec)
+    assert _ps_spec and _ps_spec.loader
+    _ps_spec.loader.exec_module(_ps)  # type: ignore
+    verify_plugin = _ps.verify_plugin
+except Exception:  # pragma: no cover - missing optional dependencies
+    def verify_plugin(*args, **kwargs):
+        return None
 
 try:  # pragma: no cover - optional during tests
     from log_utils import setup_logging
@@ -39,6 +51,19 @@ _rm = importlib.util.module_from_spec(_spec)
 assert _spec and _spec.loader
 _spec.loader.exec_module(_rm)  # type: ignore
 monitor = _rm.monitor
+
+# Import plugin runner without importing full utils package
+_pr_spec = importlib.util.spec_from_file_location(
+    "plugin_runner", Path(__file__).resolve().parents[0].parent / "utils" / "plugin_runner.py"
+)
+_pr = importlib.util.module_from_spec(_pr_spec)
+assert _pr_spec and _pr_spec.loader
+_pr_spec.loader.exec_module(_pr)  # type: ignore
+run_sandboxed = _pr.run_plugin
+PluginTimeoutError = _pr.PluginTimeoutError
+
+DEFAULT_TIMEOUT = 5.0
+DEFAULT_MEM_MB: float | None = None
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -112,18 +137,42 @@ RISK_CHECKS: List[Callable[..., Any]] = []
 
 
 def register_feature(func: Callable[..., Any]) -> Callable[..., Any]:
-    FEATURE_PLUGINS.append(func)
-    return func
+    """Register a feature plugin executed inside a sandboxed subprocess."""
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any):
+        timeout = kwargs.pop("_timeout", DEFAULT_TIMEOUT)
+        mem = kwargs.pop("_mem_limit_mb", DEFAULT_MEM_MB)
+        return run_sandboxed(func, *args, timeout=timeout, memory_limit_mb=mem, **kwargs)
+
+    FEATURE_PLUGINS.append(wrapper)
+    return wrapper
 
 
 def register_model(func: Callable[..., Any]) -> Callable[..., Any]:
-    MODEL_PLUGINS.append(func)
-    return func
+    """Register a model plugin executed in a subprocess sandbox."""
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any):
+        timeout = kwargs.pop("_timeout", DEFAULT_TIMEOUT)
+        mem = kwargs.pop("_mem_limit_mb", DEFAULT_MEM_MB)
+        return run_sandboxed(func, *args, timeout=timeout, memory_limit_mb=mem, **kwargs)
+
+    MODEL_PLUGINS.append(wrapper)
+    return wrapper
 
 
 def register_risk_check(func: Callable[..., Any]) -> Callable[..., Any]:
-    RISK_CHECKS.append(func)
-    return func
+    """Register a risk check plugin executed in a subprocess sandbox."""
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any):
+        timeout = kwargs.pop("_timeout", DEFAULT_TIMEOUT)
+        mem = kwargs.pop("_mem_limit_mb", DEFAULT_MEM_MB)
+        return run_sandboxed(func, *args, timeout=timeout, memory_limit_mb=mem, **kwargs)
+
+    RISK_CHECKS.append(wrapper)
+    return wrapper
 
 
 # ---------------------------------------------------------------------------

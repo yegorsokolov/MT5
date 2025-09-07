@@ -28,7 +28,17 @@ def _safe_plugin():
     return "ok"
 
 
+def _crash_plugin():
+    raise RuntimeError("boom")
+
+
 def test_hung_plugin_does_not_block():
     with pytest.raises(PluginTimeoutError):
         run_plugin(_hung_plugin, timeout=0.5)
+    assert run_plugin(_safe_plugin, timeout=1) == "ok"
+
+
+def test_crashing_plugin_isolated():
+    with pytest.raises(RuntimeError):
+        run_plugin(_crash_plugin, timeout=1)
     assert run_plugin(_safe_plugin, timeout=1) == "ok"
