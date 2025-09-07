@@ -35,6 +35,9 @@ class MultiHeadTransformer(torch.nn.Module):
         num_regimes: int | None = None,
         emb_dim: int = 8,
         use_checkpointing: bool = False,
+        dropout: float = 0.1,
+        ff_dim: int | None = None,
+        layer_norm: bool = False,
     ) -> None:
         super().__init__()
         self.use_checkpointing = use_checkpointing
@@ -48,12 +51,19 @@ class MultiHeadTransformer(torch.nn.Module):
         self.input_linear = torch.nn.Linear(input_size + emb_total, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
         encoder_layer = torch.nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, batch_first=True
+            d_model=d_model,
+            nhead=nhead,
+            dropout=dropout,
+            batch_first=True,
+            dim_feedforward=ff_dim or 4 * d_model,
         )
-        self.transformer = torch.nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.heads = torch.nn.ModuleDict({
-            str(i): torch.nn.Linear(d_model, 1) for i in range(num_symbols)
-        })
+        self.transformer = torch.nn.TransformerEncoder(
+            encoder_layer, num_layers=num_layers
+        )
+        self.norm = torch.nn.LayerNorm(d_model) if layer_norm else None
+        self.heads = torch.nn.ModuleDict(
+            {str(i): torch.nn.Linear(d_model, 1) for i in range(num_symbols)}
+        )
 
     def forward(self, x: torch.Tensor, symbol: int) -> torch.Tensor:
         if self.regime_emb is not None and self.regime_idx is not None:
@@ -67,6 +77,8 @@ class MultiHeadTransformer(torch.nn.Module):
                 x = torch.utils.checkpoint.checkpoint(layer, x)
         else:
             x = self.transformer(x)
+        if self.norm is not None:
+            x = self.norm(x)
         out = self.heads[str(int(symbol))](x[:, -1])
         return torch.sigmoid(out).squeeze(1)
 
