@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
 import os
 import subprocess
@@ -17,6 +18,7 @@ except Exception:  # pragma: no cover - config loading optional
 logger = logging.getLogger(__name__)
 
 _loop: asyncio.AbstractEventLoop | None = None
+_thread: threading.Thread | None = None
 _started = False
 _tasks: list[asyncio.Future] = []
 _last_retrain_ts: str | None = None
@@ -35,14 +37,41 @@ async def _runner(name: str, interval: float, func: Callable[[], None | asyncio.
         await asyncio.sleep(interval)
 
 def _schedule_jobs(jobs: Iterable[tuple[str, Callable[[], None | asyncio.Future]]]) -> None:
-    global _loop
+    global _loop, _thread
     if _loop is None:
         _loop = asyncio.new_event_loop()
-        threading.Thread(target=_loop.run_forever, daemon=True).start()
+        _thread = threading.Thread(target=_loop.run_forever, daemon=True)
+        _thread.start()
     for name, func in jobs:
         task = asyncio.run_coroutine_threadsafe(_runner(name, 24 * 60 * 60, func), _loop)
         _tasks.append(task)
         logger.info("Scheduled job: %s", name)
+
+
+def stop_scheduler() -> None:
+    """Stop the background scheduler and cancel all tasks."""
+    global _loop, _thread, _tasks, _started
+    if _loop is None:
+        return
+    for task in _tasks:
+        task.cancel()
+    _tasks.clear()
+    try:
+        _loop.call_soon_threadsafe(_loop.stop)
+    except Exception:
+        pass
+    if _thread and _thread.is_alive():
+        _thread.join()
+    try:
+        _loop.close()
+    except Exception:
+        pass
+    _loop = None
+    _thread = None
+    _started = False
+
+
+atexit.register(stop_scheduler)
 
 
 def _training_cmd(model: str) -> list[str]:
@@ -442,6 +471,7 @@ def start_scheduler() -> None:
 
 __all__ = [
     "start_scheduler",
+    "stop_scheduler",
     "cleanup_checkpoints",
     "resource_reprobe",
     "run_drift_detection",
