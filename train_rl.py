@@ -177,6 +177,7 @@ from rl.hierarchical_agent import (
     EpsilonGreedyManager,
     TrendPolicy,
     MeanReversionPolicy,
+    NewsDrivenPolicy,
 )
 
 try:  # optional dependency
@@ -1374,8 +1375,12 @@ def train_hierarchical(cfg: dict) -> float:
         }
     )
     env = HierarchicalTradingEnv(df, ["return"], max_position=1.0)
-    manager = EpsilonGreedyManager(["trend", "mean_reversion"], epsilon=0.0)
-    workers = {"trend": TrendPolicy(), "mean_reversion": MeanReversionPolicy()}
+    workers = {
+        "mean_reversion": MeanReversionPolicy(),
+        "news": NewsDrivenPolicy(),
+        "trend": TrendPolicy(),
+    }
+    manager = EpsilonGreedyManager(list(workers.keys()), epsilon=0.0)
     agent = HierarchicalAgent(manager, workers)
     obs = env.reset()
     for _ in range(cfg.get("hierarchical_steps", 10)):
