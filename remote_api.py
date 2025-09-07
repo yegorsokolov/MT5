@@ -22,20 +22,26 @@ import socket
 import time
 import datetime
 import csv
+
 try:
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - utils may be stubbed in tests
+
     def send_alert(msg: str) -> None:  # type: ignore
         return
+
+
 from log_utils import LOG_FILE, setup_logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 from dataclasses import dataclass
 from risk_manager import risk_manager
 from scheduler import start_scheduler
+
 try:
     from utils.resource_monitor import ResourceMonitor
 except Exception:  # pragma: no cover - utils may be stubbed in tests
+
     class ResourceMonitor:  # type: ignore
         def __init__(self, *a, **k):
             self.max_rss_mb = None
@@ -43,6 +49,8 @@ except Exception:  # pragma: no cover - utils may be stubbed in tests
 
         def start(self) -> None:
             return
+
+
 from metrics import RESOURCE_RESTARTS
 
 
@@ -85,6 +93,7 @@ async def _systemd_watchdog(interval: float) -> None:
         await asyncio.sleep(interval)
         _sd_notify("WATCHDOG=1")
 
+
 if os.name != "nt" and getattr(resource_watchdog, "capabilities", None):
     if resource_watchdog.capabilities.cpus > 1:  # pragma: no cover - host dependent
         try:
@@ -102,6 +111,7 @@ async def _handle_resource_breach(reason: str) -> None:
     send_alert(f"Resource watchdog triggered: {reason}")
     os._exit(1)
 
+
 API_KEY = SecretManager().get_secret("API_KEY")
 if not API_KEY:
     raise RuntimeError("API_KEY secret is required")
@@ -110,13 +120,16 @@ CERT_FILE = Path("certs/api.crt")
 KEY_FILE = Path("certs/api.key")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
+
 async def authorize(key: str = Security(api_key_header)) -> None:
     if API_KEY and key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+
 bots_lock = asyncio.Lock()
 
 RATE_LIMIT = int(os.getenv("RATE_LIMIT", "5"))
+BUCKET_TTL = int(os.getenv("BUCKET_TTL", str(15 * 60)))
 AUDIT_LOG = Path("logs/api_audit.csv")
 AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
 
@@ -125,6 +138,7 @@ AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
 class TokenBucket:
     tokens: float
     last: float
+    last_seen: float
 
 
 _buckets: Dict[str, TokenBucket] = {}
@@ -132,15 +146,19 @@ _buckets: Dict[str, TokenBucket] = {}
 
 def _allow_request(key: str) -> bool:
     now = time.time()
+    for k, b in list(_buckets.items()):
+        if now - b.last_seen > BUCKET_TTL:
+            _buckets.pop(k, None)
     bucket = _buckets.get(key)
     if not bucket:
-        bucket = TokenBucket(tokens=RATE_LIMIT, last=now)
+        bucket = TokenBucket(tokens=RATE_LIMIT, last=now, last_seen=now)
         _buckets[key] = bucket
     else:
         bucket.tokens = min(
             RATE_LIMIT, bucket.tokens + (now - bucket.last) * RATE_LIMIT
         )
         bucket.last = now
+        bucket.last_seen = now
     if bucket.tokens < 1:
         return False
     bucket.tokens -= 1
@@ -184,6 +202,7 @@ class BotInfo:
 
 bots: Dict[str, BotInfo] = {}
 metrics_clients: Set[WebSocket] = set()
+
 
 async def broadcast_update(data: Dict[str, Any]) -> None:
     """Send ``data`` to all connected WebSocket clients."""
@@ -239,6 +258,7 @@ async def _start_watcher() -> None:
         interval = WATCHDOG_USEC / 2 / 1_000_000
         asyncio.create_task(_systemd_watchdog(interval))
 
+
 @app.get("/bots")
 async def list_bots(_: None = Depends(authorize)):
     """Return running bot IDs and their status."""
@@ -252,6 +272,7 @@ async def list_bots(_: None = Depends(authorize)):
             for bid, info in bots.items()
         }
 
+
 @app.post("/bots/{bot_id}/start")
 async def start_bot(bot_id: str, _: None = Depends(authorize)):
     """Launch a realtime training instance for the given bot."""
@@ -261,6 +282,7 @@ async def start_bot(bot_id: str, _: None = Depends(authorize)):
         proc = Popen(["python", "realtime_train.py"])
         bots[bot_id] = BotInfo(proc=proc)
     return {"bot": bot_id, "status": "started"}
+
 
 @app.post("/bots/{bot_id}/stop")
 async def stop_bot(bot_id: str, _: None = Depends(authorize)):
