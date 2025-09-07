@@ -184,6 +184,7 @@ def main(
         stream = cfg.get("stream_history", False)
         for sym in symbols:
             if stream:
+                # Stream history in configurable chunks to minimize memory usage
                 pq_path = root / "data" / f"{sym}_history.parquet"
                 if pq_path.exists():
                     for chunk in load_history_iter(pq_path, chunk_size):
