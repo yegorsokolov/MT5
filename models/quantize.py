@@ -1,4 +1,5 @@
-"""Utilities for lightweight model quantization and pruning."""
+"""Utilities for post-training quantization and structured pruning."""
+
 from __future__ import annotations
 
 from typing import Optional

@@ -89,6 +89,7 @@ class ModelVariant:
     remote_only: bool = False
     weights: Optional[Path] = None
     quantized_weights: Optional[Path] = None
+    quantized_requirements: Optional[ResourceCapabilities] = None
 
     def __post_init__(self) -> None:
         base = Path(__file__).with_name("models")
@@ -105,69 +106,88 @@ class ModelVariant:
             and (not self.requirements.has_gpu or capabilities.has_gpu)
         )
 
+    def quantized_is_supported(self, capabilities: ResourceCapabilities) -> bool:
+        """Return True if quantized variant fits within available resources."""
+        req = self.quantized_requirements or self.requirements
+        return (
+            capabilities.cpus >= req.cpus
+            and capabilities.memory_gb >= req.memory_gb
+            and (not req.has_gpu or capabilities.has_gpu)
+        )
+
 
 # Registry of task -> model variants ordered from heaviest to lightest
 MODEL_REGISTRY: Dict[str, List[ModelVariant]] = {
     "sentiment": [
         ModelVariant(
-            "sentiment_large",
-            ResourceCapabilities(8, 32, True, gpu_count=1),
-            "sentiment_large_quantized",
+            name="sentiment_large",
+            requirements=ResourceCapabilities(8, 32, True, gpu_count=1),
+            quantized="sentiment_large_quantized",
             remote_only=True,
+            quantized_requirements=ResourceCapabilities(4, 16, False, gpu_count=0),
         ),
         ModelVariant(
-            "sentiment_medium",
-            ResourceCapabilities(4, 16, True, gpu_count=1),
-            "sentiment_medium_quantized",
+            name="sentiment_medium",
+            requirements=ResourceCapabilities(4, 16, True, gpu_count=1),
+            quantized="sentiment_medium_quantized",
+            quantized_requirements=ResourceCapabilities(2, 8, False, gpu_count=0),
         ),
         ModelVariant(
-            "sentiment_small",
-            ResourceCapabilities(2, 4, False, gpu_count=0),
-            "sentiment_small_quantized",
+            name="sentiment_small",
+            requirements=ResourceCapabilities(2, 4, False, gpu_count=0),
+            quantized="sentiment_small_quantized",
+            quantized_requirements=ResourceCapabilities(1, 2, False, gpu_count=0),
         ),
     ],
     "rl_policy": [
         ModelVariant(
-            "rl_large",
-            ResourceCapabilities(16, 64, True, gpu_count=1),
-            "rl_large_quantized",
+            name="rl_large",
+            requirements=ResourceCapabilities(16, 64, True, gpu_count=1),
+            quantized="rl_large_quantized",
             remote_only=True,
+            quantized_requirements=ResourceCapabilities(8, 32, False, gpu_count=0),
         ),
         ModelVariant(
-            "rl_medium",
-            ResourceCapabilities(8, 32, True, gpu_count=1),
-            "rl_medium_quantized",
+            name="rl_medium",
+            requirements=ResourceCapabilities(8, 32, True, gpu_count=1),
+            quantized="rl_medium_quantized",
+            quantized_requirements=ResourceCapabilities(4, 16, False, gpu_count=0),
         ),
         ModelVariant(
-            "rl_large_distilled",
-            ResourceCapabilities(4, 16, False, gpu_count=0),
-            "rl_large_distilled_quantized",
+            name="rl_large_distilled",
+            requirements=ResourceCapabilities(4, 16, False, gpu_count=0),
+            quantized="rl_large_distilled_quantized",
+            quantized_requirements=ResourceCapabilities(2, 8, False, gpu_count=0),
         ),
         ModelVariant(
-            "rl_small",
-            ResourceCapabilities(2, 4, False, gpu_count=0),
-            "rl_small_quantized",
+            name="rl_small",
+            requirements=ResourceCapabilities(2, 4, False, gpu_count=0),
+            quantized="rl_small_quantized",
+            quantized_requirements=ResourceCapabilities(1, 2, False, gpu_count=0),
         ),
-        ModelVariant("baseline", ResourceCapabilities(1, 1, False, gpu_count=0)),
+        ModelVariant(name="baseline", requirements=ResourceCapabilities(1, 1, False, gpu_count=0)),
     ],
     "trade_exit": [
         ModelVariant(
-            "exit_transformer",
-            ResourceCapabilities(8, 32, True, gpu_count=1),
-            "exit_transformer_quantized",
+            name="exit_transformer",
+            requirements=ResourceCapabilities(8, 32, True, gpu_count=1),
+            quantized="exit_transformer_quantized",
             remote_only=True,
+            quantized_requirements=ResourceCapabilities(4, 16, False, gpu_count=0),
         ),
         ModelVariant(
-            "exit_transformer_distilled",
-            ResourceCapabilities(4, 16, False, gpu_count=0),
-            "exit_transformer_distilled_quantized",
+            name="exit_transformer_distilled",
+            requirements=ResourceCapabilities(4, 16, False, gpu_count=0),
+            quantized="exit_transformer_distilled_quantized",
+            quantized_requirements=ResourceCapabilities(2, 8, False, gpu_count=0),
         ),
         ModelVariant(
-            "exit_gbm",
-            ResourceCapabilities(2, 4, False, gpu_count=0),
-            "exit_gbm_quantized",
+            name="exit_gbm",
+            requirements=ResourceCapabilities(2, 4, False, gpu_count=0),
+            quantized="exit_gbm_quantized",
+            quantized_requirements=ResourceCapabilities(1, 2, False, gpu_count=0),
         ),
-        ModelVariant("exit_baseline", ResourceCapabilities(1, 1, False, gpu_count=0)),
+        ModelVariant(name="exit_baseline", requirements=ResourceCapabilities(1, 1, False, gpu_count=0)),
     ],
 }
 
@@ -304,7 +324,12 @@ class ModelRegistry:
         """Return the chosen model variant for the given task."""
         variant = self.selected[task]
         tier = self.monitor.capability_tier
-        if TIERS.get(tier, 0) <= TIERS["lite"] and variant.quantized:
+        caps = self.monitor.capabilities
+        if (
+            variant.quantized
+            and variant.quantized_is_supported(caps)
+            and TIERS.get(tier, 0) <= TIERS["lite"]
+        ):
             return variant.quantized
         return variant.name
 
