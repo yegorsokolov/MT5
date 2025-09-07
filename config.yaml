@@ -88,6 +88,7 @@ symbols:
 threshold: 0.55
 trailing_stop_pips: 20
 train_rows: 50000
+time_decay_half_life: null  # in bars
 use_ray: true
 use_dask: true
 dask_cluster_url:
