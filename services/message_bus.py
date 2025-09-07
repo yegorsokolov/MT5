@@ -1,9 +1,11 @@
 """Unified message bus with NATS, Kafka and in-memory backends."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Deque, Dict, Optional
@@ -37,7 +39,7 @@ class MessageBus:
         self.backend = backend
         self.kwargs = kwargs
         self._queues: Dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
-        self._buffers: Dict[str, Deque[Any]] = defaultdict(deque)
+        self._buffers: Dict[str, Deque[tuple[float, Any]]] = defaultdict(deque)
         self._nats = None
         self._kafka_producer = None
         self._kafka_consumers: Dict[str, Any] = {}
@@ -47,7 +49,9 @@ class MessageBus:
         if self._nats is None:
             import nats
 
-            url = self.kwargs.get("url") or os.getenv("NATS_URL", "nats://localhost:4222")
+            url = self.kwargs.get("url") or os.getenv(
+                "NATS_URL", "nats://localhost:4222"
+            )
             self._nats = await nats.connect(url)
 
     # ------------------------------------------------------------------
@@ -72,13 +76,17 @@ class MessageBus:
 
         if self.backend == "nats":  # pragma: no cover - network heavy
             await self._ensure_nats()
-            data = msg if isinstance(msg, (bytes, bytearray)) else json.dumps(msg).encode()
+            data = (
+                msg if isinstance(msg, (bytes, bytearray)) else json.dumps(msg).encode()
+            )
             await self._nats.publish(topic, data)
             return
 
         if self.backend == "kafka":  # pragma: no cover - network heavy
             await self._ensure_kafka()
-            data = msg if isinstance(msg, (bytes, bytearray)) else json.dumps(msg).encode()
+            data = (
+                msg if isinstance(msg, (bytes, bytearray)) else json.dumps(msg).encode()
+            )
             await self._kafka_producer.send_and_wait(topic, data)
             return
 
@@ -86,13 +94,35 @@ class MessageBus:
         cfg = TOPIC_CONFIG.get(topic, {"max_msgs": 1000})
         queue = self._queues[topic]
         buf = self._buffers[topic]
+
+        # drop oldest item from queue if it exceeds max size
         if queue.qsize() >= cfg["max_msgs"]:
             try:
                 queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-        buf.append(msg)
+
+        now = time.time()
+        buf.append((now, msg))
+
+        # enforce retention policy
+        retention = cfg.get("retention")
+        if retention is not None:
+            cutoff = now - retention
+            while buf and buf[0][0] < cutoff:
+                buf.popleft()
+
+        # enforce buffer size limit
+        if len(buf) > cfg.get("max_msgs", 1000):
+            buf.popleft()
+
         await queue.put(msg)
+
+    # ------------------------------------------------------------------
+    def get_history(self, topic: str) -> list[Any]:
+        """Return buffered messages for ``topic`` in publish order."""
+
+        return [m for _, m in self._buffers.get(topic, [])]
 
     # ------------------------------------------------------------------
     async def subscribe(self, topic: str) -> AsyncGenerator[Any, None]:
