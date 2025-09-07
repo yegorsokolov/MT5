@@ -9,6 +9,7 @@ import streamlit as st
 import yaml
 
 from analytics.metrics_aggregator import query_metrics
+from analytics.metrics_store import query_metrics as query_local_metrics
 from analytics.regime_performance_store import RegimePerformanceStore
 from analytics.issue_client import load_default as issue_client
 from log_utils import read_decisions
@@ -111,6 +112,20 @@ def main() -> None:
         col5.metric("Funding Cost", fund_val)
         col6.metric("Margin Req.", margin_req_val)
         col7.metric("Free Margin", margin_avail_val)
+
+        # Show per-broker performance metrics
+        lat_df = query_local_metrics("broker_fill_latency_ms")
+        slip_df = query_local_metrics("broker_slippage_bps")
+        if not lat_df.empty or not slip_df.empty:
+            st.subheader("Broker Latency/Slippage")
+            lat = lat_df.groupby("broker")["value"].mean() if not lat_df.empty else pd.Series()
+            slip = (
+                slip_df.groupby("broker")["value"].mean()
+                if not slip_df.empty
+                else pd.Series()
+            )
+            table = pd.concat([lat.rename("latency_ms"), slip.rename("slippage_bps")], axis=1)
+            st.table(table.fillna(0))
 
         client = issue_client()
         open_issues = client.list_open()
