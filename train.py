@@ -12,6 +12,7 @@ import math
 import torch
 from sklearn.metrics import classification_report
 from sklearn.pipeline import Pipeline
+from sklearn.utils.class_weight import compute_sample_weight
 from analysis.purged_cv import PurgedTimeSeriesSplit
 from lightgbm import LGBMClassifier
 from analytics import mlflow_client as mlflow
@@ -265,9 +266,7 @@ def main(
     if use_pseudo_labels:
         pseudo_dir = root / "data" / "pseudo_labels"
         if pseudo_dir.exists():
-            files = list(pseudo_dir.glob("*.parquet")) + list(
-                pseudo_dir.glob("*.csv")
-            )
+            files = list(pseudo_dir.glob("*.parquet")) + list(pseudo_dir.glob("*.csv"))
             for p in files:
                 try:
                     if p.suffix == ".parquet":
@@ -281,9 +280,7 @@ def main(
                 if not set(features).issubset(df_pseudo.columns):
                     continue
                 X = pd.concat([X, df_pseudo[features]], ignore_index=True)
-                y = pd.concat(
-                    [y, df_pseudo["pseudo_label"]], ignore_index=True
-                )
+                y = pd.concat([y, df_pseudo["pseudo_label"]], ignore_index=True)
 
     if cfg.get("meta_train"):
         from analysis.meta_learning import meta_train_lgbm, save_meta_weights
@@ -361,7 +358,11 @@ def main(
                 if batch_idx == 0 and donor_booster is not None and not ckpt
                 else (clf.booster_ if (batch_idx > 0 or ckpt) else None)
             )
-            clf.fit(Xb, yb, init_model=init_model)
+            fit_kwargs = {"init_model": init_model}
+            if cfg.get("balance_classes"):
+                sw = compute_sample_weight("balanced", yb)
+                fit_kwargs["sample_weight"] = sw
+            clf.fit(Xb, yb, **fit_kwargs)
             state = {"model": pipe}
             if "scaler" in pipe.named_steps:
                 state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
@@ -440,13 +441,15 @@ def main(
         pipe = Pipeline(steps)
         _register_clf(pipe.named_steps["clf"])
 
-        fit_params = {
-            "clf__eval_set": [(X_val, y_val)],
-            "clf__early_stopping_rounds": cfg.get("early_stopping_rounds", 50),
-            "clf__verbose": False,
-        }
+        fit_params = {"clf__eval_set": [(X_val, y_val)]}
+        esr = cfg.get("early_stopping_rounds", 50)
+        if esr:
+            fit_params["clf__early_stopping_rounds"] = esr
         if donor_booster is not None:
             fit_params["clf__init_model"] = donor_booster
+        if cfg.get("balance_classes"):
+            sw = compute_sample_weight("balanced", y_train)
+            fit_params["clf__sample_weight"] = sw
         pipe.fit(X_train, y_train, **fit_params)
 
         preds = pipe.predict(X_val)
