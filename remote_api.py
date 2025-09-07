@@ -37,7 +37,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 from dataclasses import dataclass
 from risk_manager import risk_manager
-from scheduler import start_scheduler
+from scheduler import start_scheduler, stop_scheduler
 
 try:
     from utils.resource_monitor import ResourceMonitor
@@ -258,6 +258,11 @@ async def _start_watcher() -> None:
     if WATCHDOG_USEC:
         interval = WATCHDOG_USEC / 2 / 1_000_000
         asyncio.create_task(_systemd_watchdog(interval))
+
+
+@app.on_event("shutdown")
+async def _stop_scheduler_event() -> None:
+    stop_scheduler()
 
 
 @app.get("/bots")

@@ -30,7 +30,7 @@ def test_risk_manager_rebalances_by_regime(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         'scheduler',
-        types.SimpleNamespace(start_scheduler=lambda: None),
+        types.SimpleNamespace(start_scheduler=lambda: None, stop_scheduler=lambda: None),
     )
     rm_module = importlib.reload(importlib.import_module('risk_manager'))
     RiskManager = rm_module.RiskManager
