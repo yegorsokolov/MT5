@@ -45,6 +45,7 @@ models/*
 !models/bayesian_forecast.py
 !models/slimmable_network.py
 !models/residual_learner.py
+!models/residual_stacker.py
 __pycache__/
 logs/
 analysis/news_impact.parquet
