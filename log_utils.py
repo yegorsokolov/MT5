@@ -34,6 +34,10 @@ LOG_FILE = LOG_DIR / "app.log"
 TRADE_LOG = LOG_DIR / "trades.csv"
 DECISION_LOG = LOG_DIR / "decisions.parquet.enc"
 TRADE_HISTORY = LOG_DIR / "trade_history.parquet"
+ORDER_ID_INDEX = LOG_DIR / "trade_history_order_ids.parquet"
+
+# In-memory cache of order ids for quick duplicate detection
+_order_id_cache: set[str] | None = None
 
 # Standard column order for the trade CSV file.  New fields are appended to
 # this list when first encountered to keep the header stable.
@@ -49,6 +53,29 @@ TRADE_COLUMNS = [
     "model",
     "regime",
 ]
+
+
+def _load_order_id_index() -> set[str]:
+    """Load the cached set of order ids from disk if needed."""
+    global _order_id_cache
+    if _order_id_cache is None:
+        if ORDER_ID_INDEX.exists():
+            try:
+                ids = pd.read_parquet(ORDER_ID_INDEX, columns=["order_id"])
+                _order_id_cache = set(ids["order_id"].tolist())
+            except Exception:
+                _order_id_cache = set()
+        else:
+            _order_id_cache = set()
+    return _order_id_cache
+
+
+def _save_order_id_index() -> None:
+    """Persist the cached order id set to disk."""
+    if _order_id_cache is None:
+        return
+    df = pd.DataFrame({"order_id": list(_order_id_cache)})
+    df.to_parquet(ORDER_ID_INDEX, engine="pyarrow")
 
 
 class JsonFormatter(logging.Formatter):
@@ -261,22 +288,29 @@ def log_trade(event: str, **fields) -> None:
 def log_trade_history(record: dict) -> None:
     """Append executed trade with features to the parquet trade history.
 
-    If a trade with the same ``order_id`` is already present in the history the
-    record is not duplicated.
+    A lightweight index of ``order_id`` values is used to avoid scanning the
+    full history for duplicates.
     """
+
+    order_id = record.get("order_id")
+    if order_id is not None:
+        index = _load_order_id_index()
+        if order_id in index:
+            return
 
     df = pd.DataFrame([record])
     if TRADE_HISTORY.exists():
         try:
-            if "order_id" in record:
-                existing = pd.read_parquet(TRADE_HISTORY, columns=["order_id"])
-                if record["order_id"] in set(existing["order_id"].tolist()):
-                    return
             df.to_parquet(TRADE_HISTORY, engine="pyarrow", append=True)
         except Exception:
             df.to_parquet(TRADE_HISTORY, engine="pyarrow")
     else:
         df.to_parquet(TRADE_HISTORY, engine="pyarrow")
+
+    if order_id is not None:
+        index = _load_order_id_index()
+        index.add(order_id)
+        _save_order_id_index()
 
 
 def log_decision(df: pd.DataFrame) -> None:
