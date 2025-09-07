@@ -667,10 +667,14 @@ if __name__ == "__main__":
     ray_init()
     try:
         if args.tune:
-            from tuning.distributed_search import tune_lgbm
+            from tuning.bayesian_search import run_search
 
             cfg = load_config()
-            tune_lgbm(cfg)
+
+            def train_fn(c: dict, _trial) -> float:
+                return main(c)
+
+            run_search(train_fn, cfg)
         elif args.evo_search:
             from copy import deepcopy
             from tuning.evolutionary_search import run_evolutionary_search
