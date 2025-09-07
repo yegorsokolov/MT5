@@ -198,6 +198,27 @@ over core parameters and logs the best trial to MLflow. Recommended ranges:
 | `train_nn.py` | `learning_rate` 1e-5–1e-2, `d_model` 32–256, `num_layers` 1–4 |
 | `train_rl.py` | `rl_learning_rate` 1e-5–1e-2, `rl_gamma` 0.90–0.999 |
 
+### Masked time-series encoder pretraining
+
+A compact GRU encoder can be pre-trained on historical windows to speed up
+adaptation to new regimes. Run the helper script to populate the model store:
+
+```bash
+python pretrain_ts_encoder.py --config config.yaml
+```
+
+Training scripts will automatically load these weights when
+`use_ts_pretrain` is enabled in `config.yaml`:
+
+```yaml
+use_ts_pretrain: true
+ts_pretrain_epochs: 5
+ts_pretrain_batch_size: 32
+```
+
+This initialisation typically reduces early training loss compared to random
+weights.
+
 Studies are stored in `tuning/*.db`. Rerun the script with `--tune` to resume an
 interrupted optimisation or continue adding trials. Training checkpoints allow
 each trial to pick up where it left off if terminated mid‑run.
