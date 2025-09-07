@@ -17,6 +17,7 @@ from .rl_executor import RLExecutor
 from .execution_optimizer import ExecutionOptimizer
 from .fill_history import record_fill
 from metrics import SLIPPAGE_BPS, REALIZED_SLIPPAGE_BPS
+from event_store.event_writer import record as record_event
 
 try:  # optional dependency
     from utils.resource_monitor import monitor
@@ -101,6 +102,22 @@ class ExecutionEngine:
         start = perf_counter()
         strat = strategy.lower()
 
+        order_payload = {
+            "side": side,
+            "quantity": quantity,
+            "bid": bid,
+            "ask": ask,
+            "bid_vol": bid_vol,
+            "ask_vol": ask_vol,
+            "mid": mid,
+            "strategy": strat,
+            "expected_slippage_bps": expected_slippage_bps,
+        }
+        try:
+            record_event("order", order_payload)
+        except Exception:
+            pass
+
         params = (
             self.optimizer.get_params()
             if self.optimizer
@@ -182,11 +199,18 @@ class ExecutionEngine:
             record_fill(slippage=realized, latency=latency, depth=depth)
         except Exception:
             pass
-        logger.info(
-            "Slippage expected %.2f bps vs realized %.2f bps",
-            expected_slippage_bps,
-            realized,
-        )
+        try:
+            record_event(
+                "fill",
+                {
+                    **order_payload,
+                    "filled": filled,
+                    "avg_price": avg_price,
+                    "realized_slippage_bps": realized,
+                },
+            )
+        except Exception:
+            pass
         try:
             SLIPPAGE_BPS.set(expected_slippage_bps)
             REALIZED_SLIPPAGE_BPS.set(realized)

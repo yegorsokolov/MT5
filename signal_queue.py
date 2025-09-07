@@ -12,6 +12,7 @@ import numpy as np
 from services.message_bus import Topics, get_message_bus, MessageBus
 
 from analysis import pipeline_anomaly
+from event_store.event_writer import record as record_event
 
 try:  # pragma: no cover - optional dependency
     from models import residual_stacker as _residual_stacker
@@ -108,6 +109,8 @@ def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> N
         logger.warning("Pipeline anomaly detected; dropping batch")
         return
     rows = [_wrap_ci(r) for r in df.to_dict(orient="records")]
+    for row in rows:
+        record_event("prediction", row)
 
     async def _pub() -> None:
         for row in rows:
@@ -128,6 +131,8 @@ async def publish_dataframe_async(
         logger.warning("Pipeline anomaly detected; dropping batch")
         return
     rows = [_wrap_ci(r) for r in df.to_dict(orient="records")]
+    for row in rows:
+        record_event("prediction", row)
     for row in rows:
         await bus.publish(Topics.SIGNALS, row)
 
