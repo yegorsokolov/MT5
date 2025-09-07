@@ -10,7 +10,7 @@ import joblib
 import pandas as pd
 import math
 import torch
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, precision_recall_curve
 from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_sample_weight
 from analysis.purged_cv import PurgedTimeSeriesSplit
@@ -519,8 +519,13 @@ def main(
             fit_params["clf__sample_weight"] = sw
         pipe.fit(X_train, y_train, **fit_params)
 
-        preds = pipe.predict(X_val)
         probs = pipe.predict_proba(X_val)[:, 1]
+        prec, rec, thr = precision_recall_curve(y_val, probs)
+        f1_scores = 2 * prec * rec / (prec + rec + 1e-9)
+        best_idx = np.argmax(f1_scores[:-1])
+        best_thr = thr[best_idx]
+        preds = (probs > best_thr).astype(int)
+        mlflow.log_metric(f"fold_{fold}_best_thr", float(best_thr))
         last_val_y, last_val_probs = y_val, probs
         residuals = y_val.values - probs
         q = fit_residuals(residuals, alpha=cfg.get("interval_alpha", 0.1))
