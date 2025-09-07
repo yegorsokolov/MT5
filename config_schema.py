@@ -20,6 +20,9 @@ class ConfigSchema(BaseModel):
     balance_classes: bool = Field(
         False, description="Apply class weighting during model training"
     )
+    time_decay_half_life: int | None = Field(
+        None, ge=1, description="Half-life in bars for time-decay sample weighting"
+    )
     pred_cache_size: int = Field(
         256, ge=0, description="Maximum entries for prediction cache"
     )
