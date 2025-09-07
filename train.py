@@ -9,7 +9,11 @@ import asyncio
 import joblib
 import pandas as pd
 import math
-import torch
+
+try:
+    import torch
+except Exception:  # noqa: E722
+    torch = None
 from sklearn.metrics import classification_report, precision_recall_curve
 from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_sample_weight
@@ -117,6 +121,59 @@ def _load_donor_booster(symbol: str):
     return None
 
 
+def make_focal_loss(alpha: float = 0.25, gamma: float = 2.0):
+    """Create focal loss objective for LightGBM.
+
+    Parameters
+    ----------
+    alpha: float
+        Weighting factor for the rare class.
+    gamma: float
+        Focusing parameter for modulating factor.
+
+    Returns
+    -------
+    Callable
+        Function computing gradient and hessian for LightGBM.
+    """
+
+    def _focal_loss(y_pred: np.ndarray, data) -> tuple[np.ndarray, np.ndarray]:
+        if isinstance(data, np.ndarray):
+            y_true, y_pred = y_pred, data
+        elif hasattr(data, "get_label"):
+            y_true = data.get_label()
+        else:
+            y_true = data
+        p = 1.0 / (1.0 + np.exp(-y_pred))
+        alpha_t = alpha * y_true + (1 - alpha) * (1 - y_true)
+        p_t = p * y_true + (1 - p) * (1 - y_true)
+        mod_factor = (1 - p_t) ** gamma
+        grad = (p - y_true) * alpha_t * mod_factor
+        hess = alpha_t * mod_factor * p * (1 - p)
+        return grad, hess
+
+    return _focal_loss
+
+
+def make_focal_loss_metric(alpha: float = 0.25, gamma: float = 2.0):
+    """Create focal loss evaluation metric for LightGBM."""
+
+    def _focal_metric(y_pred: np.ndarray, data) -> tuple[str, float, bool]:
+        if isinstance(data, np.ndarray):
+            y_true, y_pred = y_pred, data
+        elif hasattr(data, "get_label"):
+            y_true = data.get_label()
+        else:
+            y_true = data
+        p = 1.0 / (1.0 + np.exp(-y_pred))
+        p_t = p * y_true + (1 - p) * (1 - y_true)
+        alpha_t = alpha * y_true + (1 - alpha) * (1 - y_true)
+        loss = -alpha_t * (1 - p_t) ** gamma * np.log(np.clip(p_t, 1e-7, 1 - 1e-7))
+        return "focal_loss", float(np.mean(loss)), False
+
+    return _focal_metric
+
+
 def log_shap_importance(
     pipe: Pipeline,
     X_train: pd.DataFrame,
@@ -180,6 +237,12 @@ def main(
     start_time = datetime.now()
 
     donor_booster = _load_donor_booster(transfer_from) if transfer_from else None
+
+    use_focal = cfg.get("use_focal_loss", False)
+    focal_alpha = cfg.get("focal_alpha", 0.25)
+    focal_gamma = cfg.get("focal_gamma", 2.0)
+    fobj = make_focal_loss(focal_alpha, focal_gamma) if use_focal else None
+    feval = make_focal_loss_metric(focal_alpha, focal_gamma) if use_focal else None
 
     mlflow.start_run("training", cfg)
     if df_override is not None:
@@ -292,12 +355,15 @@ def main(
         from tuning.tuning import tune_lightgbm
 
         def train_trial(params: dict, _trial) -> float:
-            clf = LGBMClassifier(
-                n_estimators=200,
-                n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
-                random_state=seed,
+            clf_params = {
+                "n_estimators": 200,
+                "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+                "random_state": seed,
                 **params,
-            )
+            }
+            if use_focal:
+                clf_params["objective"] = "None"
+            clf = LGBMClassifier(**clf_params)
             tscv_inner = PurgedTimeSeriesSplit(
                 n_splits=cfg.get("n_splits", 5),
                 embargo=cfg.get("max_horizon", 0),
@@ -306,13 +372,15 @@ def main(
             for tr_idx, va_idx in tscv_inner.split(X):
                 X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
                 y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
-                clf.fit(
-                    X_tr,
-                    y_tr,
-                    eval_set=[(X_va, y_va)],
-                    early_stopping_rounds=cfg.get("early_stopping_rounds", 50),
-                    verbose=False,
-                )
+                fit_kwargs: dict[str, object] = {
+                    "eval_set": [(X_va, y_va)],
+                    "early_stopping_rounds": cfg.get("early_stopping_rounds", 50),
+                    "verbose": False,
+                }
+                if use_focal:
+                    fit_kwargs["fobj"] = fobj
+                    fit_kwargs["feval"] = feval
+                clf.fit(X_tr, y_tr, **fit_kwargs)
                 preds = clf.predict(X_va)
                 rep = classification_report(y_va, preds, output_dict=True)
                 scores.append(rep["weighted avg"]["f1-score"])
@@ -367,18 +435,16 @@ def main(
             steps: list[tuple[str, object]] = []
             if cfg.get("use_scaler", True):
                 steps.append(("scaler", FeatureScaler.load(scaler_path)))
-            steps.append(
-                (
-                    "clf",
-                    LGBMClassifier(
-                        n_estimators=200,
-                        n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
-                        random_state=seed,
-                        keep_training_booster=True,
-                        **_lgbm_params(cfg),
-                    ),
-                )
-            )
+            clf_params = {
+                "n_estimators": 200,
+                "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+                "random_state": seed,
+                "keep_training_booster": True,
+                **_lgbm_params(cfg),
+            }
+            if use_focal:
+                clf_params["objective"] = "None"
+            steps.append(("clf", LGBMClassifier(**clf_params)))
             pipe = Pipeline(steps)
         _register_clf(pipe.named_steps["clf"])
         n_batches = math.ceil(len(X) / batch_size)
@@ -400,7 +466,10 @@ def main(
                 if batch_idx == 0 and donor_booster is not None and not ckpt
                 else (clf.booster_ if (batch_idx > 0 or ckpt) else None)
             )
-            fit_kwargs = {"init_model": init_model}
+            fit_kwargs: dict[str, object] = {"init_model": init_model}
+            if use_focal:
+                fit_kwargs["fobj"] = fobj
+                fit_kwargs["feval"] = feval
             if half_life:
                 decay = 0.5 ** ((t_max - np.arange(start, end)) / half_life)
                 if cfg.get("balance_classes"):
@@ -481,24 +550,22 @@ def main(
                     ignore_index=True,
                 )
 
-        steps = []
+        steps: list[tuple[str, object]] = []
         if cfg.get("use_scaler", True):
             steps.append(("scaler", FeatureScaler()))
-        steps.append(
-            (
-                "clf",
-                LGBMClassifier(
-                    n_estimators=200,
-                    n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
-                    random_state=seed,
-                    **_lgbm_params(cfg),
-                ),
-            )
-        )
+        clf_params = {
+            "n_estimators": 200,
+            "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+            "random_state": seed,
+            **_lgbm_params(cfg),
+        }
+        if use_focal:
+            clf_params["objective"] = "None"
+        steps.append(("clf", LGBMClassifier(**clf_params)))
         pipe = Pipeline(steps)
         _register_clf(pipe.named_steps["clf"])
 
-        fit_params = {"clf__eval_set": [(X_val, y_val)]}
+        fit_params: dict[str, object] = {"clf__eval_set": [(X_val, y_val)]}
         esr = cfg.get("early_stopping_rounds", 50)
         if esr:
             fit_params["clf__early_stopping_rounds"] = esr
@@ -517,6 +584,9 @@ def main(
         elif cfg.get("balance_classes"):
             sw = compute_sample_weight("balanced", y_train)
             fit_params["clf__sample_weight"] = sw
+        if use_focal:
+            fit_params["clf__fobj"] = fobj
+            fit_params["clf__feval"] = feval
         pipe.fit(X_train, y_train, **fit_params)
 
         probs = pipe.predict_proba(X_val)[:, 1]
@@ -628,20 +698,22 @@ def main(
         steps_reg: list[tuple[str, object]] = []
         if cfg.get("use_scaler", True):
             steps_reg.append(("scaler", FeatureScaler()))
-        steps_reg.append(
-            (
-                "clf",
-                LGBMClassifier(
-                    n_estimators=200,
-                    n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
-                    random_state=seed,
-                    **_lgbm_params(cfg),
-                ),
-            )
-        )
+        reg_clf_params = {
+            "n_estimators": 200,
+            "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+            "random_state": seed,
+            **_lgbm_params(cfg),
+        }
+        if use_focal:
+            reg_clf_params["objective"] = "None"
+        steps_reg.append(("clf", LGBMClassifier(**reg_clf_params)))
         pipe_reg = Pipeline(steps_reg)
         _register_clf(pipe_reg.named_steps["clf"])
-        pipe_reg.fit(X_reg, y_reg)
+        fit_reg: dict[str, object] = {}
+        if use_focal:
+            fit_reg["clf__fobj"] = fobj
+            fit_reg["clf__feval"] = feval
+        pipe_reg.fit(X_reg, y_reg, **fit_reg)
         regime_models[int(regime)] = pipe_reg
         logger.info("Trained regime-specific model for regime %s", regime)
 
