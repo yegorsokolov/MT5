@@ -12,6 +12,7 @@ request latencies are persisted using :func:`analytics.metrics_store.record_metr
 
 import time
 from collections import defaultdict, deque
+from dataclasses import dataclass, field
 from typing import Deque, Dict, Optional, Tuple
 
 from analytics.metrics_store import record_metric
@@ -20,6 +21,12 @@ try:  # pragma: no cover - optional dependency
     import ray  # type: ignore
 except Exception:  # pragma: no cover
     ray = None
+
+
+@dataclass
+class _RequestLog:
+    q: Deque[Tuple[float, int]] = field(default_factory=deque)
+    last_seen: float = 0.0
 
 
 class WorkerManager:
@@ -34,6 +41,7 @@ class WorkerManager:
         min_workers: int = 1,
         max_workers: int = 10,
         backend: str = "ray",
+        source_ttl: float = 300.0,
     ) -> None:
         self.window = window
         self.high_rps = high_rps
@@ -41,9 +49,10 @@ class WorkerManager:
         self.min_workers = min_workers
         self.max_workers = max_workers
         self.backend = backend
+        self.source_ttl = source_ttl
         self.worker_count = min_workers
         # track (timestamp, batch_size) for each request source
-        self._requests: Dict[str, Deque[Tuple[float, int]]] = defaultdict(deque)
+        self._requests: Dict[str, _RequestLog] = defaultdict(_RequestLog)
         if backend == "ray" and ray is not None:
             try:  # pragma: no cover - defensive
                 ray.init(ignore_reinit_error=True)
@@ -66,31 +75,43 @@ class WorkerManager:
         """
 
         now = time.time()
-        q = self._requests[source]
-        q.append((now, batch_size))
+        entry = self._requests[source]
+        entry.q.append((now, batch_size))
+        entry.last_seen = now
         cutoff = now - self.window
-        while q and q[0][0] < cutoff:
-            q.popleft()
+        while entry.q and entry.q[0][0] < cutoff:
+            entry.q.popleft()
         record_metric("queue_latency", latency, tags={"source": source})
         # Record throughput and batch size for autoscaling decisions
         if batch_size:
             throughput = batch_size / latency if latency > 0 else float("inf")
-            record_metric(
-                "batch_throughput", throughput, tags={"source": source}
-            )
+            record_metric("batch_throughput", throughput, tags={"source": source})
             record_metric("batch_size", float(batch_size), tags={"source": source})
         self._scale()
 
     # ------------------------------------------------------------------
     def _current_rps(self) -> float:
         now = time.time()
+        self._cleanup_sources(now)
         cutoff = now - self.window
         count = 0
-        for q in self._requests.values():
+        for entry in self._requests.values():
+            q = entry.q
             while q and q[0][0] < cutoff:
                 q.popleft()
             count += sum(size for ts, size in q if ts >= cutoff)
         return count / self.window
+
+    # ------------------------------------------------------------------
+    def _cleanup_sources(self, now: float) -> None:
+        """Drop request sources that have not been seen recently."""
+
+        ttl_cutoff = now - self.source_ttl
+        stale = [
+            src for src, rec in self._requests.items() if rec.last_seen < ttl_cutoff
+        ]
+        for src in stale:
+            del self._requests[src]
 
     # ------------------------------------------------------------------
     def _scale(self) -> None:
@@ -106,6 +127,7 @@ class WorkerManager:
         self.worker_count += 1
         if self.backend == "ray" and ray is not None:
             try:  # pragma: no cover - best effort
+
                 @ray.remote
                 def _noop() -> None:
                     return None
