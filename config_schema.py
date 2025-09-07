@@ -17,6 +17,9 @@ class ConfigSchema(BaseModel):
     ddp: bool | None = Field(
         None, description="Enable DistributedDataParallel if true, auto-detect if null"
     )
+    balance_classes: bool = Field(
+        False, description="Apply class weighting during model training"
+    )
     pred_cache_size: int = Field(
         256, ge=0, description="Maximum entries for prediction cache"
     )
