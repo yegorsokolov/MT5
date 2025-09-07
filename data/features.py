@@ -24,6 +24,7 @@ from utils import load_config
 from analysis import feature_gate
 from analysis.data_lineage import log_lineage
 from .expectations import validate_dataframe
+from .multitimeframe import aggregate_timeframes
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,12 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     drop low-importance or heavy features for the current capability tier and
     market regime, ensuring consistent behaviour across runs.
     """
+
+    try:
+        mtf = aggregate_timeframes(df, ["1min", "15min", "1h"]).drop(columns=["Timestamp"])
+        df = pd.concat([df, mtf], axis=1)
+    except Exception:
+        logger.debug("multi-timeframe aggregation failed", exc_info=True)
 
     for compute in get_feature_pipeline():
         prev_cols = set(df.columns)
