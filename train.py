@@ -12,7 +12,7 @@ import math
 import torch
 from sklearn.metrics import classification_report
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import TimeSeriesSplit
+from analysis.purged_cv import PurgedTimeSeriesSplit
 from lightgbm import LGBMClassifier
 from analytics import mlflow_client as mlflow
 from datetime import datetime
@@ -371,7 +371,9 @@ def main(
             pipe.named_steps["scaler"].save(scaler_path)
         return 0.0
 
-    tscv = TimeSeriesSplit(n_splits=cfg.get("n_splits", 5))
+    tscv = PurgedTimeSeriesSplit(
+        n_splits=cfg.get("n_splits", 5), embargo=cfg.get("max_horizon", 0)
+    )
     all_preds: list[int] = []
     all_true: list[int] = []
     final_pipe: Pipeline | None = None
