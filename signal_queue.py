@@ -7,10 +7,18 @@ from typing import Any, AsyncGenerator, Dict
 
 import logging
 import pandas as pd
+import numpy as np
 
 from services.message_bus import Topics, get_message_bus, MessageBus
 
 from analysis import pipeline_anomaly
+
+try:  # pragma: no cover - optional dependency
+    from models import residual_stacker as _residual_stacker
+except Exception:  # pragma: no cover - residual stacking is optional
+    _residual_stacker = None
+
+_STACKER_CACHE: Dict[str, Any] = {}
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +56,43 @@ def _is_empty(df: pd.DataFrame) -> bool:
 
 
 def _validate(df: pd.DataFrame) -> bool:
-    return pipeline_anomaly.validate(df) if hasattr(df, "columns") else True
+    try:
+        return pipeline_anomaly.validate(df) if hasattr(df, "columns") else True
+    except Exception:  # pragma: no cover - best effort
+        logger.exception("Pipeline validation failed")
+        return True
+
+
+def _apply_residual(df: pd.DataFrame) -> pd.DataFrame:
+    """Add residual stacker predictions to ``df`` when available."""
+
+    if _residual_stacker is None:
+        return df
+    cols = getattr(df, "columns", None)
+    if cols is None or "pred" not in cols or "features" not in cols:
+        return df
+
+    model_name = df.get("model_name")
+    if model_name is None:
+        name = "default"
+    elif isinstance(model_name, pd.Series):
+        name = model_name.iloc[0]
+    else:
+        name = str(model_name)
+
+    model = _STACKER_CACHE.get(name)
+    if model is None:
+        model = _residual_stacker.load(name)
+        _STACKER_CACHE[name] = model
+    if model is None:
+        return df
+
+    feats = np.vstack(df["features"].to_numpy())
+    base = df["pred"].to_numpy()
+    residual = _residual_stacker.predict(feats, base, model)
+    df = df.copy()
+    df["pred"] = base + residual
+    return df.drop(columns=["features"], errors="ignore")
 
 
 def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
@@ -56,6 +100,7 @@ def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> N
 
     if _is_empty(df):
         return
+    df = _apply_residual(df)
     if not _validate(df):
         logger.warning("Pipeline anomaly detected; dropping batch")
         return
@@ -75,6 +120,7 @@ async def publish_dataframe_async(
 
     if _is_empty(df):
         return
+    df = _apply_residual(df)
     if not _validate(df):
         logger.warning("Pipeline anomaly detected; dropping batch")
         return
