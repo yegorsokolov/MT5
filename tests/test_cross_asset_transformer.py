@@ -10,7 +10,14 @@ from models.cross_asset_transformer import CrossAssetTransformer
 
 def test_forward_shape() -> None:
     model = CrossAssetTransformer(
-        input_dim=4, n_symbols=3, d_model=8, nhead=2, num_layers=1
+        input_dim=4,
+        n_symbols=3,
+        d_model=8,
+        nhead=2,
+        num_layers=1,
+        dim_feedforward=16,
+        dropout=0.2,
+        layer_norm=True,
     )
     x = torch.randn(2, 3, 5, 4)
     out = model(x)
@@ -37,7 +44,16 @@ def test_cross_asset_improves_validation() -> None:
     train_x, train_y = x[:48], y[:48]
     val_x, val_y = x[48:], y[48:]
 
-    model = CrossAssetTransformer(feat, symbols, d_model=8, nhead=2, num_layers=1)
+    model = CrossAssetTransformer(
+        feat,
+        symbols,
+        d_model=8,
+        nhead=2,
+        num_layers=1,
+        dim_feedforward=16,
+        dropout=0.0,
+        layer_norm=True,
+    )
     baseline = PerSymbolLinear(seq_len, feat)
     opt = torch.optim.Adam(model.parameters(), lr=0.01)
     opt_b = torch.optim.Adam(baseline.parameters(), lr=0.01)
