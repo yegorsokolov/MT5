@@ -18,6 +18,7 @@ from utils.secret_manager import SecretManager
 from pathlib import Path
 import uvicorn
 from utils import update_config
+from utils.graceful_exit import graceful_exit
 import socket
 import time
 import datetime
@@ -109,7 +110,7 @@ async def _handle_resource_breach(reason: str) -> None:
     logger.error("Resource watchdog triggered: %s", reason)
     RESOURCE_RESTARTS.inc()
     send_alert(f"Resource watchdog triggered: {reason}")
-    os._exit(1)
+    await graceful_exit()
 
 
 API_KEY = SecretManager().get_secret("API_KEY")

@@ -17,6 +17,7 @@ from brokers import mt5_direct
 from utils import load_config
 from execution import ExecutionEngine, place_order
 from utils.resource_monitor import monitor
+from utils.graceful_exit import graceful_exit
 
 try:
     from utils.alerting import send_alert
@@ -163,7 +164,7 @@ async def _handle_resource_breach(reason: str) -> None:
     logger.error("Resource watchdog triggered: %s", reason)
     RESOURCE_RESTARTS.inc()
     send_alert(f"Resource watchdog triggered: {reason}")
-    os._exit(1)
+    await graceful_exit()
 
 
 async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
@@ -238,7 +239,9 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
                 record_metric("tick_anomaly_rate", rate, tags={"symbol": symbol})
                 send_alert(f"{symbol} tick anomaly rate {rate:.2%}")
             if not pipeline_anomaly.validate(df):
-                logger.warning("Pipeline anomaly detected for %s ticks; dropping batch", symbol)
+                logger.warning(
+                    "Pipeline anomaly detected for %s ticks; dropping batch", symbol
+                )
                 return pd.DataFrame()
             _ticks_counter.add(len(df))
             return df
