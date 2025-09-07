@@ -31,6 +31,7 @@ from log_utils import setup_logging, log_exceptions
 from signal_queue import get_signal_backend, publish_dataframe_async
 from data.sanitize import sanitize_ticks
 from data.feature_scaler import FeatureScaler
+from event_store.event_writer import record as record_event
 from metrics import (
     RECONNECT_COUNT,
     FEATURE_ANOMALIES,
@@ -250,6 +251,8 @@ async def generate_features(context: pd.DataFrame) -> pd.DataFrame:
         if context.empty:
             return pd.DataFrame()
         df = await asyncio.to_thread(make_features, context)
+        for row in df.to_dict(orient="records"):
+            record_event("feature", row)
         return df
 
 
