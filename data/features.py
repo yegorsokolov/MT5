@@ -72,6 +72,31 @@ def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add cyclical time encodings to ``df``.
+
+    The following columns are appended based on the ``Timestamp`` column:
+
+    - ``hour_of_day_sin`` / ``hour_of_day_cos``: Sine and cosine transforms
+      of the hour within the day.
+    - ``day_of_week_sin`` / ``day_of_week_cos``: Sine and cosine transforms of
+      the day of week where Monday=0.
+    """
+
+    if "Timestamp" not in df.columns:
+        return df
+
+    times = pd.to_datetime(df["Timestamp"], utc=True)
+    hours = times.dt.hour + times.dt.minute / 60.0
+    df = df.copy()
+    df["hour_of_day_sin"] = np.sin(2 * np.pi * hours / 24)
+    df["hour_of_day_cos"] = np.cos(2 * np.pi * hours / 24)
+    dow = times.dt.dayofweek
+    df["day_of_week_sin"] = np.sin(2 * np.pi * dow / 7)
+    df["day_of_week_cos"] = np.cos(2 * np.pi * dow / 7)
+    return df
+
+
 def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
     """Merge alternative datasets into ``df``.
 
@@ -187,6 +212,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         df = pd.concat([df, mtf], axis=1)
     except Exception:
         logger.debug("multi-timeframe aggregation failed", exc_info=True)
+
+    df = add_time_features(df)
 
     for compute in get_feature_pipeline():
         prev_cols = set(df.columns)
@@ -489,6 +516,7 @@ __all__ = [
     "add_economic_calendar_features",
     "add_news_sentiment_features",
     "add_cross_asset_features",
+    "add_time_features",
     "make_features",
     "make_features_memmap",
     "compute_rsi",
