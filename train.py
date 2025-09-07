@@ -73,6 +73,15 @@ def _register_clf(clf: LGBMClassifier) -> None:
     _ACTIVE_CLFS.append(clf)
 
 
+def _lgbm_params(cfg: dict) -> dict:
+    """Extract LightGBM hyper-parameters from config."""
+    return {
+        k: cfg[k]
+        for k in ("num_leaves", "learning_rate", "max_depth")
+        if k in cfg
+    }
+
+
 def _subscribe_cpu_updates(cfg: dict) -> None:
     async def _watch() -> None:
         q = monitor.subscribe()
@@ -282,6 +291,39 @@ def main(
                 X = pd.concat([X, df_pseudo[features]], ignore_index=True)
                 y = pd.concat([y, df_pseudo["pseudo_label"]], ignore_index=True)
 
+    if cfg.get("tune"):
+        from tuning.tuning import tune_lightgbm
+
+        def train_trial(params: dict, _trial) -> float:
+            clf = LGBMClassifier(
+                n_estimators=200,
+                n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
+                random_state=seed,
+                **params,
+            )
+            tscv_inner = PurgedTimeSeriesSplit(
+                n_splits=cfg.get("n_splits", 5),
+                embargo=cfg.get("max_horizon", 0),
+            )
+            scores: list[float] = []
+            for tr_idx, va_idx in tscv_inner.split(X):
+                X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
+                y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
+                clf.fit(
+                    X_tr,
+                    y_tr,
+                    eval_set=[(X_va, y_va)],
+                    early_stopping_rounds=cfg.get("early_stopping_rounds", 50),
+                    verbose=False,
+                )
+                preds = clf.predict(X_va)
+                rep = classification_report(y_va, preds, output_dict=True)
+                scores.append(rep["weighted avg"]["f1-score"])
+            return float(np.mean(scores))
+
+        best_params = tune_lightgbm(train_trial, n_trials=cfg.get("n_trials", 20))
+        cfg.update(best_params)
+
     if cfg.get("meta_train"):
         from analysis.meta_learning import meta_train_lgbm, save_meta_weights
 
@@ -336,6 +378,7 @@ def main(
                         n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
                         random_state=seed,
                         keep_training_booster=True,
+                        **_lgbm_params(cfg),
                     ),
                 )
             )
@@ -435,6 +478,7 @@ def main(
                     n_estimators=200,
                     n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
                     random_state=seed,
+                    **_lgbm_params(cfg),
                 ),
             )
         )
@@ -533,6 +577,7 @@ def main(
                     n_estimators=200,
                     n_jobs=cfg.get("n_jobs") or monitor.capabilities.cpus,
                     random_state=seed,
+                    **_lgbm_params(cfg),
                 ),
             )
         )
