@@ -1,4 +1,6 @@
 import asyncio
+import gc
+import sqlite3
 import sys
 import pathlib
 
@@ -31,3 +33,29 @@ def test_store_version_and_watch(tmp_path):
         assert count == 2
 
     asyncio.run(scenario())
+
+
+def test_close_closes_connection(tmp_path):
+    db_path = tmp_path / "close.db"
+    store = SQLiteConfigStore(str(db_path))
+    store.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        store.conn.execute("SELECT 1")
+
+
+def test_context_manager_closes_connection(tmp_path):
+    db_path = tmp_path / "ctx.db"
+    with SQLiteConfigStore(str(db_path)) as store:
+        store.conn.execute("SELECT 1")
+    with pytest.raises(sqlite3.ProgrammingError):
+        store.conn.execute("SELECT 1")
+
+
+def test_del_closes_connection(tmp_path):
+    db_path = tmp_path / "del.db"
+    store = SQLiteConfigStore(str(db_path))
+    conn = store.conn
+    del store
+    gc.collect()
+    with pytest.raises(sqlite3.ProgrammingError):
+        conn.execute("SELECT 1")
