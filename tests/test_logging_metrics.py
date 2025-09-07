@@ -8,9 +8,13 @@ import sys
 import os
 import base64
 import pytest
+import contextlib
+
+# Ensure real dependencies instead of stubs from tests.conftest
+sys.modules.pop("prometheus_client", None)
+sys.modules.pop("pandas", None)
 from prometheus_client import Counter, Gauge
 import pandas as pd
-import contextlib
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 mlflow_stub = types.SimpleNamespace(
@@ -49,9 +53,14 @@ def setup_tmp_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(log_mod, "LOG_DIR", tmp_path, raising=False)
     monkeypatch.setattr(log_mod, "LOG_FILE", tmp_path / "app.log", raising=False)
     monkeypatch.setattr(log_mod, "TRADE_LOG", tmp_path / "trades.csv", raising=False)
-    monkeypatch.setattr(log_mod, "DECISION_LOG", tmp_path / "decisions.parquet.enc", raising=False)
+    monkeypatch.setattr(
+        log_mod, "DECISION_LOG", tmp_path / "decisions.parquet.enc", raising=False
+    )
     os.environ["DECISION_AES_KEY"] = base64.b64encode(b"0" * 32).decode()
-    from prometheus_client import CollectorRegistry
+    try:
+        from prometheus_client import CollectorRegistry
+    except Exception:  # pragma: no cover - optional dependency
+        CollectorRegistry = lambda *a, **k: object()
 
     registry = CollectorRegistry()
     tc = Counter("tc_test", "trade", registry=registry)
@@ -87,9 +96,21 @@ def test_log_trade_and_exception(monkeypatch, tmp_path):
     path = log_mod.TRADE_LOG
     assert path.exists()
     with open(path) as f:
-        rows = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        assert reader.fieldnames == log_mod.TRADE_COLUMNS
     assert rows[0]["event"] == "buy"
     assert rows[0]["symbol"] == "XAUUSD"
+
+    # New fields should extend the header once
+    log_mod.log_trade("sell", symbol="XAUUSD", price=1.3, foo="bar")
+    with open(path) as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        assert reader.fieldnames == log_mod.TRADE_COLUMNS
+    assert rows[1]["foo"] == "bar"
+    assert rows[0]["foo"] == ""
+
     dpath = log_mod.DECISION_LOG
     assert dpath.exists()
     df = log_mod.read_decisions()
@@ -98,16 +119,16 @@ def test_log_trade_and_exception(monkeypatch, tmp_path):
 
 def test_log_predictions(monkeypatch, tmp_path):
     log_mod, _, _ = setup_tmp_logs(tmp_path, monkeypatch)
-    df = pd.DataFrame({
-        "Timestamp": [pd.Timestamp("2024-01-01")],
-        "Symbol": ["XAUUSD"],
-        "prob": [0.3],
-    })
+    df = pd.DataFrame(
+        {
+            "Timestamp": [pd.Timestamp("2024-01-01")],
+            "Symbol": ["XAUUSD"],
+            "prob": [0.3],
+        }
+    )
     log_mod.log_predictions(df)
     dpath = log_mod.DECISION_LOG
     assert dpath.exists()
     out = log_mod.read_decisions()
     assert out.loc[0, "prob"] == 0.3
     assert out.loc[0, "event"] == "prediction"
-
-
