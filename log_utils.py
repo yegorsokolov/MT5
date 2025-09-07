@@ -20,6 +20,7 @@ from datetime import datetime, UTC
 import pandas as pd
 
 from metrics import ERROR_COUNT, TRADE_COUNT
+
 try:  # optional during tests
     from core import state_sync
 except Exception:  # pragma: no cover - optional dependency
@@ -33,6 +34,21 @@ LOG_FILE = LOG_DIR / "app.log"
 TRADE_LOG = LOG_DIR / "trades.csv"
 DECISION_LOG = LOG_DIR / "decisions.parquet.enc"
 TRADE_HISTORY = LOG_DIR / "trade_history.parquet"
+
+# Standard column order for the trade CSV file.  New fields are appended to
+# this list when first encountered to keep the header stable.
+TRADE_COLUMNS = [
+    "timestamp",
+    "event",
+    "symbol",
+    "price",
+    "qty",
+    "order_id",
+    "pnl",
+    "exit_time",
+    "model",
+    "regime",
+]
 
 
 class JsonFormatter(logging.Formatter):
@@ -156,7 +172,11 @@ def setup_logging() -> logging.Logger:
     except Exception:
         cfg = {}
 
-    url = cfg.get("log_forward", {}).get("url") if isinstance(cfg.get("log_forward"), dict) else None
+    url = (
+        cfg.get("log_forward", {}).get("url")
+        if isinstance(cfg.get("log_forward"), dict)
+        else None
+    )
     if url and _is_reachable(url):  # pragma: no branch - simple check
         parsed = urlparse(url)
         handler: logging.Handler | None = None
@@ -201,16 +221,39 @@ def log_exceptions(func):
 
 
 def log_trade(event: str, **fields) -> None:
-    """Append a trade event to the CSV log and decision store."""
-    header_needed = not TRADE_LOG.exists()
+    """Append a trade event to the CSV log and decision store.
+
+    The trade CSV uses columns defined in :data:`TRADE_COLUMNS` with the
+    order shown below. Standard columns are::
+
+        timestamp, event, symbol, price, qty, order_id, pnl, exit_time, model, regime
+
+    When additional fields are provided, they are appended to the header
+    once and subsequent writes preserve the expanded order.
+    """
+
     row = {"timestamp": datetime.now(UTC).isoformat(), "event": event}
     row.update(fields)
+
+    # Add any new fields to the global column list and rewrite header if needed
+    new_cols = [c for c in row if c not in TRADE_COLUMNS]
+    if new_cols:
+        TRADE_COLUMNS.extend(new_cols)
+        if TRADE_LOG.exists():
+            with open(TRADE_LOG, newline="") as f:
+                existing_rows = list(csv.DictReader(f))
+            with open(TRADE_LOG, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=TRADE_COLUMNS)
+                writer.writeheader()
+                for r in existing_rows:
+                    writer.writerow({k: r.get(k, "") for k in TRADE_COLUMNS})
+
+    header_needed = not TRADE_LOG.exists()
     with open(TRADE_LOG, "a", newline="") as f:
-        cols = list(row.keys())
-        writer = csv.DictWriter(f, fieldnames=cols)
+        writer = csv.DictWriter(f, fieldnames=TRADE_COLUMNS)
         if header_needed:
             writer.writeheader()
-        writer.writerow(row)
+        writer.writerow({k: row.get(k, "") for k in TRADE_COLUMNS})
     TRADE_COUNT.inc()
     log_decision(pd.DataFrame([row]))
 
