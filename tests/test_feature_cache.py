@@ -54,6 +54,35 @@ def _import_features(monkeypatch):
     sys.modules["sklearn.decomposition"] = sklearn_stub.decomposition
     sys.modules["sklearn.feature_selection"] = sklearn_stub.feature_selection
 
+    stub_events = types.ModuleType("data.events")
+    stub_events.get_events = lambda *a, **k: pd.DataFrame()
+    sys.modules["data.events"] = stub_events
+
+    stub_history = types.ModuleType("data.history")
+    for name in [
+        "load_history_from_urls",
+        "load_history_mt5",
+        "load_history_config",
+        "load_history",
+        "load_history_parquet",
+        "load_history_memmap",
+        "save_history_parquet",
+        "load_multiple_histories",
+    ]:
+        setattr(stub_history, name, lambda *a, **k: pd.DataFrame())
+    sys.modules["data.history"] = stub_history
+
+    stub_expectations = types.ModuleType("data.expectations")
+    stub_expectations.validate_dataframe = lambda df, name: df
+    sys.modules["data.expectations"] = stub_expectations
+
+    stub_graph = types.ModuleType("data.graph_builder")
+    stub_graph.build_correlation_graph = lambda *a, **k: None
+    stub_graph.build_rolling_adjacency = lambda *a, **k: None
+    sys.modules["data.graph_builder"] = stub_graph
+
+    sys.modules["analysis.data_lineage"] = types.SimpleNamespace(log_lineage=lambda *a, **k: None)
+
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     sys.modules.pop("data", None)
     sys.modules.pop("data.features", None)
@@ -105,3 +134,22 @@ def test_make_features_downcasts(monkeypatch):
     assert optimized_mem < upcast_mem
     round_trip = feature_mod.optimize_dtypes(upcast.copy())
     pd.testing.assert_frame_equal(result, round_trip)
+
+
+def test_multi_timeframe_columns_cacheable(monkeypatch, tmp_path):
+    feature_mod = _import_features(monkeypatch)
+    df = pd.DataFrame(
+        {
+            "Timestamp": pd.date_range("2020-01-01", periods=10, freq="min"),
+            "Bid": np.linspace(1.0, 2.0, 10),
+            "Ask": np.linspace(1.0001, 2.0001, 10),
+        }
+    )
+    result = feature_mod.make_features(df)
+    assert "Bid_15m_mean" in result.columns
+    assert result["Bid_15m_mean"].dtype == np.float32
+    cache_path = tmp_path / "feat.pkl"
+    result.to_pickle(cache_path)
+    loaded = pd.read_pickle(cache_path)
+    assert "Bid_15m_mean" in loaded.columns
+    pd.testing.assert_series_equal(result["Bid_15m_mean"], loaded["Bid_15m_mean"])
