@@ -99,24 +99,48 @@ def _apply_residual(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["features"], errors="ignore")
 
 
-def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
-    """Synchronously publish each row of ``df`` to the signals topic."""
+def _prepare_rows(df: pd.DataFrame) -> list[Dict[str, Any]]:
+    """Return processed rows ready for publishing.
+
+    Shared between synchronous and asynchronous publishers.  The function
+    performs residual stacking, pipeline validation and wraps credible
+    intervals when present.  Any generated rows are recorded via
+    :func:`event_store.event_writer.record`.
+    """
 
     if _is_empty(df):
-        return
+        return []
     df = _apply_residual(df)
     if not _validate(df):
         logger.warning("Pipeline anomaly detected; dropping batch")
-        return
+        return []
     rows = [_wrap_ci(r) for r in df.to_dict(orient="records")]
     for row in rows:
         record_event("prediction", row)
+    return rows
 
-    async def _pub() -> None:
-        for row in rows:
-            await bus.publish(Topics.SIGNALS, row)
 
-    asyncio.run(_pub())
+async def publish_rows(bus: MessageBus, rows: list[Dict[str, Any]]) -> None:
+    """Publish ``rows`` to the signals topic."""
+
+    for row in rows:
+        await bus.publish(Topics.SIGNALS, row)
+
+
+def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
+    """Synchronously publish each row of ``df`` to the signals topic."""
+
+    rows = _prepare_rows(df)
+    if not rows:
+        return
+
+    coro = publish_rows(bus, rows)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(coro)
+    else:
+        loop.create_task(coro)
 
 
 async def publish_dataframe_async(
@@ -124,17 +148,10 @@ async def publish_dataframe_async(
 ) -> None:
     """Asynchronously publish each row of ``df`` to the signals topic."""
 
-    if _is_empty(df):
+    rows = _prepare_rows(df)
+    if not rows:
         return
-    df = _apply_residual(df)
-    if not _validate(df):
-        logger.warning("Pipeline anomaly detected; dropping batch")
-        return
-    rows = [_wrap_ci(r) for r in df.to_dict(orient="records")]
-    for row in rows:
-        record_event("prediction", row)
-    for row in rows:
-        await bus.publish(Topics.SIGNALS, row)
+    await publish_rows(bus, rows)
 
 
 async def iter_messages(
