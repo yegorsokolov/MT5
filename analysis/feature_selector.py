@@ -18,6 +18,7 @@ def select_features(
     df: pd.DataFrame,
     target: Sequence[float] | pd.Series,
     top_k: int | None = None,
+    corr_threshold: float | None = 0.95,
 ) -> list[str]:
     """Select informative features using L1 regularization or SHAP.
 
@@ -31,6 +32,10 @@ def select_features(
         If provided and SHAP is available, keep only the ``top_k`` features
         ranked by mean absolute SHAP value.  Otherwise, features with non-zero
         L1 coefficients are returned.
+    corr_threshold:
+        If provided, compute the pairwise correlation matrix and drop one of
+        any feature pairs whose absolute correlation exceeds this threshold
+        before fitting the model.  ``None`` disables this filtering.
     """
 
     X = df.copy()
@@ -39,8 +44,17 @@ def select_features(
     X = data[df.columns]
     y = data["target"]
 
+    if corr_threshold is not None and len(X.columns) > 1:
+        corr_matrix = X.corr().abs()
+        upper = corr_matrix.where(
+            np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+        )
+        to_drop = [col for col in upper.columns if (upper[col] > corr_threshold).any()]
+        if to_drop:
+            X = X.drop(columns=to_drop)
+
     if y.nunique() < 2:
-        return list(df.columns)
+        return list(X.columns)
 
     model = LogisticRegression(
         penalty="l1",
