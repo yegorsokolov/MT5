@@ -76,11 +76,7 @@ def _register_clf(clf: LGBMClassifier) -> None:
 
 def _lgbm_params(cfg: dict) -> dict:
     """Extract LightGBM hyper-parameters from config."""
-    return {
-        k: cfg[k]
-        for k in ("num_leaves", "learning_rate", "max_depth")
-        if k in cfg
-    }
+    return {k: cfg[k] for k in ("num_leaves", "learning_rate", "max_depth") if k in cfg}
 
 
 def _subscribe_cpu_updates(cfg: dict) -> None:
@@ -386,6 +382,8 @@ def main(
             pipe = Pipeline(steps)
         _register_clf(pipe.named_steps["clf"])
         n_batches = math.ceil(len(X) / batch_size)
+        t_max = len(y) - 1
+        half_life = cfg.get("time_decay_half_life")
         for batch_idx in range(start_batch, n_batches):
             start = batch_idx * batch_size
             end = min(len(X), start + batch_size)
@@ -403,7 +401,15 @@ def main(
                 else (clf.booster_ if (batch_idx > 0 or ckpt) else None)
             )
             fit_kwargs = {"init_model": init_model}
-            if cfg.get("balance_classes"):
+            if half_life:
+                decay = 0.5 ** ((t_max - np.arange(start, end)) / half_life)
+                if cfg.get("balance_classes"):
+                    cw = compute_sample_weight("balanced", yb)
+                    sw = cw * decay
+                else:
+                    sw = decay
+                fit_kwargs["sample_weight"] = sw
+            elif cfg.get("balance_classes"):
                 sw = compute_sample_weight("balanced", yb)
                 fit_kwargs["sample_weight"] = sw
             clf.fit(Xb, yb, **fit_kwargs)
@@ -498,7 +504,17 @@ def main(
             fit_params["clf__early_stopping_rounds"] = esr
         if donor_booster is not None:
             fit_params["clf__init_model"] = donor_booster
-        if cfg.get("balance_classes"):
+        half_life = cfg.get("time_decay_half_life")
+        t_max = len(y) - 1
+        if half_life:
+            decay = 0.5 ** ((t_max - train_idx) / half_life)
+            if cfg.get("balance_classes"):
+                cw = compute_sample_weight("balanced", y_train)
+                sw = cw * decay
+            else:
+                sw = decay
+            fit_params["clf__sample_weight"] = sw
+        elif cfg.get("balance_classes"):
             sw = compute_sample_weight("balanced", y_train)
             fit_params["clf__sample_weight"] = sw
         pipe.fit(X_train, y_train, **fit_params)
@@ -544,7 +560,9 @@ def main(
             final_pipe = pipe
             X_train_final = X_train
 
-    overall_cov = evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
+    overall_cov = (
+        evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
+    )
     mlflow.log_metric("interval_coverage", overall_cov)
     logger.info("Overall interval coverage: %.3f", overall_cov)
     pred_df = pd.DataFrame(
