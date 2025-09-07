@@ -561,6 +561,9 @@ def main(
                 d_model=cfg.get("d_model", 64),
                 nhead=cfg.get("nhead", 4),
                 num_layers=cfg.get("num_layers", 2),
+                dim_feedforward=cfg.get("dim_feedforward"),
+                dropout=cfg.get("dropout", 0.1),
+                layer_norm=cfg.get("layer_norm", False),
             ).to(device)
         elif use_tft:
             tft_cfg = TFTConfig(
