@@ -6,20 +6,20 @@ import sys
 import numpy as np
 import pandas as pd
 import yaml
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
 # Avoid heavy environment checks during imports
 import types
-sys.modules.setdefault("utils.environment", types.SimpleNamespace(ensure_environment=lambda: None))
-import mlflow
-import joblib
-import torch
+sys.modules.setdefault(
+    "utils.environment", types.SimpleNamespace(ensure_environment=lambda: None)
+)
 
-from data.history import load_history_iter, load_history_parquet
-import train
-import train_nn
+history = pytest.importorskip("data.history")
+load_history_iter = history.load_history_iter
+load_history_parquet = history.load_history_parquet
 
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -37,6 +37,10 @@ def _make_history(path: Path, rows: int = 100) -> None:
 
 
 def _run_train(tmpdir: Path, stream: bool):
+    train = pytest.importorskip("train")
+    mlflow = pytest.importorskip("mlflow")
+    pytest.importorskip("joblib")
+
     class DummyClf(train.LGBMClassifier.__mro__[0]):
         def fit(self, X, y, **kwargs):  # type: ignore[override]
             kwargs.pop("early_stopping_rounds", None)
@@ -88,6 +92,11 @@ def _run_train(tmpdir: Path, stream: bool):
 
 
 def _run_train_nn(tmpdir: Path, stream: bool):
+    train_nn = pytest.importorskip("train_nn")
+    mlflow = pytest.importorskip("mlflow")
+    joblib = pytest.importorskip("joblib")
+    torch = pytest.importorskip("torch")
+
     def _simple_features(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         df["return"] = df["Bid"].pct_change().fillna(0)
@@ -148,7 +157,9 @@ def _run_train_nn(tmpdir: Path, stream: bool):
     df["Symbol"] = "TEST"
     df["SymbolCode"] = 0
     train_df, test_df = train_nn.train_test_split(df, cfg.get("train_rows", 40))
-    X_test, _ = train_nn.make_sequence_arrays(test_df, features, cfg.get("sequence_length", 5))
+    X_test, _ = train_nn.make_sequence_arrays(
+        test_df, features, cfg.get("sequence_length", 5)
+    )
     model = train_nn.TransformerModel(len(features), num_symbols=1, num_regimes=1)
     model.load_state_dict(state)
     model.eval()

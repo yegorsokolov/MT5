@@ -269,10 +269,22 @@ def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
 def load_history_iter(path: Path, chunk_size: int):
     """Yield history dataframes from ``path`` in ``chunk_size`` rows.
 
+    Parameters
+    ----------
+    path : Path
+        Location of a Parquet file or directory of partitioned Parquet
+        datasets.
+    chunk_size : int
+        Number of rows to include in each yielded chunk.
+
+    Yields
+    ------
+    pandas.DataFrame
+        Consecutive slices of the history with ``Timestamp`` normalized to
+        naive ``datetime`` objects.
+
     This utility streams Parquet data using ``pyarrow.dataset`` if available,
-    falling back to ``pandas.read_parquet`` with ``chunksize``. Each yielded
-    chunk has the ``Timestamp`` column normalized to naive ``datetime`` objects
-    for consistency with other loaders.
+    falling back to ``pandas.read_parquet`` with ``chunksize``.
     """
 
     usage = getattr(monitor, "latest_usage", {})
