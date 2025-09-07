@@ -7,6 +7,8 @@ backtesting machine learning driven trading strategies on MetaTrader 5.
 
 Detailed configuration options are documented in [docs/config.md](docs/config.md).
 
+Commands used by the orchestrator to (re)start helper services are configurable via a `service_cmds` mapping in `config.yaml` or by setting the `SERVICE_COMMANDS` environment variable.
+
 The solution is split into two components:
 
 1. **Python toolkit** — handles data preprocessing, feature engineering, machine

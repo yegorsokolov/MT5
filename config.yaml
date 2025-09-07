@@ -8,6 +8,13 @@ num_workers: null
 pred_cache_size: 256
 pred_cache_policy: lru
 plugin_cache_ttl: 0
+service_cmds:
+  signal_queue:
+    - python
+    - signal_queue.py
+  realtime_train:
+    - python
+    - realtime_train.py
 log_forward:
   url: ""
 mlflow:

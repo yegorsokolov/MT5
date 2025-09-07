@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import subprocess
@@ -9,9 +10,12 @@ from typing import Callable
 try:  # pragma: no cover - alerting optional in tests
     from utils.alerting import send_alert
 except Exception:  # pragma: no cover - fallback stub
+
     def send_alert(msg: str) -> None:  # type: ignore
         return
 
+
+from utils import load_config
 from utils.resource_monitor import ResourceMonitor, monitor
 import model_registry
 import plugins  # noqa: F401 - imported for side effects
@@ -26,9 +30,13 @@ from strategy.shadow_runner import ShadowRunner
 from strategy.evolution_lab import EvolutionLab
 
 
-def _compute_quiet_windows(
-    agg: NewsAggregator, minutes: int
-) -> list[dict]:
+DEFAULT_SERVICE_CMDS: dict[str, list[str]] = {
+    "signal_queue": ["python", "signal_queue.py"],
+    "realtime_train": ["python", "realtime_train.py"],
+}
+
+
+def _compute_quiet_windows(agg: NewsAggregator, minutes: int) -> list[dict]:
     """Return quiet trading windows around high-impact events."""
     now = datetime.now(timezone.utc)
     try:
@@ -49,7 +57,12 @@ def _compute_quiet_windows(
                 currencies = [cur] if cur else []
             symbols = ev.get("symbols", []) or []
             windows.append(
-                {"start": start, "end": end, "currencies": currencies, "symbols": symbols}
+                {
+                    "start": start,
+                    "end": end,
+                    "currencies": currencies,
+                    "symbols": symbols,
+                }
             )
     return windows
 
@@ -61,14 +74,25 @@ class Orchestrator:
         self.logger = logging.getLogger(__name__)
         self.monitor = mon
         # Disable automatic refresh; orchestrator controls timing
-        self.registry = model_registry.ModelRegistry(monitor=self.monitor, auto_refresh=False)
+        self.registry = model_registry.ModelRegistry(
+            monitor=self.monitor, auto_refresh=False
+        )
         self.canary = CanaryManager(self.registry)
         self.checkpoint = None
         # mapping of service -> command used to (re)start it
-        self._service_cmds: dict[str, list[str]] = {
-            "signal_queue": ["python", "signal_queue.py"],
-            "realtime_train": ["python", "realtime_train.py"],
-        }
+        env_cmds = os.getenv("SERVICE_COMMANDS")
+        cfg_cmds: dict[str, list[str]] = {}
+        if env_cmds:
+            try:
+                cfg_cmds = json.loads(env_cmds)
+            except Exception:
+                self.logger.exception("Invalid SERVICE_COMMANDS; using defaults")
+        else:
+            try:
+                cfg_cmds = load_config().get("service_cmds") or {}
+            except Exception:
+                cfg_cmds = {}
+        self._service_cmds = {**DEFAULT_SERVICE_CMDS, **cfg_cmds}
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
         self._shadow_tasks: dict[str, asyncio.Task] = {}
         self.lab = EvolutionLab(self._base_strategy(), register=self.register_strategy)
@@ -93,7 +117,9 @@ class Orchestrator:
         previous = self.monitor.capability_tier
         while True:
             tier = await queue.get()
-            if model_registry.TIERS.get(tier, 0) > model_registry.TIERS.get(previous, 0):
+            if model_registry.TIERS.get(tier, 0) > model_registry.TIERS.get(
+                previous, 0
+            ):
                 self.logger.info("Higher-tier resources detected: %s", tier)
                 self.registry.refresh()
                 try:
