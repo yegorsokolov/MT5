@@ -38,6 +38,7 @@ models/*
 !models/hier_forecast.py
 !models/exit_survival.py
 !models/news_meta_label.py
+!models/cross_asset_transformer.py
 !models/ftrl.py
 !models/feature_autoencoder.py
 !models/orderbook_gnn.py

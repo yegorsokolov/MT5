@@ -31,6 +31,7 @@ from models.contrastive_encoder import initialize_model_with_contrastive
 from models.slimmable_network import SlimmableNetwork
 from analysis.feature_selector import select_features
 from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
+from models.cross_asset_transformer import CrossAssetTransformer
 from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
 from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
@@ -562,10 +563,21 @@ def main(
 
         quantiles = cfg.get("quantiles", [0.1, 0.5, 0.9])
         use_tft = cfg.get("use_tft", False) and TIERS.get(tier, 0) >= TIERS["gpu"]
+        use_cross_asset = (
+            cfg.get("cross_asset_transformer") and TIERS.get(tier, 0) >= TIERS["gpu"]
+        )
         horizons = cfg.get("horizons")
 
         if horizons and TIERS.get(tier, 0) >= TIERS["standard"]:
             model = HierarchicalForecaster(len(features), horizons).to(device)
+        elif use_cross_asset:
+            model = CrossAssetTransformer(
+                len(features),
+                num_symbols or 1,
+                d_model=cfg.get("d_model", 64),
+                nhead=cfg.get("nhead", 4),
+                num_layers=cfg.get("num_layers", 2),
+            ).to(device)
         elif use_tft:
             tft_cfg = TFTConfig(
                 static_size=0,
@@ -603,12 +615,15 @@ def main(
             if isinstance(model, HierarchicalForecaster):
                 return
             if isinstance(model, SlimmableNetwork):
+
                 async def _watch() -> None:
                     q = monitor.subscribe()
                     nonlocal model
                     while True:
                         await q.get()
-                        new_width = select_width_multiplier(list(model.width_multipliers))
+                        new_width = select_width_multiplier(
+                            list(model.width_multipliers)
+                        )
                         if new_width != model.active_multiplier:
                             model.set_width(new_width)
                             architecture_history.append(
@@ -617,9 +632,7 @@ def main(
                                     "width_mult": new_width,
                                 }
                             )
-                            logger.info(
-                                "Adjusted width multiplier to %s", new_width
-                            )
+                            logger.info("Adjusted width multiplier to %s", new_width)
 
                 try:
                     loop = asyncio.get_running_loop()
@@ -789,7 +802,9 @@ def main(
                 if trend == "explode":
                     for group in optim.param_groups:
                         group["lr"] *= cfg.get("grad_lr_decay", 0.5)
-                    if min(g["lr"] for g in optim.param_groups) < cfg.get("min_lr", 1e-6):
+                    if min(g["lr"] for g in optim.param_groups) < cfg.get(
+                        "min_lr", 1e-6
+                    ):
                         logger.error("Gradient explosion; aborting training")
                         grad_monitor.plot("nn")
                         return 0.0
@@ -1214,6 +1229,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Include pseudo-labeled samples during training",
     )
+    parser.add_argument(
+        "--cross-asset-transformer",
+        action="store_true",
+        help="Enable cross-asset transformer when resources permit",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.ddp:
@@ -1234,6 +1254,8 @@ if __name__ == "__main__":
         cfg["fine_tune"] = True
     if args.use_pseudo_labels:
         cfg["use_pseudo_labels"] = True
+    if args.cross_asset_transformer:
+        cfg["cross_asset_transformer"] = True
     if args.tune:
         from tuning.distributed_search import tune_transformer
 
