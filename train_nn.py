@@ -1257,9 +1257,9 @@ if __name__ == "__main__":
     if args.cross_asset_transformer:
         cfg["cross_asset_transformer"] = True
     if args.tune:
-        from tuning.distributed_search import tune_transformer
+        from tuning.bayesian_search import run_search
 
-        tune_transformer(cfg)
+        run_search(lambda c, t: launch(c), cfg)
     elif args.evo_search:
         from copy import deepcopy
         from tuning.evolutionary_search import run_evolutionary_search
