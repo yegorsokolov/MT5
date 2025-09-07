@@ -6,6 +6,9 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 import signal_queue
+import scheduler as scheduler_mod
+
+scheduler_mod.start_scheduler = lambda: None
 import risk_manager
 
 
@@ -27,6 +30,20 @@ def test_async_publish_and_iter():
     msg = asyncio.run(asyncio.wait_for(gen.__anext__(), timeout=1))
     assert msg["prob"] == 0.7
     assert pytest.approx(msg["confidence"]) == 0.8
+
+
+def test_publish_inside_running_loop():
+    queue = signal_queue.get_signal_backend({})
+    df = pd.DataFrame({"Timestamp": ["2023"], "prob": [0.6], "confidence": [0.7]})
+
+    async def runner():
+        signal_queue.publish_dataframe(queue, df)
+        gen = signal_queue.iter_messages(queue)
+        msg = await asyncio.wait_for(gen.__anext__(), timeout=1)
+        assert msg["prob"] == 0.6
+        assert pytest.approx(msg["confidence"]) == 0.7
+
+    asyncio.run(runner())
 
 
 def test_credible_interval_adjust_size():
