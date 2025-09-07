@@ -1,7 +1,34 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 from pydantic import BaseModel, Field, field_validator, ConfigDict
+
+
+class BaseModelConfig(BaseModel):
+    """Configuration for a single ensemble component model."""
+
+    type: str = Field(
+        ..., description="Model type, e.g. lightgbm, cross_asset_transformer, neural_quantile"
+    )
+    params: dict[str, Any] | None = Field(
+        None, description="Optional model hyper-parameters"
+    )
+    features: List[str] | None = Field(
+        None, description="Optional subset of feature columns to use"
+    )
+
+
+class EnsembleConfig(BaseModel):
+    """Configuration for ensemble training."""
+
+    enabled: bool = Field(False, description="Enable training of an ensemble model")
+    base_models: dict[str, BaseModelConfig] = Field(
+        default_factory=dict,
+        description="Mapping of model name to its configuration",
+    )
+    meta_learner: bool = Field(
+        False, description="Train LogisticRegression stacking meta learner"
+    )
 
 
 class ConfigSchema(BaseModel):
@@ -51,6 +78,9 @@ class ConfigSchema(BaseModel):
     mlflow: MLflowConfig | None = Field(
         None,
         description="MLflow tracking configuration including remote server credentials",
+    )
+    ensemble: EnsembleConfig | None = Field(
+        None, description="Ensemble training configuration"
     )
 
     model_config = ConfigDict(extra="allow")
