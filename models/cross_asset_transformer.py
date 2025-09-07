@@ -44,14 +44,25 @@ class CrossAssetTransformer(nn.Module):
         nhead: int = 4,
         num_layers: int = 2,
         output_dim: int = 1,
+        dim_feedforward: int | None = None,
+        dropout: float = 0.1,
+        layer_norm: bool = False,
     ) -> None:
         super().__init__()
         self.n_symbols = n_symbols
         self.input_proj = nn.Linear(input_dim, d_model)
         self.symbol_emb = nn.Embedding(n_symbols, d_model)
         self.pos_enc = PositionalEncoding(d_model)
-        enc_layer = nn.TransformerEncoderLayer(d_model, nhead, batch_first=True)
+        ff_dim = dim_feedforward if dim_feedforward is not None else 4 * d_model
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model,
+            nhead,
+            dim_feedforward=ff_dim,
+            dropout=dropout,
+            batch_first=True,
+        )
         self.encoder = nn.TransformerEncoder(enc_layer, num_layers)
+        self.norm = nn.LayerNorm(d_model) if layer_norm else None
         self.head = nn.Linear(d_model, output_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -70,6 +81,8 @@ class CrossAssetTransformer(nn.Module):
         x = x.reshape(b, s * t, -1)
         x = self.pos_enc(x)
         x = self.encoder(x)
+        if self.norm is not None:
+            x = self.norm(x)
         x = x.reshape(b, s, t, -1)
         return self.head(x[:, :, -1, :])
 
