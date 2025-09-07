@@ -68,6 +68,35 @@ class SQLiteConfigStore:
         self.lock = asyncio.Lock()
         self.subscribers: List[asyncio.Queue[Dict[str, Any]]] = []
 
+    # ------------------------------------------------------------------
+    # Lifecycle helpers
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the underlying SQLite connection."""
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+    def __del__(self) -> None:  # pragma: no cover - called by GC
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "SQLiteConfigStore":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    async def __aenter__(self) -> "SQLiteConfigStore":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
     async def get(self, key: str) -> Dict[str, Any] | None:
         async with self.lock:
             def _get() -> Dict[str, Any] | None:
@@ -211,6 +240,12 @@ async def update_config(model: UpdateModel, user: str = Depends(require_permissi
     return {"success": True, **entry}
 
 
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    """Close the global config store when the app shuts down."""
+    STORE.close()
+
+
 # ---------------------------------------------------------------------------
 # gRPC service
 # ---------------------------------------------------------------------------
@@ -271,7 +306,10 @@ async def serve_grpc(address: str = "[::]:50052") -> None:
     config_pb2_grpc.add_ConfigServiceServicer_to_server(ConfigServicer(), server)
     server.add_insecure_port(address)
     await server.start()
-    await server.wait_for_termination()
+    try:
+        await server.wait_for_termination()
+    finally:
+        STORE.close()
 
 
 # ---------------------------------------------------------------------------
