@@ -10,9 +10,11 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import psutil
 import pytest
 import analytics.metrics_store as ms
+import utils.graceful_exit as gexit
 
 spec = importlib.util.spec_from_file_location(
-    "resource_monitor", Path(__file__).resolve().parents[1] / "utils" / "resource_monitor.py"
+    "resource_monitor",
+    Path(__file__).resolve().parents[1] / "utils" / "resource_monitor.py",
 )
 rm_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rm_mod)
@@ -34,8 +36,10 @@ async def test_watchdog_triggers(monkeypatch):
     monkeypatch.setattr(psutil, "Process", lambda: FakeProc())
 
     calls = []
+
     def fake_record(name, value, tags=None):
         calls.append((name, value))
+
     monkeypatch.setattr(ms, "record_metric", fake_record)
     monkeypatch.setattr(rm_mod, "record_metric", fake_record)
 
@@ -57,3 +61,40 @@ async def test_watchdog_triggers(monkeypatch):
     monitor.stop()
     assert any(c[0] == "resource_restarts" for c in calls)
 
+
+@pytest.mark.asyncio
+async def test_graceful_exit(monkeypatch):
+    """graceful_exit cancels tasks and flushes metrics and logs."""
+
+    metrics_flushed = False
+    logs_flushed = False
+
+    def fake_generate():
+        nonlocal metrics_flushed
+        metrics_flushed = True
+
+    def fake_shutdown():
+        nonlocal logs_flushed
+        logs_flushed = True
+
+    monkeypatch.setattr(gexit, "generate_latest", lambda: fake_generate())
+    monkeypatch.setattr(gexit.logging, "shutdown", lambda: fake_shutdown())
+
+    cancelled = asyncio.Event()
+
+    async def pending():
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    asyncio.create_task(pending())
+    await asyncio.sleep(0)
+
+    with pytest.raises(SystemExit):
+        await gexit.graceful_exit()
+
+    assert cancelled.is_set()
+    assert metrics_flushed
+    assert logs_flushed
