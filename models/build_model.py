@@ -9,6 +9,7 @@ import torch
 from utils.resource_monitor import monitor
 from models.multi_head import MultiHeadTransformer
 from models.graph_net import GraphNet
+from models.ts_masked_encoder import initialize_model_with_ts_masked_encoder
 
 
 def compute_scale_factor(capabilities=None) -> float:
@@ -50,21 +51,26 @@ def build_model(
     num_layers = max(1, int(cfg.get("num_layers", 2) * scale_factor))
 
     if cfg.get("graph_model"):
-        return GraphNet(
+        model = GraphNet(
             input_size,
             hidden_channels=d_model,
             out_channels=1,
             num_layers=num_layers,
         )
-    return MultiHeadTransformer(
-        input_size,
-        num_symbols=num_symbols,
-        d_model=d_model,
-        nhead=nhead,
-        num_layers=num_layers,
-        num_regimes=num_regimes,
-        use_checkpointing=cfg.get("use_checkpointing", False),
-        dropout=cfg.get("dropout", 0.1),
-        ff_dim=cfg.get("ff_dim"),
-        layer_norm=cfg.get("layer_norm", False),
-    )
+    else:
+        model = MultiHeadTransformer(
+            input_size,
+            num_symbols=num_symbols,
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=num_layers,
+            num_regimes=num_regimes,
+            use_checkpointing=cfg.get("use_checkpointing", False),
+            dropout=cfg.get("dropout", 0.1),
+            ff_dim=cfg.get("ff_dim"),
+            layer_norm=cfg.get("layer_norm", False),
+        )
+
+    if cfg.get("use_ts_pretrain"):
+        initialize_model_with_ts_masked_encoder(model)
+    return model
