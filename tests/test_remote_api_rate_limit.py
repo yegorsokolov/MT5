@@ -35,6 +35,7 @@ def load_api(tmp_path, monkeypatch, rate=2):
     sys.modules["risk_manager"] = risk_mod
     sched_mod = types.ModuleType("scheduler")
     sched_mod.start_scheduler = lambda: None
+    sched_mod.stop_scheduler = lambda: None
     sys.modules["scheduler"] = sched_mod
     sys.modules["prometheus_client"] = types.SimpleNamespace(
         Counter=lambda *a, **k: None,
@@ -49,7 +50,10 @@ def load_api(tmp_path, monkeypatch, rate=2):
     env_mod = types.ModuleType("environment")
     env_mod.ensure_environment = lambda: None
     sys.modules["utils.environment"] = env_mod
-    sys.modules["utils"] = types.SimpleNamespace(update_config=lambda *a, **k: None)
+    utils_mod = types.ModuleType("utils")
+    utils_mod.update_config = lambda *a, **k: None
+    sys.modules["utils"] = utils_mod
+    sys.modules["utils.graceful_exit"] = types.SimpleNamespace(graceful_exit=lambda *a, **k: None)
     sys.modules["metrics"] = importlib.import_module("metrics")
     mlflow_mod = types.ModuleType("mlflow")
     mlflow_mod.set_tracking_uri = lambda *a, **k: None
