@@ -29,6 +29,7 @@ from train_rl import (
 from stable_baselines3 import PPO, SAC, A2C
 from sb3_contrib.qrdqn import QRDQN
 from sb3_contrib import TRPO, RecurrentPPO
+
 try:  # optional import for hierarchical PPO
     from sb3_contrib import HierarchicalPPO  # type: ignore
 except Exception:  # pragma: no cover - algorithm may not be available
@@ -42,8 +43,6 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-
-
 def load_models(paths, versions=None):
     """Load multiple models from paths or version identifiers."""
     models = []
@@ -54,9 +53,9 @@ def load_models(paths, versions=None):
             m, meta = model_store.load_model(vid)
             models.append(m)
             if feature_list is None:
-                feature_list = meta.get("features") or meta.get("training_config", {}).get(
-                    "features"
-                )
+                feature_list = meta.get("features") or meta.get(
+                    "training_config", {}
+                ).get("features")
         except FileNotFoundError:
             logger.warning("Model version %s not found", vid)
     for p in paths:
@@ -99,11 +98,21 @@ def meta_transformer_signals(df, features, cfg):
     num_regimes = (
         int(df["market_regime"].nunique()) if "market_regime" in df.columns else None
     )
-    model = MultiHeadTransformer(len(feat), num_symbols=num_symbols, num_regimes=num_regimes).to(device)
+    model = MultiHeadTransformer(
+        len(feat),
+        num_symbols=num_symbols,
+        num_regimes=num_regimes,
+        dropout=0.0,
+        layer_norm=False,
+    ).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
     tier = monitor.capabilities.capability_tier()
     TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
-    sym_code = int(df.get("SymbolCode", pd.Series([0])).iloc[0]) if "SymbolCode" in df.columns else 0
+    sym_code = (
+        int(df.get("SymbolCode", pd.Series([0])).iloc[0])
+        if "SymbolCode" in df.columns
+        else 0
+    )
     if TIERS.get(tier, 0) < TIERS["gpu"]:
         model.prune_heads([sym_code])
     model.eval()
@@ -124,7 +133,10 @@ def rl_signals(df, features, cfg):
     model_path = Path(__file__).resolve().parent / "model_rl.zip"
     model_rllib = Path(__file__).resolve().parent / "model_rllib"
     model_recurrent = (
-        Path(__file__).resolve().parent / "models" / "recurrent_rl" / "recurrent_model.zip"
+        Path(__file__).resolve().parent
+        / "models"
+        / "recurrent_rl"
+        / "recurrent_model.zip"
     )
     model_hierarchical = Path(__file__).resolve().parent / "model_hierarchical.zip"
     algo = cfg.get("rl_algorithm", "PPO").upper()
@@ -439,6 +451,7 @@ def main():
     else:
         base_models: dict[str, Any] = {}
         if models:
+
             def _gbm_predict(data: pd.DataFrame) -> np.ndarray:
                 return np.mean(
                     [m.predict_proba(data[features])[:, 1] for m in models], axis=0
@@ -452,11 +465,14 @@ def main():
             )
 
         if online_model is not None:
+
             def _online_predict(data: pd.DataFrame) -> np.ndarray:
-                return np.array([
-                    online_model.predict_proba_one(row).get(1, 0.0)
-                    for row in data[features].to_dict("records")
-                ])
+                return np.array(
+                    [
+                        online_model.predict_proba_one(row).get(1, 0.0)
+                        for row in data[features].to_dict("records")
+                    ]
+                )
 
             base_models["online"] = _online_predict
 
@@ -524,11 +540,13 @@ def main():
         0.0,
     )
 
-    out = pd.DataFrame({
-        "Timestamp": df["Timestamp"],
-        "Symbol": cfg.get("symbol"),
-        "prob": combined,
-    })
+    out = pd.DataFrame(
+        {
+            "Timestamp": df["Timestamp"],
+            "Symbol": cfg.get("symbol"),
+            "prob": combined,
+        }
+    )
     log_df = df[["Timestamp"] + features].copy()
     log_df["Symbol"] = cfg.get("symbol")
     for name, arr in pred_dict.items():
