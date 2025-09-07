@@ -9,7 +9,7 @@ can be used in tests without heavy dependencies.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Tuple, Any
+from typing import Any, Dict, Iterable, List
 import random
 
 
@@ -81,7 +81,17 @@ class MeanReversionPolicy(ConstantPolicy):
     """Always goes against the trend (negative action)."""
 
     def __init__(self) -> None:
-        super().__init__(-1.0)
+        # The manager controls direction; workers output trade magnitude.
+        super().__init__(1.0)
+
+
+class NewsDrivenPolicy(ConstantPolicy):
+    """Dummy policy reacting to news sentiment with a flat position."""
+
+    def __init__(self) -> None:
+        # Real implementation would use news features.  For tests the policy is
+        # neutral so the manager's choice alone defines direction.
+        super().__init__(0.0)
 
 
 class EpsilonGreedyManager:
@@ -112,12 +122,18 @@ class HierarchicalAgent:
     def __init__(self, manager: Any, workers: Dict[str, BasePolicy]) -> None:
         self.manager = manager
         self.workers = workers
+        # map policy names to ids expected by :class:`HierarchicalTradingEnv`
+        self.policy_to_idx = {name: i for i, name in enumerate(workers)}
+        self.idx_to_policy = {i: name for name, i in self.policy_to_idx.items()}
         self.replay_buffer = ReplayBuffer()
 
     def act(self, obs: Any) -> Dict[str, Any]:
+        """Select a worker policy and return environment compatible action."""
+
         policy_key = self.manager.select_policy(obs)
         action = self.workers[policy_key].act(obs)
-        return {"manager": policy_key, "worker": action}
+        manager_idx = self.policy_to_idx[policy_key]
+        return {"manager": manager_idx, "worker": action}
 
     def store(
         self,
@@ -127,7 +143,12 @@ class HierarchicalAgent:
         next_obs: Any,
         done: bool,
     ) -> None:
-        tr = Transition(obs, action["manager"], action["worker"], reward, next_obs, done)
+        manager_action = action.get("manager")
+        if isinstance(manager_action, int):
+            manager_key = self.idx_to_policy.get(manager_action, str(manager_action))
+        else:
+            manager_key = manager_action
+        tr = Transition(obs, manager_key, action.get("worker"), reward, next_obs, done)
         self.replay_buffer.add(tr)
 
     def train(self, batch_size: int = 32) -> None:
@@ -151,5 +172,6 @@ __all__ = [
     "ConstantPolicy",
     "TrendPolicy",
     "MeanReversionPolicy",
+    "NewsDrivenPolicy",
     "EpsilonGreedyManager",
 ]
