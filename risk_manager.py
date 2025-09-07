@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, TYPE_CHECKING
 import asyncio
 import os
+import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -67,6 +69,8 @@ class RiskManager:
         var_window: int = 100,
         tail_hedger: "TailHedger" | None = None,
         risk_of_ruin_threshold: float = 1.0,
+        risk_of_ruin_downscale: float = 1.0,
+        ruin_downscale_factor: float = 0.5,
         initial_capital: float = 1.0,
         optimizer: RobustOptimizer | None = None,
         tail_threshold: float | None = None,
@@ -93,6 +97,8 @@ class RiskManager:
         self.budget_allocator = BudgetAllocator(initial_capital)
         self.tail_hedger = tail_hedger
         self.risk_of_ruin_threshold = risk_of_ruin_threshold
+        self.risk_of_ruin_downscale = risk_of_ruin_downscale
+        self.ruin_downscale_factor = ruin_downscale_factor
         self.initial_capital = initial_capital
         self.robust_optimizer = optimizer or RobustOptimizer()
         self._regime_pnl_history: Dict[int, Dict[str, List[float]]] = {}
@@ -216,6 +222,8 @@ class RiskManager:
                 )
                 return 0.0
             size *= _IMPACT_BOOST
+        if self.metrics.risk_of_ruin > self.risk_of_ruin_downscale:
+            size *= self.ruin_downscale_factor
         proposed = size * direction
         allowed = self.net_exposure.limit(symbol, proposed)
         if allowed == 0.0:
@@ -321,7 +329,7 @@ class RiskManager:
             self.metrics.var = float(-np.percentile(self._ewma_pnl_history, 1))
             returns = pd.Series(self._ewma_pnl_history) / self.initial_capital
             self.metrics.risk_of_ruin = float(
-                risk_of_ruin(returns, self.initial_capital)
+                risk_of_ruin(returns, self.equity)
             )
             if self._ewma_factor_history and len(self._ewma_factor_history) == len(
                 self._ewma_pnl_history
@@ -370,6 +378,7 @@ class RiskManager:
             record_metric("pnl", pnl, {"bot_id": bot_id})
             record_metric("exposure", self.metrics.exposure)
             record_metric("var_ewma", self.metrics.var)
+            record_metric("risk_of_ruin", self.metrics.risk_of_ruin)
             record_metric("risk_of_ruin_ewma", self.metrics.risk_of_ruin)
         except Exception:
             pass
@@ -389,6 +398,24 @@ class RiskManager:
         net = self._current_positions()
         self.currency_exposure.snapshot(net)
         self.exposure_matrix.snapshot(net)
+        self._snapshot_risk()
+
+    def _snapshot_risk(self, path: str = "reports/risk") -> None:
+        """Persist latest risk metrics for dashboard consumption."""
+        try:
+            p = Path(path)
+            p.mkdir(parents=True, exist_ok=True)
+            ts = pd.Timestamp.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            data = {
+                "timestamp": ts,
+                "equity": self.equity,
+                "risk_of_ruin": self.metrics.risk_of_ruin,
+                "trading_halted": self.metrics.trading_halted,
+            }
+            pd.DataFrame([data]).to_csv(p / f"{ts}.csv", index=False)
+            (p / "latest.json").write_text(json.dumps(data))
+        except Exception:
+            pass
 
     def record_returns(self, returns: Dict[str, float]) -> None:
         """Record asset returns and update correlation/exposure matrices."""
@@ -520,6 +547,10 @@ MAX_TOTAL_DRAWDOWN = float(os.getenv("MAX_TOTAL_DRAWDOWN", "1e9"))
 MAX_VAR = float(os.getenv("MAX_VAR", "1e9"))
 TAIL_HEDGE_VAR = float(os.getenv("TAIL_HEDGE_VAR", str(MAX_VAR)))
 RISK_OF_RUIN_THRESHOLD = float(os.getenv("RISK_OF_RUIN_THRESHOLD", "1.0"))
+RISK_OF_RUIN_DOWNSCALE = float(os.getenv("RISK_OF_RUIN_DOWNSCALE", "1.0"))
+RISK_OF_RUIN_DOWNSCALE_FACTOR = float(
+    os.getenv("RISK_OF_RUIN_DOWNSCALE_FACTOR", "0.5")
+)
 INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "1.0"))
 MAX_LONG_EXPOSURE = float(os.getenv("MAX_LONG_EXPOSURE", "inf"))
 MAX_SHORT_EXPOSURE = float(os.getenv("MAX_SHORT_EXPOSURE", "inf"))
@@ -531,6 +562,8 @@ risk_manager = RiskManager(
     max_var=MAX_VAR,
     ewma_alpha=EWMA_ALPHA,
     risk_of_ruin_threshold=RISK_OF_RUIN_THRESHOLD,
+    risk_of_ruin_downscale=RISK_OF_RUIN_DOWNSCALE,
+    ruin_downscale_factor=RISK_OF_RUIN_DOWNSCALE_FACTOR,
     initial_capital=INITIAL_CAPITAL,
     max_long_exposure=MAX_LONG_EXPOSURE,
     max_short_exposure=MAX_SHORT_EXPOSURE,
