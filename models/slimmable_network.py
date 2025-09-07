@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Sequence
 
+from utils.resource_monitor import monitor
+
 
 class SlimmableNetwork(nn.Module):
     """Simple fully connected network supporting width multipliers.
@@ -80,3 +82,20 @@ class SlimmableNetwork(nn.Module):
                 "fc2.bias": self.fc2_bias.detach().clone(),
             }
         return slices
+
+
+def select_width_multiplier(widths: Sequence[float]) -> float:
+    """Return the widest width multiplier supported by local resources."""
+
+    tier = monitor.capabilities.capability_tier()
+    widths = sorted(widths)
+    if tier in ("gpu", "hpc"):
+        return widths[-1]
+    if tier == "standard":
+        for w in reversed(widths):
+            if w <= 0.5:
+                return w
+    return widths[0]
+
+
+__all__ = ["SlimmableNetwork", "select_width_multiplier"]
