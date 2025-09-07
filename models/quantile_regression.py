@@ -92,34 +92,62 @@ class NeuralQuantile:
     hidden_dim: int = 32
     epochs: int = 100
     lr: float = 1e-3
+    dropout: float = 0.0
+    patience: int = 10
     models: Dict[float, nn.Module] = field(default_factory=dict)
+    epochs_trained: Dict[float, int] = field(default_factory=dict)
 
     def _build_net(self) -> nn.Module:  # pragma: no cover - small helper
-        return nn.Sequential(
+        layers = [
             nn.Linear(self.input_dim, self.hidden_dim),
             nn.ReLU(),
-            nn.Linear(self.hidden_dim, 1),
-        )
+        ]
+        if self.dropout > 0:
+            layers.append(nn.Dropout(self.dropout))
+        layers.append(nn.Linear(self.hidden_dim, 1))
+        return nn.Sequential(*layers)
 
     @staticmethod
     def _quantile_loss(pred: torch.Tensor, target: torch.Tensor, alpha: float) -> torch.Tensor:
         diff = target - pred
         return torch.max(alpha * diff, (alpha - 1) * diff).mean()
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "NeuralQuantile":
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        val: Tuple[np.ndarray, np.ndarray] | None = None,
+    ) -> "NeuralQuantile":
         if torch is None:
             raise ImportError("PyTorch is required for NeuralQuantile")
         X_t = torch.tensor(np.asarray(X), dtype=torch.float32)
         y_t = torch.tensor(np.asarray(y), dtype=torch.float32).view(-1, 1)
+        if val is not None:
+            X_val_t = torch.tensor(np.asarray(val[0]), dtype=torch.float32)
+            y_val_t = torch.tensor(np.asarray(val[1]), dtype=torch.float32).view(-1, 1)
         for a in self.alphas:
             net = self._build_net()
             opt = torch.optim.Adam(net.parameters(), lr=self.lr)
-            for _ in range(self.epochs):
+            best_val = float("inf")
+            bad_epochs = 0
+            for epoch in range(self.epochs):
                 opt.zero_grad()
                 pred = net(X_t)
                 loss = self._quantile_loss(pred, y_t, float(a))
                 loss.backward()
                 opt.step()
+                if val is not None:
+                    with torch.no_grad():
+                        pred_v = net(X_val_t)
+                        val_loss = self._quantile_loss(pred_v, y_val_t, float(a)).item()
+                    if val_loss < best_val - 1e-6:
+                        best_val = val_loss
+                        bad_epochs = 0
+                    else:
+                        bad_epochs += 1
+                        if bad_epochs >= self.patience:
+                            break
+            self.epochs_trained[float(a)] = epoch + 1
             net.eval()
             self.models[float(a)] = net
         return self
