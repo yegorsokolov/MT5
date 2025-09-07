@@ -98,6 +98,10 @@ try:  # optional torch dependency
     from .slimmable_network import SlimmableNetwork
 except Exception:  # pragma: no cover - torch may be missing
     SlimmableNetwork = None
+try:  # optional torch dependency
+    from .cross_asset_transformer import CrossAssetTransformer
+except Exception:  # pragma: no cover - torch may be missing
+    CrossAssetTransformer = None
 
 __all__ = [
     "EnsembleModel",
@@ -111,5 +115,6 @@ __all__ = [
     "TFTConfig",
     "QuantileLoss",
     "SlimmableNetwork",
+    "CrossAssetTransformer",
     "LazyModel",
 ]
