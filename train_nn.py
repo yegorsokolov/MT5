@@ -800,6 +800,13 @@ def main(
                         group["lr"] *= cfg.get("grad_lr_growth", 2.0)
                 if (step + 1) % accumulate_steps == 0 or (step + 1) == steps_per_epoch:
                     if use_amp:
+                        scaler.unscale_(optim)
+                    max_norm = cfg.get("max_norm", 1.0)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), max_norm
+                    )
+                    logger.debug("Gradient norm: %f", grad_norm)
+                    if use_amp:
                         scaler.step(optim)
                         scaler.update()
                     else:
