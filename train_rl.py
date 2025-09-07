@@ -1581,9 +1581,9 @@ if __name__ == "__main__":
     if args.sim_env:
         cfg["sim_env"] = True
     if args.tune:
-        from tuning.distributed_search import tune_rl
+        from tuning.bayesian_search import run_search
 
-        tune_rl(cfg)
+        run_search(lambda c, t: launch(c), cfg)
     else:
         ray_init()
         try:
