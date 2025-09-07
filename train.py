@@ -57,6 +57,7 @@ from analysis.prob_calibration import (
 from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
 from analysis.domain_adapter import DomainAdapter
+from models.conformal import fit_residuals, predict_interval, evaluate_coverage
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -420,6 +421,9 @@ def main(
     )
     all_preds: list[int] = []
     all_true: list[int] = []
+    all_probs: list[float] = []
+    all_lower: list[float] = []
+    all_upper: list[float] = []
     final_pipe: Pipeline | None = None
     X_train_final: pd.DataFrame | None = None
     last_val_y: np.ndarray | None = None
@@ -431,6 +435,9 @@ def main(
         start_fold = last_fold + 1
         all_preds = state.get("all_preds", [])
         all_true = state.get("all_true", [])
+        all_probs = state.get("all_probs", [])
+        all_lower = state.get("all_lower", [])
+        all_upper = state.get("all_upper", [])
         final_pipe = state.get("model")
         scaler_state = state.get("scaler_state")
         if final_pipe and scaler_state and "scaler" in final_pipe.named_steps:
@@ -499,6 +506,12 @@ def main(
         preds = pipe.predict(X_val)
         probs = pipe.predict_proba(X_val)[:, 1]
         last_val_y, last_val_probs = y_val, probs
+        residuals = y_val.values - probs
+        q = fit_residuals(residuals, alpha=cfg.get("interval_alpha", 0.1))
+        lower, upper = predict_interval(probs, q)
+        cov = evaluate_coverage(y_val, lower, upper)
+        mlflow.log_metric(f"fold_{fold}_interval_coverage", cov)
+        logger.info("Fold %d interval coverage: %.3f", fold, cov)
         conf = np.abs(probs - 0.5) * 2
         sizer = PositionSizer(capital=cfg.get("eval_capital", 1000.0))
         for p, c in zip(probs, conf):
@@ -511,10 +524,16 @@ def main(
 
         all_preds.extend(preds)
         all_true.extend(y_val)
+        all_probs.extend(probs)
+        all_lower.extend(lower)
+        all_upper.extend(upper)
         state = {
             "model": pipe,
             "all_preds": all_preds,
             "all_true": all_true,
+            "all_probs": all_probs,
+            "all_lower": all_lower,
+            "all_upper": all_upper,
             "metrics": report,
         }
         if "scaler" in pipe.named_steps:
@@ -524,6 +543,22 @@ def main(
         if fold == tscv.n_splits - 1:
             final_pipe = pipe
             X_train_final = X_train
+
+    overall_cov = evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
+    mlflow.log_metric("interval_coverage", overall_cov)
+    logger.info("Overall interval coverage: %.3f", overall_cov)
+    pred_df = pd.DataFrame(
+        {
+            "y_true": all_true,
+            "pred": all_preds,
+            "prob": all_probs,
+            "lower": all_lower,
+            "upper": all_upper,
+        }
+    )
+    pred_path = root / "val_predictions.csv"
+    pred_df.to_csv(pred_path, index=False)
+    mlflow.log_artifact(str(pred_path))
 
     calibrator = None
     calib_method = cfg.get("calibration")
