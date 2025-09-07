@@ -96,6 +96,11 @@ parallel_backtest: true
 use_scaler: true
 use_sharpe_sizing: true
 
+# pretraining options for time-series encoder
+use_ts_pretrain: false
+ts_pretrain_epochs: 20
+ts_pretrain_batch_size: 32
+
 # Feature pipeline selection. Modules are executed in order.
 features:
   - price
