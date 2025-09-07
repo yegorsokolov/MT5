@@ -48,6 +48,9 @@ def _wrap_ci(row: Dict[str, Any]) -> Dict[str, Any]:
             "lower": row.pop("ci_lower"),
             "upper": row.pop("ci_upper"),
         }
+    elif {"pred", "pred_var"}.issubset(row):
+        row = row.copy()
+        row["prediction"] = {"mean": row.pop("pred"), "var": row.pop("pred_var")}
     return row
 
 
@@ -132,7 +135,44 @@ async def publish_dataframe_async(
 async def iter_messages(
     bus: MessageBus, fmt: str = "json", sizer=None
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Yield messages from the signals topic."""
+    """Yield messages from the signals topic.
+
+    When ``sizer`` is provided it is expected to expose the same interface as
+    :meth:`risk_manager.RiskManager.adjust_size`.  Messages containing a
+    ``prediction`` dictionary with ``mean`` and ``var`` fields will be
+    transformed into a credible interval before being passed to ``sizer``.  The
+    message's ``size`` field is replaced with the adjusted value.
+    """
 
     async for msg in bus.subscribe(Topics.SIGNALS):
+        if sizer is not None and isinstance(msg, dict):
+            pred = msg.get("prediction")
+            symbol = msg.get("symbol")
+            base_size = msg.get("size")
+            ts = msg.get("Timestamp") or msg.get("timestamp")
+            if (
+                pred is not None
+                and symbol is not None
+                and base_size is not None
+                and ts is not None
+            ):
+                ci: tuple[float, float] | None = None
+                if "var" in pred and "mean" in pred:
+                    std = float(np.sqrt(max(pred["var"], 0.0)))
+                    mean = float(pred["mean"])
+                    ci = (mean - 1.96 * std, mean + 1.96 * std)
+                elif {"lower", "upper"}.issubset(pred):
+                    ci = (float(pred["lower"]), float(pred["upper"]))
+                direction = 1 if float(base_size) >= 0 else -1
+                try:
+                    sized = sizer(
+                        symbol,
+                        abs(float(base_size)),
+                        ts,
+                        direction,
+                        cred_interval=ci,
+                    )
+                    msg["size"] = sized * direction
+                except Exception:  # pragma: no cover - sizing is best effort
+                    pass
         yield msg
