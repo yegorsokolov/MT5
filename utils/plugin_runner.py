@@ -16,6 +16,11 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+try:  # pragma: no cover - ``resource`` is Unix only
+    import resource
+except Exception:  # pragma: no cover - Windows or limited platforms
+    resource = None  # type: ignore
+
 try:  # pragma: no cover - optional dependency guard
     from watchdog.events import FileSystemEventHandler
     from watchdog.observers.polling import PollingObserver
@@ -33,15 +38,34 @@ class PluginTimeoutError(RuntimeError):
     """Raised when a plugin does not finish execution within the timeout."""
 
 
-def _plugin_entry(q: mp.Queue, func: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
-    """Execute ``func`` and put the result or exception into ``q``."""
+def _plugin_entry(
+    q: mp.Queue,
+    func: Callable[..., Any],
+    mem_limit_mb: float | None,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> None:
+    """Execute ``func`` with optional memory limits and return via ``q``."""
+    if mem_limit_mb and resource is not None:  # pragma: no cover - platform dependent
+        try:
+            limit = int(mem_limit_mb * 1024 * 1024)
+            resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+        except Exception:
+            # Memory limits are best-effort; failure to set should not crash
+            pass
     try:
         q.put(("result", func(*args, **kwargs)))
     except Exception as exc:  # pragma: no cover - plugin errors are forwarded
         q.put(("error", exc))
 
 
-def run_plugin(func: Callable[..., Any] | Any, *args: Any, timeout: float = 5.0, **kwargs: Any) -> Any:
+def run_plugin(
+    func: Callable[..., Any] | Any,
+    *args: Any,
+    timeout: float = 5.0,
+    memory_limit_mb: float | None = None,
+    **kwargs: Any,
+) -> Any:
     """Run ``func`` in a separate process with ``timeout`` seconds.
 
     Parameters
@@ -66,18 +90,28 @@ def run_plugin(func: Callable[..., Any] | Any, *args: Any, timeout: float = 5.0,
 
     target = getattr(func, "plugin", func)  # Support PluginSpec objects
     q: mp.Queue = mp.Queue()
-    proc = mp.Process(target=_plugin_entry, args=(q, target, *args), kwargs=kwargs)
+    proc = mp.Process(target=_plugin_entry, args=(q, target, memory_limit_mb, args, kwargs))
     proc.start()
     proc.join(timeout)
     if proc.is_alive():
         proc.terminate()
         proc.join()
         raise PluginTimeoutError(f"Plugin '{getattr(func, 'name', target.__name__)}' timed out")
+    if proc.exitcode not in (0, None):
+        logger.error(
+            "Sandboxed plugin %s exited with code %s",
+            getattr(func, "name", getattr(target, "__name__", "unknown")),
+            proc.exitcode,
+        )
     try:
         status, value = q.get_nowait()
     except queue.Empty:
+        logger.error("Plugin %s produced no result", getattr(func, "name", target.__name__))
         return None
     if status == "error":
+        logger.error(
+            "Plugin %s raised %s", getattr(func, "name", target.__name__), value
+        )
         raise value
     return value
 
