@@ -28,6 +28,10 @@ class ConfigSchema(BaseModel):
         ge=0,
         description="Seconds before unused plugins are unloaded from memory",
     )
+    service_cmds: dict[str, list[str]] | None = Field(
+        None,
+        description="Mapping of service name to command used to (re)start it",
+    )
     ewma_alpha: float = Field(
         0.06,
         gt=0,
