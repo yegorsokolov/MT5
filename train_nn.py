@@ -28,7 +28,7 @@ from models.build_model import build_model, compute_scale_factor
 from models.hier_forecast import HierarchicalForecaster
 from models.quantize import apply_quantization
 from models.contrastive_encoder import initialize_model_with_contrastive
-from models.slimmable_network import SlimmableNetwork
+from models.slimmable_network import SlimmableNetwork, select_width_multiplier
 from analysis.feature_selector import select_features
 from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
 from models.cross_asset_transformer import CrossAssetTransformer
@@ -95,22 +95,6 @@ def _load_donor_state_dict(symbol: str):
             if isinstance(state, dict):
                 return state
     return None
-
-
-def select_width_multiplier(widths: list[float]) -> float:
-    """Return the widest width multiplier supported by local resources."""
-
-    tier = monitor.capabilities.capability_tier()
-    widths = sorted(widths)
-    if tier in ("gpu", "hpc"):
-        return widths[-1]
-    if tier == "standard":
-        for w in reversed(widths):
-            if w <= 0.5:
-                return w
-    return widths[0]
-
-
 def batch_size_backoff(cfg: dict, train_step: Callable[[int, int], T]) -> T:
     """Run ``train_step`` with automatic batch size backoff.
 

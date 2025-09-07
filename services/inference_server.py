@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 
 import asyncio
 import os
+import logging
 
 import joblib
 import pandas as pd
@@ -27,11 +28,16 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
 
+from models.slimmable_network import SlimmableNetwork, select_width_multiplier
+from utils.resource_monitor import monitor
+
+logger = logging.getLogger(__name__)
 app = FastAPI(title="Inference Server")
 
 # Cache of loaded models keyed by model name
 _MODEL_CACHE: Dict[str, Any] = {}
 _MODEL_DIR = Path(__file__).resolve().parents[1] / "models"
+_WIDTH_WATCH_TASK: asyncio.Task | None = None
 
 # Simple thread pool to provide a bit of concurrency.  The default can be
 # overridden via the ``INFER_WORKERS`` environment variable which allows the
@@ -53,9 +59,21 @@ def health() -> Dict[str, Any]:
     return {"status": "ok", "loaded_models": list(_MODEL_CACHE.keys())}
 
 
+def _ensure_watcher() -> None:
+    global _WIDTH_WATCH_TASK
+    if _WIDTH_WATCH_TASK is None:
+        try:
+            loop = asyncio.get_event_loop()
+            q = monitor.subscribe()
+            _WIDTH_WATCH_TASK = loop.create_task(_watch_widths(q))
+        except RuntimeError:
+            pass
+
+
 def _load_model(name: str) -> Any:
     """Load ``name`` from disk if not already cached."""
 
+    _ensure_watcher()
     model = _MODEL_CACHE.get(name)
     if model is None:
         path = _MODEL_DIR / f"{name}.pkl"
@@ -69,8 +87,25 @@ def _load_model(name: str) -> Any:
                 model.to("cuda")
             except Exception:  # pragma: no cover - defensive
                 pass
+        if isinstance(model, SlimmableNetwork):
+            width = select_width_multiplier(list(model.width_multipliers))
+            model.set_width(width)
+            logger.info("Loaded slimmable model %s at width %s", name, width)
         _MODEL_CACHE[name] = model
     return model
+
+
+async def _watch_widths(queue: asyncio.Queue[str]) -> None:
+    """Adjust widths of cached slimmable networks on capability refresh."""
+
+    while True:
+        await queue.get()
+        for name, model in list(_MODEL_CACHE.items()):
+            if isinstance(model, SlimmableNetwork):
+                new_width = select_width_multiplier(list(model.width_multipliers))
+                if new_width != model.active_multiplier:
+                    model.set_width(new_width)
+                    logger.info("Adjusted width of %s to %s", name, new_width)
 
 
 @app.post("/predict")
@@ -82,6 +117,10 @@ async def predict(req: PredictRequest) -> Dict[str, List[float]]:
     loop = asyncio.get_event_loop()
 
     def _do_predict() -> List[float]:
+        if isinstance(model, SlimmableNetwork):
+            width = select_width_multiplier(list(model.width_multipliers))
+            if width != model.active_multiplier:
+                model.set_width(width)
         if hasattr(model, "predict_proba"):
             preds = model.predict_proba(df)[:, 1]
         elif hasattr(model, "predict"):
