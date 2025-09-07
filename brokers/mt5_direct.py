@@ -18,6 +18,8 @@ IS_CUDF = pd.__name__ == "cudf"
 
 logger = logging.getLogger(__name__)
 
+from analysis.broker_tca import broker_tca
+
 # Expose key constants for consumers
 COPY_TICKS_ALL = getattr(_mt5, "COPY_TICKS_ALL", 0)
 ORDER_TYPE_BUY = getattr(_mt5, "ORDER_TYPE_BUY", 0)
@@ -77,8 +79,21 @@ def is_terminal_logged_in() -> bool:
 
 
 def order_send(request):
-    """Proxy to ``MetaTrader5.order_send``."""
-    return _mt5.order_send(request)
+    """Proxy to ``MetaTrader5.order_send`` with latency/slippage tracking."""
+
+    order_ts = pd.Timestamp.utcnow()
+    result = _mt5.order_send(request)
+    fill_ts = pd.Timestamp.utcnow()
+    try:
+        req_price = float(request.get("price", 0) or 0)
+        typ = request.get("type")
+        fill_price = float(getattr(result, "price", req_price) or req_price)
+        sign = 1 if typ in (ORDER_TYPE_BUY,) else -1
+        slippage = (fill_price - req_price) / req_price * sign * 10000 if req_price else 0.0
+        broker_tca.record("mt5_direct", order_ts, fill_ts, slippage)
+    except Exception:
+        pass
+    return result
 
 
 def symbol_select(symbol: str, enable: bool = True) -> bool:
