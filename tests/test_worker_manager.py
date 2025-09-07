@@ -9,6 +9,7 @@ from services.worker_manager import WorkerManager
 
 import types, importlib.util
 
+
 class _Resp:
     def __init__(self, preds=None):
         self._preds = preds or []
@@ -45,9 +46,7 @@ def test_worker_manager_scales_on_load(monkeypatch):
     def fake_record(name, value, tags=None, path=None):
         metrics.append((name, value, tags))
 
-    monkeypatch.setattr(
-        "services.worker_manager.record_metric", fake_record
-    )
+    monkeypatch.setattr("services.worker_manager.record_metric", fake_record)
 
     # Speed up scaling for the test
     manager = WorkerManager(window=2.0, high_rps=1.0, low_rps=0.1)
@@ -79,3 +78,14 @@ def test_worker_manager_scales_on_load(monkeypatch):
         m[0] == "batch_throughput" and m[2]["source"] == "remote_client"
         for m in metrics
     )
+
+
+def test_worker_manager_cleans_up_stale_sources(monkeypatch):
+    monkeypatch.setattr("services.worker_manager.record_metric", lambda *a, **k: None)
+    manager = WorkerManager(window=1.0, source_ttl=1.0)
+    manager.record_request("old", 0.01)
+    assert "old" in manager._requests
+    time.sleep(1.1)
+    manager.record_request("new", 0.01)
+    assert "old" not in manager._requests
+    assert "new" in manager._requests
