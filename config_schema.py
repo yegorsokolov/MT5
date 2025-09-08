@@ -89,6 +89,9 @@ class ConfigSchema(BaseModel):
     ensemble: EnsembleConfig | None = Field(
         None, description="Ensemble training configuration"
     )
+    graph_model: bool = Field(
+        False, description="Use graph neural network architecture for training"
+    )
 
     use_ts_pretrain: bool = Field(
         False,
