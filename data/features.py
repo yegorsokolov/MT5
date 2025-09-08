@@ -23,6 +23,7 @@ from utils.resource_monitor import monitor, ResourceCapabilities
 from utils import load_config
 from analysis import feature_gate
 from analysis.data_lineage import log_lineage
+from analysis.fractal_features import rolling_fractal_features
 from .expectations import validate_dataframe
 from .multitimeframe import aggregate_timeframes
 
@@ -145,6 +146,38 @@ def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
 add_alt_features.degradable = True  # type: ignore[attr-defined]
 
 
+def add_fractal_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Append rolling fractal metrics to ``df``.
+
+    The ``mid`` price series is passed to
+    :func:`analysis.fractal_features.rolling_fractal_features`, producing two
+    columns that characterise price path complexity:
+
+    - ``hurst``: Rolling Hurst exponent indicating trend persistence.
+    - ``fractal_dim``: Katz fractal dimension of the price trajectory.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data containing a ``mid`` price column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Original ``df`` with ``hurst`` and ``fractal_dim`` appended. If ``mid``
+        is missing the frame is returned unchanged.
+    """
+
+    if "mid" not in df.columns:
+        return df
+
+    feats = rolling_fractal_features(df["mid"])
+    df = df.copy()
+    df["hurst"] = feats["hurst"]
+    df["fractal_dim"] = feats["fractal_dim"]
+    return df
+
+
 def add_corporate_actions(df: pd.DataFrame) -> pd.DataFrame:
     """Merge dividend, split and ownership data into ``df``.
 
@@ -204,7 +237,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     capabilities to avoid overwhelming constrained environments.  The final
     feature set is then passed through :func:`analysis.feature_gate.select` to
     drop low-importance or heavy features for the current capability tier and
-    market regime, ensuring consistent behaviour across runs.
+    market regime, ensuring consistent behaviour across runs. After price-based
+    features are computed, rolling fractal metrics ``hurst`` and ``fractal_dim``
+    derived from the mid price are appended to the frame.
     """
 
     try:
@@ -223,6 +258,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         raw_file = df.attrs.get("source", "unknown")
         for col in new_cols:
             log_lineage(run_id, raw_file, compute.__name__, col)
+
+    # Fractal metrics derived from mid-price after price-based features
+    df = add_fractal_features(df)
 
     # Allow runtime plugins to extend the feature set
     adjacency = df.attrs.get("adjacency_matrices")
@@ -516,6 +554,7 @@ __all__ = [
     "add_economic_calendar_features",
     "add_news_sentiment_features",
     "add_cross_asset_features",
+    "add_fractal_features",
     "add_time_features",
     "make_features",
     "make_features_memmap",
