@@ -63,6 +63,7 @@ from analysis import model_card
 from analysis.domain_adapter import DomainAdapter
 from models.conformal import fit_residuals, predict_interval, evaluate_coverage
 from analysis.regime_thresholds import find_regime_thresholds
+from analysis.concept_drift import ConceptDriftMonitor
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -236,6 +237,11 @@ def main(
     root.joinpath("data").mkdir(exist_ok=True)
     scaler_path = root / "scaler.pkl"
     start_time = datetime.now()
+
+    drift_monitor = ConceptDriftMonitor(
+        method=cfg.get("drift_method", "adwin"),
+        delta=float(cfg.get("drift_delta", 0.002)),
+    )
 
     donor_booster = _load_donor_booster(transfer_from) if transfer_from else None
 
@@ -594,6 +600,8 @@ def main(
         pipe.fit(X_train, y_train, **fit_params)
 
         probs = pipe.predict_proba(X_val)[:, 1]
+        for feat_row, pred in zip(X_val[features].to_dict("records"), probs):
+            drift_monitor.update(feat_row, float(pred))
         regimes_val = X_val["market_regime"].values
         thr_dict, preds = find_regime_thresholds(y_val.values, probs, regimes_val)
         for reg, thr_val in thr_dict.items():
@@ -770,6 +778,9 @@ def main(
         if final_pipe is not None:
             al_queue = ActiveLearningQueue()
             probs = final_pipe.predict_proba(X)
+            prob_arr = probs[:, 1] if getattr(probs, "ndim", 1) > 1 else probs
+            for feat_row, pred in zip(X.to_dict("records"), prob_arr):
+                drift_monitor.update(feat_row, float(pred))
             al_queue.push(X.index, probs, k=cfg.get("al_queue_size", 10))
             new_labels = al_queue.pop_labeled()
             if not new_labels.empty and "tb_label" in df.columns:
