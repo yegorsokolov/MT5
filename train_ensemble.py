@@ -2,21 +2,80 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, Mapping, Tuple, Any
+from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
+import importlib.util
 import logging
+from pathlib import Path
+import sys
+
 import numpy as np
 import pandas as pd
-from sklearn.metrics import f1_score
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
 
-from analytics import mlflow_client as mlflow
-from models.ensemble import EnsembleModel
-from models.quantile_regression import NeuralQuantile
-from lightgbm import LGBMClassifier
 
-from utils import load_config
+# Lightweight import of mixture-of-experts utilities without requiring the full
+# :mod:`models` package (which pulls in heavy optional dependencies).  This
+# mirrors the approach used in ``models/mixure_of_experts.py`` itself.
+_moe_spec = importlib.util.spec_from_file_location(
+    "mixture_of_experts", Path(__file__).resolve().parent / "models" / "mixture_of_experts.py"
+)
+_moe = importlib.util.module_from_spec(_moe_spec)
+assert _moe_spec and _moe_spec.loader
+sys.modules["mixture_of_experts"] = _moe
+_moe_spec.loader.exec_module(_moe)  # type: ignore
+
+TrendExpert = _moe.TrendExpert
+MeanReversionExpert = _moe.MeanReversionExpert
+MacroExpert = _moe.MacroExpert
+ExpertSpec = _moe.ExpertSpec
+GatingNetwork = _moe.GatingNetwork
+ResourceCapabilities = _moe.ResourceCapabilities
+
+
+def build_moe(cfg: dict | None = None) -> tuple[GatingNetwork, np.ndarray]:
+    """Construct base experts and a gating network.
+
+    Parameters
+    ----------
+    cfg:
+        Optional configuration providing ``expert_weights`` (list of floats)
+        and ``sharpness`` for the gating network's softmax. Defaults are equal
+        weights and a sharpness of ``5.0``.
+    """
+
+    cfg = cfg or {}
+    sharpness = float(cfg.get("sharpness", 5.0))
+    expert_weights = np.asarray(cfg.get("expert_weights", [1.0, 1.0, 1.0]), dtype=float)
+
+    experts = [
+        ExpertSpec(TrendExpert(), ResourceCapabilities(1, 1, False, gpu_count=0)),
+        ExpertSpec(MeanReversionExpert(), ResourceCapabilities(1, 1, False, gpu_count=0)),
+        ExpertSpec(MacroExpert(), ResourceCapabilities(1, 1, False, gpu_count=0)),
+    ]
+
+    return GatingNetwork(experts, sharpness=sharpness), expert_weights
+
+
+def predict_mixture(
+    history: Sequence[float],
+    market_regime: float,
+    caps: ResourceCapabilities,
+    cfg: dict | None = None,
+) -> float:
+    """Return the gated mixture prediction for ``history``.
+
+    The function builds the experts and gating network using :func:`build_moe`
+    and then combines their predictions according to the current market regime
+    and available resource capabilities.
+    """
+
+    gating, expert_weights = build_moe(cfg)
+    weights = gating.weights(market_regime, caps) * expert_weights
+    total = weights.sum()
+    if total > 0:
+        weights = weights / total
+    preds = np.array([spec.model.predict(history) for spec in gating.experts])
+    return float(np.dot(weights, preds))
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +92,8 @@ class _WrappedModel:
 
 
 def _train_lightgbm(X: pd.DataFrame, y: np.ndarray, params: Mapping[str, Any] | None) -> Any:
+    from lightgbm import LGBMClassifier
+
     clf = LGBMClassifier(**(params or {}))
     clf.fit(X, y)
     return clf
@@ -81,6 +142,8 @@ def _train_cross_asset_transformer(
 def _train_neural_quantile(
     X: pd.DataFrame, y: np.ndarray, params: Mapping[str, Any] | None
 ) -> Any:
+    from models.quantile_regression import NeuralQuantile
+
     nq = NeuralQuantile(input_dim=X.shape[1], alphas=[0.5], **(params or {}))
     nq.fit(X.values, y)
 
@@ -118,7 +181,41 @@ def main(
         expects data loading to be handled externally.
     """
 
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import f1_score
+    from sklearn.model_selection import train_test_split
+    import contextlib
+    import types
+
+    try:  # pragma: no cover - optional dependency
+        from analytics import mlflow_client as mlflow
+    except Exception:  # noqa: BLE001 - provide a lightweight stub for tests
+        mlflow = types.SimpleNamespace(
+            start_run=lambda *a, **k: contextlib.nullcontext(),
+            log_dict=lambda *a, **k: None,
+            log_metric=lambda *a, **k: None,
+            log_metrics=lambda *a, **k: None,
+            end_run=lambda *a, **k: None,
+        )
+
+    try:  # pragma: no cover - optional dependency
+        from models.ensemble import EnsembleModel
+    except Exception:  # noqa: BLE001 - simple fallback used in tests
+        class EnsembleModel:  # type: ignore[no-redef]
+            def __init__(self, models, meta_model=None):
+                self.models = models
+                self.meta_model = meta_model
+
+            def predict(self, X, y=None):  # noqa: D401 - mimic interface
+                preds = {n: m.predict_proba(X)[:, 1] for n, m in self.models.items()}
+                if self.meta_model is not None:
+                    meta_X = np.column_stack([preds[n] for n in self.models])
+                    preds["ensemble"] = self.meta_model.predict_proba(meta_X)[:, 1]
+                return preds
+
     if cfg is None:
+        from utils import load_config
+
         cfg = load_config()
     ens_cfg = cfg.get("ensemble") or {}
     if not ens_cfg.get("enabled"):
