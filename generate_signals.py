@@ -51,6 +51,9 @@ def load_models(paths, versions=None):
     for vid in versions:
         try:
             m, meta = model_store.load_model(vid)
+            thr = meta.get("performance", {}).get("regime_thresholds")
+            if thr is not None:
+                setattr(m, "regime_thresholds", thr)
             models.append(m)
             if feature_list is None:
                 feature_list = meta.get("features") or meta.get(
@@ -353,6 +356,7 @@ def main():
     models, stored_features = load_models(model_paths, model_versions)
     if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
+    regime_thresholds = getattr(models[0], "regime_thresholds", {}) if models else {}
 
     # Replay past trades through any newly enabled model versions
     new_versions = [v for v in model_versions if v not in prev_models]
@@ -540,11 +544,22 @@ def main():
         0.0,
     )
 
+    regimes = df["market_regime"] if "market_regime" in df.columns else None
+    if regimes is not None and regime_thresholds:
+        preds = np.zeros(len(df), dtype=int)
+        for reg, thr in regime_thresholds.items():
+            mask = regimes == int(reg)
+            preds[mask] = (combined[mask] > thr).astype(int)
+    else:
+        default_thr = cfg.get("threshold", 0.5)
+        preds = (combined > default_thr).astype(int)
+
     out = pd.DataFrame(
         {
             "Timestamp": df["Timestamp"],
             "Symbol": cfg.get("symbol"),
             "prob": combined,
+            "pred": preds,
         }
     )
     log_df = df[["Timestamp"] + features].copy()
@@ -552,6 +567,7 @@ def main():
     for name, arr in pred_dict.items():
         log_df[f"prob_{name}"] = arr
     log_df["prob"] = combined
+    log_df["pred"] = preds
     log_predictions(log_df)
     fmt = os.getenv("SIGNAL_FORMAT", "protobuf")
     queue = get_signal_backend(cfg)
