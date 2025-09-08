@@ -68,17 +68,68 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_cross_asset_features(df: pd.DataFrame) -> pd.DataFrame:
-    # Placeholder for more advanced cross-asset relationships
+def add_cross_asset_features(df: pd.DataFrame, window: int = 30) -> pd.DataFrame:
+    """Add simple cross-asset interaction features.
+
+    For every pair of symbols sharing the same ``Timestamp`` this function
+    computes:
+
+    - Rolling correlation of their returns over ``window`` periods, appended as
+      ``corr_<sym1>_<sym2>`` for rows where ``Symbol`` is ``sym1``.
+    - The ratio of their instantaneous returns, appended as
+      ``relret_<sym1>_<sym2>`` for the same rows.
+
+    Missing values (for example during the warm up period of the rolling
+    correlation) are filled with ``0.0`` to keep downstream models simple.
+    """
+
+    required = {"Symbol", "Timestamp", "return"}
+    if not required.issubset(df.columns):
+        return df
+
+    df = df.copy().sort_values("Timestamp")
+    pivot = df.pivot(index="Timestamp", columns="Symbol", values="return")
+    symbols = list(pivot.columns)
+
+    for sym1 in symbols:
+        for sym2 in symbols:
+            if sym1 == sym2:
+                continue
+
+            corr_series = pivot[sym1].rolling(window).corr(pivot[sym2])
+            ratio_series = (pivot[sym1] / pivot[sym2]).replace(
+                [np.inf, -np.inf], np.nan
+            )
+
+            ts_map = df.loc[df["Symbol"] == sym1, "Timestamp"]
+            df.loc[df["Symbol"] == sym1, f"corr_{sym1}_{sym2}"] = ts_map.map(
+                corr_series
+            ).fillna(0.0)
+            df.loc[df["Symbol"] == sym1, f"relret_{sym1}_{sym2}"] = ts_map.map(
+                ratio_series
+            ).fillna(0.0)
+
     return df
 
 
 def compute(df: pd.DataFrame) -> pd.DataFrame:
-    from data import features as base
+    """Enrich ``df`` with index and cross-asset features.
+
+    The following columns are appended:
+
+    - Market index returns/volatility via :func:`add_index_features`.
+    - Pairwise rolling correlations (``corr_<sym1>_<sym2>``) and relative
+      return ratios (``relret_<sym1>_<sym2>``) via
+      :func:`add_cross_asset_features`.
+
+    Additionally, rolling adjacency matrices describing the cross-symbol
+    relationships are stored in ``df.attrs['adjacency_matrices']``.
+    """
+
     from data.graph_builder import build_rolling_adjacency
 
-    df = base.add_index_features(df)
-    df = base.add_cross_asset_features(df)
+    df = add_index_features(df)
+    df = add_cross_asset_features(df)
 
     if {"Symbol", "Timestamp"}.issubset(df.columns):
         try:
