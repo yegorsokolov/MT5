@@ -38,6 +38,7 @@ import asyncio
 from signal_queue import publish_dataframe_async, get_signal_backend
 from models.ensemble import EnsembleModel
 from models import model_store
+from analysis.concept_drift import ConceptDriftMonitor
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -334,6 +335,10 @@ def main():
     cache = PredictionCache(
         cfg.get("pred_cache_size", 256), cfg.get("pred_cache_policy", "lru")
     )
+    monitor = ConceptDriftMonitor(
+        method=cfg.get("drift_method", "adwin"),
+        delta=float(cfg.get("drift_delta", 0.002)),
+    )
 
     # Reload previous runtime state if available
     state = load_runtime_state()
@@ -507,6 +512,7 @@ def main():
             prob = float(new_probs[j])
             probs[idx] = prob
             cache.set(int(hashes[idx]), prob)
+            monitor.update(sub_df.iloc[j][features], prob)
 
     ma_ok = df["ma_cross"] == 1
     rsi_ok = df["rsi_14"] > cfg.get("rsi_buy", 55)
