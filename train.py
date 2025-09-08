@@ -14,7 +14,12 @@ try:
     import torch
 except Exception:  # noqa: E722
     torch = None
-from sklearn.metrics import classification_report, precision_recall_curve
+from sklearn.metrics import (
+    classification_report,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_sample_weight
 from analysis.purged_cv import PurgedTimeSeriesSplit
@@ -64,6 +69,7 @@ from analysis.domain_adapter import DomainAdapter
 from models.conformal import fit_residuals, predict_interval, evaluate_coverage
 from analysis.regime_thresholds import find_regime_thresholds
 from analysis.concept_drift import ConceptDriftMonitor
+from analysis.pseudo_labeler import generate_pseudo_labels
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -223,6 +229,7 @@ def main(
     df_override: pd.DataFrame | None = None,
     transfer_from: str | None = None,
     use_pseudo_labels: bool = False,
+    df_unlabeled: pd.DataFrame | None = None,
 ) -> float:
     """Train LightGBM model and return weighted F1 score."""
     if cfg is None:
@@ -663,6 +670,12 @@ def main(
         mlflow.log_metric(
             f"fold_{fold}_f1_weighted", report["weighted avg"]["f1-score"]
         )
+        mlflow.log_metric(
+            f"fold_{fold}_precision_weighted", report["weighted avg"]["precision"]
+        )
+        mlflow.log_metric(
+            f"fold_{fold}_recall_weighted", report["weighted avg"]["recall"]
+        )
 
         all_preds.extend(preds)
         all_true.extend(y_val)
@@ -746,7 +759,29 @@ def main(
     logger.info("Model saved to %s", root / "model.joblib")
     mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
     mlflow.log_metric("f1_weighted", aggregate_report["weighted avg"]["f1-score"])
+    mlflow.log_metric("precision_weighted", aggregate_report["weighted avg"]["precision"])
+    mlflow.log_metric("recall_weighted", aggregate_report["weighted avg"]["recall"])
     mlflow.log_artifact(str(root / "model.joblib"))
+    if final_pipe is not None and df_unlabeled is not None:
+        X_unlabeled = df_unlabeled[features]
+        y_unlabeled = (
+            df_unlabeled["label"].values if "label" in df_unlabeled.columns else None
+        )
+        pseudo_path = generate_pseudo_labels(
+            final_pipe,
+            X_unlabeled,
+            y_true=y_unlabeled,
+            threshold=cfg.get("pseudo_label_threshold", 0.9),
+            output_dir=root / "data" / "pseudo_labels",
+            report_dir=root / "reports" / "pseudo_label",
+        )
+        logger.info("Generated pseudo labels at %s", pseudo_path)
+        if y_unlabeled is not None:
+            preds_unlabeled = final_pipe.predict(X_unlabeled)
+            prec = precision_score(y_unlabeled, preds_unlabeled, zero_division=0)
+            rec = recall_score(y_unlabeled, preds_unlabeled, zero_division=0)
+            mlflow.log_metric("pseudo_label_precision", prec)
+            mlflow.log_metric("pseudo_label_recall", rec)
     version_id = model_store.save_model(
         final_pipe,
         cfg,
