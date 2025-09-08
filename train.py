@@ -290,7 +290,9 @@ def main(
         if len(num_cols) > 0:
             adapter.fit_source(df[num_cols])
             df[num_cols] = adapter.transform(df[num_cols])
-            adapter.save(adapter_path)
+        # Always persist adapter state so subsequent runs can reuse learned
+        # statistics even if the current dataset lacks numeric columns.
+        adapter.save(adapter_path)
         df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes

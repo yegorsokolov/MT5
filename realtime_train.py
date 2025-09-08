@@ -425,6 +425,8 @@ async def train_realtime():
         scaler = FeatureScaler.load(scaler_path)
         adapter_path = root / "domain_adapter.pkl"
         adapter = DomainAdapter.load(adapter_path)
+        batch_count = 0
+        reestimate_interval = cfg.get("adapter_reestimate_interval", 100)
 
         symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
@@ -435,16 +437,39 @@ async def train_realtime():
             logger.info("Using %s backend for signal bus", signal_backend)
 
         async def process_batch(batch: pd.DataFrame) -> None:
+            nonlocal batch_count
             feats = await generate_features(batch)
             if feats.empty:
                 return
             feats = apply_liquidity_adjustment(feats)
             num_cols = feats.select_dtypes(np.number).columns
             if len(num_cols) > 0:
+                raw_feats = feats[num_cols].copy()
+                feats[num_cols] = adapter.transform(feats[num_cols])
                 scaler.partial_fit(feats[num_cols])
                 feats[num_cols] = scaler.transform(feats[num_cols])
-                feats[num_cols] = adapter.transform(feats[num_cols])
                 scaler.save(scaler_path)
+                batch_count += 1
+                if batch_count % reestimate_interval == 0:
+                    adapter.reestimate(raw_feats)
+                    adapter.save(adapter_path)
+                    if (
+                        adapter.source_mean_ is not None
+                        and adapter.target_mean_ is not None
+                        and adapter.source_cov_ is not None
+                        and adapter.target_cov_ is not None
+                    ):
+                        mean_diff = float(
+                            np.linalg.norm(adapter.source_mean_ - adapter.target_mean_)
+                        )
+                        cov_diff = float(
+                            np.linalg.norm(adapter.source_cov_ - adapter.target_cov_)
+                        )
+                        logger.info(
+                            "Domain adapter alignment: mean diff %.4f cov diff %.4f",
+                            mean_diff,
+                            cov_diff,
+                        )
             if not pipeline_anomaly.validate(feats):
                 logger.warning("Pipeline anomaly detected in features; dropping batch")
                 return
