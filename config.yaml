@@ -8,6 +8,8 @@ num_workers: null
 pred_cache_size: 256
 pred_cache_policy: lru
 plugin_cache_ttl: 0
+active_learning:
+  k: 10
 drift_method: adwin
 drift_delta: 0.002
 service_cmds:
