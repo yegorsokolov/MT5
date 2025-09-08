@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover - utils may not be available in tests
 
 from utils.resource_monitor import monitor, ResourceCapabilities
 
-from . import price, news, cross_asset
+from . import price, news, cross_asset, orderbook
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,7 @@ _REGISTRY: Dict[str, FeatureSpec] = {
     "price": FeatureSpec(price.compute, min_cpus=1, min_mem_gb=1.0),
     "news": FeatureSpec(news.compute, min_cpus=2, min_mem_gb=4.0),
     "cross_asset": FeatureSpec(cross_asset.compute, min_cpus=4, min_mem_gb=8.0),
+    "orderbook": FeatureSpec(orderbook.compute, min_cpus=2, min_mem_gb=2.0),
 }
 
 # Holds latest status report
@@ -95,7 +96,11 @@ def _update_status() -> None:
             },
         }
 
-    skipped = [n for n, s in statuses.items() if s["status"] == "skipped_insufficient_resources"]
+    skipped = [
+        n
+        for n, s in statuses.items()
+        if s["status"] == "skipped_insufficient_resources"
+    ]
     suggestion: Optional[str] = None
     if skipped:
         req_cpus = max(_REGISTRY[n].min_cpus for n in skipped)
@@ -157,4 +162,3 @@ except Exception:  # pragma: no cover - no running loop during import
 
 
 __all__ = ["get_feature_pipeline", "report_status"]
-
