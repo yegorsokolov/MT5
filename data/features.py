@@ -28,6 +28,7 @@ from utils import load_config
 from analysis import feature_gate
 from analysis.data_lineage import log_lineage
 from analysis.fractal_features import rolling_fractal_features
+from analysis.garch_vol import garch_volatility
 from .expectations import validate_dataframe
 from .multitimeframe import aggregate_timeframes
 
@@ -188,6 +189,24 @@ def add_fractal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_garch_volatility(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute EGARCH volatility on returns and append ``garch_vol`` column.
+
+    The heavy lifting is performed by :func:`analysis.garch_vol.garch_volatility`,
+    which fits an EGARCH(1,1) model when the ``arch`` library is available and
+    otherwise falls back to a 30-period rolling standard deviation. If the
+    required ``return`` column is missing, the input frame is returned
+    unchanged.
+    """
+
+    if "return" not in df.columns:
+        return df
+
+    df = df.copy()
+    df["garch_vol"] = garch_volatility(df["return"])
+    return df
+
+
 def add_corporate_actions(df: pd.DataFrame) -> pd.DataFrame:
     """Merge dividend, split and ownership data into ``df``.
 
@@ -300,6 +319,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         raw_file = df.attrs.get("source", "unknown")
         for col in new_cols:
             log_lineage(run_id, raw_file, compute.__name__, col)
+
+    # GARCH volatility derived from returns
+    df = add_garch_volatility(df)
 
     # Cross-spectral coherence metrics between symbols
     df = add_cross_spectral_features(df)
@@ -588,6 +610,7 @@ __all__ = [
     "add_cross_asset_features",
     "add_cross_spectral_features",
     "add_fractal_features",
+    "add_garch_volatility",
     "add_time_features",
     "make_features",
     "make_features_memmap",
