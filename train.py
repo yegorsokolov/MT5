@@ -339,6 +339,16 @@ def main(
 
     X = df[features]
 
+    al_queue = ActiveLearningQueue()
+    new_labels = al_queue.pop_labeled()
+    if not new_labels.empty and "tb_label" in df.columns:
+        df = merge_labels(df, new_labels, "tb_label")
+        y = df["tb_label"]
+        X = df[features]
+        save_history_parquet(df, root / "data" / "history.parquet")
+    logger.info("Active learning queue size: %d", len(al_queue))
+    al_k = cfg.get("active_learning", {}).get("k", 10)
+
     if use_pseudo_labels:
         pseudo_dir = root / "data" / "pseudo_labels"
         if pseudo_dir.exists():
@@ -625,7 +635,10 @@ def main(
             fit_params["clf__feval"] = feval
         pipe.fit(X_train, y_train, **fit_params)
 
-        probs = pipe.predict_proba(X_val)[:, 1]
+        val_probs = pipe.predict_proba(X_val)
+        al_queue.push(X_val.index, val_probs, k=al_k)
+        logger.info("Active learning queue size: %d", len(al_queue))
+        probs = val_probs[:, 1]
         for feat_row, pred in zip(X_val[features].to_dict("records"), probs):
             drift_monitor.update(feat_row, float(pred))
         regimes_val = X_val["market_regime"].values
@@ -799,21 +812,7 @@ def main(
         clf = final_pipe.named_steps.get("clf", final_pipe)
         export_lightgbm(clf, sample)
 
-    # Active learning: queue uncertain samples and integrate new labels
-    try:
-        if final_pipe is not None:
-            al_queue = ActiveLearningQueue()
-            probs = final_pipe.predict_proba(X)
-            prob_arr = probs[:, 1] if getattr(probs, "ndim", 1) > 1 else probs
-            for feat_row, pred in zip(X.to_dict("records"), prob_arr):
-                drift_monitor.update(feat_row, float(pred))
-            al_queue.push(X.index, probs, k=cfg.get("al_queue_size", 10))
-            new_labels = al_queue.pop_labeled()
-            if not new_labels.empty and "tb_label" in df.columns:
-                df = merge_labels(df, new_labels, "tb_label")
-                save_history_parquet(df, root / "data" / "history.parquet")
-    except Exception as e:  # pragma: no cover - fail safe
-        logger.warning("Active learning step failed: %s", e)
+    logger.info("Active learning queue size: %d", len(al_queue))
     model_card.generate(
         cfg,
         [root / "data" / "history.parquet"],
