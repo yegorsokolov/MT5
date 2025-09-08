@@ -41,6 +41,18 @@ class ActiveLearningQueue:
         self.labeled_path = labeled_path
         self.queue_path.parent.mkdir(parents=True, exist_ok=True)
 
+    def __len__(self) -> int:
+        if self.queue_path.exists():
+            try:
+                return len(json.loads(self.queue_path.read_text()))
+            except Exception:  # pragma: no cover - corrupted file
+                return 0
+        return 0
+
+    def size(self) -> int:
+        """Return number of samples currently queued."""
+        return len(self)
+
     def push(self, ids: Sequence[int], probs: np.ndarray, k: int = 10) -> None:
         """Push ``k`` most uncertain samples to the queue."""
         unc = entropy_uncertainty(probs)
