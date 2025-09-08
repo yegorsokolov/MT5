@@ -11,29 +11,49 @@ import pandas as pd
 class FeatureScaler:
     """Online feature scaler using Welford's algorithm.
 
-    Maintains running mean and variance for each feature allowing
-    normalisation of streaming data. The scaler can be updated with
+    Maintains running statistics for each feature allowing normalisation of
+    streaming data. The scaler can optionally clip values to a percentile and
+    use median/IQR based scaling for robustness. Statistics can be updated with
     ``partial_fit`` and serialised to disk for later reuse.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clip_pct: float | None = None, use_median: bool = False) -> None:
         self.mean_: np.ndarray | None = None
         self.m2_: np.ndarray | None = None
         self.n_: int = 0
         self.columns_: list[str] | None = None
 
+        self.clip_pct = clip_pct
+        self.use_median = use_median
+        self.median_: np.ndarray | None = None
+        self.q1_: np.ndarray | None = None
+        self.q3_: np.ndarray | None = None
+        self.clip_min_: np.ndarray | None = None
+        self.clip_max_: np.ndarray | None = None
+        self._data_: np.ndarray | None = None
+
     # ------------------------------------------------------------------
     # Fitting
     # ------------------------------------------------------------------
-    def fit(self, X: pd.DataFrame | np.ndarray, y: Any | None = None) -> "FeatureScaler":
+    def fit(
+        self, X: pd.DataFrame | np.ndarray, y: Any | None = None
+    ) -> "FeatureScaler":
         """Reset and fit on ``X``. Provided for sklearn compatibility."""
         self.mean_ = None
         self.m2_ = None
         self.n_ = 0
         self.columns_ = None
+        self.median_ = None
+        self.q1_ = None
+        self.q3_ = None
+        self.clip_min_ = None
+        self.clip_max_ = None
+        self._data_ = None
         return self.partial_fit(X)
 
-    def partial_fit(self, X: pd.DataFrame | np.ndarray, y: Any | None = None) -> "FeatureScaler":
+    def partial_fit(
+        self, X: pd.DataFrame | np.ndarray, y: Any | None = None
+    ) -> "FeatureScaler":
         """Update running statistics with a new batch ``X``."""
         if isinstance(X, pd.DataFrame):
             data = X.to_numpy(dtype=float)
@@ -60,6 +80,20 @@ class FeatureScaler:
         self.mean_ += delta * batch_n / total_n
         self.m2_ += batch_m2 + delta**2 * self.n_ * batch_n / total_n
         self.n_ = total_n
+
+        if self.use_median or self.clip_pct is not None:
+            if self._data_ is None:
+                self._data_ = data.copy()
+            else:
+                self._data_ = np.vstack([self._data_, data])
+            if self.use_median:
+                self.median_ = np.median(self._data_, axis=0)
+                self.q1_ = np.percentile(self._data_, 25, axis=0)
+                self.q3_ = np.percentile(self._data_, 75, axis=0)
+            if self.clip_pct is not None:
+                pct = float(self.clip_pct)
+                self.clip_min_ = np.percentile(self._data_, pct, axis=0)
+                self.clip_max_ = np.percentile(self._data_, 100 - pct, axis=0)
         return self
 
     # ------------------------------------------------------------------
@@ -81,9 +115,25 @@ class FeatureScaler:
             cols = self.columns_
             index = None
 
-        var = self.m2_ / max(self.n_ - 1, 1)
-        std = np.sqrt(var)
-        scaled = (data - self.mean_) / (std + 1e-8)
+        if (
+            self.clip_pct is not None
+            and self.clip_min_ is not None
+            and self.clip_max_ is not None
+        ):
+            data = np.clip(data, self.clip_min_, self.clip_max_)
+
+        if (
+            self.use_median
+            and self.median_ is not None
+            and self.q1_ is not None
+            and self.q3_ is not None
+        ):
+            iqr = self.q3_ - self.q1_
+            scaled = (data - self.median_) / (iqr + 1e-8)
+        else:
+            var = self.m2_ / max(self.n_ - 1, 1)
+            std = np.sqrt(var)
+            scaled = (data - self.mean_) / (std + 1e-8)
 
         if isinstance(X, pd.DataFrame):
             return pd.DataFrame(scaled, columns=cols, index=index)
@@ -98,6 +148,13 @@ class FeatureScaler:
             "m2": self.m2_,
             "n": self.n_,
             "columns": self.columns_,
+            "median": self.median_,
+            "q1": self.q1_,
+            "q3": self.q3_,
+            "clip_min": self.clip_min_,
+            "clip_max": self.clip_max_,
+            "clip_pct": self.clip_pct,
+            "use_median": self.use_median,
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
@@ -105,6 +162,13 @@ class FeatureScaler:
         self.m2_ = state.get("m2")
         self.n_ = state.get("n", 0)
         self.columns_ = state.get("columns")
+        self.median_ = state.get("median")
+        self.q1_ = state.get("q1")
+        self.q3_ = state.get("q3")
+        self.clip_min_ = state.get("clip_min")
+        self.clip_max_ = state.get("clip_max")
+        self.clip_pct = state.get("clip_pct", self.clip_pct)
+        self.use_median = state.get("use_median", self.use_median)
 
     def save(self, path: Path | str) -> Path:
         path = Path(path)
@@ -119,4 +183,3 @@ class FeatureScaler:
             state = joblib.load(path)
             scaler.load_state_dict(state)
         return scaler
-
