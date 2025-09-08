@@ -7,6 +7,8 @@ from typing import Dict, Mapping
 
 import pandas as pd
 from scheduler import schedule_retrain
+from analytics import mlflow_client as mlflow
+
 try:  # optional dependency
     from event_store import EventStore  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -166,6 +168,10 @@ class ConceptDriftMonitor:
         log_path = self.log_dir / f"{ts.replace(':', '-')}_{source}.json"
         with open(log_path, "w") as fh:
             json.dump({"timestamp": ts, "source": source}, fh)
+        try:
+            mlflow.log_metric("concept_drift", 1.0)
+        except Exception:  # pragma: no cover - mlflow optional
+            pass
         try:
             schedule_retrain(model=model, update_hyperparams=True, store=self.store)
         except Exception:
