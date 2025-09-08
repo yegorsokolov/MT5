@@ -11,7 +11,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.calibration import calibration_curve
+from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
@@ -23,9 +23,28 @@ class ProbabilityCalibrator:
 
     method: str = "platt"
     model: Any | None = None
+    cv: int | None = None
 
-    def fit(self, y_true: np.ndarray, probs: np.ndarray) -> "ProbabilityCalibrator":
+    def fit(
+        self,
+        y_true: np.ndarray,
+        probs: np.ndarray | None = None,
+        *,
+        base_model: Any | None = None,
+        X: Any | None = None,
+    ) -> "ProbabilityCalibrator":
         y_arr = np.asarray(y_true)
+        if self.cv is not None:
+            if base_model is None or X is None:
+                raise ValueError("base_model and X required when cv is set")
+            method = "sigmoid" if self.method == "platt" else "isotonic"
+            ccv = CalibratedClassifierCV(base_model, cv=self.cv, method=method)
+            ccv.fit(X, y_arr)
+            self.model = ccv
+            return self
+
+        if probs is None:
+            raise ValueError("probs required when cv is None")
         p_arr = np.asarray(probs)
         if self.method == "platt":
             lr = LogisticRegression()
@@ -39,13 +58,15 @@ class ProbabilityCalibrator:
             raise ValueError(f"Unknown calibration method: {self.method}")
         return self
 
-    def predict(self, probs: np.ndarray) -> np.ndarray:
+    def predict(self, data: np.ndarray) -> np.ndarray:
         if self.model is None:
             raise RuntimeError("Calibrator has not been fitted")
-        p_arr = np.asarray(probs)
+        arr = np.asarray(data)
+        if self.cv is not None:
+            return self.model.predict_proba(arr)[:, 1]
         if self.method == "platt":
-            return self.model.predict_proba(p_arr.reshape(-1, 1))[:, 1]
-        return self.model.predict(p_arr)
+            return self.model.predict_proba(arr.reshape(-1, 1))[:, 1]
+        return self.model.predict(arr)
 
 
 class CalibratedModel:
