@@ -19,6 +19,10 @@ from features.cross_asset import (
     add_index_features,
     add_cross_asset_features,
 )
+from analysis.cross_spectral import (
+    compute as cross_spectral_compute,
+    REQUIREMENTS as CROSS_SPECTRAL_REQ,
+)
 from utils.resource_monitor import monitor, ResourceCapabilities
 from utils import load_config
 from analysis import feature_gate
@@ -37,9 +41,15 @@ except Exception:  # pragma: no cover - config may be unavailable
 
 def _apply_transform(fn, df):
     """Apply ``fn`` to ``df`` unless throttled by latency."""
-    latency = getattr(monitor, "latency", lambda: getattr(monitor, "tick_to_signal_latency", 0.0))
+    latency = getattr(
+        monitor, "latency", lambda: getattr(monitor, "tick_to_signal_latency", 0.0)
+    )
     latency_val = latency() if callable(latency) else latency
-    if LATENCY_THRESHOLD and latency_val > LATENCY_THRESHOLD and getattr(fn, "degradable", False):
+    if (
+        LATENCY_THRESHOLD
+        and latency_val > LATENCY_THRESHOLD
+        and getattr(fn, "degradable", False)
+    ):
         logger.warning(
             "Throttling feature %s (latency %.3fs > %.3fs)",
             fn.__name__,
@@ -226,6 +236,36 @@ add_corporate_actions.min_capability = "standard"  # type: ignore[attr-defined]
 add_corporate_actions.degradable = True  # type: ignore[attr-defined]
 
 
+def add_cross_spectral_features(df: pd.DataFrame, window: int = 64) -> pd.DataFrame:
+    """Append rolling cross-spectral coherence columns to ``df``.
+
+    For each pair of symbols the magnitude-squared coherence of their return
+    series is computed over ``window`` observations using
+    :func:`analysis.cross_spectral.compute`.  For rows where ``Symbol`` equals
+    ``A`` the column ``coh_B`` stores coherence with symbol ``B``.
+    """
+
+    caps = getattr(
+        monitor,
+        "capabilities",
+        ResourceCapabilities(cpus=1, memory_gb=0.0, has_gpu=False, gpu_count=0),
+    )
+    req = CROSS_SPECTRAL_REQ
+    if (
+        caps.cpus >= req.cpus
+        and caps.memory_gb >= req.memory_gb
+        and (caps.has_gpu or not req.has_gpu)
+    ):
+        try:
+            cross_spectral_compute.degradable = True  # type: ignore[attr-defined]
+            df = _apply_transform(
+                lambda d: cross_spectral_compute(d, window=window), df
+            )
+        except Exception:  # pragma: no cover - computation may fail
+            logger.debug("cross spectral computation failed", exc_info=True)
+    return df
+
+
 def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """Generate model features by executing registered modules sequentially.
 
@@ -243,7 +283,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """
 
     try:
-        mtf = aggregate_timeframes(df, ["1min", "15min", "1h"]).drop(columns=["Timestamp"])
+        mtf = aggregate_timeframes(df, ["1min", "15min", "1h"]).drop(
+            columns=["Timestamp"]
+        )
         df = pd.concat([df, mtf], axis=1)
     except Exception:
         logger.debug("multi-timeframe aggregation failed", exc_info=True)
@@ -259,6 +301,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         for col in new_cols:
             log_lineage(run_id, raw_file, compute.__name__, col)
 
+    # Cross-spectral coherence metrics between symbols
+    df = add_cross_spectral_features(df)
+
     # Fractal metrics derived from mid-price after price-based features
     df = add_fractal_features(df)
 
@@ -272,26 +317,6 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         plugins = []
     for plugin in plugins:
         df = plugin(df, adjacency_matrices=adjacency)
-
-    # Optionally compute cross-spectral coherence features on capable machines
-    try:
-        from analysis import cross_spectral
-
-        caps = getattr(
-            monitor,
-            "capabilities",
-            ResourceCapabilities(cpus=1, memory_gb=0.0, has_gpu=False, gpu_count=0),
-        )
-        req = getattr(cross_spectral, "REQUIREMENTS", caps)
-        if (
-            caps.cpus >= req.cpus
-            and caps.memory_gb >= req.memory_gb
-            and (caps.has_gpu or not req.has_gpu)
-        ):
-            cross_spectral.compute.degradable = True  # type: ignore[attr-defined]
-            df = _apply_transform(cross_spectral.compute, df)
-    except Exception:
-        logger.debug("cross spectral computation failed", exc_info=True)
 
     # Merge options implied volatility and skew where resources allow
     try:
@@ -463,7 +488,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     # gate is computed offline and persisted for deterministic behaviour, so at
     # runtime we simply apply the stored selection without recomputing
     # importances.
-    regime_id = int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
+    regime_id = (
+        int(df["market_regime"].iloc[-1]) if "market_regime" in df.columns else 0
+    )
     df, _ = feature_gate.select(df, tier, regime_id, persist=False)
 
     df = optimize_dtypes(df)
@@ -482,6 +509,7 @@ def make_features_memmap(path: str | Path, chunk_size: int = 1000) -> pd.DataFra
 
 # -- Technical helpers -------------------------------------------------
 
+
 def compute_rsi(series: pd.Series, period: int) -> pd.Series:
     delta = series.diff()
     up = delta.clip(lower=0)
@@ -492,7 +520,9 @@ def compute_rsi(series: pd.Series, period: int) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def ma_cross_signal(df: pd.DataFrame, short: str = "ma_10", long: str = "ma_30") -> pd.Series:
+def ma_cross_signal(
+    df: pd.DataFrame, short: str = "ma_10", long: str = "ma_30"
+) -> pd.Series:
     cross_up = (df[short] > df[long]) & (df[short].shift(1) <= df[long].shift(1))
     cross_down = (df[short] < df[long]) & (df[short].shift(1) >= df[long].shift(1))
     signal = pd.Series(0, index=df.index)
@@ -501,7 +531,9 @@ def ma_cross_signal(df: pd.DataFrame, short: str = "ma_10", long: str = "ma_30")
     return signal
 
 
-def train_test_split(df: pd.DataFrame, n_train: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def train_test_split(
+    df: pd.DataFrame, n_train: int
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     if "Symbol" in df.columns:
         trains: List[pd.DataFrame] = []
         tests: List[pd.DataFrame] = []
@@ -554,6 +586,7 @@ __all__ = [
     "add_economic_calendar_features",
     "add_news_sentiment_features",
     "add_cross_asset_features",
+    "add_cross_spectral_features",
     "add_fractal_features",
     "add_time_features",
     "make_features",
