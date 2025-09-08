@@ -62,6 +62,7 @@ from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
 from analysis.domain_adapter import DomainAdapter
 from models.conformal import fit_residuals, predict_interval, evaluate_coverage
+from analysis.regime_thresholds import find_regime_thresholds
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -495,6 +496,7 @@ def main(
         n_splits=cfg.get("n_splits", 5), embargo=cfg.get("max_horizon", 0)
     )
     all_preds: list[int] = []
+    all_regimes: list[int] = []
     all_true: list[int] = []
     all_probs: list[float] = []
     all_lower: list[float] = []
@@ -512,6 +514,7 @@ def main(
         all_preds = state.get("all_preds", [])
         all_true = state.get("all_true", [])
         all_probs = state.get("all_probs", [])
+        all_regimes = state.get("all_regimes", [])
         all_lower = state.get("all_lower", [])
         all_upper = state.get("all_upper", [])
         final_pipe = state.get("model")
@@ -591,12 +594,10 @@ def main(
         pipe.fit(X_train, y_train, **fit_params)
 
         probs = pipe.predict_proba(X_val)[:, 1]
-        prec, rec, thr = precision_recall_curve(y_val, probs)
-        f1_scores = 2 * prec * rec / (prec + rec + 1e-9)
-        best_idx = np.argmax(f1_scores[:-1])
-        best_thr = thr[best_idx]
-        preds = (probs > best_thr).astype(int)
-        mlflow.log_metric(f"fold_{fold}_best_thr", float(best_thr))
+        regimes_val = X_val["market_regime"].values
+        thr_dict, preds = find_regime_thresholds(y_val.values, probs, regimes_val)
+        for reg, thr_val in thr_dict.items():
+            mlflow.log_metric(f"fold_{fold}_thr_regime_{reg}", float(thr_val))
         last_val_X, last_val_y, last_val_probs = X_val, y_val, probs
         residuals = y_val.values - probs
         q = fit_residuals(residuals, alpha=cfg.get("interval_alpha", 0.1))
@@ -617,6 +618,7 @@ def main(
         all_preds.extend(preds)
         all_true.extend(y_val)
         all_probs.extend(probs)
+        all_regimes.extend(regimes_val)
         all_lower.extend(lower)
         all_upper.extend(upper)
         state = {
@@ -624,9 +626,11 @@ def main(
             "all_preds": all_preds,
             "all_true": all_true,
             "all_probs": all_probs,
+            "all_regimes": all_regimes,
             "all_lower": all_lower,
             "all_upper": all_upper,
             "metrics": report,
+            "regime_thresholds": thr_dict,
         }
         if "scaler" in pipe.named_steps:
             state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
@@ -639,6 +643,9 @@ def main(
     overall_cov = (
         evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
     )
+    regime_thresholds, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
+    for reg, thr_val in regime_thresholds.items():
+        mlflow.log_metric(f"thr_regime_{reg}", float(thr_val))
     mlflow.log_metric("interval_coverage", overall_cov)
     logger.info("Overall interval coverage: %.3f", overall_cov)
     pred_df = pd.DataFrame(
@@ -646,6 +653,7 @@ def main(
             "y_true": all_true,
             "pred": all_preds,
             "prob": all_probs,
+            "market_regime": all_regimes,
             "lower": all_lower,
             "upper": all_upper,
         }
@@ -681,6 +689,8 @@ def main(
     aggregate_report = classification_report(all_true, all_preds, output_dict=True)
     logger.info("\n%s", classification_report(all_true, all_preds))
 
+    if final_pipe is not None:
+        setattr(final_pipe, "regime_thresholds", regime_thresholds)
     joblib.dump(final_pipe, root / "model.joblib")
     if final_pipe and "scaler" in final_pipe.named_steps:
         final_pipe.named_steps["scaler"].save(scaler_path)
@@ -691,7 +701,10 @@ def main(
     version_id = model_store.save_model(
         final_pipe,
         cfg,
-        {"f1_weighted": aggregate_report["weighted avg"]["f1-score"]},
+        {
+            "f1_weighted": aggregate_report["weighted avg"]["f1-score"],
+            "regime_thresholds": regime_thresholds,
+        },
         features=features,
     )
     logger.info("Registered model version %s", version_id)
