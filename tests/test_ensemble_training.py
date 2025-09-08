@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 import types
 import contextlib
+import importlib.util
+from pathlib import Path
 
 # Ensure real scipy modules are available for sklearn
 sys.modules.pop("scipy", None)
@@ -24,7 +26,14 @@ mlflow_stub = types.SimpleNamespace(
 )
 sys.modules["mlflow"] = mlflow_stub
 
-from train_ensemble import main
+_spec = importlib.util.spec_from_file_location(
+    "train_ensemble", Path(__file__).resolve().parents[1] / "train_ensemble.py"
+)
+_te = importlib.util.module_from_spec(_spec)
+assert _spec and _spec.loader
+sys.modules["train_ensemble"] = _te
+_spec.loader.exec_module(_te)  # type: ignore
+main = _te.main
 
 
 def test_ensemble_beats_base_models():
