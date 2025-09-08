@@ -559,6 +559,32 @@ def main(
                     ],
                     ignore_index=True,
                 )
+            elif cfg.get("use_diffusion_aug", False):
+                from analysis.scenario_diffusion import ScenarioDiffusion
+
+                logger.info("Generating diffusion crash scenarios on the fly")
+                seq_len = cfg.get("sequence_length", 50)
+                n_syn = cfg.get("diffusion_aug_samples", len(X_train))
+                model = ScenarioDiffusion(seq_len=seq_len)
+                ret_idx = features.index("return") if "return" in features else None
+                X_syn = np.zeros((n_syn, len(features)))
+                y_syn = np.zeros(n_syn, dtype=int)
+                for i in range(n_syn):
+                    path = model.sample_crash_recovery(seq_len)
+                    val = float(np.clip(path.min(), -0.3, 0.3))
+                    if ret_idx is not None:
+                        X_syn[i, ret_idx] = val
+                df_aug = pd.DataFrame(X_syn, columns=features)
+                X_train = pd.concat([X_train, df_aug], ignore_index=True)
+                y_train = pd.concat(
+                    [
+                        y_train,
+                        pd.Series(
+                            y_syn, index=range(len(y_train), len(y_train) + len(y_syn))
+                        ),
+                    ],
+                    ignore_index=True,
+                )
 
         steps: list[tuple[str, object]] = []
         if cfg.get("use_scaler", True):
