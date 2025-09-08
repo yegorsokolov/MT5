@@ -8,7 +8,8 @@ class BaseModelConfig(BaseModel):
     """Configuration for a single ensemble component model."""
 
     type: str = Field(
-        ..., description="Model type, e.g. lightgbm, cross_asset_transformer, neural_quantile"
+        ...,
+        description="Model type, e.g. lightgbm, cross_asset_transformer, neural_quantile",
     )
     params: dict[str, Any] | None = Field(
         None, description="Optional model hyper-parameters"
@@ -60,6 +61,12 @@ class ConfigSchema(BaseModel):
         0,
         ge=0,
         description="Seconds before unused plugins are unloaded from memory",
+    )
+    drift_method: str = Field("adwin", description="Concept drift detection method")
+    drift_delta: float = Field(
+        0.002,
+        gt=0,
+        description="Sensitivity parameter for concept drift detector",
     )
     service_cmds: dict[str, list[str]] | None = Field(
         None,
