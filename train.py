@@ -501,6 +501,7 @@ def main(
     all_upper: list[float] = []
     final_pipe: Pipeline | None = None
     X_train_final: pd.DataFrame | None = None
+    last_val_X: pd.DataFrame | None = None
     last_val_y: np.ndarray | None = None
     last_val_probs: np.ndarray | None = None
     start_fold = 0
@@ -596,7 +597,7 @@ def main(
         best_thr = thr[best_idx]
         preds = (probs > best_thr).astype(int)
         mlflow.log_metric(f"fold_{fold}_best_thr", float(best_thr))
-        last_val_y, last_val_probs = y_val, probs
+        last_val_X, last_val_y, last_val_probs = X_val, y_val, probs
         residuals = y_val.values - probs
         q = fit_residuals(residuals, alpha=cfg.get("interval_alpha", 0.1))
         lower, upper = predict_interval(probs, q)
@@ -655,12 +656,18 @@ def main(
 
     calibrator = None
     calib_method = cfg.get("calibration")
-    if calib_method and final_pipe is not None:
-        calibrator = ProbabilityCalibrator(method=calib_method).fit(
-            last_val_y, last_val_probs
-        )
-        calibrated_probs = calibrator.predict(last_val_probs)
-        log_reliability(
+    calib_cv = cfg.get("calibration_cv")
+    if calib_method and final_pipe is not None and last_val_y is not None:
+        calibrator = ProbabilityCalibrator(method=calib_method, cv=calib_cv)
+        if calib_cv:
+            calibrator.fit(last_val_y, base_model=final_pipe, X=last_val_X)
+            calibrated_probs = calibrator.predict(last_val_X)
+            final_pipe = calibrator.model
+        else:
+            calibrator.fit(last_val_y, last_val_probs)
+            calibrated_probs = calibrator.predict(last_val_probs)
+            final_pipe = CalibratedModel(final_pipe, calibrator)
+        brier_raw, brier_cal = log_reliability(
             last_val_y,
             last_val_probs,
             calibrated_probs,
@@ -668,7 +675,8 @@ def main(
             "lgbm",
             calib_method,
         )
-        final_pipe = CalibratedModel(final_pipe, calibrator)
+        mlflow.log_metric("calibration_brier_raw", brier_raw)
+        mlflow.log_metric("calibration_brier_calibrated", brier_cal)
 
     aggregate_report = classification_report(all_true, all_preds, output_dict=True)
     logger.info("\n%s", classification_report(all_true, all_preds))

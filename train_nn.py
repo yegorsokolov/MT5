@@ -938,7 +938,7 @@ def main(
                         val_true_arr, val_probs_arr
                     )
                     calibrated = calibrator.predict(val_probs_arr)
-                    log_reliability(
+                    brier_raw, brier_cal = log_reliability(
                         val_true_arr,
                         val_probs_arr,
                         calibrated,
@@ -946,6 +946,8 @@ def main(
                         "nn",
                         calib_method,
                     )
+                    mlflow.log_metric("calibration_brier_raw", brier_raw)
+                    mlflow.log_metric("calibration_brier_calibrated", brier_cal)
 
             correct = 0
             total = 0
