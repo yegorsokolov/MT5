@@ -28,6 +28,7 @@ from utils import load_config
 from analysis import feature_gate
 from analysis.data_lineage import log_lineage
 from analysis.fractal_features import rolling_fractal_features
+from analysis.frequency_features import spectral_features, wavelet_energy
 from analysis.garch_vol import garch_volatility
 from .expectations import validate_dataframe
 from .multitimeframe import aggregate_timeframes
@@ -189,6 +190,45 @@ def add_fractal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_frequency_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Append frequency-domain energy metrics to ``df``.
+
+    The price series (``mid`` if present otherwise ``close``) is passed to
+    :func:`analysis.frequency_features.spectral_features` and
+    :func:`analysis.frequency_features.wavelet_energy` producing two columns:
+
+    - ``spec_energy``: Rolling spectral energy derived from the FFT.
+    - ``wavelet_energy``: Energy of wavelet detail coefficients.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data containing a price column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Original ``df`` with the new frequency features appended. If neither a
+        ``mid`` nor ``close`` column is present the frame is returned
+        unchanged.
+    """
+
+    price_col = None
+    if "mid" in df.columns:
+        price_col = "mid"
+    elif "close" in df.columns:
+        price_col = "close"
+    if price_col is None:
+        return df
+
+    spec = spectral_features(df[price_col])
+    wave = wavelet_energy(df[price_col])
+    df = df.copy()
+    df["spec_energy"] = spec["spec_energy"]
+    df["wavelet_energy"] = wave["wavelet_energy"]
+    return df
+
+
 def add_garch_volatility(df: pd.DataFrame) -> pd.DataFrame:
     """Compute EGARCH volatility on returns and append ``garch_vol`` column.
 
@@ -297,8 +337,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     feature set is then passed through :func:`analysis.feature_gate.select` to
     drop low-importance or heavy features for the current capability tier and
     market regime, ensuring consistent behaviour across runs. After price-based
-    features are computed, rolling fractal metrics ``hurst`` and ``fractal_dim``
-    derived from the mid price are appended to the frame.
+    features are computed, frequency-domain energies ``spec_energy`` and
+    ``wavelet_energy`` along with rolling fractal metrics ``hurst`` and
+    ``fractal_dim`` derived from the mid price are appended to the frame.
     """
 
     try:
@@ -325,6 +366,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     # Cross-spectral coherence metrics between symbols
     df = add_cross_spectral_features(df)
+
+    # Frequency-domain energy metrics on the price series
+    df = add_frequency_features(df)
 
     # Fractal metrics derived from mid-price after price-based features
     df = add_fractal_features(df)
@@ -609,6 +653,7 @@ __all__ = [
     "add_news_sentiment_features",
     "add_cross_asset_features",
     "add_cross_spectral_features",
+    "add_frequency_features",
     "add_fractal_features",
     "add_garch_volatility",
     "add_time_features",
