@@ -160,6 +160,7 @@ def backtest_on_df(
     probs = model.predict_proba(df[feats])[:, 1]
 
     threshold = cfg.get("threshold", 0.55)
+    regime_thresholds = getattr(model, "regime_thresholds", {})
     distance = cfg.get("trailing_stop_pips", 20) * 1e-4
     order_size = cfg.get("order_size", 1.0)
 
@@ -182,7 +183,9 @@ def backtest_on_df(
         ask_vol = getattr(row, "AskVolume", np.inf)
 
         engine.record_volume(bid_vol + ask_vol)
-        if not in_position and prob > threshold:
+        regime = getattr(row, "market_regime", None)
+        thr = regime_thresholds.get(int(regime), threshold) if regime is not None else threshold
+        if not in_position and prob > thr:
             result = engine.place_order(
                 side="buy",
                 quantity=order_size,
