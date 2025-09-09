@@ -284,6 +284,22 @@ def main(
         mlflow.log_metric("f1_ensemble", ens_f1)
         best_base = max(metrics[n] for n in models)
         mlflow.log_metric("ensemble_improvement", ens_f1 - best_base)
+        if cfg.get("use_price_distribution"):
+            from train_price_distribution import train_price_distribution
+
+            _, dist_metrics = train_price_distribution(
+                X_train.values,
+                y_train,
+                X_val.values,
+                y_val,
+                n_components=int(cfg.get("n_components", 3)),
+                epochs=int(cfg.get("dist_epochs", 100)),
+            )
+            mlflow.log_metrics({
+                "dist_coverage": dist_metrics["coverage"],
+                "dist_baseline_coverage": dist_metrics["baseline_coverage"],
+                "dist_expected_shortfall": dist_metrics["expected_shortfall"],
+            })
     finally:
         mlflow.end_run()
 
