@@ -25,15 +25,19 @@ class BaselineMovingAverageStrategy:
         Number of recent prices for the slow moving average.
     """
 
-    def __init__(self, short_window: int = 5, long_window: int = 20) -> None:
+    def __init__(
+        self, short_window: int = 5, long_window: int = 20, min_diff: float = 0.0
+    ) -> None:
         if short_window >= long_window:
             raise ValueError("short_window must be < long_window")
+        if min_diff < 0:
+            raise ValueError("min_diff must be non-negative")
         self.short_window = short_window
         self.long_window = long_window
+        self.min_diff = float(min_diff)
         self._short: Deque[float] = deque(maxlen=short_window)
         self._long: Deque[float] = deque(maxlen=long_window)
-        self._prev_short = 0.0
-        self._prev_long = 0.0
+        self._prev_diff = 0.0
 
     def generate_order(self, tick: Dict[str, Any]) -> Dict[str, int]:
         """Generate an order based on the latest price tick."""
@@ -46,16 +50,19 @@ class BaselineMovingAverageStrategy:
 
         short_ma = sum(self._short) / self.short_window
         long_ma = sum(self._long) / self.long_window
+        diff = short_ma - long_ma
 
         quantity = 0
-        if short_ma > long_ma and self._prev_short <= self._prev_long:
+        if diff > self.min_diff and self._prev_diff <= self.min_diff:
             quantity = 1
-        elif short_ma < long_ma and self._prev_short >= self._prev_long:
+        elif diff < -self.min_diff and self._prev_diff >= -self.min_diff:
             quantity = -1
 
-        self._prev_short, self._prev_long = short_ma, long_ma
+        self._prev_diff = diff
         return {"quantity": quantity}
 
-    def update(self, order: Dict[str, Any], outcome: float) -> None:  # pragma: no cover - simple baseline
+    def update(
+        self, order: Dict[str, Any], outcome: float
+    ) -> None:  # pragma: no cover - simple baseline
         """Update internal state from trade outcome (no-op for baseline)."""
         return
