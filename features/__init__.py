@@ -34,6 +34,8 @@ from . import (
     auto_indicator,
     volume,
     multi_timeframe,
+    supertrend,
+    adaptive_ma,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,9 +59,9 @@ _REGISTRY: Dict[str, FeatureSpec] = {
     "orderbook": FeatureSpec(orderbook.compute, min_cpus=2, min_mem_gb=2.0),
     "auto_indicator": FeatureSpec(auto_indicator.compute, min_cpus=1, min_mem_gb=1.0),
     "volume": FeatureSpec(volume.compute, min_cpus=1, min_mem_gb=1.0),
-    "multi_timeframe": FeatureSpec(
-        multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0
-    ),
+    "multi_timeframe": FeatureSpec(multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0),
+    "supertrend": FeatureSpec(supertrend.compute, min_cpus=1, min_mem_gb=1.0),
+    "adaptive_ma": FeatureSpec(adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0),
 }
 
 # Holds latest status report
