@@ -20,3 +20,13 @@ def test_no_overlap_with_embargo() -> None:
         start, end = val_idx[0], val_idx[-1] + 1
         embargo_range = set(range(max(0, start - embargo), min(n, end + embargo)))
         assert embargo_range.isdisjoint(train_idx)
+
+
+def test_group_exclusion() -> None:
+    data = list(range(12))
+    groups = [0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1]
+    splitter = PurgedTimeSeriesSplit(n_splits=3, embargo=0)
+    for train_idx, val_idx in splitter.split(data, groups=groups):
+        train_groups = {groups[i] for i in train_idx}
+        val_groups = {groups[i] for i in val_idx}
+        assert train_groups.isdisjoint(val_groups)
