@@ -6,6 +6,7 @@ from typing import Any, Tuple
 from datetime import datetime
 import shutil
 import joblib
+from filelock import FileLock
 from crypto_utils import _load_key, encrypt, decrypt
 
 try:  # optional during tests
@@ -94,20 +95,35 @@ def load_latest_checkpoint(
 # ---------------------------------------------------------------------------
 # Runtime state persistence
 # ---------------------------------------------------------------------------
-_STATE_DIR = Path("/var/lib/mt5bot")
+_STATE_DIR = Path(os.getenv("MT5BOT_STATE_DIR", "/var/lib/mt5bot"))
 _STATE_FILE = _STATE_DIR / "runtime_state.pkl"
+
+
+def _ensure_state_dir() -> None:
+    """Create the state directory with restrictive permissions."""
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    try:  # ensure only owner can access
+        os.chmod(_STATE_DIR, 0o700)
+    except PermissionError:  # pragma: no cover - best effort on readonly FS
+        pass
+
+
+def _lock(path: Path) -> FileLock:
+    """Return a file lock for ``path``."""
+    return FileLock(str(path) + ".lock")
 
 
 def _runtime_state_file(account_id: str | None = None) -> Path:
     """Return the runtime state file path for ``account_id``.
 
-    If ``account_id`` is provided, the state is namespaced per MT5 account
-    so that switching between accounts does not leak trading state.  When no
-    ``account_id`` is given the legacy ``runtime_state.pkl`` location is
-    used for backwards compatibility.
+    When ``account_id`` is provided the identifier is validated and the state
+    file is namespaced per MT5 account so switching accounts does not leak
+    trading state.
     """
 
     if account_id:
+        if not str(account_id).isdigit():
+            raise ValueError("Invalid account_id")
         return _STATE_DIR / f"runtime_state_{account_id}.pkl"
     return _STATE_FILE
 
@@ -149,7 +165,7 @@ def save_runtime_state(
         Location of the persisted state file.
     """
 
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dir()
     state = {
         "last_timestamp": last_timestamp,
         "open_positions": open_positions,
@@ -160,7 +176,8 @@ def save_runtime_state(
     if feature_scalers is not None:
         state["feature_scalers"] = feature_scalers
     path = _runtime_state_file(account_id)
-    joblib.dump(state, path)
+    with _lock(path):
+        joblib.dump(state, path)
     return path
 
 
@@ -171,9 +188,8 @@ def load_runtime_state(account_id: str | None = None) -> dict[str, Any] | None:
     ----------
     account_id:
         Optional MT5 account identifier. When provided, the state is loaded
-        from the account-specific file. If no file exists for that account the
-        legacy global state file is used as a fallback to allow migration of
-        existing state when a user switches accounts.
+        from the account-specific file. No automatic fallback to the legacy
+        global file is performed.
 
     Returns
     -------
@@ -184,15 +200,10 @@ def load_runtime_state(account_id: str | None = None) -> dict[str, Any] | None:
 
     path = _runtime_state_file(account_id)
     if not path.exists():
-        if account_id:
-            # Fallback to legacy state file when migrating to a new account
-            path = _STATE_FILE
-            if not path.exists():
-                return None
-        else:
-            return None
+        return None
     try:
-        state: dict[str, Any] = joblib.load(path)
+        with _lock(path):
+            state: dict[str, Any] = joblib.load(path)
     except Exception:
         return None
 
@@ -204,6 +215,26 @@ def load_runtime_state(account_id: str | None = None) -> dict[str, Any] | None:
     return state
 
 
+def legacy_runtime_state_exists() -> bool:
+    """Return ``True`` if the pre-account namespaced state file exists."""
+
+    return _STATE_FILE.exists()
+
+
+def migrate_runtime_state(account_id: str) -> Path:
+    """Move legacy runtime state to the account-specific file."""
+
+    new_path = _runtime_state_file(account_id)
+    if new_path.exists():
+        return new_path
+    if not _STATE_FILE.exists():
+        raise FileNotFoundError("Legacy runtime state not found")
+    _ensure_state_dir()
+    with _lock(_STATE_FILE), _lock(new_path):
+        shutil.move(_STATE_FILE, new_path)
+    return new_path
+
+
 # ---------------------------------------------------------------------------
 # Replay state persistence
 # ---------------------------------------------------------------------------
@@ -213,8 +244,9 @@ _REPLAY_TS_FILE = _STATE_DIR / "last_replay_timestamp.txt"
 def save_replay_timestamp(ts: str) -> Path:
     """Persist the timestamp of the last reprocessed decision."""
 
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
-    _REPLAY_TS_FILE.write_text(ts)
+    _ensure_state_dir()
+    with _lock(_REPLAY_TS_FILE):
+        _REPLAY_TS_FILE.write_text(ts)
     return _REPLAY_TS_FILE
 
 
@@ -223,7 +255,8 @@ def load_replay_timestamp() -> str:
 
     if not _REPLAY_TS_FILE.exists():
         return ""
-    return _REPLAY_TS_FILE.read_text().strip()
+    with _lock(_REPLAY_TS_FILE):
+        return _REPLAY_TS_FILE.read_text().strip()
 
 
 # ---------------------------------------------------------------------------
@@ -237,13 +270,14 @@ def save_user_risk(
 ) -> Path:
     """Persist user-provided risk parameters."""
 
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dir()
     data = {
         "daily_drawdown": daily_drawdown,
         "total_drawdown": total_drawdown,
         "news_blackout_minutes": news_blackout_minutes,
     }
-    joblib.dump(data, _RISK_FILE)
+    with _lock(_RISK_FILE):
+        joblib.dump(data, _RISK_FILE)
     return _RISK_FILE
 
 
@@ -253,7 +287,8 @@ def load_user_risk() -> dict[str, Any] | None:
     if not _RISK_FILE.exists():
         return None
     try:
-        data: dict[str, Any] = joblib.load(_RISK_FILE)
+        with _lock(_RISK_FILE):
+            data: dict[str, Any] = joblib.load(_RISK_FILE)
     except Exception:
         return None
     return data
@@ -274,19 +309,9 @@ def save_router_state(
     history: list[tuple[Any, float, str]],
     total_plays: int,
 ) -> Path:
-    """Persist the strategy router's state to disk.
+    """Persist the strategy router's state to disk."""
 
-    Parameters
-    ----------
-    champion: Current champion strategy name.
-    A, b: LinUCB parameter matrices.
-    rewards: Cumulative reward per strategy.
-    counts: Number of plays per strategy.
-    history: Recorded feature/reward pairs.
-    total_plays: Total number of routing decisions made.
-    """
-
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dir()
     state = {
         "champion": champion,
         "A": A,
@@ -296,7 +321,8 @@ def save_router_state(
         "history": history,
         "total_plays": total_plays,
     }
-    joblib.dump(state, _ROUTER_FILE)
+    with _lock(_ROUTER_FILE):
+        joblib.dump(state, _ROUTER_FILE)
     return _ROUTER_FILE
 
 
@@ -306,7 +332,8 @@ def load_router_state() -> dict[str, Any] | None:
     if not _ROUTER_FILE.exists():
         return None
     try:
-        return joblib.load(_ROUTER_FILE)
+        with _lock(_ROUTER_FILE):
+            return joblib.load(_ROUTER_FILE)
     except Exception:
         return None
 
