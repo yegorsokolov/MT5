@@ -92,32 +92,40 @@ def main() -> None:
     if st.sidebar.button("Export state"):
         try:
             archive_path = (
-                subprocess.check_output(["bash", "scripts/export_state.sh"])
-                .decode()
+                subprocess.check_output(["bash", "scripts/export_state.sh"], text=True)
                 .strip()
             )
             with open(archive_path, "rb") as f:
                 st.sidebar.download_button(
                     label="Download project state",
-                    data=f.read(),
+                    data=f,
                     file_name=os.path.basename(archive_path),
                     mime="application/gzip",
                 )
+            os.remove(archive_path)
         except Exception as exc:  # pragma: no cover - GUI feedback only
             st.sidebar.error(f"Export failed: {exc}")
 
     uploaded = st.sidebar.file_uploader("Upload state archive", type="tar.gz")
     if st.sidebar.button("Import state") and uploaded:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz") as tmp:
-            tmp.write(uploaded.getbuffer())
-            tmp_path = tmp.name
-        try:
-            subprocess.check_call(["bash", "scripts/import_state.sh", tmp_path])
-            load_current_config.clear()
-            st.sidebar.success("Import complete. Reloading...")
-            st.experimental_rerun()
-        except Exception as exc:  # pragma: no cover - GUI feedback only
-            st.sidebar.error(f"Import failed: {exc}")
+        if uploaded.size > 1_000_000_000:
+            st.sidebar.error("Archive too large")
+        else:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz") as tmp:
+                tmp.write(uploaded.getbuffer())
+                tmp_path = tmp.name
+            try:
+                subprocess.check_call(["bash", "scripts/import_state.sh", tmp_path])
+                load_current_config.clear()
+                st.sidebar.success("Import complete. Reloading...")
+                st.experimental_rerun()
+            except Exception as exc:  # pragma: no cover - GUI feedback only
+                st.sidebar.error(f"Import failed: {exc}")
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     tabs = st.tabs(["Overview", "Performance", "Config Explorer", "Logs", "Traces"])
 
