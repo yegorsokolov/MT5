@@ -12,6 +12,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+from analysis.ensemble_diversity import error_correlation_matrix
+
 
 # Lightweight import of mixture-of-experts utilities without requiring the full
 # :mod:`models` package (which pulls in heavy optional dependencies).  This
@@ -250,13 +252,32 @@ def main(
             metrics[name] = f1
             mlflow.log_metric(f"f1_{name}", f1)
 
+        weights = None
+        if len(val_preds) > 1:
+            corr = error_correlation_matrix(val_preds, y_val)
+            if hasattr(mlflow, "log_dict"):
+                mlflow.log_dict(corr.to_dict(), "error_correlation.json")
+            corr_abs = corr.abs()
+            np.fill_diagonal(corr_abs.values, np.nan)
+            mlflow.log_metric(
+                "mean_error_correlation", float(np.nanmean(corr_abs.values))
+            )
+            if ens_cfg.get("diversity_weighting"):
+                mean_corr = np.nanmean(corr_abs.values, axis=1)
+                diversity = np.clip(1.0 - mean_corr, 0.0, None)
+                if not np.allclose(diversity.sum(), 0.0):
+                    div_w = diversity / diversity.sum()
+                    weights = {name: float(w) for name, w in zip(corr.index, div_w)}
+                    if hasattr(mlflow, "log_dict"):
+                        mlflow.log_dict(weights, "diversity_weights.json")
+
         meta_model = None
         if ens_cfg.get("meta_learner"):
             meta_X = np.column_stack([val_preds[n] for n in models])
             meta_model = LogisticRegression().fit(meta_X, y_val)
 
-        ensemble = EnsembleModel(models, meta_model=meta_model)
-        all_preds = ensemble.predict(X_val, y_val)
+        ensemble = EnsembleModel(models, weights=weights, meta_model=meta_model)
+        all_preds = ensemble.predict(X_val)
         ens_prob = all_preds["ensemble"]
         ens_f1 = f1_score(y_val, (ens_prob > 0.5).astype(int))
         metrics["ensemble"] = ens_f1
