@@ -2,14 +2,19 @@ import numpy as np
 import pandas as pd
 import sys
 from pathlib import Path
+import importlib.util
 
 # Ensure real SciPy is available (conftest stubs a minimal version)
 for mod in ["scipy", "scipy.stats"]:
     sys.modules.pop(mod, None)
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from strategy.pair_trading import find_cointegrated_pairs, generate_signals
+_pair_path = Path(__file__).resolve().parents[1] / "strategy" / "pair_trading.py"
+spec = importlib.util.spec_from_file_location("pair_trading", _pair_path)
+pair_trading = importlib.util.module_from_spec(spec)
+sys.modules["pair_trading"] = pair_trading
+spec.loader.exec_module(pair_trading)
+find_cointegrated_pairs = pair_trading.find_cointegrated_pairs
+generate_signals = pair_trading.generate_signals
 
 
 def build_df() -> pd.DataFrame:
