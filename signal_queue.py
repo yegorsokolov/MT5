@@ -155,9 +155,22 @@ async def publish_dataframe_async(
 
 
 async def iter_messages(
-    bus: MessageBus, fmt: str = "json", sizer=None
+    bus: MessageBus, fmt: str = "json", sizer=None, meta_clf=None
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Yield messages from the signals topic.
+
+    Parameters
+    ----------
+    bus:
+        Message bus to consume from.
+    fmt:
+        Serialization format used by the publisher.
+    sizer:
+        Optional position sizing callable.
+    meta_clf:
+        Optional meta-classifier used to filter predictions.  Messages with a
+        ``prob`` field that the classifier deems unreliable (predicts ``0``)
+        are dropped.
 
     When ``sizer`` is provided it is expected to expose the same interface as
     :meth:`risk_manager.RiskManager.adjust_size`.  Messages containing a
@@ -167,6 +180,17 @@ async def iter_messages(
     """
 
     async for msg in bus.subscribe(Topics.SIGNALS):
+        if meta_clf is not None and isinstance(msg, dict):
+            prob = msg.get("prob")
+            if prob is not None:
+                feat = pd.DataFrame(
+                    {"prob": [prob], "confidence": [abs(float(prob) - 0.5) * 2]}
+                )
+                try:
+                    if int(meta_clf.predict(feat)[0]) == 0:
+                        continue
+                except Exception:  # pragma: no cover - best effort
+                    pass
         if sizer is not None and isinstance(msg, dict):
             pred = msg.get("prediction")
             symbol = msg.get("symbol")
