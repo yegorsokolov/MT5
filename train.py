@@ -548,6 +548,7 @@ def main(
             final_pipe.named_steps["scaler"].load_state_dict(scaler_state)
         logger.info("Resuming from checkpoint at fold %s", last_fold)
 
+    last_split: tuple[np.ndarray, np.ndarray] | None = None
     for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
         if fold < start_fold:
             continue
@@ -701,10 +702,32 @@ def main(
         if fold == tscv.n_splits - 1:
             final_pipe = pipe
             X_train_final = X_train
+        last_split = (train_idx, val_idx)
 
     overall_cov = (
         evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
     )
+    if cfg.get("use_price_distribution") and last_split is not None:
+        from train_price_distribution import train_price_distribution
+
+        train_idx, val_idx = last_split
+        X_arr = X.values
+        returns = df["return"].to_numpy()
+        _, dist_metrics = train_price_distribution(
+            X_arr[train_idx],
+            returns[train_idx],
+            X_arr[val_idx],
+            returns[val_idx],
+            n_components=int(cfg.get("n_components", 3)),
+            epochs=int(cfg.get("dist_epochs", 100)),
+        )
+        mlflow.log_metric("dist_coverage", dist_metrics["coverage"])
+        mlflow.log_metric(
+            "dist_baseline_coverage", dist_metrics["baseline_coverage"]
+        )
+        mlflow.log_metric(
+            "dist_expected_shortfall", dist_metrics["expected_shortfall"]
+        )
     regime_thresholds, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
     for reg, thr_val in regime_thresholds.items():
         mlflow.log_metric(f"thr_regime_{reg}", float(thr_val))
@@ -937,6 +960,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Include pseudo-labeled samples during training",
     )
+    parser.add_argument(
+        "--use-price-distribution",
+        action="store_true",
+        help="Train auxiliary PriceDistributionModel",
+    )
+    parser.add_argument(
+        "--n-components",
+        type=int,
+        default=None,
+        help="Number of mixture components for PriceDistributionModel",
+    )
     args = parser.parse_args()
     ray_init()
     try:
@@ -981,6 +1015,10 @@ if __name__ == "__main__":
                 cfg["fine_tune"] = True
             if args.use_pseudo_labels:
                 cfg["use_pseudo_labels"] = True
+            if args.use_price_distribution:
+                cfg["use_price_distribution"] = True
+            if args.n_components is not None:
+                cfg["n_components"] = args.n_components
             launch(
                 cfg,
                 export=args.export,
