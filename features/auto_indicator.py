@@ -12,15 +12,16 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from typing import Iterable, Sequence, Optional, Union
 
 
-def _generate_lags(series: pd.Series, lags: int = 3) -> pd.DataFrame:
-    """Return DataFrame of lagged versions of ``series`` up to ``lags``."""
-    data = {f"{series.name}_lag{lag}": series.shift(lag) for lag in range(1, lags + 1)}
+def _generate_lags(series: pd.Series, lags: Sequence[int]) -> pd.DataFrame:
+    """Return DataFrame of lagged versions of ``series``."""
+    data = {f"{series.name}_lag{lag}": series.shift(lag) for lag in lags}
     return pd.DataFrame(data)
 
 
-def _rolling_stats(series: pd.Series, windows: list[int]) -> pd.DataFrame:
+def _rolling_stats(series: pd.Series, windows: Sequence[int]) -> pd.DataFrame:
     """Return rolling mean and std for ``series`` over provided windows."""
     frames = {}
     for win in windows:
@@ -30,20 +31,39 @@ def _rolling_stats(series: pd.Series, windows: list[int]) -> pd.DataFrame:
     return pd.DataFrame(frames)
 
 
-def compute(df: pd.DataFrame) -> pd.DataFrame:
-    """Create additional indicators from all numeric columns.
+def compute(
+    df: pd.DataFrame,
+    lags: Union[int, Sequence[int]] = 3,
+    windows: Sequence[int] = (5, 10),
+    skip: Optional[Iterable[str]] = None,
+) -> pd.DataFrame:
+    """Create additional indicators from numeric columns.
 
-    The function automatically generates lagged values and simple rolling
-    statistics for each numeric column.  Non‑numeric columns are ignored.
-    The original dataframe is not modified; a copy with new features is
-    returned.
+    Parameters
+    ----------
+    df:
+        Input dataframe.
+    lags:
+        Either an integer specifying the number of sequential lags starting
+        at 1 or an explicit iterable of lag steps.
+    windows:
+        Rolling window sizes for which mean and standard deviation are
+        calculated.
+    skip:
+        Optional iterable of column names to exclude from transformation,
+        e.g. target columns to avoid data leakage.
     """
     df = df.copy()
     numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if skip:
+        skip_set = set(skip)
+        numeric_cols = [c for c in numeric_cols if c not in skip_set]
+    lag_seq = range(1, lags + 1) if isinstance(lags, int) else list(lags)
+    win_seq = list(windows)
     for col in numeric_cols:
         series = df[col]
-        df = df.join(_generate_lags(series))
-        df = df.join(_rolling_stats(series, windows=[5, 10]))
+        df = df.join(_generate_lags(series, lag_seq))
+        df = df.join(_rolling_stats(series, win_seq))
     df = df.dropna(axis=1, how="all")
     return df
 
