@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import numpy as np
 import pandas as pd
 
 from data.events import get_events
 
-
-def _merge_asof(left: pd.DataFrame, right: pd.DataFrame, **kwargs) -> pd.DataFrame:
-    return pd.merge_asof(left, right, **kwargs)
+# Default transformer used for sentiment analysis.  Tests may monkeypatch this
+# to a lightweight model.
+MODEL_NAME = "distilbert-base-uncased-finetuned-sst-2-english"
+_MODEL_CACHE = None  # Lazily initialised (tokenizer, model)
+_SENT_CACHE: dict[str, tuple[np.ndarray, float]] = {}
 
 
 def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -38,27 +39,85 @@ def add_economic_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
-    path = Path(__file__).resolve().parent / "data" / "news_sentiment.csv"
-    if not path.exists():
+    """Append transformer based news sentiment features.
+
+    The function attempts to load a HuggingFace sentiment classification model
+    using :class:`~transformers.AutoModelForSequenceClassification`.  If the
+    ``transformers`` (and ``torch``) libraries or the model weights are not
+    available the features gracefully degrade to zeros so downstream code can
+    rely on their presence.
+
+    For each row the ``news_summary`` (or ``summary``) text is encoded and the
+    pooled embedding from the final hidden state is appended as
+    ``news_emb_{i}``.  A scalar polarity score ``news_sentiment`` is computed as
+    ``P(positive) - P(negative)`` from the classifier logits.  Results are
+    cached in-memory keyed by the raw text so repeated summaries avoid redundant
+    model calls.
+    """
+
+    text_col = next((c for c in ("news_summary", "summary") if c in df.columns), None)
+    if text_col is None:
         df["news_sentiment"] = 0.0
-        df["news_summary"] = ""
+        df["news_emb_0"] = 0.0
         return df
-    news = pd.read_csv(path)
-    if "Timestamp" not in news.columns or "sentiment" not in news.columns:
+
+    try:  # Optional heavy dependency
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        import torch
+    except Exception:  # pragma: no cover - optional dependency
         df["news_sentiment"] = 0.0
-        df["news_summary"] = ""
+        df["news_emb_0"] = 0.0
         return df
-    news["Timestamp"] = pd.to_datetime(news["Timestamp"])
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"])
-    news = news.sort_values("Timestamp")
-    df = df.sort_values("Timestamp")
-    df = _merge_asof(df, news, on="Timestamp", direction="backward")
-    df["news_sentiment"] = df["sentiment"].fillna(0.0)
-    if "summary" in news.columns:
-        df["news_summary"] = df["summary"].fillna("")
-    else:
-        df["news_summary"] = ""
-    df = df.drop(columns=["sentiment", "summary"], errors="ignore")
+
+    global _MODEL_CACHE, _SENT_CACHE
+    try:
+        tokenizer, model = _MODEL_CACHE  # type: ignore[misc]
+    except Exception:
+        _MODEL_CACHE = None
+        _SENT_CACHE = {}
+        tokenizer = model = None
+
+    if _MODEL_CACHE is None:
+        try:
+            model_name = globals().get("MODEL_NAME", "distilbert-base-uncased-finetuned-sst-2-english")
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForSequenceClassification.from_pretrained(model_name)
+            _MODEL_CACHE = (tokenizer, model)
+        except Exception:  # pragma: no cover - model download failure
+            df["news_sentiment"] = 0.0
+            df["news_emb_0"] = 0.0
+            return df
+
+    emb_dim = int(getattr(model.config, "hidden_size", 0))
+    texts = df[text_col].fillna("").astype(str)
+    embeddings: list[np.ndarray] = []
+    sentiments: list[float] = []
+    for text in texts:
+        if text in _SENT_CACHE:
+            emb, pol = _SENT_CACHE[text]
+        else:
+            try:
+                inputs = tokenizer(text, return_tensors="pt", truncation=True)
+                with torch.no_grad():
+                    outputs = model(**inputs, output_hidden_states=True)
+                probs = torch.softmax(outputs.logits, dim=-1)[0]
+                pol = float(probs[1] - probs[0])
+                emb = outputs.hidden_states[-1][0, 0].detach().cpu().numpy().astype(float)
+            except Exception:  # pragma: no cover - runtime error
+                emb = np.zeros(emb_dim, dtype=float)
+                pol = 0.0
+            _SENT_CACHE[text] = (emb, pol)
+        embeddings.append(emb)
+        sentiments.append(pol)
+
+    if emb_dim == 0:
+        df["news_sentiment"] = 0.0
+        df["news_emb_0"] = 0.0
+        return df
+
+    for i in range(emb_dim):
+        df[f"news_emb_{i}"] = [vec[i] if len(vec) > i else 0.0 for vec in embeddings]
+    df["news_sentiment"] = sentiments
     return df
 
 
