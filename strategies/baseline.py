@@ -140,7 +140,9 @@ class BaselineStrategy:
         lower = mean - 2 * std
         return upper, lower
 
-    def _true_range(self, high: float, low: float, prev_close: Optional[float]) -> float:
+    def _true_range(
+        self, high: float, low: float, prev_close: Optional[float]
+    ) -> float:
         if prev_close is None:
             return high - low
         return max(high - low, abs(high - prev_close), abs(low - prev_close))
@@ -172,6 +174,8 @@ class BaselineStrategy:
         mfi: Optional[float] = None,
         htf_ma: Optional[float] = None,
         htf_rsi: Optional[float] = None,
+        supertrend_break: Optional[int] = None,
+        kama_cross: Optional[int] = None,
     ) -> int:
         """Process a new bar and return a trading signal.
 
@@ -194,6 +198,13 @@ class BaselineStrategy:
         htf_ma, htf_rsi:
             Optional higher-timeframe moving average and RSI values used
             to align trades with broader trends.
+        supertrend_break:
+            Optional breakout signal from the SuperTrend indicator. A
+            value of ``1`` only allows long entries while ``-1`` only
+            allows short entries.
+        kama_cross:
+            Optional price/KAMA cross signal. When provided entries are
+            permitted only when it matches the raw signal direction.
 
         Returns
         -------
@@ -266,11 +277,24 @@ class BaselineStrategy:
 
         # Volume confirmation using OBV and MFI
         if raw_signal != 0 and obv is not None and mfi is not None:
-            if raw_signal == 1 and not (mfi > 50 and (self._prev_obv is None or obv > self._prev_obv)):
+            if raw_signal == 1 and not (
+                mfi > 50 and (self._prev_obv is None or obv > self._prev_obv)
+            ):
                 raw_signal = 0
-            elif raw_signal == -1 and not (mfi < 50 and (self._prev_obv is None or obv < self._prev_obv)):
+            elif raw_signal == -1 and not (
+                mfi < 50 and (self._prev_obv is None or obv < self._prev_obv)
+            ):
                 raw_signal = 0
         self._prev_obv = obv if obv is not None else self._prev_obv
+
+        if (
+            raw_signal != 0
+            and supertrend_break is not None
+            and supertrend_break != raw_signal
+        ):
+            raw_signal = 0
+        if raw_signal != 0 and kama_cross is not None and kama_cross != raw_signal:
+            raw_signal = 0
 
         self._prev_short, self._prev_long = short_ma, long_ma
 
