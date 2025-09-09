@@ -10,6 +10,7 @@ from utils.resource_monitor import monitor
 from models.multi_head import MultiHeadTransformer
 from models.graph_net import GraphNet
 from models.ts_masked_encoder import initialize_model_with_ts_masked_encoder
+from models.contrastive_encoder import initialize_model_with_contrastive
 
 
 def compute_scale_factor(capabilities=None) -> float:
@@ -73,4 +74,6 @@ def build_model(
 
     if cfg.get("use_ts_pretrain"):
         initialize_model_with_ts_masked_encoder(model)
+    if cfg.get("use_contrastive_pretrain"):
+        initialize_model_with_contrastive(model)
     return model

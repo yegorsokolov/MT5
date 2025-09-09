@@ -108,6 +108,21 @@ class ConfigSchema(BaseModel):
         description="Batch size for time-series encoder pretraining",
     )
 
+    use_contrastive_pretrain: bool = Field(
+        False,
+        description="Initialise models from contrastive encoder weights if available",
+    )
+    contrastive_epochs: int = Field(
+        20,
+        ge=1,
+        description="Number of epochs for contrastive encoder pretraining",
+    )
+    contrastive_batch_size: int = Field(
+        32,
+        ge=1,
+        description="Batch size for contrastive encoder pretraining",
+    )
+
     model_config = ConfigDict(extra="allow")
 
     @field_validator("symbols")

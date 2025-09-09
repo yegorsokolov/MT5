@@ -219,6 +219,27 @@ ts_pretrain_batch_size: 32
 This initialisation typically reduces early training loss compared to random
 weights.
 
+### Contrastive encoder pretraining
+
+A lightweight contrastive encoder can also be trained on unlabeled windows to
+provide a useful initialization. Populate the model store with:
+
+```bash
+python pretrain_contrastive.py --config config.yaml
+```
+
+Training scripts load these weights automatically when
+`use_contrastive_pretrain` is enabled in `config.yaml`:
+
+```yaml
+use_contrastive_pretrain: true
+contrastive_epochs: 5
+contrastive_batch_size: 32
+```
+
+This initialisation typically lowers early training loss versus random
+initialisation.
+
 Studies are stored in `tuning/*.db`. Rerun the script with `--tune` to resume an
 interrupted optimisation or continue adding trials. Training checkpoints allow
 each trial to pick up where it left off if terminated mid‑run.

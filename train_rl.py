@@ -111,6 +111,7 @@ from data.history import (
     save_history_parquet,
     load_history_config,
 )
+
 # Simulation environment for offline training
 try:
     from simulation.agent_market import AgentMarketSimulator
@@ -460,9 +461,7 @@ def main(
     dfs = []
     if cfg.get("sim_env") and AgentMarketSimulator is not None:
         for sym in symbols:
-            sim = AgentMarketSimulator(
-                seed=seed, steps=int(cfg.get("sim_steps", 1000))
-            )
+            sim = AgentMarketSimulator(seed=seed, steps=int(cfg.get("sim_steps", 1000)))
             _, book = sim.run()
             df_sym = sim.to_history_df(book)
             df_sym["Symbol"] = sym
@@ -543,7 +542,8 @@ def main(
     ]
     if cfg.get("graph_model"):
         graph_model = build_model(len(features), cfg, scale_factor).to(device)
-        graph_model = initialize_model_with_contrastive(graph_model)
+        if cfg.get("use_contrastive_pretrain"):
+            graph_model = initialize_model_with_contrastive(graph_model)
 
     size = monitor.capabilities.capability_tier()
     algo_cfg = cfg.get("rl_algorithm", "AUTO").upper()
@@ -1251,7 +1251,9 @@ def main(
                 state_matrix = np.asarray(states, dtype=float)
             else:
                 # Fallback to single-agent portfolio returns and simple regime feature
-                returns_arr = np.array(getattr(env, "portfolio_returns", []), dtype=float)
+                returns_arr = np.array(
+                    getattr(env, "portfolio_returns", []), dtype=float
+                )
                 regimes_arr = np.array(
                     getattr(env, "regimes", np.zeros_like(returns_arr)), dtype=float
                 )
@@ -1261,9 +1263,7 @@ def main(
                 state_matrix = regimes_arr.reshape(-1, 1)
             dataset = MetaControllerDataset(ret_matrix, state_matrix)
             train_meta_controller(dataset, epochs=int(cfg.get("meta_epochs", 10)))
-            logger.info(
-                "Meta-controller trained on %d samples", len(dataset.returns)
-            )
+            logger.info("Meta-controller trained on %d samples", len(dataset.returns))
         except Exception:  # pragma: no cover - best effort
             logger.exception("Meta-controller training failed")
 
