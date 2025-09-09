@@ -1,4 +1,9 @@
-"""Training routine for the Adaptive MT5 bot."""
+"""Training routine for the Adaptive MT5 bot.
+
+The training procedure uses :class:`analysis.purged_cv.PurgedTimeSeriesSplit`
+with symbol identifiers as *groups* so that observations from the same
+instrument never appear in both the training and validation folds.
+"""
 
 from pathlib import Path
 import random
@@ -347,6 +352,9 @@ def main(
     feat_path.write_text(json.dumps(features))
 
     X = df[features]
+    # Use symbol identifiers as group labels so cross-validation folds
+    # never mix data from the same instrument between train and validation.
+    groups = df["Symbol"] if "Symbol" in df.columns else df.get("SymbolCode")
 
     al_queue = ActiveLearningQueue()
     new_labels = al_queue.pop_labeled()
@@ -395,7 +403,7 @@ def main(
                 embargo=cfg.get("max_horizon", 0),
             )
             scores: list[float] = []
-            for tr_idx, va_idx in tscv_inner.split(X):
+            for tr_idx, va_idx in tscv_inner.split(X, groups=groups):
                 X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
                 y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
                 fit_kwargs: dict[str, object] = {
@@ -549,7 +557,7 @@ def main(
         logger.info("Resuming from checkpoint at fold %s", last_fold)
 
     last_split: tuple[np.ndarray, np.ndarray] | None = None
-    for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
+    for fold, (train_idx, val_idx) in enumerate(tscv.split(X, groups=groups)):
         if fold < start_fold:
             continue
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
@@ -722,12 +730,8 @@ def main(
             epochs=int(cfg.get("dist_epochs", 100)),
         )
         mlflow.log_metric("dist_coverage", dist_metrics["coverage"])
-        mlflow.log_metric(
-            "dist_baseline_coverage", dist_metrics["baseline_coverage"]
-        )
-        mlflow.log_metric(
-            "dist_expected_shortfall", dist_metrics["expected_shortfall"]
-        )
+        mlflow.log_metric("dist_baseline_coverage", dist_metrics["baseline_coverage"])
+        mlflow.log_metric("dist_expected_shortfall", dist_metrics["expected_shortfall"])
     regime_thresholds, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
     for reg, thr_val in regime_thresholds.items():
         mlflow.log_metric(f"thr_regime_{reg}", float(thr_val))
@@ -782,7 +786,9 @@ def main(
     logger.info("Model saved to %s", root / "model.joblib")
     mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
     mlflow.log_metric("f1_weighted", aggregate_report["weighted avg"]["f1-score"])
-    mlflow.log_metric("precision_weighted", aggregate_report["weighted avg"]["precision"])
+    mlflow.log_metric(
+        "precision_weighted", aggregate_report["weighted avg"]["precision"]
+    )
     mlflow.log_metric("recall_weighted", aggregate_report["weighted avg"]["recall"])
     mlflow.log_artifact(str(root / "model.joblib"))
     if final_pipe is not None and df_unlabeled is not None:
