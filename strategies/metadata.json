@@ -1,0 +1,32 @@
+{
+  "baseline": {
+    "status": "experimental",
+    "metrics": {},
+    "approved": false
+  },
+  "external_adapter": {
+    "status": "experimental",
+    "metrics": {},
+    "approved": false
+  },
+  "backtrader_template": {
+    "status": "experimental",
+    "metrics": {},
+    "approved": false
+  },
+  "freqtrade_template": {
+    "status": "experimental",
+    "metrics": {},
+    "approved": false
+  },
+  "trade_exit_policy": {
+    "status": "experimental",
+    "metrics": {},
+    "approved": false
+  },
+  "baseline_ma": {
+    "status": "experimental",
+    "metrics": {},
+    "approved": false
+  }
+}
