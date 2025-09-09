@@ -9,17 +9,18 @@ This guide outlines how to migrate the trading bot and its state to a new VPS.
    ```bash
    scripts/export_state.sh
    ```
+   Alternatively, use the dashboard's **Export state** button to generate and download the archive.
 3. Transfer the resulting archive to the new VPS using `scp` or any preferred method.
 
 ## Import state on the new VPS
 
 1. Copy the exported archive to the new server.
-2. Restore checkpoints and configuration:
+2. Stop the service on the new VPS.
+3. Restore checkpoints and configuration:
    ```bash
    scripts/import_state.sh /path/to/project_state_<timestamp>.tar.gz
    ```
-3. Start the service on the new VPS. The latest checkpoint will be loaded automatically.
+   The dashboard also provides an **Import state** button to upload the archive directly.
+4. Start the service on the new VPS. The latest checkpoint will be loaded automatically.
 
-## Copy through the dashboard
-
-The web dashboard includes a **Copy project** button in the sidebar. Clicking it generates the archive and offers it for download, which can then be moved to another environment and restored using the import script above.
+Importing overwrites existing checkpoints and configuration, replacing any current training progress.
