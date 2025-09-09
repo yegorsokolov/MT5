@@ -596,16 +596,15 @@ mlflow:
       chosen hyperparameters are tracked with MLflow. Any improvements are
       written back to `config.yaml` and logged under `logs/config_changes.csv`.
    2. To view experiment history run `scripts/mlflow_ui.sh` and open `http://localhost:5000`.
-14. **Upload logs** –
-   1. Start `python scripts/hourly_log_push.py` in a separate window. This
-      script copies entries from `logs/` into the `Run logs/` folder and pushes
-      it every hour so log history is archived automatically. Use Windows Task
+14. **Upload artifacts** –
+   1. Start `python scripts/hourly_artifact_push.py` in a separate window. This
+      script commits `logs/` and `checkpoints/` every hour so history is archived automatically. Use Windows Task
       Scheduler to launch it at logon for unattended operation.
 
 15. **Keep it running** –
    1. Create scheduled tasks that start both `python realtime_train.py` and the
-      hourly log uploader whenever the VPS boots or a user logs in. With these
-      tasks enabled the bot and log push service run indefinitely.
+      hourly artifact uploader whenever the VPS boots or a user logs in. With these
+      tasks enabled the bot and artifact push service run indefinitely.
 
 With the EA running on your VPS and the training script collecting realtime data,
 the bot will continually adapt to market conditions.
@@ -735,8 +734,7 @@ inspection, pipe the log through `jq`:
 tail -f logs/app.log | jq .
 ```
 
-The helper script `scripts/upload_logs.py` can be run to automatically commit
-and push the log directory to your repository for later analysis.
+The helper script `scripts/sync_artifacts.py` can be run to automatically commit and push the log and checkpoint directories to your repository for later analysis.
 
 ## Streamlined Deployment
 
@@ -934,20 +932,20 @@ can speed up training, checkpointing may slow it slightly due to recomputation.
 
 ## Automatic Log Uploading
 
-`scripts/upload_logs.py` commits the contents of `logs/` and `config.yaml` to
+`scripts/sync_artifacts.py` commits the contents of `logs/`, `checkpoints/` and `config.yaml` to
 the repository. Set the `GITHUB_TOKEN` environment variable to a token with
 write access before running:
 
 ```bash
-GITHUB_TOKEN=<token> python scripts/upload_logs.py
+GITHUB_TOKEN=<token> python scripts/sync_artifacts.py
 ```
 
 Long-running services can import and call
-`scripts.upload_logs.register_shutdown_hook()` to push logs when they exit. To
+`scripts.sync_artifacts.register_shutdown_hook()` to push artifacts when they exit. To
 upload logs periodically, schedule the script with cron, for example:
 
 ```cron
-0 * * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/upload_logs.py
+0 * * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/sync_artifacts.py
 ```
 
 ## Docker image

@@ -27,7 +27,7 @@ if [ -f /opt/mt5/terminal64.exe ]; then
 fi
 
 # Push logs every hour in background
-python scripts/hourly_log_push.py &
+python scripts/hourly_artifact_push.py &
 
 # Run realtime training loop
 exec python realtime_train.py
