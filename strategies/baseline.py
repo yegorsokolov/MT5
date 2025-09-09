@@ -8,10 +8,22 @@ found in production trading systems:
 
 * Relative Strength Index (RSI) to filter overbought/oversold regimes.
 * Bollinger Bands to avoid entries in stretched markets.
+* Average True Range (ATR) driven risk management including optional
+  position sizing adjustments in volatile environments.
 * Trailing take-profit and stop-loss logic for open positions.
 
 Despite the extra functionality the implementation remains
 dependency-free and operates purely on streaming price data.
+
+Example
+-------
+>>> BaselineStrategy(
+...     short_window=5,
+...    long_window=20,
+...    atr_stop_long=3,
+...    atr_stop_short=3,
+...    scale_pos_by_atr=True,
+... )
 """
 
 from collections import deque
@@ -30,10 +42,12 @@ class BaselineStrategy:
         Number of recent prices for the slow moving average.
     rsi_window:
         Number of price changes for RSI calculation.
-    stop_loss_pct:
-        Initial stop loss as a decimal (``0.02`` => 2%).
-    take_profit_pct:
-        Profit target as a decimal.
+    atr_window:
+        Number of periods for ATR calculation.
+    atr_stop_long:
+        ATR multiples used for initial long stop and profit targets.
+    atr_stop_short:
+        ATR multiples used for initial short stop and profit targets.
     trailing_stop_pct:
         Percentage distance for trailing stop once the trade moves in
         favour.
@@ -44,6 +58,9 @@ class BaselineStrategy:
         Optional mapping of session name to max absolute position size.
     default_position_limit:
         Default position limit when a session is not specified.
+    scale_pos_by_atr:
+        When ``True`` position sizes are scaled inversely with the
+        latest ATR value.
     """
 
     def __init__(
@@ -51,12 +68,14 @@ class BaselineStrategy:
         short_window: int = 5,
         long_window: int = 20,
         rsi_window: int = 14,
-        stop_loss_pct: float = 0.02,
-        take_profit_pct: float = 0.04,
+        atr_window: int = 14,
+        atr_stop_long: float = 3.0,
+        atr_stop_short: float = 3.0,
         trailing_stop_pct: float = 0.01,
         trailing_take_profit_pct: float = 0.02,
         session_position_limits: Optional[Dict[str, int]] = None,
         default_position_limit: int = 1,
+        scale_pos_by_atr: bool = False,
     ) -> None:
         if short_window >= long_window:
             raise ValueError("short_window must be < long_window")
@@ -65,10 +84,12 @@ class BaselineStrategy:
         self.short_window = short_window
         self.long_window = long_window
         self.rsi_window = rsi_window
-        self.stop_loss_pct = float(stop_loss_pct)
-        self.take_profit_pct = float(take_profit_pct)
+        self.atr_window = atr_window
+        self.atr_stop_long = float(atr_stop_long)
+        self.atr_stop_short = float(atr_stop_short)
         self.trailing_stop_pct = float(trailing_stop_pct)
         self.trailing_take_profit_pct = float(trailing_take_profit_pct)
+        self.scale_pos_by_atr = scale_pos_by_atr
 
         self._short: Deque[float] = deque(maxlen=short_window)
         self._long: Deque[float] = deque(maxlen=long_window)
@@ -76,6 +97,14 @@ class BaselineStrategy:
         self._prev_price: Optional[float] = None
         self._prev_short = 0.0
         self._prev_long = 0.0
+
+        # ATR state
+        self._highs: Deque[float] = deque(maxlen=atr_window)
+        self._lows: Deque[float] = deque(maxlen=atr_window)
+        self._closes: Deque[float] = deque(maxlen=atr_window)
+        self._trs: Deque[float] = deque(maxlen=atr_window)
+        self.latest_atr: Optional[float] = None
+        self.entry_atr: Optional[float] = None
 
         # Position management
         self.position = 0  # -1 short, 0 flat, 1 long
@@ -110,6 +139,11 @@ class BaselineStrategy:
         lower = mean - 2 * std
         return upper, lower
 
+    def _true_range(self, high: float, low: float, prev_close: Optional[float]) -> float:
+        if prev_close is None:
+            return high - low
+        return max(high - low, abs(high - prev_close), abs(low - prev_close))
+
     # ------------------------------------------------------------------
     # Session helpers
     # ------------------------------------------------------------------
@@ -126,8 +160,25 @@ class BaselineStrategy:
     # ------------------------------------------------------------------
     # Main update routine
     # ------------------------------------------------------------------
-    def update(self, price: float, session: Optional[str] = None) -> int:
-        """Process a new price and return a trading signal.
+    def update(
+        self,
+        price: float,
+        high: Optional[float] = None,
+        low: Optional[float] = None,
+        atr: Optional[float] = None,
+        session: Optional[str] = None,
+    ) -> int:
+        """Process a new bar and return a trading signal.
+
+        Parameters
+        ----------
+        price:
+            Closing price of the bar.
+        high, low:
+            Optional high and low for ATR calculation.  When omitted they
+            default to ``price``.
+        atr:
+            Optional externally supplied ATR value.
 
         Returns
         -------
@@ -138,13 +189,31 @@ class BaselineStrategy:
         if session is not None:
             self.set_session(session)
 
+        if high is None:
+            high = price
+        if low is None:
+            low = price
+
         if self._prev_price is not None:
             self._price_changes.append(price - self._prev_price)
         self._prev_price = price
 
         self._short.append(price)
         self._long.append(price)
-        if len(self._long) < self.long_window:
+        self._highs.append(high)
+        self._lows.append(low)
+
+        prev_close = self._closes[-1] if self._closes else None
+        if atr is not None:
+            self.latest_atr = atr
+        else:
+            tr = self._true_range(high, low, prev_close)
+            self._trs.append(tr)
+            if len(self._trs) == self.atr_window:
+                self.latest_atr = sum(self._trs) / self.atr_window
+        self._closes.append(price)
+
+        if len(self._long) < self.long_window or self.latest_atr is None:
             # Not enough data yet
             return 0
 
@@ -179,6 +248,8 @@ class BaselineStrategy:
         # No open position - consider new entries
         if self.position == 0 and raw_signal != 0:
             limit = self.current_position_limit
+            if self.scale_pos_by_atr and self.latest_atr:
+                limit = max(1, int(limit / self.latest_atr))
             raw_signal = max(min(raw_signal, limit), -limit)
             if raw_signal == 1:
                 self._open_long(price)
@@ -194,6 +265,7 @@ class BaselineStrategy:
     def _open_long(self, price: float) -> None:
         self.position = 1
         self.entry_price = price
+        self.entry_atr = self.latest_atr
         self.peak_price = price
         self.trough_price = None
         self.take_profit_armed = False
@@ -201,6 +273,7 @@ class BaselineStrategy:
     def _open_short(self, price: float) -> None:
         self.position = -1
         self.entry_price = price
+        self.entry_atr = self.latest_atr
         self.trough_price = price
         self.peak_price = None
         self.take_profit_armed = False
@@ -213,16 +286,16 @@ class BaselineStrategy:
         return 0
 
     def _manage_long(self, price: float) -> int:
-        assert self.entry_price is not None
+        assert self.entry_price is not None and self.entry_atr is not None
         self.peak_price = max(self.peak_price or price, price)
-        stop_loss = self.entry_price * (1 - self.stop_loss_pct)
+        stop_loss = self.entry_price - self.entry_atr * self.atr_stop_long
         stop_loss = max(stop_loss, self.peak_price * (1 - self.trailing_stop_pct))
 
         if price <= stop_loss:
             self.position = 0
             return -1
 
-        take_profit_level = self.entry_price * (1 + self.take_profit_pct)
+        take_profit_level = self.entry_price + self.entry_atr * self.atr_stop_long
         if not self.take_profit_armed and price >= take_profit_level:
             self.take_profit_armed = True
             self.peak_price = price
@@ -236,16 +309,16 @@ class BaselineStrategy:
         return 0
 
     def _manage_short(self, price: float) -> int:
-        assert self.entry_price is not None
+        assert self.entry_price is not None and self.entry_atr is not None
         self.trough_price = min(self.trough_price or price, price)
-        stop_loss = self.entry_price * (1 + self.stop_loss_pct)
+        stop_loss = self.entry_price + self.entry_atr * self.atr_stop_short
         stop_loss = min(stop_loss, self.trough_price * (1 + self.trailing_stop_pct))
 
         if price >= stop_loss:
             self.position = 0
             return 1
 
-        take_profit_level = self.entry_price * (1 - self.take_profit_pct)
+        take_profit_level = self.entry_price - self.entry_atr * self.atr_stop_short
         if not self.take_profit_armed and price <= take_profit_level:
             self.take_profit_armed = True
             self.trough_price = price
