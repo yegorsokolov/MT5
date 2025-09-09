@@ -3,7 +3,12 @@ import logging
 import time
 from typing import Any, List, Optional
 
-from analytics.metrics_store import query_metrics
+try:
+    from analytics.metrics_store import query_metrics
+except Exception:  # pragma: no cover - optional dependency may be stubbed in tests
+    def query_metrics(*a, **k):  # type: ignore
+        import pandas as _pd
+        return _pd.DataFrame()
 
 from metrics import BROKER_FAILURES, BROKER_LATENCY_MS
 
@@ -86,6 +91,22 @@ class ConnectionManager:
         if self._active_index is None:
             return False
         indices = [i for i in self._rank_broker_indices() if i != self._active_index]
+        # If no backup brokers are available, attempt to re-initialise the
+        # current broker.  This handles cases where the user switches accounts
+        # on the terminal causing the existing session to become invalid.
+        if not indices:
+            broker = self._brokers[self._active_index]
+            name = getattr(broker, "__name__", broker.__class__.__name__)
+            try:
+                if broker.initialize():
+                    logger.warning("Failover: reconnected broker %s", name)
+                    return True
+            except Exception:
+                logger.exception(
+                    "Failed to reinitialize broker %s during failover", broker
+                )
+            logger.error("All brokers failed during failover")
+            return False
         for idx in indices:
             broker = self._brokers[idx]
             try:

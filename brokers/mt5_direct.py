@@ -63,6 +63,15 @@ def initialize(**kwargs) -> bool:
     Any keyword arguments are passed directly to ``MetaTrader5.initialize``.
     The function returns ``True`` on success, ``False`` otherwise.
     """
+    # Always tear down existing connections so that switching accounts on the
+    # terminal doesn't leave us bound to a stale session.  ``shutdown`` may not
+    # be present in lightweight stubs used during testing, hence ``getattr``.
+    try:
+        shutdown = getattr(_mt5, "shutdown")
+        if callable(shutdown):
+            shutdown()
+    except Exception:
+        pass
     return bool(_mt5.initialize(**kwargs))
 
 
