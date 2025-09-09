@@ -23,6 +23,11 @@ from analysis.cross_spectral import (
     compute as cross_spectral_compute,
     REQUIREMENTS as CROSS_SPECTRAL_REQ,
 )
+from analysis.knowledge_graph import (
+    load_knowledge_graph,
+    risk_score,
+    opportunity_score,
+)
 from utils.resource_monitor import monitor, ResourceCapabilities
 from utils import load_config
 from analysis import feature_gate
@@ -200,6 +205,35 @@ def add_factor_exposure_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.merge(exposures, on="Symbol", how="left")
     for col in factor_cols:
         df[col] = df[col].fillna(0.0)
+    return df
+
+
+def add_knowledge_graph_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Append knowledge graph-derived risk and opportunity scores."""
+
+    company_col = None
+    if "Symbol" in df.columns:
+        company_col = "Symbol"
+    elif "company" in df.columns:
+        company_col = "company"
+    if company_col is None:
+        return df
+
+    try:
+        g = load_knowledge_graph()
+    except Exception:  # pragma: no cover - graph may be unavailable
+        df = df.copy()
+        df["graph_risk"] = 0.0
+        df["graph_opportunity"] = 0.0
+        return df
+
+    companies = df[company_col].astype(str).unique()
+    risk_map = {c: risk_score(g, c) for c in companies}
+    opp_map = {c: opportunity_score(g, c) for c in companies}
+
+    df = df.copy()
+    df["graph_risk"] = df[company_col].map(risk_map).fillna(0.0)
+    df["graph_opportunity"] = df[company_col].map(opp_map).fillna(0.0)
     return df
 
 
@@ -414,6 +448,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     # Cross-spectral coherence metrics between symbols
     df = add_cross_spectral_features(df)
+
+    # Knowledge graph-based risk and opportunity scores
+    df = add_knowledge_graph_features(df)
 
     # Frequency-domain energy metrics on the price series
     df = add_frequency_features(df)
@@ -708,6 +745,7 @@ __all__ = [
     "add_fractal_features",
     "add_garch_volatility",
     "add_factor_exposure_features",
+    "add_knowledge_graph_features",
     "add_time_features",
     "make_features",
     "make_features_memmap",
