@@ -105,6 +105,11 @@ use_ts_pretrain: false
 ts_pretrain_epochs: 20
 ts_pretrain_batch_size: 32
 
+# pretraining options for contrastive encoder
+use_contrastive_pretrain: false
+contrastive_epochs: 20
+contrastive_batch_size: 32
+
 # Feature pipeline selection. Modules are executed in order.
 features:
   - price
