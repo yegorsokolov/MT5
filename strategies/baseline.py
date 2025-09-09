@@ -97,6 +97,7 @@ class BaselineStrategy:
         self._prev_price: Optional[float] = None
         self._prev_short = 0.0
         self._prev_long = 0.0
+        self._prev_obv: Optional[float] = None
 
         # ATR state
         self._highs: Deque[float] = deque(maxlen=atr_window)
@@ -167,6 +168,8 @@ class BaselineStrategy:
         low: Optional[float] = None,
         atr: Optional[float] = None,
         session: Optional[str] = None,
+        obv: Optional[float] = None,
+        mfi: Optional[float] = None,
     ) -> int:
         """Process a new bar and return a trading signal.
 
@@ -179,6 +182,13 @@ class BaselineStrategy:
             default to ``price``.
         atr:
             Optional externally supplied ATR value.
+        session:
+            Optional session name used for position limits.
+        obv, mfi:
+            Optional volume indicators used for trend confirmation. When
+            provided the strategy only enters long when both indicators
+            show bullish pressure (``obv`` rising and ``mfi`` > 50) and
+            short when they indicate bearish pressure.
 
         Returns
         -------
@@ -237,6 +247,14 @@ class BaselineStrategy:
             and price > lower_band
         ):
             raw_signal = -1
+
+        # Volume confirmation using OBV and MFI
+        if raw_signal != 0 and obv is not None and mfi is not None:
+            if raw_signal == 1 and not (mfi > 50 and (self._prev_obv is None or obv > self._prev_obv)):
+                raw_signal = 0
+            elif raw_signal == -1 and not (mfi < 50 and (self._prev_obv is None or obv < self._prev_obv)):
+                raw_signal = 0
+        self._prev_obv = obv if obv is not None else self._prev_obv
 
         self._prev_short, self._prev_long = short_ma, long_ma
 
