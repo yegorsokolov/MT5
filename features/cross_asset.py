@@ -91,6 +91,22 @@ def add_cross_asset_features(df: pd.DataFrame, window: int = 30) -> pd.DataFrame
     pivot = df.pivot(index="Timestamp", columns="Symbol", values="return")
     symbols = list(pivot.columns)
 
+    # ------------------------------------------------------------------
+    # Cross-sectional relative strength
+    # ------------------------------------------------------------------
+    cs_mean = pivot.mean(axis=1)
+    cs_std = pivot.std(axis=1, ddof=0).replace(0, np.nan)
+    rel_strength = pivot.sub(cs_mean, axis=0).div(cs_std, axis=0)
+
+    for sym in symbols:
+        ts_map = df.loc[df["Symbol"] == sym, "Timestamp"]
+        df.loc[df["Symbol"] == sym, f"rel_strength_{sym}"] = ts_map.map(
+            rel_strength[sym]
+        ).fillna(0.0)
+
+    # ------------------------------------------------------------------
+    # Pairwise interactions
+    # ------------------------------------------------------------------
     for sym1 in symbols:
         for sym2 in symbols:
             if sym1 == sym2:
