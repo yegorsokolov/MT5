@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -88,7 +89,7 @@ def main() -> None:
         st.info("Enter API key to connect")
         return
 
-    if st.sidebar.button("Copy project"):
+    if st.sidebar.button("Export state"):
         try:
             archive_path = (
                 subprocess.check_output(["bash", "scripts/export_state.sh"])
@@ -104,6 +105,19 @@ def main() -> None:
                 )
         except Exception as exc:  # pragma: no cover - GUI feedback only
             st.sidebar.error(f"Export failed: {exc}")
+
+    uploaded = st.sidebar.file_uploader("Upload state archive", type="tar.gz")
+    if st.sidebar.button("Import state") and uploaded:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz") as tmp:
+            tmp.write(uploaded.getbuffer())
+            tmp_path = tmp.name
+        try:
+            subprocess.check_call(["bash", "scripts/import_state.sh", tmp_path])
+            load_current_config.clear()
+            st.sidebar.success("Import complete. Reloading...")
+            st.experimental_rerun()
+        except Exception as exc:  # pragma: no cover - GUI feedback only
+            st.sidebar.error(f"Import failed: {exc}")
 
     tabs = st.tabs(["Overview", "Performance", "Config Explorer", "Logs", "Traces"])
 
