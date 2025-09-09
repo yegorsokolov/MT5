@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Dict
 
@@ -87,6 +88,37 @@ def main() -> None:
         st.info("Enter API key to connect")
         return
 
+    uploaded = st.sidebar.file_uploader("State archive", type=["tar.gz", "tgz", "tar"])
+
+    if st.sidebar.button("Import state", disabled=uploaded is None):
+        if uploaded is not None:
+            tmp_path = Path("/tmp") / uploaded.name
+            tmp_path.write_bytes(uploaded.getbuffer())
+            try:
+                subprocess.check_call(
+                    ["bash", "scripts/import_state.sh", str(tmp_path)]
+                )
+                st.sidebar.success("Import complete")
+            except Exception as exc:  # pragma: no cover - GUI feedback only
+                st.sidebar.error(f"Import failed: {exc}")
+
+    if st.sidebar.button("Copy project"):
+        try:
+            archive_path = (
+                subprocess.check_output(["bash", "scripts/export_state.sh"])
+                .decode()
+                .strip()
+            )
+            with open(archive_path, "rb") as f:
+                st.sidebar.download_button(
+                    label="Download project copy",
+                    data=f.read(),
+                    file_name=os.path.basename(archive_path),
+                    mime="application/gzip",
+                )
+        except Exception as exc:  # pragma: no cover - GUI feedback only
+            st.sidebar.error(f"Copy failed: {exc}")
+
     tabs = st.tabs(["Overview", "Performance", "Config Explorer", "Logs", "Traces"])
 
     # Overview tab
@@ -118,13 +150,19 @@ def main() -> None:
         slip_df = query_local_metrics("broker_slippage_bps")
         if not lat_df.empty or not slip_df.empty:
             st.subheader("Broker Latency/Slippage")
-            lat = lat_df.groupby("broker")["value"].mean() if not lat_df.empty else pd.Series()
+            lat = (
+                lat_df.groupby("broker")["value"].mean()
+                if not lat_df.empty
+                else pd.Series()
+            )
             slip = (
                 slip_df.groupby("broker")["value"].mean()
                 if not slip_df.empty
                 else pd.Series()
             )
-            table = pd.concat([lat.rename("latency_ms"), slip.rename("slippage_bps")], axis=1)
+            table = pd.concat(
+                [lat.rename("latency_ms"), slip.rename("slippage_bps")], axis=1
+            )
             st.table(table.fillna(0))
 
         client = issue_client()
