@@ -95,6 +95,8 @@ def _load_donor_state_dict(symbol: str):
             if isinstance(state, dict):
                 return state
     return None
+
+
 def batch_size_backoff(cfg: dict, train_step: Callable[[int, int], T]) -> T:
     """Run ``train_step`` with automatic batch size backoff.
 
@@ -596,7 +598,8 @@ def main(
                 num_symbols=num_symbols,
                 num_regimes=num_regimes,
             ).to(device)
-        model = initialize_model_with_contrastive(model)
+        if cfg.get("use_contrastive_pretrain"):
+            model = initialize_model_with_contrastive(model)
 
         def _watch_model() -> None:
             if isinstance(model, HierarchicalForecaster):
