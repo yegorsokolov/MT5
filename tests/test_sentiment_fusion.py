@@ -2,13 +2,30 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import sys
+sys.modules.pop("pandas", None)
 import pandas as pd
+sys.modules.pop("scipy", None)
+sys.modules.pop("scipy.sparse", None)
+sys.modules.pop("scipy.stats", None)
+sys.modules.pop("tqdm", None)
+import scipy
+import scipy.sparse as sp
+import scipy.stats as st
+sys.modules["scipy"] = scipy
+sys.modules["scipy.sparse"] = sp
+sys.modules["scipy.stats"] = st
+sys.modules["psutil"] = __import__("psutil")
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import types
+ge_core = types.SimpleNamespace(expectation_suite=types.SimpleNamespace(ExpectationSuite=object))
+sys.modules.setdefault("great_expectations", types.SimpleNamespace(core=ge_core))
+sys.modules["great_expectations.core"] = ge_core
+sys.modules["great_expectations.core.expectation_suite"] = ge_core.expectation_suite
 
 sys.modules.setdefault("utils.environment", types.SimpleNamespace(ensure_environment=lambda: None))
 sys.modules.setdefault("duckdb", types.SimpleNamespace())
@@ -22,7 +39,6 @@ sys.modules.setdefault(
     "torch",
     types.SimpleNamespace(cuda=types.SimpleNamespace(device_count=lambda: 0)),
 )
-sys.modules.setdefault("tqdm", types.SimpleNamespace())
 sys.modules.setdefault("river", types.SimpleNamespace())
 sys.modules.setdefault("kafka", types.SimpleNamespace())
 sys.modules.setdefault("redis", types.SimpleNamespace())
@@ -75,6 +91,7 @@ def test_sentiment_fusion_improves_metrics(tmp_path, monkeypatch):
     base_mse = mean_squared_error(target, base_pred)
 
     # Fused model
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, *a, **k: None)
     sentiment_fusion.train(events, target)
     fused_pred = sentiment_fusion.score(events)["fused_sentiment"]
     fused_mse = mean_squared_error(target, fused_pred)
@@ -83,16 +100,23 @@ def test_sentiment_fusion_improves_metrics(tmp_path, monkeypatch):
 
     # Integration with feature pipeline
     monkeypatch.setattr(monitor, "capability_tier", "standard")
-    csv_dir = Path(__file__).resolve().parents[1] / "data" / "data"
-    csv_dir.mkdir(parents=True, exist_ok=True)
-    (csv_dir / "news_sentiment.csv").write_text("Timestamp,sentiment\n2021-01-01,0\n")
+    import features.news as fnews
+
+    monkeypatch.setattr(
+        fnews,
+        "MODEL_NAME",
+        "hf-internal-testing/tiny-distilbert-base-uncased-finetuned-sst-2-english",
+        raising=False,
+    )
     df = pd.DataFrame(
         {
             "Timestamp": events["timestamp"],
             "Symbol": events["symbol"],
             "mid": rng.randn(n),
+            "news_summary": ["headline"] * n,
         }
     )
     enriched = add_news_sentiment_features(df)
-    assert "event_sentiment" in enriched.columns
-    assert enriched["event_sentiment"].notna().any()
+    assert "news_sentiment" in enriched.columns
+    emb_cols = [c for c in enriched.columns if c.startswith("news_emb_")]
+    assert emb_cols

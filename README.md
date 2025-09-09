@@ -648,7 +648,12 @@ present. Configuration values for these filters live in `config.yaml`.  The
 pipeline now also considers news sentiment scores and cross-asset momentum
 to further refine entries. Set `enable_news_trading` to `false` to automatically
 block trades within a few minutes of scheduled high impact events pulled from
-all three calendars.
+all three calendars.  When the optional `transformers` dependency is available,
+news summaries are encoded with a HuggingFace
+`AutoModelForSequenceClassification` to produce both polarity scores and
+embedding vectors that downstream models can consume.  If the model cannot be
+loaded the features gracefully fall back to zeros so existing pipelines remain
+operational.
 
 Sentiment scoring behaviour can be tuned via `sentiment_mode` in
 `config.yaml`. The default `full` mode loads the original FinBERT/FinGPT
