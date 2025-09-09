@@ -22,6 +22,7 @@ models/*
 !models/meta_learner.py
 !models/price_distribution.py
 !models/graph_net.py
+!models/graph_attention.py
 !models/distillation.py
 !models/meta_label.py
 !models/remote_client.py

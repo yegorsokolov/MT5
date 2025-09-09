@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Sequence, Tuple
 
+import logging
 import numpy as np
 import pandas as pd
 import torch
@@ -22,6 +23,10 @@ from torch.optim import Adam
 from torch.nn import MSELoss
 
 from models.graph_net import GraphNet
+from models.graph_attention import GATNet
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_node_features(df: pd.DataFrame, symbols: Sequence[str]) -> List[torch.Tensor]:
@@ -86,22 +91,39 @@ def train_graphnet(
         Wide DataFrame of per-symbol return series.  ``df.attrs`` must contain
         ``"adjacency_matrices"`` as described in :func:`build_graph_examples`.
     cfg:
-        Configuration dictionary.  Recognised keys include ``"symbols"``,
-        ``"epochs"``, ``"lr"``, ``"hidden_channels"`` and ``"num_layers"``.
+        Configuration dictionary. Recognised keys include ``"symbols"``,
+        ``"epochs"``, ``"lr"``, ``"hidden_channels"`` and ``"num_layers"``. Set
+        ``"use_gat"`` to ``True`` to build a :class:`models.graph_attention.GATNet`
+        instead of :class:`models.graph_net.GraphNet`. Additional GAT-specific
+        options are ``"gat_heads"`` controlling the number of attention heads and
+        ``"gat_dropout"`` which applies dropout to the attention weights.
     return_losses:
         If ``True`` the function returns a tuple ``(model, losses)`` where
         ``losses`` is a list of average epoch losses.
     """
 
-    symbols = cfg.get("symbols") or list(df.columns)
+    symbols = cfg.get("symbols")
+    if symbols is None:
+        symbols = list(df.columns)
     examples = build_graph_examples(df, symbols)
 
-    model = GraphNet(
-        in_channels=examples[0][0].size(1),
-        hidden_channels=cfg.get("hidden_channels", 32),
-        out_channels=1,
-        num_layers=cfg.get("num_layers", 2),
-    )
+    use_gat = cfg.get("use_gat", False)
+    if use_gat:
+        model = GATNet(
+            in_channels=examples[0][0].size(1),
+            hidden_channels=cfg.get("hidden_channels", 32),
+            out_channels=1,
+            num_layers=cfg.get("num_layers", 2),
+            heads=cfg.get("gat_heads", 1),
+            dropout=cfg.get("gat_dropout", 0.0),
+        )
+    else:
+        model = GraphNet(
+            in_channels=examples[0][0].size(1),
+            hidden_channels=cfg.get("hidden_channels", 32),
+            out_channels=1,
+            num_layers=cfg.get("num_layers", 2),
+        )
     optimizer = Adam(model.parameters(), lr=cfg.get("lr", 0.01))
     loss_fn = MSELoss()
 
@@ -111,6 +133,8 @@ def train_graphnet(
         total = 0.0
         for x, edge_index, y in examples:
             pred = model(x, edge_index)
+            if use_gat and getattr(model, "last_attention", None) is not None:
+                logger.debug("attention weights: %s", model.last_attention)
             loss = loss_fn(pred, y)
             optimizer.zero_grad()
             loss.backward()
