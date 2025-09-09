@@ -335,6 +335,8 @@ Graph-based features can be extracted from cross-correlation networks when
 to embed each symbol at every timestamp. A temporal variant controlled by
 `use_temporal_gat` processes adjacency matrices sequentially to generate
 per-timestamp node embeddings.
+The number of attention heads and dropout applied to the attention weights can
+be configured via `gat_heads` and `gat_dropout`.
 Spread and slippage protections are provided via the `spread` and `slippage`
 plugins. Enable them with the `use_spread_check` and `use_slippage_check`
 flags and configure thresholds through `max_spread` and `max_slippage`.

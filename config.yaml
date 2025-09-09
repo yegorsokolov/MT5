@@ -143,6 +143,10 @@ use_tsfresh: false
 use_gat_features: false
 # enable temporal GAT embeddings
 use_temporal_gat: false
+# number of attention heads for GAT layers
+gat_heads: 1
+# dropout applied to GAT attention weights
+gat_dropout: 0.0
 # enable autoencoder price embeddings
 use_autoencoder_features: false
 # macroeconomic data from FRED
