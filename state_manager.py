@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 import os
 from typing import Any, Tuple
+from datetime import datetime
+import shutil
 import joblib
 from crypto_utils import _load_key, encrypt, decrypt
+
 try:  # optional during tests
     from core import state_sync
 except Exception:  # pragma: no cover - optional dependency
@@ -12,13 +15,31 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 def _checkpoint_dir(directory: str | None = None) -> Path:
-    """Return the checkpoint directory, creating it if needed."""
-    base = Path(directory or os.getenv("CHECKPOINT_DIR", "checkpoints"))
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+    """Return the checkpoint directory, creating it if needed.
+
+    Checkpoints are organised under ``/data/checkpoints`` with a timestamped
+    sub-directory for each run. The current timestamp is cached in the
+    ``CHECKPOINT_TIMESTAMP`` environment variable so multiple checkpoints from
+    the same process end up in the same folder. The active configuration file
+    is also copied alongside the checkpoints for reproducibility.
+    """
+
+    base = Path(directory or os.getenv("CHECKPOINT_DIR", "/data/checkpoints"))
+    ts = os.getenv("CHECKPOINT_TIMESTAMP")
+    if ts is None:
+        ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        os.environ["CHECKPOINT_TIMESTAMP"] = ts
+    ckpt_dir = base / ts
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    cfg = Path("config.yaml")
+    if cfg.exists():
+        shutil.copy2(cfg, ckpt_dir / "config.yaml")
+    return ckpt_dir
 
 
-def save_checkpoint(state: dict[str, Any], step: int, directory: str | None = None) -> Path:
+def save_checkpoint(
+    state: dict[str, Any], step: int, directory: str | None = None
+) -> Path:
     """Persist ``state`` at ``step`` to the checkpoint directory.
 
     Parameters
@@ -38,7 +59,9 @@ def save_checkpoint(state: dict[str, Any], step: int, directory: str | None = No
     return path
 
 
-def load_latest_checkpoint(directory: str | None = None) -> Tuple[int, dict[str, Any]] | None:
+def load_latest_checkpoint(
+    directory: str | None = None,
+) -> Tuple[int, dict[str, Any]] | None:
     """Load the most recent checkpoint if it exists.
 
     Returns ``None`` if no checkpoints are present. Otherwise returns a
@@ -46,10 +69,14 @@ def load_latest_checkpoint(directory: str | None = None) -> Tuple[int, dict[str,
     """
     if state_sync:
         state_sync.pull_checkpoints()
-    ckpt_dir = Path(directory or os.getenv("CHECKPOINT_DIR", "checkpoints"))
-    if not ckpt_dir.exists():
+    base = Path(directory or os.getenv("CHECKPOINT_DIR", "/data/checkpoints"))
+    if not base.exists():
         return None
-    checkpoints = sorted(ckpt_dir.glob("checkpoint_*.pkl.enc"))
+    subdirs = [p for p in base.iterdir() if p.is_dir()]
+    if not subdirs:
+        return None
+    latest_dir = max(subdirs, key=lambda p: p.stat().st_mtime)
+    checkpoints = sorted(latest_dir.glob("checkpoint_*.pkl.enc"))
     if not checkpoints:
         return None
     latest = max(checkpoints, key=lambda p: p.stat().st_mtime)
