@@ -62,4 +62,41 @@ def triple_barrier(
     log_lineage(run_id, raw_file, "triple_barrier", "label")
     return labels
 
-__all__ = ["triple_barrier"]
+
+def multi_horizon_labels(prices: "pd.Series", horizons: list[int]) -> "pd.DataFrame":
+    """Generate binary labels for multiple prediction horizons.
+
+    For each horizon ``h`` in ``horizons`` a column ``label_h`` is created
+    indicating whether the price after ``h`` steps is greater than the
+    current price.  The trailing ``h`` rows where the future is unknown are
+    filled with ``0``.
+
+    Parameters
+    ----------
+    prices : pd.Series
+        Series of prices indexed by time.
+    horizons : list[int]
+        List of prediction horizons in steps.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with one column per horizon named ``label_{h}``.
+    """
+
+    data: dict[str, pd.Series] = {}
+    for h in horizons:
+        future = prices.shift(-h)
+        data[f"label_{h}"] = (future > prices).astype(int).fillna(0).astype(int)
+
+    labels = pd.DataFrame(data, index=prices.index)
+
+    run_id = prices.attrs.get("run_id", "unknown")
+    raw_file = prices.attrs.get("source", "unknown")
+    for h in horizons:
+        log_lineage(run_id, raw_file, f"multi_horizon_{h}", "label")
+
+    return labels
+
+
+__all__ = ["triple_barrier", "multi_horizon_labels"]
