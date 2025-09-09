@@ -31,5 +31,25 @@ def test_baseline_ma_crossover_places_orders(metadata_file: Path):
         tick = {"price": price, "next_price": price}
         executor.on_tick(tick)
 
-    orders = [call.args[0]["quantity"] for call in executor.place_live_order.call_args_list if call.args[0]["quantity"]]
+    orders = [
+        call.args[0]["quantity"]
+        for call in executor.place_live_order.call_args_list
+        if call.args[0]["quantity"]
+    ]
     assert orders == [1, -1]
+
+
+def test_min_diff_filters_noisy_signals():
+    strategy = get_strategy(short_window=2, long_window=3, min_diff=1.0)
+    executor = StrategyExecutor(mode=Mode.LIVE_TRADING, strategy=strategy)
+    executor.place_live_order = Mock()
+
+    prices = [1, 2, 3, 2.5, 2]
+    for price in prices:
+        tick = {"price": price, "next_price": price}
+        executor.on_tick(tick)
+
+    assert all(
+        call.args[0]["quantity"] == 0
+        for call in executor.place_live_order.call_args_list
+    )
