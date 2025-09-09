@@ -506,6 +506,8 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    7. To use the FRED macro features install `pandas_datareader` with
       `pip install pandas_datareader` and set the `FRED_API_KEY` environment
       variable.
+   8. The `auto_indicator` plugin automatically generates lag and rolling
+      statistics for numeric columns and requires no extra dependencies.
 7. **Build Protobuf classes** –
    1. Make sure the `protoc` compiler is installed and on your `PATH`.
    2. Run `protoc --python_out=. proto/signals.proto` from the repository root.
