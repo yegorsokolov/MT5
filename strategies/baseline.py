@@ -28,7 +28,7 @@ Example
 
 from collections import deque
 from math import sqrt
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict, Optional, Set
 
 
 class BaselineStrategy:
@@ -61,6 +61,12 @@ class BaselineStrategy:
     scale_pos_by_atr:
         When ``True`` position sizes are scaled inversely with the
         latest ATR value.
+    long_regimes:
+        Optional set of regime ids permitting long positions. ``None``
+        allows longs in any regime.
+    short_regimes:
+        Optional set of regime ids permitting short positions. ``None``
+        allows shorts in any regime.
     """
 
     def __init__(
@@ -76,6 +82,8 @@ class BaselineStrategy:
         session_position_limits: Optional[Dict[str, int]] = None,
         default_position_limit: int = 1,
         scale_pos_by_atr: bool = False,
+        long_regimes: Optional[Set[int]] = None,
+        short_regimes: Optional[Set[int]] = None,
     ) -> None:
         if short_window >= long_window:
             raise ValueError("short_window must be < long_window")
@@ -90,6 +98,8 @@ class BaselineStrategy:
         self.trailing_stop_pct = float(trailing_stop_pct)
         self.trailing_take_profit_pct = float(trailing_take_profit_pct)
         self.scale_pos_by_atr = scale_pos_by_atr
+        self.long_regimes = set(long_regimes) if long_regimes is not None else None
+        self.short_regimes = set(short_regimes) if short_regimes is not None else None
 
         self._short: Deque[float] = deque(maxlen=short_window)
         self._long: Deque[float] = deque(maxlen=long_window)
@@ -179,6 +189,7 @@ class BaselineStrategy:
         supertrend_break: Optional[int] = None,
         kama_cross: Optional[int] = None,
         kma_cross: Optional[int] = None,
+        regime: Optional[int] = None,
     ) -> int:
         """Process a new bar and return a trading signal.
 
@@ -215,6 +226,8 @@ class BaselineStrategy:
         kma_cross:
             Optional price/KMA cross signal. When provided entries are
             permitted only when it matches the raw signal direction.
+        regime:
+            Optional discrete regime id used to gate long/short entries.
 
         Returns
         -------
@@ -322,6 +335,15 @@ class BaselineStrategy:
 
         self._prev_short, self._prev_long = short_ma, long_ma
 
+        # Exit immediately if current regime disallows the held position
+        if regime is not None:
+            if self.position == 1 and self.long_regimes is not None and regime not in self.long_regimes:
+                self.position = 0
+                return -1
+            if self.position == -1 and self.short_regimes is not None and regime not in self.short_regimes:
+                self.position = 0
+                return 1
+
         # Manage existing position before considering new entries
         exit_signal = self._manage_position(price)
         if exit_signal:
@@ -329,6 +351,11 @@ class BaselineStrategy:
 
         # No open position - consider new entries
         if self.position == 0 and raw_signal != 0:
+            if regime is not None:
+                if raw_signal == 1 and self.long_regimes is not None and regime not in self.long_regimes:
+                    return 0
+                if raw_signal == -1 and self.short_regimes is not None and regime not in self.short_regimes:
+                    return 0
             limit = self.current_position_limit
             if self.scale_pos_by_atr and self.latest_atr:
                 limit = max(1, int(limit / self.latest_atr))
