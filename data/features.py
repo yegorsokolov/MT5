@@ -23,6 +23,7 @@ from analysis.cross_spectral import (
     compute as cross_spectral_compute,
     REQUIREMENTS as CROSS_SPECTRAL_REQ,
 )
+from analysis.knowledge_graph import risk_score, opportunity_score
 from utils.resource_monitor import monitor, ResourceCapabilities
 from utils import load_config
 from analysis import feature_gate
@@ -156,6 +157,43 @@ def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
 
 # Mark as degradable for high-latency throttling
 add_alt_features.degradable = True  # type: ignore[attr-defined]
+
+
+def add_knowledge_graph_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach knowledge graph risk and opportunity scores.
+
+    The function loads a persisted knowledge graph using
+    :func:`analysis.knowledge_graph.load_knowledge_graph` and computes
+    ``graph_risk`` and ``graph_opportunity`` scores for each company.  The
+    company identifier is taken from the ``Symbol`` column if present
+    otherwise ``company``.  If neither column exists or the graph cannot be
+    loaded, the input DataFrame is returned unchanged.
+    """
+
+    comp_col = None
+    if "Symbol" in df.columns:
+        comp_col = "Symbol"
+    elif "company" in df.columns:
+        comp_col = "company"
+    if comp_col is None:
+        return df
+
+    try:  # pragma: no cover - optional graph
+        from analysis.knowledge_graph import load_knowledge_graph
+
+        g = load_knowledge_graph()
+    except Exception:
+        return df
+
+    companies = df[comp_col].astype(str)
+    unique = companies.unique()
+    risk_map = {c: risk_score(g, c) for c in unique}
+    opp_map = {c: opportunity_score(g, c) for c in unique}
+
+    df = df.copy()
+    df["graph_risk"] = companies.map(risk_map)
+    df["graph_opportunity"] = companies.map(opp_map)
+    return df
 
 
 def add_fractal_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -360,6 +398,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         raw_file = df.attrs.get("source", "unknown")
         for col in new_cols:
             log_lineage(run_id, raw_file, compute.__name__, col)
+
+    # Knowledge graph risk and opportunity scores
+    df = add_knowledge_graph_features(df)
 
     # GARCH volatility derived from returns
     df = add_garch_volatility(df)
@@ -653,6 +694,7 @@ __all__ = [
     "add_news_sentiment_features",
     "add_cross_asset_features",
     "add_cross_spectral_features",
+    "add_knowledge_graph_features",
     "add_frequency_features",
     "add_fractal_features",
     "add_garch_volatility",
