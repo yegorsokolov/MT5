@@ -7,7 +7,11 @@ import os
 import logging
 import joblib
 import pandas as pd
-from state_manager import load_runtime_state, save_runtime_state
+from state_manager import (
+    load_runtime_state,
+    save_runtime_state,
+    legacy_runtime_state_exists,
+)
 
 import numpy as np
 
@@ -42,6 +46,16 @@ from analysis.concept_drift import ConceptDriftMonitor
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def _validate_account_id(account_id: str | None) -> str | None:
+    """Ensure ``account_id`` contains only digits."""
+
+    if account_id is None:
+        return None
+    if not str(account_id).isdigit():
+        raise ValueError(f"Invalid MT5 account ID: {account_id}")
+    return str(account_id)
 
 
 def load_models(paths, versions=None):
@@ -332,7 +346,9 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config()
-    account_id = os.getenv("MT5_ACCOUNT_ID") or cfg.get("account_id")
+    account_id = _validate_account_id(
+        os.getenv("MT5_ACCOUNT_ID") or cfg.get("account_id")
+    )
     cache = PredictionCache(
         cfg.get("pred_cache_size", 256), cfg.get("pred_cache_policy", "lru")
     )
@@ -343,6 +359,14 @@ def main():
 
     # Reload previous runtime state if available
     state = load_runtime_state(account_id=account_id)
+    if account_id and state is None and legacy_runtime_state_exists():
+        logger.warning(
+            "Legacy runtime state detected but no state for account %s. "
+            "Run `python -c \"from state_manager import migrate_runtime_state; "
+            "migrate_runtime_state('%s')\"` to migrate.",
+            account_id,
+            account_id,
+        )
     last_ts = None
     prev_models: list[str] = []
     if state:
