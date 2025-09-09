@@ -71,12 +71,27 @@ _STATE_DIR = Path("/var/lib/mt5bot")
 _STATE_FILE = _STATE_DIR / "runtime_state.pkl"
 
 
+def _runtime_state_file(account_id: str | None = None) -> Path:
+    """Return the runtime state file path for ``account_id``.
+
+    If ``account_id`` is provided, the state is namespaced per MT5 account
+    so that switching between accounts does not leak trading state.  When no
+    ``account_id`` is given the legacy ``runtime_state.pkl`` location is
+    used for backwards compatibility.
+    """
+
+    if account_id:
+        return _STATE_DIR / f"runtime_state_{account_id}.pkl"
+    return _STATE_FILE
+
+
 def save_runtime_state(
     last_timestamp: str,
     open_positions: list[dict[str, Any]],
     model_versions: list[str],
     model_weights: dict[str, Any] | None = None,
     feature_scalers: dict[str, Any] | None = None,
+    account_id: str | None = None,
 ) -> Path:
     """Persist runtime trading state to the MT5 bot directory.
 
@@ -92,6 +107,14 @@ def save_runtime_state(
         Optional mapping of model identifiers to their serialized weights.
     feature_scalers:
         Optional mapping of feature scaler objects used in preprocessing.
+
+    Parameters
+    ----------
+    account_id:
+        Optional MT5 account identifier. When provided, the runtime state is
+        stored in a file unique to that account. This allows users to switch
+        accounts while retaining their model state and cutting access from the
+        previous account.
 
     Returns
     -------
@@ -109,19 +132,40 @@ def save_runtime_state(
         state["model_weights"] = model_weights
     if feature_scalers is not None:
         state["feature_scalers"] = feature_scalers
-    joblib.dump(state, _STATE_FILE)
-    return _STATE_FILE
+    path = _runtime_state_file(account_id)
+    joblib.dump(state, path)
+    return path
 
 
-def load_runtime_state() -> dict[str, Any] | None:
+def load_runtime_state(account_id: str | None = None) -> dict[str, Any] | None:
     """Load runtime trading state if present.
 
-    Returns ``None`` when no state has been saved yet."""
+    Parameters
+    ----------
+    account_id:
+        Optional MT5 account identifier. When provided, the state is loaded
+        from the account-specific file. If no file exists for that account the
+        legacy global state file is used as a fallback to allow migration of
+        existing state when a user switches accounts.
 
-    if not _STATE_FILE.exists():
-        return None
+    Returns
+    -------
+    dict or None
+        Previously saved runtime state or ``None`` when no state has been
+        saved yet.
+    """
+
+    path = _runtime_state_file(account_id)
+    if not path.exists():
+        if account_id:
+            # Fallback to legacy state file when migrating to a new account
+            path = _STATE_FILE
+            if not path.exists():
+                return None
+        else:
+            return None
     try:
-        state: dict[str, Any] = joblib.load(_STATE_FILE)
+        state: dict[str, Any] = joblib.load(path)
     except Exception:
         return None
 
