@@ -25,3 +25,14 @@ executor = StrategyExecutor(mode=Mode.LIVE_TRADING, strategy=strategy)
 - No order is generated when no crossover occurs.
 
 Configure `short_window`, `long_window`, and `min_diff` to suit your market and timeframe.
+
+## Higher Timeframe Confirmation
+
+The strategy can optionally align entries with a broader trend by
+supplying higher timeframe indicators to the ``update`` method via the
+``htf_ma`` and ``htf_rsi`` parameters.  Long trades require the current
+price to be above ``htf_ma`` and ``htf_rsi`` to exceed 50 while short
+trades require price below ``htf_ma`` and ``htf_rsi`` below 50.  These
+indicators can be derived from minute data using
+``features.multi_timeframe.compute`` which resamples to intervals such as
+1H or 4H and calculates moving averages and RSI.

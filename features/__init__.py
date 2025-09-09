@@ -26,7 +26,15 @@ except Exception:  # pragma: no cover - utils may not be available in tests
 
 from utils.resource_monitor import monitor, ResourceCapabilities
 
-from . import price, news, cross_asset, orderbook, auto_indicator, volume
+from . import (
+    price,
+    news,
+    cross_asset,
+    orderbook,
+    auto_indicator,
+    volume,
+    multi_timeframe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +57,9 @@ _REGISTRY: Dict[str, FeatureSpec] = {
     "orderbook": FeatureSpec(orderbook.compute, min_cpus=2, min_mem_gb=2.0),
     "auto_indicator": FeatureSpec(auto_indicator.compute, min_cpus=1, min_mem_gb=1.0),
     "volume": FeatureSpec(volume.compute, min_cpus=1, min_mem_gb=1.0),
+    "multi_timeframe": FeatureSpec(
+        multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0
+    ),
 }
 
 # Holds latest status report
