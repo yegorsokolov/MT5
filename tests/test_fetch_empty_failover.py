@@ -11,8 +11,11 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 # stub heavy dependencies so realtime_train imports without installing them
 sys.modules['git'] = types.SimpleNamespace(Repo=lambda *a, **k: None)
 sys.modules['yaml'] = types.SimpleNamespace(safe_load=lambda *a, **k: {})
-sys.modules['utils'] = types.SimpleNamespace(load_config=lambda: {"max_empty_batches": 2})
+utils_mod = types.ModuleType('utils')
+utils_mod.load_config = lambda: {"max_empty_batches": 2}
+sys.modules['utils'] = utils_mod
 sys.modules['utils.resource_monitor'] = types.SimpleNamespace(monitor=lambda *a, **k: None)
+sys.modules['utils.graceful_exit'] = types.SimpleNamespace(graceful_exit=lambda *a, **k: None)
 sys.modules['requests'] = types.SimpleNamespace(get=lambda *a, **k: None)
 data_pkg = types.ModuleType('data')
 data_pkg.features = types.SimpleNamespace(make_features=lambda df: df)
@@ -38,7 +41,10 @@ sys.modules['data.features'] = data_pkg.features
 sys.modules['data.sanitize'] = data_pkg.sanitize
 sys.modules['data.trade_log'] = data_pkg.trade_log
 sys.modules['data.feature_scaler'] = data_pkg.feature_scaler
-sys.modules['signal_queue'] = types.SimpleNamespace(get_signal_backend=lambda cfg: None)
+sys.modules['signal_queue'] = types.SimpleNamespace(
+    get_signal_backend=lambda cfg: None,
+    publish_dataframe_async=lambda *a, **k: None,
+)
 metrics_mod = types.ModuleType('metrics')
 metrics_mod.RECONNECT_COUNT = types.SimpleNamespace(inc=lambda: None)
 metrics_mod.FEATURE_ANOMALIES = types.SimpleNamespace(inc=lambda: None)
@@ -49,6 +55,8 @@ metrics_mod.BROKER_LATENCY_MS = types.SimpleNamespace(labels=lambda **k: types.S
 metrics_mod.BROKER_FAILURES = types.SimpleNamespace(labels=lambda **k: types.SimpleNamespace(inc=lambda: None))
 metrics_mod.SLIPPAGE_BPS = types.SimpleNamespace(set=lambda v: None)
 metrics_mod.REALIZED_SLIPPAGE_BPS = types.SimpleNamespace(set=lambda v: None)
+metrics_mod.PIPELINE_ANOMALY_TOTAL = types.SimpleNamespace(inc=lambda *a, **k: None)
+metrics_mod.PIPELINE_ANOMALY_RATE = types.SimpleNamespace(set=lambda v: None)
 sys.modules['metrics'] = metrics_mod
 
 analytics_pkg = types.ModuleType('analytics')
@@ -62,6 +70,13 @@ sys.modules['models'] = types.SimpleNamespace(model_store=types.SimpleNamespace(
 sys.modules['prometheus_client'] = types.SimpleNamespace(Counter=lambda *a, **k: None, Gauge=lambda *a, **k: None)
 sys.modules['analysis.anomaly_detector'] = types.SimpleNamespace(
     detect_anomalies=lambda df, quarantine_path=None, counter=None: (df, [])
+)
+sys.modules['user_risk_inputs'] = types.SimpleNamespace(configure_user_risk=lambda *a, **k: None)
+sys.modules['state_manager'] = types.SimpleNamespace()
+sys.modules['crypto_utils'] = types.SimpleNamespace(
+    _load_key=lambda *a, **k: None,
+    encrypt=lambda *a, **k: None,
+    decrypt=lambda *a, **k: None,
 )
 class _DummySpan:
     def __enter__(self):
