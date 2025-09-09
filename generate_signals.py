@@ -58,10 +58,16 @@ def _validate_account_id(account_id: str | None) -> str | None:
     return str(account_id)
 
 
-def load_models(paths, versions=None):
-    """Load multiple models from paths or version identifiers."""
+def load_models(paths, versions=None, return_meta: bool = False):
+    """Load multiple models from paths or version identifiers.
+
+    When ``return_meta`` is True the function also returns a meta-classifier
+    loaded from the ``meta_model_id`` recorded in the primary model's metadata.
+    """
+
     models = []
     feature_list = None
+    meta_model = None
     versions = versions or []
     for vid in versions:
         try:
@@ -69,6 +75,13 @@ def load_models(paths, versions=None):
             thr = meta.get("performance", {}).get("regime_thresholds")
             if thr is not None:
                 setattr(m, "regime_thresholds", thr)
+            if meta_model is None:
+                meta_id = meta.get("performance", {}).get("meta_model_id")
+                if meta_id:
+                    try:
+                        meta_model, _ = model_store.load_model(meta_id)
+                    except FileNotFoundError:
+                        meta_model = None
             models.append(m)
             if feature_list is None:
                 feature_list = meta.get("features") or meta.get(
@@ -80,6 +93,8 @@ def load_models(paths, versions=None):
         mp = Path(__file__).resolve().parent / p
         if mp.exists():
             models.append(joblib.load(mp))
+    if return_meta:
+        return models, feature_list, meta_model
     return models, feature_list
 
 
@@ -383,7 +398,9 @@ def main():
     env_version = os.getenv("MODEL_VERSION_ID")
     if env_version:
         model_versions.append(env_version)
-    models, stored_features = load_models(model_paths, model_versions)
+    models, stored_features, meta_clf = load_models(
+        model_paths, model_versions, return_meta=True
+    )
     if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
     regime_thresholds = getattr(models[0], "regime_thresholds", {}) if models else {}
@@ -574,6 +591,15 @@ def main():
         probs,
         0.0,
     )
+    if meta_clf is not None:
+        meta_feat = pd.DataFrame(
+            {
+                "prob": combined,
+                "confidence": np.abs(combined - 0.5) * 2,
+            }
+        )
+        keep = meta_clf.predict(meta_feat) == 1
+        combined = np.where(keep, combined, 0.0)
 
     regimes = df["market_regime"] if "market_regime" in df.columns else None
     if regimes is not None and regime_thresholds:
