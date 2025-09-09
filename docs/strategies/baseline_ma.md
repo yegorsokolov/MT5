@@ -36,3 +36,19 @@ trades require price below ``htf_ma`` and ``htf_rsi`` below 50.  These
 indicators can be derived from minute data using
 ``features.multi_timeframe.compute`` which resamples to intervals such as
 1H or 4H and calculates moving averages and RSI.
+
+## Kalman Moving Average Filter
+
+For noisier markets the strategy can be combined with a Kalman-filter
+based moving average (``kma``) by enabling the ``kalman_ma`` feature.
+The filter smooths the closing price using two hyperparameters:
+
+- ``process_noise`` (``Q``): variance of the process noise. Higher
+  values let the filter react quicker but introduce more noise.
+- ``measurement_noise`` (``R``): variance of the observation noise.
+  Increasing this value produces a smoother, but more lagging, average.
+
+When ``kalman_ma`` is active the strategy's ``update`` method accepts a
+``kma_cross`` argument which signals price/KMA crossovers (``1`` for
+upward, ``-1`` for downward).  New trades are only allowed when the
+``kma_cross`` direction matches the moving-average signal.

@@ -178,6 +178,7 @@ class BaselineStrategy:
         htf_rsi: Optional[float] = None,
         supertrend_break: Optional[int] = None,
         kama_cross: Optional[int] = None,
+        kma_cross: Optional[int] = None,
     ) -> int:
         """Process a new bar and return a trading signal.
 
@@ -210,6 +211,9 @@ class BaselineStrategy:
             allows short entries.
         kama_cross:
             Optional price/KAMA cross signal. When provided entries are
+            permitted only when it matches the raw signal direction.
+        kma_cross:
+            Optional price/KMA cross signal. When provided entries are
             permitted only when it matches the raw signal direction.
 
         Returns
@@ -312,6 +316,8 @@ class BaselineStrategy:
         ):
             raw_signal = 0
         if raw_signal != 0 and kama_cross is not None and kama_cross != raw_signal:
+            raw_signal = 0
+        if raw_signal != 0 and kma_cross is not None and kma_cross != raw_signal:
             raw_signal = 0
 
         self._prev_short, self._prev_long = short_ma, long_ma
