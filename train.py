@@ -26,6 +26,7 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.pipeline import Pipeline
+from sklearn.multioutput import MultiOutputClassifier
 from sklearn.utils.class_weight import compute_sample_weight
 from analysis.purged_cv import PurgedTimeSeriesSplit
 from lightgbm import LGBMClassifier
@@ -133,6 +134,62 @@ def _load_donor_booster(symbol: str):
             if clf and hasattr(clf, "booster_"):
                 return clf.booster_
     return None
+
+
+def train_multi_output_model(
+    X: pd.DataFrame, y: pd.DataFrame, cfg: dict | None = None
+) -> tuple[Pipeline, dict[str, object]]:
+    """Train a multi-output classifier and report metrics per horizon.
+
+    The function builds a small pipeline consisting of an optional
+    :class:`FeatureScaler` followed by a ``MultiOutputClassifier`` wrapping
+    ``LGBMClassifier``.  It returns both the fitted pipeline and a dictionary
+    containing a ``classification_report`` for each horizon as well as an
+    aggregated F1 score across horizons.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix.
+    y : pd.DataFrame
+        DataFrame of target columns, one per horizon.
+    cfg : dict, optional
+        Optional configuration with LightGBM parameters.
+
+    Returns
+    -------
+    Pipeline
+        The fitted pipeline.
+    dict
+        Dictionary with per-horizon reports and ``aggregate_f1``.
+    """
+
+    cfg = cfg or {}
+    steps: list[tuple[str, object]] = []
+    if cfg.get("use_scaler", True):
+        steps.append(("scaler", FeatureScaler()))
+
+    clf_params = {
+        "n_estimators": cfg.get("n_estimators", 50),
+        "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+        "random_state": cfg.get("seed", 0),
+        **_lgbm_params(cfg),
+    }
+    base = LGBMClassifier(**clf_params)
+    clf = MultiOutputClassifier(base)
+    steps.append(("clf", clf))
+    pipe = Pipeline(steps)
+    pipe.fit(X, y)
+
+    preds = pipe.predict(X)
+    reports: dict[str, object] = {}
+    f1_scores: list[float] = []
+    for i, col in enumerate(y.columns):
+        rep = classification_report(y[col], preds[:, i], output_dict=True)
+        reports[col] = rep
+        f1_scores.append(rep["weighted avg"]["f1-score"])
+    reports["aggregate_f1"] = float(np.mean(f1_scores))
+    return pipe, reports
 
 
 def make_focal_loss(alpha: float = 0.25, gamma: float = 2.0):
