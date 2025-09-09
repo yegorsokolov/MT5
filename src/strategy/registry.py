@@ -28,7 +28,7 @@ def get_strategy(name: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
 
     strat = strat_cls(**kwargs)
     return {
-        "approved": True,
+        "name": name or "baseline_ma",
         "generate_order": strat.generate_order,
         "update": strat.update,
     }
