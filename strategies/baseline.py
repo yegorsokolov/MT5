@@ -170,6 +170,8 @@ class BaselineStrategy:
         session: Optional[str] = None,
         obv: Optional[float] = None,
         mfi: Optional[float] = None,
+        htf_ma: Optional[float] = None,
+        htf_rsi: Optional[float] = None,
     ) -> int:
         """Process a new bar and return a trading signal.
 
@@ -189,6 +191,9 @@ class BaselineStrategy:
             provided the strategy only enters long when both indicators
             show bullish pressure (``obv`` rising and ``mfi`` > 50) and
             short when they indicate bearish pressure.
+        htf_ma, htf_rsi:
+            Optional higher-timeframe moving average and RSI values used
+            to align trades with broader trends.
 
         Returns
         -------
@@ -247,6 +252,17 @@ class BaselineStrategy:
             and price > lower_band
         ):
             raw_signal = -1
+
+        if raw_signal == 1:
+            if (htf_ma is not None and price <= htf_ma) or (
+                htf_rsi is not None and htf_rsi <= 50
+            ):
+                raw_signal = 0
+        elif raw_signal == -1:
+            if (htf_ma is not None and price >= htf_ma) or (
+                htf_rsi is not None and htf_rsi >= 50
+            ):
+                raw_signal = 0
 
         # Volume confirmation using OBV and MFI
         if raw_signal != 0 and obv is not None and mfi is not None:
