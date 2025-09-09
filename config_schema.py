@@ -30,6 +30,9 @@ class EnsembleConfig(BaseModel):
     meta_learner: bool = Field(
         False, description="Train LogisticRegression stacking meta learner"
     )
+    diversity_weighting: bool = Field(
+        False, description="Weight models inversely to error correlations"
+    )
 
 
 class ConfigSchema(BaseModel):
