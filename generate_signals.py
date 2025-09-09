@@ -332,6 +332,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config()
+    account_id = os.getenv("MT5_ACCOUNT_ID") or cfg.get("account_id")
     cache = PredictionCache(
         cfg.get("pred_cache_size", 256), cfg.get("pred_cache_policy", "lru")
     )
@@ -341,7 +342,7 @@ def main():
     )
 
     # Reload previous runtime state if available
-    state = load_runtime_state()
+    state = load_runtime_state(account_id=account_id)
     last_ts = None
     prev_models: list[str] = []
     if state:
@@ -596,7 +597,9 @@ def main():
         last_processed = (
             pd.to_datetime(df["Timestamp"]).max().isoformat() if not df.empty else ""
         )
-        save_runtime_state(last_processed, open_positions, model_versions)
+        save_runtime_state(
+            last_processed, open_positions, model_versions, account_id=account_id
+        )
     except Exception:
         logger.exception("Failed to persist runtime state")
 
