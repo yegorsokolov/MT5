@@ -75,6 +75,7 @@ from models.conformal import fit_residuals, predict_interval, evaluate_coverage
 from analysis.regime_thresholds import find_regime_thresholds
 from analysis.concept_drift import ConceptDriftMonitor
 from analysis.pseudo_labeler import generate_pseudo_labels
+from models.meta_label import train_meta_classifier
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -532,6 +533,7 @@ def main(
     all_regimes: list[int] = []
     all_true: list[int] = []
     all_probs: list[float] = []
+    all_conf: list[float] = []
     all_lower: list[float] = []
     all_upper: list[float] = []
     final_pipe: Pipeline | None = None
@@ -547,6 +549,7 @@ def main(
         all_preds = state.get("all_preds", [])
         all_true = state.get("all_true", [])
         all_probs = state.get("all_probs", [])
+        all_conf = state.get("all_conf", [])
         all_regimes = state.get("all_regimes", [])
         all_lower = state.get("all_lower", [])
         all_upper = state.get("all_upper", [])
@@ -674,6 +677,7 @@ def main(
         sizer = PositionSizer(capital=cfg.get("eval_capital", 1000.0))
         for p, c in zip(probs, conf):
             sizer.size(p, confidence=c)
+        all_conf.extend(conf)
         report = classification_report(y_val, preds, output_dict=True)
         logger.info("Fold %d\n%s", fold, classification_report(y_val, preds))
         mlflow.log_metric(
@@ -697,6 +701,7 @@ def main(
             "all_preds": all_preds,
             "all_true": all_true,
             "all_probs": all_probs,
+            "all_conf": all_conf,
             "all_regimes": all_regimes,
             "all_lower": all_lower,
             "all_upper": all_upper,
@@ -811,13 +816,18 @@ def main(
             rec = recall_score(y_unlabeled, preds_unlabeled, zero_division=0)
             mlflow.log_metric("pseudo_label_precision", prec)
             mlflow.log_metric("pseudo_label_recall", rec)
+    meta_features = pd.DataFrame({"prob": all_probs, "confidence": all_conf})
+    meta_clf = train_meta_classifier(meta_features, all_true)
+    meta_version_id = model_store.save_model(meta_clf, cfg, {"type": "meta"})
+    perf = {
+        "f1_weighted": aggregate_report["weighted avg"]["f1-score"],
+        "regime_thresholds": regime_thresholds,
+        "meta_model_id": meta_version_id,
+    }
     version_id = model_store.save_model(
         final_pipe,
         cfg,
-        {
-            "f1_weighted": aggregate_report["weighted avg"]["f1-score"],
-            "regime_thresholds": regime_thresholds,
-        },
+        perf,
         features=features,
     )
     logger.info("Registered model version %s", version_id)
