@@ -508,6 +508,8 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
       variable.
    8. The `auto_indicator` plugin automatically generates lag and rolling
       statistics for numeric columns and requires no extra dependencies.
+      Lag lengths and window sizes can be configured and target columns
+      can be skipped to avoid leakage.
 7. **Build Protobuf classes** –
    1. Make sure the `protoc` compiler is installed and on your `PATH`.
    2. Run `protoc --python_out=. proto/signals.proto` from the repository root.
