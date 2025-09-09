@@ -98,6 +98,7 @@ class BaselineStrategy:
         self._prev_short = 0.0
         self._prev_long = 0.0
         self._prev_obv: Optional[float] = None
+        self._prev_cvd: Optional[float] = None
 
         # ATR state
         self._highs: Deque[float] = deque(maxlen=atr_window)
@@ -172,6 +173,7 @@ class BaselineStrategy:
         session: Optional[str] = None,
         obv: Optional[float] = None,
         mfi: Optional[float] = None,
+        cvd: Optional[float] = None,
         htf_ma: Optional[float] = None,
         htf_rsi: Optional[float] = None,
         supertrend_break: Optional[int] = None,
@@ -195,6 +197,10 @@ class BaselineStrategy:
             provided the strategy only enters long when both indicators
             show bullish pressure (``obv`` rising and ``mfi`` > 50) and
             short when they indicate bearish pressure.
+        cvd:
+            Optional cumulative volume delta. Long entries require
+            positive and rising ``cvd`` while short entries require
+            negative and falling ``cvd``.
         htf_ma, htf_rsi:
             Optional higher-timeframe moving average and RSI values used
             to align trades with broader trends.
@@ -286,6 +292,18 @@ class BaselineStrategy:
             ):
                 raw_signal = 0
         self._prev_obv = obv if obv is not None else self._prev_obv
+
+        # CVD confirmation
+        if raw_signal != 0 and cvd is not None:
+            if raw_signal == 1 and not (
+                cvd > 0 and (self._prev_cvd is None or cvd > self._prev_cvd)
+            ):
+                raw_signal = 0
+            elif raw_signal == -1 and not (
+                cvd < 0 and (self._prev_cvd is None or cvd < self._prev_cvd)
+            ):
+                raw_signal = 0
+        self._prev_cvd = cvd if cvd is not None else self._prev_cvd
 
         if (
             raw_signal != 0
