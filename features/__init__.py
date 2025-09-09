@@ -37,6 +37,7 @@ from . import (
     multi_timeframe,
     supertrend,
     adaptive_ma,
+    kalman_ma,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ _REGISTRY: Dict[str, FeatureSpec] = {
     "multi_timeframe": FeatureSpec(multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0),
     "supertrend": FeatureSpec(supertrend.compute, min_cpus=1, min_mem_gb=1.0),
     "adaptive_ma": FeatureSpec(adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0),
+    "kalman_ma": FeatureSpec(kalman_ma.compute, min_cpus=1, min_mem_gb=1.0),
 }
 
 # Holds latest status report
