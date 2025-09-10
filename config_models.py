@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Dict, List
 
 from pydantic import BaseModel, Field, ConfigDict
+
+
+class ConfigError(ValueError):
+    """Raised when configuration validation fails."""
 
 
 class TrainingConfig(BaseModel):
@@ -34,6 +38,15 @@ class StrategyConfig(BaseModel):
 
     symbols: List[str]
     risk_per_trade: float = Field(..., gt=0, le=1)
+    session_position_limits: Dict[str, int] = Field(default_factory=dict)
+    default_position_limit: int = 1
+    model_config = ConfigDict(extra="forbid")
+
+
+class ServicesConfig(BaseModel):
+    """Configuration for auxiliary services."""
+
+    service_cmds: Dict[str, List[str]] = Field(default_factory=dict)
     model_config = ConfigDict(extra="forbid")
 
 
@@ -43,10 +56,11 @@ class AppConfig(BaseModel):
     training: TrainingConfig = TrainingConfig()
     features: FeaturesConfig = FeaturesConfig()
     strategy: StrategyConfig
+    services: ServicesConfig = ServicesConfig()
     model_config = ConfigDict(extra="forbid")
 
     def get(self, key: str, default=None):
-        for section in (self.training, self.features, self.strategy):
+        for section in (self.training, self.features, self.strategy, self.services):
             if key in section.model_fields:
                 return getattr(section, key)
         return default
