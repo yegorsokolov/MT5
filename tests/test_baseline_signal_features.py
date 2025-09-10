@@ -46,7 +46,9 @@ def test_baseline_feature_matches_strategy():
 
     result = baseline_signal.compute(df, **params)
 
-    strat = BaselineStrategy(**params)
+    strat = BaselineStrategy(
+        **params, session_position_limits={}, default_position_limit=1
+    )
     exp_sig = []
     exp_long = []
     exp_short = []
@@ -90,7 +92,5 @@ def test_baseline_feature_matches_strategy():
         exp_short.append(short_stop)
 
     assert result["baseline_signal"].tolist() == exp_sig
-    assert np.allclose(result["baseline_long_stop"].tolist(), exp_long, equal_nan=True)
-    assert np.allclose(
-        result["baseline_short_stop"].tolist(), exp_short, equal_nan=True
-    )
+    assert np.allclose(result["long_stop"].tolist(), exp_long, equal_nan=True)
+    assert np.allclose(result["short_stop"].tolist(), exp_short, equal_nan=True)
