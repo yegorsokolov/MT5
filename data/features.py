@@ -527,24 +527,31 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     import time
 
     merge_lock = threading.Lock()
+    feature_timings: dict[str, dict[str, float]] = {}
 
     def _run_compute(compute):
         start = time.perf_counter()
         result = compute(df.copy())
-        duration = time.perf_counter() - start
-        return compute.__name__, result, duration
+        end = time.perf_counter()
+        return compute.__name__, result, start, end
 
     results = {}
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = [executor.submit(_run_compute, compute) for compute in pipeline]
         for future in concurrent.futures.as_completed(futures):
-            name, res, duration = future.result()
+            name, res, start, end = future.result()
+            duration = end - start
             logger.info("feature %s executed in %.3fs", name, duration)
             with merge_lock:
-                results[name] = (res, duration)
+                results[name] = res
+                feature_timings[name] = {
+                    "start": start,
+                    "end": end,
+                    "duration": duration,
+                }
 
     for compute in pipeline:
-        res, duration = results[compute.__name__]
+        res = results[compute.__name__]
         prev_cols = set(df.columns)
         new_cols = [c for c in res.columns if c not in prev_cols]
         with merge_lock:
@@ -553,6 +560,8 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         raw_file = df.attrs.get("source", "unknown")
         for col in new_cols:
             log_lineage(run_id, raw_file, compute.__name__, col)
+
+    df.attrs["feature_timings"] = feature_timings
 
     # GARCH volatility derived from returns
     df = add_garch_volatility(df)
