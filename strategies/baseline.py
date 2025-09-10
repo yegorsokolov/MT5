@@ -67,6 +67,10 @@ class BaselineStrategy:
     short_regimes:
         Optional set of regime ids permitting short positions. ``None``
         allows shorts in any regime.
+    ram_long_threshold:
+        Minimum risk-adjusted momentum required to allow a long entry.
+    ram_short_threshold:
+        Maximum risk-adjusted momentum permitted for a short entry.
     """
 
     def __init__(
@@ -84,6 +88,8 @@ class BaselineStrategy:
         scale_pos_by_atr: bool = False,
         long_regimes: Optional[Set[int]] = None,
         short_regimes: Optional[Set[int]] = None,
+        ram_long_threshold: float = 0.0,
+        ram_short_threshold: float = 0.0,
     ) -> None:
         if short_window >= long_window:
             raise ValueError("short_window must be < long_window")
@@ -100,6 +106,8 @@ class BaselineStrategy:
         self.scale_pos_by_atr = scale_pos_by_atr
         self.long_regimes = set(long_regimes) if long_regimes is not None else None
         self.short_regimes = set(short_regimes) if short_regimes is not None else None
+        self.ram_long_threshold = float(ram_long_threshold)
+        self.ram_short_threshold = float(ram_short_threshold)
 
         self._short: Deque[float] = deque(maxlen=short_window)
         self._long: Deque[float] = deque(maxlen=long_window)
@@ -184,6 +192,7 @@ class BaselineStrategy:
         obv: Optional[float] = None,
         mfi: Optional[float] = None,
         cvd: Optional[float] = None,
+        ram: Optional[float] = None,
         htf_ma: Optional[float] = None,
         htf_rsi: Optional[float] = None,
         supertrend_break: Optional[int] = None,
@@ -213,6 +222,10 @@ class BaselineStrategy:
             Optional cumulative volume delta. Long entries require
             positive and rising ``cvd`` while short entries require
             negative and falling ``cvd``.
+        ram:
+            Optional risk-adjusted momentum value. Long entries require
+            ``ram`` above ``ram_long_threshold`` while short entries
+            require it below ``ram_short_threshold``.
         htf_ma, htf_rsi:
             Optional higher-timeframe moving average and RSI values used
             to align trades with broader trends.
@@ -321,6 +334,13 @@ class BaselineStrategy:
             ):
                 raw_signal = 0
         self._prev_cvd = cvd if cvd is not None else self._prev_cvd
+
+        # Risk-adjusted momentum confirmation
+        if raw_signal != 0 and ram is not None:
+            if raw_signal == 1 and ram < self.ram_long_threshold:
+                raw_signal = 0
+            elif raw_signal == -1 and ram > self.ram_short_threshold:
+                raw_signal = 0
 
         if (
             raw_signal != 0
