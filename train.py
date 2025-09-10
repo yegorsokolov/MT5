@@ -654,6 +654,7 @@ def main(
     last_val_X: pd.DataFrame | None = None
     last_val_y: np.ndarray | None = None
     last_val_probs: np.ndarray | None = None
+    last_val_regimes: np.ndarray | None = None
     start_fold = 0
     ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
     if ckpt:
@@ -777,7 +778,12 @@ def main(
         thr_dict, preds = find_regime_thresholds(y_val.values, probs, regimes_val)
         for reg, thr_val in thr_dict.items():
             mlflow.log_metric(f"fold_{fold}_thr_regime_{reg}", float(thr_val))
-        last_val_X, last_val_y, last_val_probs = X_val, y_val, probs
+        last_val_X, last_val_y, last_val_probs, last_val_regimes = (
+            X_val,
+            y_val,
+            probs,
+            regimes_val,
+        )
         residuals = y_val.values - probs
         q = fit_residuals(residuals, alpha=cfg.get("interval_alpha", 0.1))
         lower, upper = predict_interval(probs, q)
@@ -848,9 +854,6 @@ def main(
         mlflow.log_metric("dist_coverage", dist_metrics["coverage"])
         mlflow.log_metric("dist_baseline_coverage", dist_metrics["baseline_coverage"])
         mlflow.log_metric("dist_expected_shortfall", dist_metrics["expected_shortfall"])
-    regime_thresholds, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
-    for reg, thr_val in regime_thresholds.items():
-        mlflow.log_metric(f"thr_regime_{reg}", float(thr_val))
     mlflow.log_metric("interval_coverage", overall_cov)
     logger.info("Overall interval coverage: %.3f", overall_cov)
     pred_df = pd.DataFrame(
@@ -873,11 +876,20 @@ def main(
     if calib_method and final_pipe is not None and last_val_y is not None:
         calibrator = ProbabilityCalibrator(method=calib_method, cv=calib_cv)
         if calib_cv:
-            calibrator.fit(last_val_y, base_model=final_pipe, X=last_val_X)
+            calibrator.fit(
+                last_val_y,
+                base_model=final_pipe,
+                X=last_val_X,
+                regimes=last_val_regimes,
+            )
             calibrated_probs = calibrator.predict(last_val_X)
             final_pipe = calibrator.model
         else:
-            calibrator.fit(last_val_y, last_val_probs)
+            calibrator.fit(
+                last_val_y,
+                last_val_probs,
+                regimes=last_val_regimes,
+            )
             calibrated_probs = calibrator.predict(last_val_probs)
             final_pipe = CalibratedModel(final_pipe, calibrator)
         brier_raw, brier_cal = log_reliability(
@@ -890,6 +902,13 @@ def main(
         )
         mlflow.log_metric("calibration_brier_raw", brier_raw)
         mlflow.log_metric("calibration_brier_calibrated", brier_cal)
+
+    if calibrator is not None and calibrator.regime_thresholds:
+        regime_thresholds = calibrator.regime_thresholds
+    else:
+        regime_thresholds, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
+    for reg, thr_val in regime_thresholds.items():
+        mlflow.log_metric(f"thr_regime_{reg}", float(thr_val))
 
     aggregate_report = classification_report(all_true, all_preds, output_dict=True)
     logger.info("\n%s", classification_report(all_true, all_preds))
