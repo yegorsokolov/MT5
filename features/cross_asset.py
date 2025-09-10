@@ -70,17 +70,23 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_cross_asset_features(
-    df: pd.DataFrame, window: int = 30, whitelist: Iterable[str] | None = None
+    df: pd.DataFrame,
+    window: int = 30,
+    whitelist: Iterable[str] | None = None,
+    max_pairs: int | None = None,
+    reduce: str | None = None,
 ) -> pd.DataFrame:
     """Add simple cross-asset interaction features.
 
     For every pair of symbols sharing the same ``Timestamp`` this function
-    computes:
+    computes pairwise interactions.  By default all symbol combinations are
+    used, however ``max_pairs`` together with ``reduce`` can limit or compress
+    the generated features:
 
-    - Rolling correlation of their returns over ``window`` periods, appended as
-      ``corr_<sym1>_<sym2>`` for rows where ``Symbol`` is ``sym1``.
-    - The ratio of their instantaneous returns, appended as
-      ``relret_<sym1>_<sym2>`` for the same rows.
+    - ``reduce='top_k'`` keeps only the ``max_pairs`` most correlated symbol
+      pairs (unique, unordered) and skips the rest.
+    - ``reduce='pca'`` applies PCA to the full pairwise feature matrix and
+      returns ``max_pairs`` principal components labelled ``pair_pca_<i>``.
 
     Missing values (for example during the warm up period of the rolling
     correlation) are filled with ``0.0`` to keep downstream models simple.
@@ -94,6 +100,12 @@ def add_cross_asset_features(
     whitelist:
         Optional iterable restricting pairwise calculations to the provided
         symbols.  If ``None`` all symbols are considered.
+    max_pairs:
+        Maximum number of pairwise relationships to keep.  If ``None`` all
+        combinations are generated.
+    reduce:
+        Reduction strategy when ``max_pairs`` is set.  Options are ``"top_k"``
+        and ``"pca"``.  ``None`` disables reduction.
     """
 
     required = {"Symbol", "Timestamp", "return"}
@@ -122,54 +134,113 @@ def add_cross_asset_features(
     # ------------------------------------------------------------------
     # Pairwise interactions
     # ------------------------------------------------------------------
+    if reduce not in {None, "top_k", "pca"}:
+        raise ValueError("reduce must be one of None, 'top_k', 'pca'")
+
     pair_symbols = [s for s in symbols if whitelist is None or s in whitelist]
     if len(pair_symbols) >= 2:
         pair_pivot = pivot[pair_symbols]
 
-        # Rolling correlations via matrix operations
-        corr = pair_pivot.rolling(window).corr()
-        corr = corr.rename_axis(index=["Timestamp", "Symbol"], columns="other")
-        corr_long = (
-            corr.stack()
-            .reset_index()
-            .rename(columns={0: "value"})
-        )
-        corr_long = corr_long[corr_long["Symbol"] != corr_long["other"]]
-        corr_features = (
-            corr_long.assign(
+        if max_pairs and reduce == "top_k":
+            # ----------------------------------------------------------
+            # Identify top-k correlated symbol pairs
+            # ----------------------------------------------------------
+            corr_matrix = pair_pivot.corr().abs().fillna(0.0)
+            mask = np.triu(np.ones_like(corr_matrix, dtype=bool), k=1)
+            top_pairs = (
+                corr_matrix.where(mask)
+                .stack()
+                .sort_values(ascending=False)
+                .head(max_pairs)
+                .index.tolist()
+            )
+
+            for s1, s2 in top_pairs:
+                corr_series = pair_pivot[s1].rolling(window).corr(pair_pivot[s2])
+                ratio = (pair_pivot[s1] / pair_pivot[s2]).replace(
+                    [np.inf, -np.inf], np.nan
+                )
+                inv_ratio = (pair_pivot[s2] / pair_pivot[s1]).replace(
+                    [np.inf, -np.inf], np.nan
+                )
+
+                ts_map = df.loc[df["Symbol"] == s1, "Timestamp"]
+                df.loc[df["Symbol"] == s1, f"corr_{s1}_{s2}"] = ts_map.map(corr_series)
+                df.loc[df["Symbol"] == s1, f"relret_{s1}_{s2}"] = ts_map.map(ratio)
+
+                ts_map = df.loc[df["Symbol"] == s2, "Timestamp"]
+                df.loc[df["Symbol"] == s2, f"corr_{s2}_{s1}"] = ts_map.map(corr_series)
+                df.loc[df["Symbol"] == s2, f"relret_{s2}_{s1}"] = ts_map.map(inv_ratio)
+
+            keep_cols: list[str] = []
+            for s1, s2 in top_pairs:
+                keep_cols.extend(
+                    [
+                        f"corr_{s1}_{s2}",
+                        f"relret_{s1}_{s2}",
+                        f"corr_{s2}_{s1}",
+                        f"relret_{s2}_{s1}",
+                    ]
+                )
+            df[keep_cols] = df[keep_cols].fillna(0.0)
+
+        else:
+            # ----------------------------------------------------------
+            # Full pairwise matrices (possibly reduced via PCA)
+            # ----------------------------------------------------------
+            corr = pair_pivot.rolling(window).corr()
+            corr = corr.rename_axis(index=["Timestamp", "Symbol"], columns="other")
+            corr_long = corr.stack().reset_index().rename(columns={0: "value"})
+            corr_long = corr_long[corr_long["Symbol"] != corr_long["other"]]
+            corr_features = corr_long.assign(
                 feature=lambda d: "corr_" + d["Symbol"] + "_" + d["other"]
-            )
-            .pivot(index=["Timestamp", "Symbol"], columns="feature", values="value")
-        )
+            ).pivot(index=["Timestamp", "Symbol"], columns="feature", values="value")
 
-        # Relative return matrix
-        arr = pair_pivot.to_numpy()
-        with np.errstate(divide="ignore", invalid="ignore"):
-            relret_arr = arr[:, :, None] / arr[:, None, :]
-        relret_arr[~np.isfinite(relret_arr)] = np.nan
-        relret_df = pd.DataFrame(
-            relret_arr.reshape(len(pair_pivot.index) * len(pair_symbols), len(pair_symbols)),
-            index=pd.MultiIndex.from_product(
-                [pair_pivot.index, pair_symbols], names=["Timestamp", "Symbol"]
-            ),
-            columns=pair_symbols,
-        )
-        relret_long = (
-            relret_df.stack()
-            .reset_index()
-            .rename(columns={"level_2": "other", 0: "value"})
-        )
-        relret_long = relret_long[relret_long["Symbol"] != relret_long["other"]]
-        relret_features = (
-            relret_long.assign(
+            arr = pair_pivot.to_numpy()
+            with np.errstate(divide="ignore", invalid="ignore"):
+                relret_arr = arr[:, :, None] / arr[:, None, :]
+            relret_arr[~np.isfinite(relret_arr)] = np.nan
+            relret_df = pd.DataFrame(
+                relret_arr.reshape(
+                    len(pair_pivot.index) * len(pair_symbols), len(pair_symbols)
+                ),
+                index=pd.MultiIndex.from_product(
+                    [pair_pivot.index, pair_symbols], names=["Timestamp", "Symbol"]
+                ),
+                columns=pair_symbols,
+            )
+            relret_long = (
+                relret_df.stack()
+                .reset_index()
+                .rename(columns={"level_2": "other", 0: "value"})
+            )
+            relret_long = relret_long[relret_long["Symbol"] != relret_long["other"]]
+            relret_features = relret_long.assign(
                 feature=lambda d: "relret_" + d["Symbol"] + "_" + d["other"]
-            )
-            .pivot(index=["Timestamp", "Symbol"], columns="feature", values="value")
-        )
+            ).pivot(index=["Timestamp", "Symbol"], columns="feature", values="value")
 
-        pair_features = pd.concat([corr_features, relret_features], axis=1)
-        df = df.join(pair_features, on=["Timestamp", "Symbol"])
-        df[pair_features.columns] = df[pair_features.columns].fillna(0.0)
+            pair_features = pd.concat([corr_features, relret_features], axis=1)
+
+            if max_pairs and reduce == "pca":
+                X = pair_features.fillna(0.0).to_numpy()
+                n_comp = min(max_pairs, X.shape[1])
+                try:  # pragma: no cover - sklearn optional
+                    from sklearn.decomposition import PCA
+
+                    pca = PCA(n_components=n_comp)
+                    reduced = pca.fit_transform(X)
+                except Exception:  # pragma: no cover - fallback without sklearn
+                    U, S, Vt = np.linalg.svd(X, full_matrices=False)
+                    reduced = U[:, :n_comp] * S[:n_comp]
+                reduced_cols = [f"pair_pca_{i}" for i in range(reduced.shape[1])]
+                reduced_df = pd.DataFrame(
+                    reduced, index=pair_features.index, columns=reduced_cols
+                )
+                df = df.join(reduced_df, on=["Timestamp", "Symbol"])
+                df[reduced_cols] = df[reduced_cols].fillna(0.0)
+            else:
+                df = df.join(pair_features, on=["Timestamp", "Symbol"])
+                df[pair_features.columns] = df[pair_features.columns].fillna(0.0)
 
     return df
 
@@ -190,8 +261,18 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
 
     from data.graph_builder import build_rolling_adjacency
 
+    try:  # pragma: no cover - config optional in tests
+        from utils import load_config
+
+        cfg = load_config().get("cross_asset", {})
+    except Exception:  # pragma: no cover - config issues shouldn't fail
+        cfg = {}
+
     df = add_index_features(df)
-    df = add_cross_asset_features(df)
+    params = {
+        k: cfg[k] for k in ["window", "whitelist", "max_pairs", "reduce"] if k in cfg
+    }
+    df = add_cross_asset_features(df, **params)
 
     if {"Symbol", "Timestamp"}.issubset(df.columns):
         try:

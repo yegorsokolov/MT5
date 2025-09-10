@@ -126,6 +126,22 @@ class ConfigSchema(BaseModel):
         description="Batch size for contrastive encoder pretraining",
     )
 
+    class CrossAssetConfig(BaseModel):
+        window: int | None = Field(30, ge=1, description="Rolling correlation window")
+        whitelist: List[str] | None = Field(
+            None, description="Subset of symbols for pairwise calculations"
+        )
+        max_pairs: int | None = Field(
+            None, ge=1, description="Maximum number of symbol pairs to retain"
+        )
+        reduce: str | None = Field(
+            "top_k", description="Reduction strategy", pattern="^(top_k|pca)$"
+        )
+
+    cross_asset: CrossAssetConfig | None = Field(
+        None, description="Cross-asset feature options"
+    )
+
     model_config = ConfigDict(extra="allow")
 
     @field_validator("symbols")
