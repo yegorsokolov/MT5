@@ -46,7 +46,7 @@ from .multitimeframe import aggregate_timeframes
 logger = logging.getLogger(__name__)
 
 try:
-    LATENCY_THRESHOLD = float(load_config().get("latency_threshold", 0.0))
+    LATENCY_THRESHOLD = float(load_config().features.latency_threshold)
 except Exception:  # pragma: no cover - config may be unavailable
     LATENCY_THRESHOLD = 0.0
 
