@@ -30,7 +30,7 @@ from collections import deque
 from math import isnan
 from typing import Deque, Dict, Optional, Set
 
-from indicators import atr as calc_atr, bollinger, rsi, sma
+from indicators import atr as calc_atr, bollinger, rsi as calc_rsi, sma
 
 
 class BaselineStrategy:
@@ -169,7 +169,12 @@ class BaselineStrategy:
         price: float,
         high: Optional[float] = None,
         low: Optional[float] = None,
-        atr: Optional[float] = None,
+        short_ma: Optional[float] = None,
+        long_ma: Optional[float] = None,
+        rsi: Optional[float] = None,
+        atr_val: Optional[float] = None,
+        boll_upper: Optional[float] = None,
+        boll_lower: Optional[float] = None,
         session: Optional[str] = None,
         obv: Optional[float] = None,
         mfi: Optional[float] = None,
@@ -196,8 +201,17 @@ class BaselineStrategy:
         high, low:
             Optional high and low for ATR calculation.  When omitted they
             default to ``price``.
-        atr:
-            Optional externally supplied ATR value.
+        short_ma, long_ma:
+            Optional externally supplied short and long moving averages.
+            When provided these are used directly.
+        rsi:
+            Optional externally supplied RSI value.
+        atr_val:
+            Optional externally supplied ATR value. When omitted it is
+            calculated internally from ``high``/``low``/``price``.
+        boll_upper, boll_lower:
+            Optional externally supplied Bollinger Band values. When
+            omitted they are derived from recent prices.
         session:
             Optional session name used for position limits.
         obv, mfi:
@@ -268,8 +282,8 @@ class BaselineStrategy:
         self._lows.append(low)
         self._closes.append(price)
 
-        if atr is not None:
-            self.latest_atr = atr
+        if atr_val is not None:
+            self.latest_atr = atr_val
         elif len(self._closes) >= self.atr_window + 1:
             self.latest_atr = calc_atr(
                 self._highs, self._lows, self._closes, self.atr_window
@@ -279,22 +293,35 @@ class BaselineStrategy:
             # Not enough data yet
             return 0
 
-        short_ma = sma(self._short, self.short_window)
-        long_ma, upper_band, lower_band = bollinger(self._long, self.long_window)
-        rsi_val = rsi(self._long, self.rsi_window)
+        short_ma_val = short_ma if short_ma is not None else sma(
+            self._short, self.short_window
+        )
+        if long_ma is not None and boll_upper is not None and boll_lower is not None:
+            long_ma_val = long_ma
+            upper_band = boll_upper
+            lower_band = boll_lower
+        else:
+            lm, ub, lb = bollinger(self._long, self.long_window)
+            long_ma_val = long_ma if long_ma is not None else lm
+            upper_band = boll_upper if boll_upper is not None else ub
+            lower_band = boll_lower if boll_lower is not None else lb
+
+        rsi_val = rsi if rsi is not None else calc_rsi(
+            self._long, self.rsi_window
+        )
         if isinstance(rsi_val, float) and isnan(rsi_val):
             rsi_val = 50.0
 
         raw_signal = 0
         if (
-            short_ma > long_ma
+            short_ma_val > long_ma_val
             and self._prev_short <= self._prev_long
             and rsi_val < 70
             and price < upper_band
         ):
             raw_signal = 1
         elif (
-            short_ma < long_ma
+            short_ma_val < long_ma_val
             and self._prev_short >= self._prev_long
             and rsi_val > 30
             and price > lower_band
@@ -375,7 +402,7 @@ class BaselineStrategy:
         if raw_signal != 0 and squeeze_break is not None and squeeze_break != raw_signal:
             raw_signal = 0
 
-        self._prev_short, self._prev_long = short_ma, long_ma
+        self._prev_short, self._prev_long = short_ma_val, long_ma_val
 
         # Exit immediately if current regime disallows the held position
         if regime is not None:
