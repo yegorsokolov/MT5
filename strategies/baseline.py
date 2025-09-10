@@ -26,11 +26,39 @@ Example
 ... )
 """
 
+from dataclasses import dataclass
 from collections import deque
 from math import isnan
 from typing import Deque, Dict, Optional, Set
 
 from indicators import atr as calc_atr, bollinger, rsi as calc_rsi, sma
+
+
+@dataclass
+class IndicatorBundle:
+    high: Optional[float] = None
+    low: Optional[float] = None
+    short_ma: Optional[float] = None
+    long_ma: Optional[float] = None
+    rsi: Optional[float] = None
+    atr: Optional[float] = None
+    boll_upper: Optional[float] = None
+    boll_lower: Optional[float] = None
+    obv: Optional[float] = None
+    mfi: Optional[float] = None
+    cvd: Optional[float] = None
+    ram: Optional[float] = None
+    hurst: Optional[float] = None
+    htf_ma: Optional[float] = None
+    htf_rsi: Optional[float] = None
+    supertrend_break: Optional[int] = None
+    kama_cross: Optional[int] = None
+    kma_cross: Optional[int] = None
+    vwap_cross: Optional[int] = None
+    macd_cross: Optional[int] = None
+    squeeze_break: Optional[int] = None
+    regime: Optional[int] = None
+    microprice_delta: Optional[float] = None
 
 
 class BaselineStrategy:
@@ -167,114 +195,26 @@ class BaselineStrategy:
     def update(
         self,
         price: float,
-        high: Optional[float] = None,
-        low: Optional[float] = None,
-        short_ma: Optional[float] = None,
-        long_ma: Optional[float] = None,
-        rsi: Optional[float] = None,
-        atr_val: Optional[float] = None,
-        boll_upper: Optional[float] = None,
-        boll_lower: Optional[float] = None,
+        indicators: Optional[IndicatorBundle] = None,
         session: Optional[str] = None,
-        obv: Optional[float] = None,
-        mfi: Optional[float] = None,
-        cvd: Optional[float] = None,
-        ram: Optional[float] = None,
-        hurst: Optional[float] = None,
-        htf_ma: Optional[float] = None,
-        htf_rsi: Optional[float] = None,
-        supertrend_break: Optional[int] = None,
-        kama_cross: Optional[int] = None,
-        kma_cross: Optional[int] = None,
-        vwap_cross: Optional[int] = None,
-        macd_cross: Optional[int] = None,
-        squeeze_break: Optional[int] = None,
-        regime: Optional[int] = None,
-        microprice_delta: Optional[float] = None,
     ) -> int:
-        """Process a new bar and return a trading signal.
+        """Process a new bar and return a trading signal."""
 
-        Parameters
-        ----------
-        price:
-            Closing price of the bar.
-        high, low:
-            Optional high and low for ATR calculation.  When omitted they
-            default to ``price``.
-        short_ma, long_ma:
-            Optional externally supplied short and long moving averages.
-            When provided these are used directly.
-        rsi:
-            Optional externally supplied RSI value.
-        atr_val:
-            Optional externally supplied ATR value. When omitted it is
-            calculated internally from ``high``/``low``/``price``.
-        boll_upper, boll_lower:
-            Optional externally supplied Bollinger Band values. When
-            omitted they are derived from recent prices.
-        session:
-            Optional session name used for position limits.
-        obv, mfi:
-            Optional volume indicators used for trend confirmation. When
-            provided the strategy only enters long when both indicators
-            show bullish pressure (``obv`` rising and ``mfi`` > 50) and
-            short when they indicate bearish pressure.
-        cvd:
-            Optional cumulative volume delta. Long entries require
-            positive and rising ``cvd`` while short entries require
-            negative and falling ``cvd``.
-        ram:
-            Optional risk-adjusted momentum value. Long entries require
-            ``ram`` above ``ram_long_threshold`` while short entries
-            require it below ``ram_short_threshold``.
-        hurst:
-            Optional Hurst exponent value. Long entries require
-            ``hurst`` to be at least ``hurst_trend_min`` while short
-            entries require it to be at most
-            ``hurst_mean_reversion_max``.
-        htf_ma, htf_rsi:
-            Optional higher-timeframe moving average and RSI values used
-            to align trades with broader trends.
-        supertrend_break:
-            Optional breakout signal from the SuperTrend indicator. A
-            value of ``1`` only allows long entries while ``-1`` only
-            allows short entries.
-        kama_cross:
-            Optional price/KAMA cross signal. When provided entries are
-            permitted only when it matches the raw signal direction.
-        kma_cross:
-            Optional price/KMA cross signal. When provided entries are
-            permitted only when it matches the raw signal direction.
-        vwap_cross:
-            Optional session/day VWAP crossover signal. Long entries
-            require ``vwap_cross`` of ``1`` while short entries require
-            ``-1``.
-        macd_cross:
-            Optional MACD line/signal crossover confirmation. Long entries
-            require ``macd_cross`` of ``1`` while short entries require
-            ``-1``.
-        squeeze_break:
-            Optional breakout signal from a Keltner squeeze. A value of ``1``
-            only allows long entries while ``-1`` only allows short entries.
-        regime:
-            Optional discrete regime id used to gate long/short entries.
-        microprice_delta:
-            Optional microprice pressure signal. Long entries require a
-            positive value while short entries require a negative value.
-
-        Returns
-        -------
-        int
-            1 for buy, -1 for sell, 0 for hold.
-        """
-
+        if indicators is None:
+            indicators = IndicatorBundle()
         if session is not None:
             self.set_session(session)
 
-        if high is None:
-            high = price
-        if low is None:
-            low = price
+        signal = self._compute_signal(price, indicators)
+        signal = self._apply_filters(signal, indicators, price)
+        return self._manage_position(price, signal, indicators.regime)
+
+    # ------------------------------------------------------------------
+    # Signal computation helpers
+    # ------------------------------------------------------------------
+    def _compute_signal(self, price: float, ind: IndicatorBundle) -> int:
+        high = ind.high if ind.high is not None else price
+        low = ind.low if ind.low is not None else price
 
         self._short.append(price)
         self._long.append(price)
@@ -282,33 +222,26 @@ class BaselineStrategy:
         self._lows.append(low)
         self._closes.append(price)
 
-        if atr_val is not None:
-            self.latest_atr = atr_val
+        if ind.atr is not None:
+            self.latest_atr = ind.atr
         elif len(self._closes) >= self.atr_window + 1:
-            self.latest_atr = calc_atr(
-                self._highs, self._lows, self._closes, self.atr_window
-            )
+            self.latest_atr = calc_atr(self._highs, self._lows, self._closes, self.atr_window)
 
         if len(self._long) < self.long_window or self.latest_atr is None:
-            # Not enough data yet
             return 0
 
-        short_ma_val = short_ma if short_ma is not None else sma(
-            self._short, self.short_window
-        )
-        if long_ma is not None and boll_upper is not None and boll_lower is not None:
-            long_ma_val = long_ma
-            upper_band = boll_upper
-            lower_band = boll_lower
+        short_ma_val = ind.short_ma if ind.short_ma is not None else sma(self._short, self.short_window)
+        if ind.long_ma is not None and ind.boll_upper is not None and ind.boll_lower is not None:
+            long_ma_val = ind.long_ma
+            upper_band = ind.boll_upper
+            lower_band = ind.boll_lower
         else:
             lm, ub, lb = bollinger(self._long, self.long_window)
-            long_ma_val = long_ma if long_ma is not None else lm
-            upper_band = boll_upper if boll_upper is not None else ub
-            lower_band = boll_lower if boll_lower is not None else lb
+            long_ma_val = ind.long_ma if ind.long_ma is not None else lm
+            upper_band = ind.boll_upper if ind.boll_upper is not None else ub
+            lower_band = ind.boll_lower if ind.boll_lower is not None else lb
 
-        rsi_val = rsi if rsi is not None else calc_rsi(
-            self._long, self.rsi_window
-        )
+        rsi_val = ind.rsi if ind.rsi is not None else calc_rsi(self._long, self.rsi_window)
         if isinstance(rsi_val, float) and isnan(rsi_val):
             rsi_val = 50.0
 
@@ -328,114 +261,77 @@ class BaselineStrategy:
         ):
             raw_signal = -1
 
-        if raw_signal == 1:
-            if (htf_ma is not None and price <= htf_ma) or (
-                htf_rsi is not None and htf_rsi <= 50
-            ):
-                raw_signal = 0
-        elif raw_signal == -1:
-            if (htf_ma is not None and price >= htf_ma) or (
-                htf_rsi is not None and htf_rsi >= 50
-            ):
-                raw_signal = 0
-
-        # Volume confirmation using OBV and MFI
-        if raw_signal != 0 and obv is not None and mfi is not None:
-            if raw_signal == 1 and not (
-                mfi > 50 and (self._prev_obv is None or obv > self._prev_obv)
-            ):
-                raw_signal = 0
-            elif raw_signal == -1 and not (
-                mfi < 50 and (self._prev_obv is None or obv < self._prev_obv)
-            ):
-                raw_signal = 0
-        self._prev_obv = obv if obv is not None else self._prev_obv
-
-        # CVD confirmation
-        if raw_signal != 0 and cvd is not None:
-            if raw_signal == 1 and not (
-                cvd > 0 and (self._prev_cvd is None or cvd > self._prev_cvd)
-            ):
-                raw_signal = 0
-            elif raw_signal == -1 and not (
-                cvd < 0 and (self._prev_cvd is None or cvd < self._prev_cvd)
-            ):
-                raw_signal = 0
-        self._prev_cvd = cvd if cvd is not None else self._prev_cvd
-
-        # Microprice confirmation
-        if raw_signal != 0 and microprice_delta is not None:
-            if raw_signal == 1 and microprice_delta <= 0:
-                raw_signal = 0
-            elif raw_signal == -1 and microprice_delta >= 0:
-                raw_signal = 0
-
-        # Risk-adjusted momentum confirmation
-        if raw_signal != 0 and ram is not None:
-            if raw_signal == 1 and ram < self.ram_long_threshold:
-                raw_signal = 0
-            elif raw_signal == -1 and ram > self.ram_short_threshold:
-                raw_signal = 0
-
-        # Hurst exponent gating
-        if raw_signal != 0 and hurst is not None:
-            if raw_signal == 1 and hurst < self.hurst_trend_min:
-                raw_signal = 0
-            elif raw_signal == -1 and hurst > self.hurst_mean_reversion_max:
-                raw_signal = 0
-
-        if raw_signal != 0 and vwap_cross is not None and vwap_cross != raw_signal:
-            raw_signal = 0
-
-        if (
-            raw_signal != 0
-            and supertrend_break is not None
-            and supertrend_break != raw_signal
-        ):
-            raw_signal = 0
-        if raw_signal != 0 and kama_cross is not None and kama_cross != raw_signal:
-            raw_signal = 0
-        if raw_signal != 0 and kma_cross is not None and kma_cross != raw_signal:
-            raw_signal = 0
-        if raw_signal != 0 and macd_cross is not None and macd_cross != raw_signal:
-            raw_signal = 0
-        if raw_signal != 0 and squeeze_break is not None and squeeze_break != raw_signal:
-            raw_signal = 0
-
         self._prev_short, self._prev_long = short_ma_val, long_ma_val
+        return raw_signal
 
-        # Exit immediately if current regime disallows the held position
-        if regime is not None:
-            if self.position == 1 and self.long_regimes is not None and regime not in self.long_regimes:
-                self.position = 0
-                return -1
-            if self.position == -1 and self.short_regimes is not None and regime not in self.short_regimes:
-                self.position = 0
-                return 1
+    def _apply_filters(self, raw_signal: int, ind: IndicatorBundle, price: float) -> int:
+        signal = raw_signal
 
-        # Manage existing position before considering new entries
-        exit_signal = self._manage_position(price)
-        if exit_signal:
-            return exit_signal
+        if signal == 1:
+            if (ind.htf_ma is not None and price <= ind.htf_ma) or (
+                ind.htf_rsi is not None and ind.htf_rsi <= 50
+            ):
+                signal = 0
+        elif signal == -1:
+            if (ind.htf_ma is not None and price >= ind.htf_ma) or (
+                ind.htf_rsi is not None and ind.htf_rsi >= 50
+            ):
+                signal = 0
 
-        # No open position - consider new entries
-        if self.position == 0 and raw_signal != 0:
-            if regime is not None:
-                if raw_signal == 1 and self.long_regimes is not None and regime not in self.long_regimes:
-                    return 0
-                if raw_signal == -1 and self.short_regimes is not None and regime not in self.short_regimes:
-                    return 0
-            limit = self.current_position_limit
-            if self.scale_pos_by_atr and self.latest_atr:
-                limit = max(1, int(limit / self.latest_atr))
-            raw_signal = max(min(raw_signal, limit), -limit)
-            if raw_signal == 1:
-                self._open_long(price)
-            else:
-                self._open_short(price)
-            return raw_signal
+        if signal != 0 and ind.obv is not None and ind.mfi is not None:
+            if signal == 1 and not (
+                ind.mfi > 50 and (self._prev_obv is None or ind.obv > self._prev_obv)
+            ):
+                signal = 0
+            elif signal == -1 and not (
+                ind.mfi < 50 and (self._prev_obv is None or ind.obv < self._prev_obv)
+            ):
+                signal = 0
+        self._prev_obv = ind.obv if ind.obv is not None else self._prev_obv
 
-        return 0
+        if signal != 0 and ind.cvd is not None:
+            if signal == 1 and not (
+                ind.cvd > 0 and (self._prev_cvd is None or ind.cvd > self._prev_cvd)
+            ):
+                signal = 0
+            elif signal == -1 and not (
+                ind.cvd < 0 and (self._prev_cvd is None or ind.cvd < self._prev_cvd)
+            ):
+                signal = 0
+        self._prev_cvd = ind.cvd if ind.cvd is not None else self._prev_cvd
+
+        if signal != 0 and ind.microprice_delta is not None:
+            if signal == 1 and ind.microprice_delta <= 0:
+                signal = 0
+            elif signal == -1 and ind.microprice_delta >= 0:
+                signal = 0
+
+        if signal != 0 and ind.ram is not None:
+            if signal == 1 and ind.ram < self.ram_long_threshold:
+                signal = 0
+            elif signal == -1 and ind.ram > self.ram_short_threshold:
+                signal = 0
+
+        if signal != 0 and ind.hurst is not None:
+            if signal == 1 and ind.hurst < self.hurst_trend_min:
+                signal = 0
+            elif signal == -1 and ind.hurst > self.hurst_mean_reversion_max:
+                signal = 0
+
+        if signal != 0 and ind.vwap_cross is not None and ind.vwap_cross != signal:
+            signal = 0
+        if signal != 0 and ind.supertrend_break is not None and ind.supertrend_break != signal:
+            signal = 0
+        if signal != 0 and ind.kama_cross is not None and ind.kama_cross != signal:
+            signal = 0
+        if signal != 0 and ind.kma_cross is not None and ind.kma_cross != signal:
+            signal = 0
+        if signal != 0 and ind.macd_cross is not None and ind.macd_cross != signal:
+            signal = 0
+        if signal != 0 and ind.squeeze_break is not None and ind.squeeze_break != signal:
+            signal = 0
+
+        return signal
 
     # ------------------------------------------------------------------
     # Position management helpers
@@ -456,11 +352,45 @@ class BaselineStrategy:
         self.peak_price = None
         self.take_profit_armed = False
 
-    def _manage_position(self, price: float) -> int:
+    def _handle_open_position(self, price: float) -> int:
         if self.position == 1:
             return self._manage_long(price)
         if self.position == -1:
             return self._manage_short(price)
+        return 0
+
+    def _manage_position(self, price: float, signal: int, regime: Optional[int]) -> int:
+        # Exit immediately if current regime disallows the held position
+        if regime is not None:
+            if self.position == 1 and self.long_regimes is not None and regime not in self.long_regimes:
+                self.position = 0
+                return -1
+            if self.position == -1 and self.short_regimes is not None and regime not in self.short_regimes:
+                self.position = 0
+                return 1
+
+        # Manage existing position before considering new entries
+        exit_signal = self._handle_open_position(price)
+        if exit_signal:
+            return exit_signal
+
+        # No open position - consider new entries
+        if self.position == 0 and signal != 0:
+            if regime is not None:
+                if signal == 1 and self.long_regimes is not None and regime not in self.long_regimes:
+                    return 0
+                if signal == -1 and self.short_regimes is not None and regime not in self.short_regimes:
+                    return 0
+            limit = self.current_position_limit
+            if self.scale_pos_by_atr and self.latest_atr:
+                limit = max(1, int(limit / self.latest_atr))
+            signal = max(min(signal, limit), -limit)
+            if signal == 1:
+                self._open_long(price)
+            else:
+                self._open_short(price)
+            return signal
+
         return 0
 
     def _manage_long(self, price: float) -> int:

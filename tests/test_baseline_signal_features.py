@@ -16,7 +16,7 @@ assert spec.loader is not None
 spec.loader.exec_module(baseline_signal)
 
 from indicators import sma, rsi, atr, bollinger
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 
 
 def test_baseline_feature_matches_strategy():
@@ -51,17 +51,17 @@ def test_baseline_feature_matches_strategy():
     exp_long = []
     exp_short = []
     for row in df.itertuples():
-        sig = strat.update(
-            row.Close,
+        ind = IndicatorBundle(
             high=row.High,
             low=row.Low,
             short_ma=row.short_ma if not np.isnan(row.short_ma) else None,
             long_ma=row.long_ma if not np.isnan(row.long_ma) else None,
             rsi=row.rsi if not np.isnan(row.rsi) else None,
-            atr_val=row.atr if not np.isnan(row.atr) else None,
+            atr=row.atr if not np.isnan(row.atr) else None,
             boll_upper=row.boll_upper if not np.isnan(row.boll_upper) else None,
             boll_lower=row.boll_lower if not np.isnan(row.boll_lower) else None,
         )
+        sig = strat.update(row.Close, ind)
         exp_sig.append(sig)
         price = row.Close
         long_stop = np.nan

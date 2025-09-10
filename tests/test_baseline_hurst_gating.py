@@ -4,7 +4,7 @@ import sys
 # Ensure repo root on path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 
 
 def test_baseline_hurst_gating():
@@ -19,7 +19,8 @@ def test_baseline_hurst_gating():
     )
     signal = 0
     for p in prices:
-        signal = strat.update(p, hurst=0.8)
+        ind = IndicatorBundle(hurst=0.8)
+        signal = strat.update(p, ind)
     assert signal == 1
 
     strat = BaselineStrategy(
@@ -32,7 +33,8 @@ def test_baseline_hurst_gating():
     )
     signal = 0
     for p in prices:
-        signal = strat.update(p, hurst=0.3)
+        ind = IndicatorBundle(hurst=0.3)
+        signal = strat.update(p, ind)
     assert signal == 0
 
     prices = [3.0, 2.0, 1.0]
@@ -46,7 +48,8 @@ def test_baseline_hurst_gating():
     )
     signal = 0
     for p in prices:
-        signal = strat.update(p, hurst=0.3)
+        ind = IndicatorBundle(hurst=0.3)
+        signal = strat.update(p, ind)
     assert signal == -1
 
     strat = BaselineStrategy(
@@ -59,5 +62,6 @@ def test_baseline_hurst_gating():
     )
     signal = 0
     for p in prices:
-        signal = strat.update(p, hurst=0.8)
+        ind = IndicatorBundle(hurst=0.8)
+        signal = strat.update(p, ind)
     assert signal == 0
