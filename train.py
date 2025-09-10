@@ -125,6 +125,38 @@ def _subscribe_cpu_updates(cfg: AppConfig) -> None:
     loop.create_task(_watch())
 
 
+def _index_to_timestamps(idx: pd.Index) -> np.ndarray:
+    """Convert an index or Series to a numeric timestamp array."""
+    if isinstance(idx, pd.Series):
+        idx = idx.index if idx.name is None else idx
+    if isinstance(idx, pd.DatetimeIndex):
+        return idx.view("int64")
+    arr = np.asarray(idx)
+    try:
+        return arr.astype("int64")
+    except Exception:  # pragma: no cover - best effort conversion
+        return np.arange(len(idx), dtype="int64")
+
+
+def _combined_sample_weight(
+    y: np.ndarray,
+    ts: np.ndarray,
+    t_max: int,
+    balance: bool,
+    half_life: int | None,
+) -> np.ndarray | None:
+    """Compute optional class and time-decay sample weights."""
+    sw = np.ones(len(y), dtype=float)
+    applied = False
+    if balance:
+        sw *= compute_sample_weight("balanced", y)
+        applied = True
+    if half_life:
+        sw *= 0.5 ** ((t_max - ts) / half_life)
+        applied = True
+    return sw if applied else None
+
+
 def _load_donor_booster(symbol: str):
     """Load LightGBM booster for the latest model trained on a symbol."""
     try:
@@ -453,6 +485,12 @@ def main(
                 X = pd.concat([X, df_pseudo[features]], ignore_index=True)
                 y = pd.concat([y, df_pseudo["pseudo_label"]], ignore_index=True)
 
+    if "timestamp" in df.columns and len(df) == len(X):
+        timestamps = _index_to_timestamps(df["timestamp"])
+    else:
+        timestamps = np.arange(len(X), dtype="int64")
+    t_max = int(timestamps.max())
+
     if cfg.get("tune"):
         from tuning.tuning import tune_lightgbm
 
@@ -471,6 +509,8 @@ def main(
                 embargo=cfg.get("max_horizon", 0),
             )
             scores: list[float] = []
+            half_life = cfg.get("time_decay_half_life")
+            balance = cfg.get("balance_classes")
             for tr_idx, va_idx in tscv_inner.split(X, groups=groups):
                 X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
                 y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
@@ -479,6 +519,15 @@ def main(
                     "early_stopping_rounds": cfg.get("early_stopping_rounds", 50),
                     "verbose": False,
                 }
+                sw = _combined_sample_weight(
+                    y_tr.to_numpy(),
+                    timestamps[tr_idx],
+                    t_max,
+                    balance,
+                    half_life,
+                )
+                if sw is not None:
+                    fit_kwargs["sample_weight"] = sw
                 if use_focal:
                     fit_kwargs["fobj"] = fobj
                     fit_kwargs["feval"] = feval
@@ -550,7 +599,6 @@ def main(
             pipe = Pipeline(steps)
         _register_clf(pipe.named_steps["clf"])
         n_batches = math.ceil(len(X) / batch_size)
-        t_max = len(y) - 1
         half_life = cfg.get("time_decay_half_life")
         for batch_idx in range(start_batch, n_batches):
             start = batch_idx * batch_size
@@ -572,16 +620,14 @@ def main(
             if use_focal:
                 fit_kwargs["fobj"] = fobj
                 fit_kwargs["feval"] = feval
-            if half_life:
-                decay = 0.5 ** ((t_max - np.arange(start, end)) / half_life)
-                if cfg.get("balance_classes"):
-                    cw = compute_sample_weight("balanced", yb)
-                    sw = cw * decay
-                else:
-                    sw = decay
-                fit_kwargs["sample_weight"] = sw
-            elif cfg.get("balance_classes"):
-                sw = compute_sample_weight("balanced", yb)
+            sw = _combined_sample_weight(
+                yb.to_numpy(),
+                timestamps[start:end],
+                t_max,
+                cfg.get("balance_classes"),
+                half_life,
+            )
+            if sw is not None:
                 fit_kwargs["sample_weight"] = sw
             clf.fit(Xb, yb, **fit_kwargs)
             state = {"model": pipe}
@@ -627,6 +673,8 @@ def main(
         logger.info("Resuming from checkpoint at fold %s", last_fold)
 
     last_split: tuple[np.ndarray, np.ndarray] | None = None
+    half_life = cfg.get("time_decay_half_life")
+    balance = cfg.get("balance_classes")
     for fold, (train_idx, val_idx) in enumerate(tscv.split(X, groups=groups)):
         if fold < start_fold:
             continue
@@ -705,18 +753,14 @@ def main(
             fit_params["clf__early_stopping_rounds"] = esr
         if donor_booster is not None:
             fit_params["clf__init_model"] = donor_booster
-        half_life = cfg.get("time_decay_half_life")
-        t_max = len(y) - 1
-        if half_life:
-            decay = 0.5 ** ((t_max - train_idx) / half_life)
-            if cfg.get("balance_classes"):
-                cw = compute_sample_weight("balanced", y_train)
-                sw = cw * decay
-            else:
-                sw = decay
-            fit_params["clf__sample_weight"] = sw
-        elif cfg.get("balance_classes"):
-            sw = compute_sample_weight("balanced", y_train)
+        sw = _combined_sample_weight(
+            y_train.to_numpy(),
+            timestamps[train_idx],
+            t_max,
+            balance,
+            half_life,
+        )
+        if sw is not None:
             fit_params["clf__sample_weight"] = sw
         if use_focal:
             fit_params["clf__fobj"] = fobj
