@@ -466,10 +466,35 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     df = add_time_features(df)
 
-    for compute in get_feature_pipeline():
+    pipeline = list(get_feature_pipeline())
+
+    import concurrent.futures
+    import threading
+    import time
+
+    merge_lock = threading.Lock()
+
+    def _run_compute(compute):
+        start = time.perf_counter()
+        result = compute(df.copy())
+        duration = time.perf_counter() - start
+        return compute.__name__, result, duration
+
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(_run_compute, compute) for compute in pipeline]
+        for future in concurrent.futures.as_completed(futures):
+            name, res, duration = future.result()
+            logger.info("feature %s executed in %.3fs", name, duration)
+            with merge_lock:
+                results[name] = (res, duration)
+
+    for compute in pipeline:
+        res, duration = results[compute.__name__]
         prev_cols = set(df.columns)
-        df = compute(df)
-        new_cols = set(df.columns) - prev_cols
+        new_cols = [c for c in res.columns if c not in prev_cols]
+        with merge_lock:
+            df[new_cols] = res[new_cols]
         run_id = df.attrs.get("run_id", "unknown")
         raw_file = df.attrs.get("source", "unknown")
         for col in new_cols:
