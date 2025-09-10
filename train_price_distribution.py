@@ -66,6 +66,12 @@ def main() -> None:  # pragma: no cover - CLI entry point
     parser.add_argument("--n-components", type=int, default=3)
     args = parser.parse_args()
 
+    import warnings
+
+    warnings.warn(
+        "train_price_distribution.py is deprecated; use 'python train_cli.py price-distribution' instead",
+        DeprecationWarning,
+    )
     logging.basicConfig(level=logging.INFO)
     train_df = pd.read_csv(args.train)
     val_df = pd.read_csv(args.val)

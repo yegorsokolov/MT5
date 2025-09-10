@@ -76,7 +76,7 @@ atexit.register(stop_scheduler)
 
 def _training_cmd(model: str) -> list[str]:
     if model == "nn":
-        return ["python", "train_nn.py", "--resume-online"]
+        return ["python", "train_cli.py", "neural", "--resume-online"]
     if model == "rl":
         return ["python", "train_rl.py"]
     return ["python", "train.py", "--resume-online"]
@@ -101,7 +101,10 @@ def schedule_retrain(
 
 def process_retrain_events(store: EventStore | None = None) -> None:
     """Consume retrain events and launch training scripts."""
-    from analytics.metrics_aggregator import log_retrain_outcome
+    try:
+        from analytics.metrics_store import log_retrain_outcome
+    except Exception:  # pragma: no cover - optional
+        from analytics.metrics_aggregator import log_retrain_outcome  # type: ignore
     if store is None:
         from event_store import EventStore
 

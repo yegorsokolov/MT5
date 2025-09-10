@@ -30,6 +30,7 @@ def _run_launch(file: str) -> int:
         "cluster_available": lambda: True,
         "submit": fake_submit,
         "main": lambda *a, **k: 0,
+        "AppConfig": object,
     }
     launch.__globals__.update(launch_globals)
     launch({"seed": 1})

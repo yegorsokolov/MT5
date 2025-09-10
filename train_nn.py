@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from log_utils import setup_logging, log_exceptions
+from log_utils import log_exceptions
 
 from pathlib import Path
 import random
@@ -75,7 +75,6 @@ from core.orchestrator import Orchestrator
 from utils.lr_scheduler import LookaheadAdamW
 from analysis.grad_monitor import GradientMonitor
 
-setup_logging()
 logger = logging.getLogger(__name__)
 
 Orchestrator.start()
@@ -317,7 +316,16 @@ def main(
     root.joinpath("data").mkdir(exist_ok=True)
     start_time = datetime.now()
 
-    mlflow.start_run("training_nn", cfg)
+    try:  # avoid starting nested runs
+        import mlflow as _mlflow  # type: ignore
+        active = _mlflow.active_run()
+    except Exception:  # pragma: no cover - mlflow optional
+        active = None
+    if active is None:
+        try:
+            mlflow.start_run("training_nn", cfg)
+        except Exception:  # pragma: no cover - mlflow optional
+            pass
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
     chunk_size = cfg.get("stream_chunk_size", 100_000)
@@ -1146,7 +1154,6 @@ def main(
 
     grad_monitor.plot("nn")
     mlflow.log_metric("runtime", (datetime.now() - start_time).total_seconds())
-    mlflow.end_run()
     return acc
 
 
@@ -1186,6 +1193,12 @@ def launch(cfg: dict | None = None) -> float:
 
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.warn(
+        "train_nn.py is deprecated; use 'python train_cli.py neural' instead",
+        DeprecationWarning,
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--ddp", action="store_true", help="Enable DistributedDataParallel"
