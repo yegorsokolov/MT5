@@ -9,7 +9,7 @@ import mlflow
 import log_utils
 from pydantic import ValidationError, BaseModel
 from filelock import FileLock
-from config_models import AppConfig
+from config_models import AppConfig, ConfigError
 from .secret_manager import SecretManager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -46,7 +46,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     try:
         cfg = AppConfig(**data)
     except ValidationError as e:
-        raise ValueError(f"Invalid configuration: {e}") from e
+        raise ConfigError(f"Invalid configuration: {e}") from e
     return cfg
 
 

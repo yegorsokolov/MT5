@@ -37,6 +37,7 @@ from analysis.knowledge_graph import (
 )
 from utils.resource_monitor import monitor, ResourceCapabilities
 from utils import load_config
+from config_models import ConfigError
 from analysis import feature_gate
 from analysis.data_lineage import log_lineage
 from analysis.fractal_features import rolling_fractal_features
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 try:
     LATENCY_THRESHOLD = float(load_config().features.latency_threshold)
-except Exception:  # pragma: no cover - config may be unavailable
+except ConfigError:  # pragma: no cover - config may be unavailable
     LATENCY_THRESHOLD = 0.0
 
 # Location for persisted factor exposure matrices

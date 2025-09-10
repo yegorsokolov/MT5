@@ -1093,19 +1093,20 @@ if __name__ == "__main__":
             }
             run_evolutionary_search(eval_fn, space)
         else:
-            cfg = load_config().model_dump()
+            cfg = load_config()
+            cfg_dict = cfg.model_dump()
             if args.meta_train:
-                cfg["meta_train"] = True
+                cfg_dict["meta_train"] = True
             if args.fine_tune:
-                cfg["fine_tune"] = True
+                cfg_dict["fine_tune"] = True
             if args.use_pseudo_labels:
-                cfg["use_pseudo_labels"] = True
+                cfg_dict["use_pseudo_labels"] = True
             if args.use_price_distribution:
-                cfg["use_price_distribution"] = True
+                cfg_dict["use_price_distribution"] = True
             if args.n_components is not None:
-                cfg["n_components"] = args.n_components
+                cfg_dict["n_components"] = args.n_components
             launch(
-                cfg,
+                cfg_dict,
                 export=args.export,
                 resume_online=args.resume_online,
                 transfer_from=args.transfer_from,
