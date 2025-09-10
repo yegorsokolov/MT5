@@ -1,10 +1,19 @@
+import time
 import numpy as np
 import pandas as pd
 import pytest
+from pathlib import Path
+import importlib.util
 
 torch = pytest.importorskip("torch")
 
-from features.orderbook import compute
+spec = importlib.util.spec_from_file_location(
+    "orderbook", Path(__file__).resolve().parents[1] / "features" / "orderbook.py"
+)
+orderbook = importlib.util.module_from_spec(spec)
+assert spec.loader is not None  # for mypy
+spec.loader.exec_module(orderbook)
+compute = orderbook.compute
 
 
 def _make_df(rows: int = 5) -> pd.DataFrame:
@@ -34,3 +43,12 @@ def test_orderbook_compute_adds_embeddings():
     emb = out[cols].to_numpy()
     assert emb.shape == (len(df), 8)
     assert np.isfinite(emb).all()
+
+
+def test_orderbook_compute_performance():
+    df = _make_df(2000)
+    start = time.time()
+    compute(df, depth=2, hidden_channels=8, batch_size=256)
+    duration = time.time() - start
+    # Should comfortably run within a second on moderate datasets
+    assert duration < 1.0
