@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,6 +15,8 @@ from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
+
+from analysis.regime_thresholds import find_regime_thresholds
 
 
 @dataclass
@@ -24,6 +26,7 @@ class ProbabilityCalibrator:
     method: str = "platt"
     model: Any | None = None
     cv: int | None = None
+    regime_thresholds: dict[int, float] | None = None
 
     def fit(
         self,
@@ -32,6 +35,7 @@ class ProbabilityCalibrator:
         *,
         base_model: Any | None = None,
         X: Any | None = None,
+        regimes: Iterable[int] | np.ndarray | None = None,
     ) -> "ProbabilityCalibrator":
         y_arr = np.asarray(y_true)
         if self.cv is not None:
@@ -41,6 +45,28 @@ class ProbabilityCalibrator:
             ccv = CalibratedClassifierCV(base_model, cv=self.cv, method=method)
             ccv.fit(X, y_arr)
             self.model = ccv
+            if regimes is not None:
+                cal_probs = ccv.predict_proba(X)[:, 1]
+                thr, _ = find_regime_thresholds(y_arr, cal_probs, regimes)
+                setattr(ccv, "regime_thresholds", thr)
+                self.regime_thresholds = thr
+
+                def _predict(
+                    X_new: Any,
+                    *,
+                    regimes: Iterable[int] | np.ndarray | None = None,
+                    default_threshold: float = 0.5,
+                ) -> np.ndarray:
+                    probs = ccv.predict_proba(X_new)[:, 1]
+                    if regimes is not None and thr:
+                        preds = np.zeros(len(probs), dtype=int)
+                        for reg, t in thr.items():
+                            mask = np.asarray(regimes) == int(reg)
+                            preds[mask] = (probs[mask] > t).astype(int)
+                        return preds
+                    return (probs > default_threshold).astype(int)
+
+                setattr(ccv, "predict", _predict)
             return self
 
         if probs is None:
@@ -56,6 +82,12 @@ class ProbabilityCalibrator:
             self.model = ir
         else:  # pragma: no cover - defensive
             raise ValueError(f"Unknown calibration method: {self.method}")
+
+        if regimes is not None:
+            calibrated = self.predict(p_arr)
+            thr, _ = find_regime_thresholds(y_arr, calibrated, regimes)
+            setattr(self.model, "regime_thresholds", thr)
+            self.regime_thresholds = thr
         return self
 
     def predict(self, data: np.ndarray) -> np.ndarray:
@@ -68,6 +100,25 @@ class ProbabilityCalibrator:
             return self.model.predict_proba(arr.reshape(-1, 1))[:, 1]
         return self.model.predict(arr)
 
+    def predict_classes(
+        self,
+        data: Any,
+        *,
+        regimes: Iterable[int] | np.ndarray | None = None,
+        default_threshold: float = 0.5,
+    ) -> np.ndarray:
+        """Return binary predictions applying regime-specific thresholds."""
+        probs = self.predict(data)
+        thr = self.regime_thresholds or getattr(self.model, "regime_thresholds", {})
+        if regimes is not None and thr:
+            preds = np.zeros(len(probs), dtype=int)
+            r = np.asarray(regimes)
+            for reg, t in thr.items():
+                mask = r == int(reg)
+                preds[mask] = (probs[mask] > t).astype(int)
+            return preds
+        return (probs > default_threshold).astype(int)
+
 
 class CalibratedModel:
     """Wrap a model and apply probability calibration on predict_proba."""
@@ -75,6 +126,7 @@ class CalibratedModel:
     def __init__(self, model: Any, calibrator: ProbabilityCalibrator) -> None:
         self.model = model
         self.calibrator = calibrator
+        self.regime_thresholds = calibrator.regime_thresholds or {}
 
     def __getattr__(self, item: str) -> Any:  # pragma: no cover - delegation
         return getattr(self.model, item)
@@ -85,6 +137,27 @@ class CalibratedModel:
             calibrated = self.calibrator.predict(raw[:, 1])
             return np.column_stack([1 - calibrated, calibrated])
         return self.calibrator.predict(raw)
+
+    def predict(
+        self,
+        X: Any,
+        *,
+        regimes: Iterable[int] | np.ndarray | None = None,
+        default_threshold: float = 0.5,
+    ) -> np.ndarray:
+        """Predict class labels using calibrated probabilities and thresholds."""
+        probs = self.predict_proba(X)
+        if probs.ndim == 2:
+            probs = probs[:, 1]
+        thr = self.regime_thresholds
+        if regimes is not None and thr:
+            preds = np.zeros(len(probs), dtype=int)
+            r = np.asarray(regimes)
+            for reg, t in thr.items():
+                mask = r == int(reg)
+                preds[mask] = (probs[mask] > t).astype(int)
+            return preds
+        return (probs > default_threshold).astype(int)
 
 
 def plot_reliability_diagram(
