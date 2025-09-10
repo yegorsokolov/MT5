@@ -198,6 +198,7 @@ class BaselineStrategy:
         supertrend_break: Optional[int] = None,
         kama_cross: Optional[int] = None,
         kma_cross: Optional[int] = None,
+        vwap_cross: Optional[int] = None,
         regime: Optional[int] = None,
     ) -> int:
         """Process a new bar and return a trading signal.
@@ -239,6 +240,10 @@ class BaselineStrategy:
         kma_cross:
             Optional price/KMA cross signal. When provided entries are
             permitted only when it matches the raw signal direction.
+        vwap_cross:
+            Optional session/day VWAP crossover signal. Long entries
+            require ``vwap_cross`` of ``1`` while short entries require
+            ``-1``.
         regime:
             Optional discrete regime id used to gate long/short entries.
 
@@ -341,6 +346,9 @@ class BaselineStrategy:
                 raw_signal = 0
             elif raw_signal == -1 and ram > self.ram_short_threshold:
                 raw_signal = 0
+
+        if raw_signal != 0 and vwap_cross is not None and vwap_cross != raw_signal:
+            raw_signal = 0
 
         if (
             raw_signal != 0
