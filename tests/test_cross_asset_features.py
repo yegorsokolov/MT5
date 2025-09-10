@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import time
+import numpy as np
 
 FEATURES_PATH = Path(__file__).resolve().parents[1] / "features" / "cross_asset.py"
 spec = importlib.util.spec_from_file_location("cross_asset", FEATURES_PATH)
@@ -11,6 +13,46 @@ cross_asset = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(cross_asset)
 add_cross_asset_features = cross_asset.add_cross_asset_features
+
+
+def _baseline_add_cross_asset_features(df: pd.DataFrame, window: int = 30) -> pd.DataFrame:
+    required = {"Symbol", "Timestamp", "return"}
+    if not required.issubset(df.columns):
+        return df
+
+    df = df.copy().sort_values("Timestamp")
+    pivot = df.pivot(index="Timestamp", columns="Symbol", values="return")
+    symbols = list(pivot.columns)
+
+    cs_mean = pivot.mean(axis=1)
+    cs_std = pivot.std(axis=1, ddof=0).replace(0, np.nan)
+    rel_strength = pivot.sub(cs_mean, axis=0).div(cs_std, axis=0)
+
+    for sym in symbols:
+        ts_map = df.loc[df["Symbol"] == sym, "Timestamp"]
+        df.loc[df["Symbol"] == sym, f"rel_strength_{sym}"] = ts_map.map(
+            rel_strength[sym]
+        ).fillna(0.0)
+
+    for sym1 in symbols:
+        for sym2 in symbols:
+            if sym1 == sym2:
+                continue
+
+            corr_series = pivot[sym1].rolling(window).corr(pivot[sym2])
+            ratio_series = (pivot[sym1] / pivot[sym2]).replace(
+                [np.inf, -np.inf], np.nan
+            )
+
+            ts_map = df.loc[df["Symbol"] == sym1, "Timestamp"]
+            df.loc[df["Symbol"] == sym1, f"corr_{sym1}_{sym2}"] = ts_map.map(
+                corr_series
+            ).fillna(0.0)
+            df.loc[df["Symbol"] == sym1, f"relret_{sym1}_{sym2}"] = ts_map.map(
+                ratio_series
+            ).fillna(0.0)
+
+    return df
 
 
 def _sample_df():
@@ -38,7 +80,7 @@ def test_cross_asset_features_creation():
         assert col in out.columns
 
     assert out.shape[0] == df.shape[0]
-    assert out.shape[1] == df.shape[1] + 4
+    assert out.shape[1] == df.shape[1] + 6
 
     wide = df.pivot(index="Timestamp", columns="Symbol", values="return")
     expected_corr = wide["AAA"].rolling(3).corr(wide["BBB"]).iloc[-1]
@@ -49,3 +91,41 @@ def test_cross_asset_features_creation():
     ]
     assert last_row["corr_AAA_BBB"].iloc[0] == pytest.approx(expected_corr)
     assert last_row["relret_AAA_BBB"].iloc[0] == pytest.approx(expected_ratio)
+
+
+def test_cross_asset_whitelist():
+    df = _sample_df()
+    extra = df[df["Symbol"] == "AAA"].copy()
+    extra["Symbol"] = "CCC"
+    df = pd.concat([df, extra], ignore_index=True)
+
+    out = add_cross_asset_features(df, window=3, whitelist=["AAA", "BBB"])
+
+    assert "corr_AAA_BBB" in out.columns
+    assert "corr_AAA_CCC" not in out.columns
+    assert "corr_BBB_CCC" not in out.columns
+
+
+def test_cross_asset_large_universe_runtime():
+    symbols = [f"S{i:03d}" for i in range(30)]
+    periods = 40
+    idx = pd.date_range("2020-01-01", periods=periods, freq="D")
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(
+        {
+            "Timestamp": idx.repeat(len(symbols)),
+            "Symbol": symbols * periods,
+            "return": rng.standard_normal(periods * len(symbols)) / 100,
+        }
+    )
+
+    start = time.perf_counter()
+    vec = add_cross_asset_features(df.copy(), window=5)
+    vec_time = time.perf_counter() - start
+
+    start = time.perf_counter()
+    base = _baseline_add_cross_asset_features(df.copy(), window=5).fillna(0.0)
+    base_time = time.perf_counter() - start
+
+    pd.testing.assert_frame_equal(vec.sort_index(axis=1), base.sort_index(axis=1))
+    assert vec_time < base_time
