@@ -7,7 +7,14 @@ import pandas as pd
 
 from indicators import atr, bollinger, rsi, sma
 
+try:  # pragma: no cover - decorator optional when imported standalone
+    from . import validate_module
+except Exception:  # pragma: no cover - fallback without validation
+    def validate_module(func):
+        return func
 
+
+@validate_module
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     """Compute standard price/volume technical features."""
     df = df.copy()

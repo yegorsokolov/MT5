@@ -7,6 +7,12 @@ import pandas as pd
 
 from data.events import get_events
 
+try:  # pragma: no cover - decorator optional when imported standalone
+    from . import validate_module
+except Exception:  # pragma: no cover - fallback without validation
+    def validate_module(func):
+        return func
+
 # Default transformer used for sentiment analysis.  Tests may monkeypatch this
 # to a lightweight model.
 MODEL_NAME = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -121,6 +127,7 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+@validate_module
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     from data import features as base
 
