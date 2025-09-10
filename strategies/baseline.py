@@ -209,6 +209,7 @@ class BaselineStrategy:
         kma_cross: Optional[int] = None,
         vwap_cross: Optional[int] = None,
         macd_cross: Optional[int] = None,
+        squeeze_break: Optional[int] = None,
         regime: Optional[int] = None,
         microprice_delta: Optional[float] = None,
     ) -> int:
@@ -264,6 +265,9 @@ class BaselineStrategy:
             Optional MACD line/signal crossover confirmation. Long entries
             require ``macd_cross`` of ``1`` while short entries require
             ``-1``.
+        squeeze_break:
+            Optional breakout signal from a Keltner squeeze. A value of ``1``
+            only allows long entries while ``-1`` only allows short entries.
         regime:
             Optional discrete regime id used to gate long/short entries.
         microprice_delta:
@@ -398,6 +402,8 @@ class BaselineStrategy:
         if raw_signal != 0 and kma_cross is not None and kma_cross != raw_signal:
             raw_signal = 0
         if raw_signal != 0 and macd_cross is not None and macd_cross != raw_signal:
+            raw_signal = 0
+        if raw_signal != 0 and squeeze_break is not None and squeeze_break != raw_signal:
             raw_signal = 0
 
         self._prev_short, self._prev_long = short_ma, long_ma
