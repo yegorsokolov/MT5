@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import hashlib
 import uuid
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -27,6 +29,48 @@ def _save_metadata(name: str, data: Dict, store_dir: Path | None = None) -> str:
     return path.name
 
 STORE_DIR = Path(__file__).resolve().parent / "store"
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _git_commit() -> str | None:
+    """Return the current git commit hash if available."""
+
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT)
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return None
+
+
+def _lineage_hash() -> str | None:
+    """Return hash of recorded dataset versions if present."""
+
+    for p in [REPO_ROOT / "logs" / "data_versions.json", REPO_ROOT / "data_versions.json"]:
+        if p.exists():
+            try:
+                h = hashlib.sha256()
+                with p.open("rb") as f:
+                    for chunk in iter(lambda: f.read(8192), b""):
+                        h.update(chunk)
+                return h.hexdigest()
+            except Exception:
+                return None
+    return None
+
+
+def _package_versions() -> Dict[str, str]:
+    """Return mapping of installed package versions."""
+
+    try:  # pragma: no cover - best effort
+        import pkg_resources
+
+        return {dist.project_name: dist.version for dist in pkg_resources.working_set}
+    except Exception:
+        return {}
 
 
 def _ensure_store(store_dir: Path | None = None) -> Path:
@@ -92,6 +136,10 @@ def save_model(
         "performance": performance,
         "timestamp": datetime.utcnow().isoformat(),
         "artifact": artifact_name,
+        "git_commit": _git_commit(),
+        "data_lineage_hash": _lineage_hash(),
+        "python_version": sys.version,
+        "package_versions": _package_versions(),
     }
     if architecture_history:
         metadata["architecture_history"] = architecture_history
@@ -133,6 +181,23 @@ def list_versions(store_dir: Path | None = None) -> List[Dict]:
     return versions
 
 
+# Provenance helpers ----------------------------------------------------------
+def get_provenance(version_id: str, store_dir: Path | None = None) -> Dict[str, Any]:
+    """Return provenance information for ``version_id``.
+
+    The dictionary contains the git commit, data lineage hash, Python version
+    and the package versions captured at save time.
+    """
+
+    _, meta = load_model(version_id, store_dir)
+    return {
+        "git_commit": meta.get("git_commit"),
+        "data_lineage_hash": meta.get("data_lineage_hash"),
+        "python_version": meta.get("python_version"),
+        "package_versions": meta.get("package_versions", {}),
+    }
+
+
 # Convenience wrappers --------------------------------------------------------
 def save_replay_stats(stats: Dict, store_dir: Path | None = None) -> str:
     """Persist replay statistics for later analysis."""
@@ -150,6 +215,7 @@ __all__ = [
     "save_model",
     "load_model",
     "list_versions",
+    "get_provenance",
     "save_replay_stats",
     "save_tuned_params",
 ]
