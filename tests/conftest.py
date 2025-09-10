@@ -37,6 +37,9 @@ metrics_mod.__spec__ = importlib.machinery.ModuleSpec("analytics.metrics_store",
 sys.modules.setdefault("analytics.metrics_store", metrics_mod)
 
 class _DF(list):
+    def __init__(self, data=None):
+        super().__init__(data or [])
+
     def to_dict(self, orient="records"):
         return list(self)
 
@@ -44,7 +47,7 @@ try:
     import pandas as pd_mod  # type: ignore
 except Exception:  # pragma: no cover - pandas may not be installed
     pd_mod = types.ModuleType("pandas")
-    pd_mod.DataFrame = lambda data=None: _DF(data or [])
+    pd_mod.DataFrame = _DF
     pd_mod.date_range = lambda start=None, periods=0, freq=None: [0] * periods
 pd_mod.__spec__ = importlib.machinery.ModuleSpec("pandas", loader=None)
 sys.modules["pandas"] = pd_mod
