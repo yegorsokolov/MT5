@@ -90,6 +90,8 @@ def compute(
         atr_stop_short=atr_stop_short,
         trailing_stop_pct=trailing_stop_pct,
         trailing_take_profit_pct=trailing_take_profit_pct,
+        session_position_limits={},
+        default_position_limit=1,
     )
 
     signals: list[int] = []
@@ -215,8 +217,8 @@ def compute(
         short_stops.append(short_stop)
 
     df["baseline_signal"] = signals
-    df["baseline_long_stop"] = long_stops
-    df["baseline_short_stop"] = short_stops
+    df["long_stop"] = long_stops
+    df["short_stop"] = short_stops
     return df
 
 
