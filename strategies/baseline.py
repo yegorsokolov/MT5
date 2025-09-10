@@ -27,8 +27,10 @@ Example
 """
 
 from collections import deque
-from math import sqrt
+from math import isnan
 from typing import Deque, Dict, Optional, Set
+
+from indicators import atr as calc_atr, bollinger, rsi, sma
 
 
 class BaselineStrategy:
@@ -118,19 +120,16 @@ class BaselineStrategy:
         self.hurst_mean_reversion_max = float(hurst_mean_reversion_max)
 
         self._short: Deque[float] = deque(maxlen=short_window)
-        self._long: Deque[float] = deque(maxlen=long_window)
-        self._price_changes: Deque[float] = deque(maxlen=rsi_window)
-        self._prev_price: Optional[float] = None
+        self._long: Deque[float] = deque(maxlen=max(long_window, rsi_window + 1))
         self._prev_short = 0.0
         self._prev_long = 0.0
         self._prev_obv: Optional[float] = None
         self._prev_cvd: Optional[float] = None
 
         # ATR state
-        self._highs: Deque[float] = deque(maxlen=atr_window)
-        self._lows: Deque[float] = deque(maxlen=atr_window)
-        self._closes: Deque[float] = deque(maxlen=atr_window)
-        self._trs: Deque[float] = deque(maxlen=atr_window)
+        self._highs: Deque[float] = deque(maxlen=atr_window + 1)
+        self._lows: Deque[float] = deque(maxlen=atr_window + 1)
+        self._closes: Deque[float] = deque(maxlen=atr_window + 1)
         self.latest_atr: Optional[float] = None
         self.entry_atr: Optional[float] = None
 
@@ -148,31 +147,6 @@ class BaselineStrategy:
     # ------------------------------------------------------------------
     # Indicator helpers
     # ------------------------------------------------------------------
-    def _compute_rsi(self) -> float:
-        if len(self._price_changes) < self.rsi_window:
-            return 50.0  # Neutral when insufficient data
-        gains = [c for c in self._price_changes if c > 0]
-        losses = [-c for c in self._price_changes if c < 0]
-        avg_gain = sum(gains) / self.rsi_window
-        avg_loss = sum(losses) / self.rsi_window
-        if avg_loss == 0:
-            return 100.0
-        rs = avg_gain / avg_loss
-        return 100 - 100 / (1 + rs)
-
-    def _compute_bollinger(self, mean: float) -> tuple[float, float]:
-        var = sum((p - mean) ** 2 for p in self._long) / self.long_window
-        std = sqrt(var)
-        upper = mean + 2 * std
-        lower = mean - 2 * std
-        return upper, lower
-
-    def _true_range(
-        self, high: float, low: float, prev_close: Optional[float]
-    ) -> float:
-        if prev_close is None:
-            return high - low
-        return max(high - low, abs(high - prev_close), abs(low - prev_close))
 
     # ------------------------------------------------------------------
     # Session helpers
@@ -288,46 +262,41 @@ class BaselineStrategy:
         if low is None:
             low = price
 
-        if self._prev_price is not None:
-            self._price_changes.append(price - self._prev_price)
-        self._prev_price = price
-
         self._short.append(price)
         self._long.append(price)
         self._highs.append(high)
         self._lows.append(low)
+        self._closes.append(price)
 
-        prev_close = self._closes[-1] if self._closes else None
         if atr is not None:
             self.latest_atr = atr
-        else:
-            tr = self._true_range(high, low, prev_close)
-            self._trs.append(tr)
-            if len(self._trs) == self.atr_window:
-                self.latest_atr = sum(self._trs) / self.atr_window
-        self._closes.append(price)
+        elif len(self._closes) >= self.atr_window + 1:
+            self.latest_atr = calc_atr(
+                self._highs, self._lows, self._closes, self.atr_window
+            )
 
         if len(self._long) < self.long_window or self.latest_atr is None:
             # Not enough data yet
             return 0
 
-        short_ma = sum(self._short) / self.short_window
-        long_ma = sum(self._long) / self.long_window
-        rsi = self._compute_rsi()
-        upper_band, lower_band = self._compute_bollinger(long_ma)
+        short_ma = sma(self._short, self.short_window)
+        long_ma, upper_band, lower_band = bollinger(self._long, self.long_window)
+        rsi_val = rsi(self._long, self.rsi_window)
+        if isinstance(rsi_val, float) and isnan(rsi_val):
+            rsi_val = 50.0
 
         raw_signal = 0
         if (
             short_ma > long_ma
             and self._prev_short <= self._prev_long
-            and rsi < 70
+            and rsi_val < 70
             and price < upper_band
         ):
             raw_signal = 1
         elif (
             short_ma < long_ma
             and self._prev_short >= self._prev_long
-            and rsi > 30
+            and rsi_val > 30
             and price > lower_band
         ):
             raw_signal = -1
