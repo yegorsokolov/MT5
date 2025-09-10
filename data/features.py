@@ -6,8 +6,13 @@ import logging
 from pathlib import Path
 from typing import List, Tuple
 
+import hashlib
+import os
+from functools import wraps
+
 import numpy as np
 import pandas as pd
+from joblib import Memory
 
 from analytics.metrics_store import record_metric
 from features import get_feature_pipeline
@@ -47,6 +52,31 @@ except Exception:  # pragma: no cover - config may be unavailable
 
 # Location for persisted factor exposure matrices
 FACTOR_EXPOSURE_DIR = Path("data/factors")
+
+# Joblib cache for feature computations
+_FEATURE_CACHE_DIR = Path(os.environ.get("FEATURE_CACHE_DIR", "data/feature_cache"))
+_memory = Memory(str(_FEATURE_CACHE_DIR), verbose=0)
+
+
+def cache_feature(func):
+    """Cache feature computation based on raw data hash and module name."""
+
+    def _cached(data_hash, module, df, *args, **kwargs):
+        return func(df, *args, **kwargs)
+
+    cached_impl = _memory.cache(_cached, ignore=["df"])
+
+    @wraps(func)
+    def wrapper(df, *args, **kwargs):
+        if os.environ.get("NO_CACHE"):
+            return func(df, *args, **kwargs)
+        data_hash = hashlib.sha256(
+            pd.util.hash_pandas_object(df, index=True).values.tobytes()
+        ).hexdigest()
+        module = func.__module__
+        return cached_impl(data_hash, module, df, *args, **kwargs)
+
+    return wrapper
 
 
 def _apply_transform(fn, df):
@@ -118,6 +148,7 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+@cache_feature
 def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
     """Merge alternative datasets into ``df``.
 
@@ -166,6 +197,7 @@ def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
 add_alt_features.degradable = True  # type: ignore[attr-defined]
 
 
+@cache_feature
 def add_factor_exposure_features(df: pd.DataFrame) -> pd.DataFrame:
     """Merge latest factor exposures into ``df``.
 

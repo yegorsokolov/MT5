@@ -44,6 +44,38 @@ def _import_features(monkeypatch):
     sys.modules["utils.resource_monitor"] = stub_utils.resource_monitor
     sys.modules["utils.data_backend"] = stub_utils.data_backend
 
+    stub_features_pkg = types.ModuleType("features")
+    stub_features_pkg.__path__ = []
+    stub_features_pkg.get_feature_pipeline = lambda: []
+    features_news = types.ModuleType("features.news")
+    features_news.add_economic_calendar_features = lambda df: df
+    features_news.add_news_sentiment_features = lambda df: df
+    features_cross = types.ModuleType("features.cross_asset")
+    features_cross.add_index_features = lambda df: df
+    features_cross.add_cross_asset_features = lambda df: df
+    stub_features_pkg.news = features_news
+    stub_features_pkg.cross_asset = features_cross
+    sys.modules["features"] = stub_features_pkg
+    sys.modules["features.news"] = features_news
+    sys.modules["features.cross_asset"] = features_cross
+
+    # stub alt data loader with call counter
+    alt_loader = types.ModuleType("data.alt_data_loader")
+    alt_loader.call_count = {"count": 0}
+
+    def _load_alt(symbols):
+        alt_loader.call_count["count"] += 1
+        return pd.DataFrame(
+            {
+                "Date": pd.date_range("2020-01-01", periods=len(symbols), freq="D"),
+                "Symbol": symbols,
+                "implied_vol": np.linspace(0.1, 0.1, len(symbols)),
+            }
+        )
+
+    alt_loader.load_alt_data = _load_alt
+    sys.modules["data.alt_data_loader"] = alt_loader
+
     sklearn_stub = types.SimpleNamespace(
         decomposition=types.SimpleNamespace(PCA=lambda *a, **k: None),
         feature_selection=types.SimpleNamespace(
@@ -80,6 +112,30 @@ def _import_features(monkeypatch):
     stub_graph.build_correlation_graph = lambda *a, **k: None
     stub_graph.build_rolling_adjacency = lambda *a, **k: None
     sys.modules["data.graph_builder"] = stub_graph
+
+    stub_kg = types.ModuleType("analysis.knowledge_graph")
+    stub_kg.load_knowledge_graph = lambda *a, **k: None
+    stub_kg.risk_score = lambda *a, **k: 0.0
+    stub_kg.opportunity_score = lambda *a, **k: 0.0
+    sys.modules["analysis.knowledge_graph"] = stub_kg
+
+    stub_freq = types.ModuleType("analysis.frequency_features")
+    stub_freq.spectral_features = lambda df: df
+    stub_freq.wavelet_energy = lambda df: df
+    sys.modules["analysis.frequency_features"] = stub_freq
+
+    stub_fractal = types.ModuleType("analysis.fractal_features")
+    stub_fractal.rolling_fractal_features = lambda df: df
+    sys.modules["analysis.fractal_features"] = stub_fractal
+
+    stub_cross = types.ModuleType("analysis.cross_spectral")
+    stub_cross.compute = lambda df, window=None: df
+    stub_cross.REQUIREMENTS = stub_utils.resource_monitor.ResourceCapabilities()
+    sys.modules["analysis.cross_spectral"] = stub_cross
+
+    stub_garch = types.ModuleType("analysis.garch_vol")
+    stub_garch.garch_volatility = lambda df: df
+    sys.modules["analysis.garch_vol"] = stub_garch
 
     sys.modules["analysis.data_lineage"] = types.SimpleNamespace(log_lineage=lambda *a, **k: None)
 
@@ -153,3 +209,24 @@ def test_multi_timeframe_columns_cacheable(monkeypatch, tmp_path):
     loaded = pd.read_pickle(cache_path)
     assert "Bid_15m_mean" in loaded.columns
     pd.testing.assert_series_equal(result["Bid_15m_mean"], loaded["Bid_15m_mean"])
+
+
+def test_feature_cache_hits_and_invalidation(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEATURE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("NO_CACHE", raising=False)
+    feature_mod = _import_features(monkeypatch)
+    loader = sys.modules["data.alt_data_loader"]
+    df = pd.DataFrame(
+        {
+            "Timestamp": pd.date_range("2020-01-01", periods=2, freq="D"),
+            "Symbol": ["AAA", "AAA"],
+        }
+    )
+    feature_mod.add_alt_features(df)
+    assert loader.call_count["count"] == 1
+    feature_mod.add_alt_features(df)
+    assert loader.call_count["count"] == 1
+    df2 = df.copy()
+    df2.loc[0, "Timestamp"] = df2.loc[0, "Timestamp"] + pd.Timedelta(days=1)
+    feature_mod.add_alt_features(df2)
+    assert loader.call_count["count"] == 2

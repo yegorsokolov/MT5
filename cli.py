@@ -106,6 +106,9 @@ def train_rl_cmd(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mt5")
+    parser.add_argument(
+        "--no-cache", action="store_true", help="Disable feature caching"
+    )
     sub = parser.add_subparsers(dest="command")
 
     p_train = sub.add_parser("train", help="Run classic training pipeline")
@@ -157,6 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "no_cache", False):
+        os.environ["NO_CACHE"] = "1"
     if not hasattr(args, "func"):
         parser.print_help()
         return 1
