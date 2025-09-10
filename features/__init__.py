@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from functools import wraps
+from importlib.metadata import entry_points
 
 try:  # config is optional during import in some tests
     from utils import load_config
@@ -75,26 +76,42 @@ class FeatureSpec:
 
 
 # Registry of feature specifications
-_REGISTRY: Dict[str, FeatureSpec] = {
-    "price": FeatureSpec(price.compute, min_cpus=1, min_mem_gb=1.0),
-    "news": FeatureSpec(news.compute, min_cpus=2, min_mem_gb=4.0),
-    "cross_asset": FeatureSpec(cross_asset.compute, min_cpus=4, min_mem_gb=8.0),
-    "orderbook": FeatureSpec(orderbook.compute, min_cpus=2, min_mem_gb=2.0),
-    "order_flow": FeatureSpec(order_flow.compute, min_cpus=1, min_mem_gb=1.0),
-    "microprice": FeatureSpec(microprice.compute, min_cpus=1, min_mem_gb=1.0),
-    "auto_indicator": FeatureSpec(auto_indicator.compute, min_cpus=1, min_mem_gb=1.0),
-    "volume": FeatureSpec(volume.compute, min_cpus=1, min_mem_gb=1.0),
-    "multi_timeframe": FeatureSpec(multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0),
-    "supertrend": FeatureSpec(supertrend.compute, min_cpus=1, min_mem_gb=1.0),
-    "keltner_squeeze": FeatureSpec(keltner_squeeze.compute, min_cpus=1, min_mem_gb=1.0),
-    "adaptive_ma": FeatureSpec(adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0),
-    "kalman_ma": FeatureSpec(kalman_ma.compute, min_cpus=1, min_mem_gb=1.0),
-    "regime": FeatureSpec(regime.compute, min_cpus=1, min_mem_gb=1.0),
-    "macd": FeatureSpec(macd.compute, min_cpus=1, min_mem_gb=1.0),
-    "ram": FeatureSpec(ram.compute, min_cpus=1, min_mem_gb=1.0),
-    "vwap": FeatureSpec(vwap.compute, min_cpus=1, min_mem_gb=1.0),
-    "baseline_signal": FeatureSpec(baseline_signal.compute, min_cpus=1, min_mem_gb=1.0),
-}
+_REGISTRY: Dict[str, FeatureSpec] = {}
+
+
+def register_feature(
+    name: str,
+    compute: Callable[["pd.DataFrame"], "pd.DataFrame"],
+    min_cpus: int = 1,
+    min_mem_gb: float = 0.0,
+    requires_gpu: bool = False,
+) -> None:
+    """Register a feature implementation."""
+
+    _REGISTRY[name] = FeatureSpec(
+        compute, min_cpus=min_cpus, min_mem_gb=min_mem_gb, requires_gpu=requires_gpu
+    )
+
+
+# Register built-in features
+register_feature("price", price.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("news", news.compute, min_cpus=2, min_mem_gb=4.0)
+register_feature("cross_asset", cross_asset.compute, min_cpus=4, min_mem_gb=8.0)
+register_feature("orderbook", orderbook.compute, min_cpus=2, min_mem_gb=2.0)
+register_feature("order_flow", order_flow.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("microprice", microprice.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("auto_indicator", auto_indicator.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("volume", volume.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("multi_timeframe", multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("supertrend", supertrend.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("keltner_squeeze", keltner_squeeze.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("adaptive_ma", adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("kalman_ma", kalman_ma.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("regime", regime.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("macd", macd.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("ram", ram.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("vwap", vwap.compute, min_cpus=1, min_mem_gb=1.0)
+register_feature("baseline_signal", baseline_signal.compute, min_cpus=1, min_mem_gb=1.0)
 
 # Holds latest status report
 _STATUS: Dict[str, object] = {}
@@ -187,10 +204,35 @@ def report_status() -> Dict[str, object]:
 
 def get_feature_pipeline() -> List[Callable[["pd.DataFrame"], "pd.DataFrame"]]:
     """Return the list of compute functions enabled in the config and resources."""
-
+    _load_external_features()
     _update_status()
     active = [f["name"] for f in _STATUS.get("features", []) if f["status"] == "active"]
     return [_REGISTRY[name].compute for name in active]
+
+
+_external_loaded = False
+
+
+def _load_external_features() -> None:
+    """Load feature plugins declared via entry points."""
+
+    global _external_loaded
+    if _external_loaded:
+        return
+    try:
+        eps = entry_points(group="mt5.features")
+    except TypeError:  # pragma: no cover - Python<3.10
+        eps = entry_points().get("mt5.features", [])
+    except Exception:  # pragma: no cover - missing metadata
+        eps = []
+    for ep in eps:
+        try:
+            hook = ep.load()
+            hook(register_feature)
+            logger.info("Loaded feature plugin %s", ep.name)
+        except Exception:  # pragma: no cover - plugin errors shouldn't crash
+            logger.debug("Failed to load feature plugin %s", ep.name, exc_info=True)
+    _external_loaded = True
 
 
 async def _watch_capabilities(queue: asyncio.Queue[str]) -> None:
@@ -208,4 +250,4 @@ except Exception:  # pragma: no cover - no running loop during import
     pass
 
 
-__all__ = ["get_feature_pipeline", "report_status", "validator"]
+__all__ = ["get_feature_pipeline", "report_status", "validator", "register_feature"]

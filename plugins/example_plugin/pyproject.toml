@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mt5-example-plugin"
+version = "0.1.0"
+
+[project.entry-points."mt5.features"]
+plugin_feature = "example_plugin.feature:register"
+
+[project.entry-points."mt5.strategies"]
+plugin_strategy = "example_plugin.strategy:register"
