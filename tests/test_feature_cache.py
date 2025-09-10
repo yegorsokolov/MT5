@@ -230,3 +230,26 @@ def test_feature_cache_hits_and_invalidation(monkeypatch, tmp_path):
     df2.loc[0, "Timestamp"] = df2.loc[0, "Timestamp"] + pd.Timedelta(days=1)
     feature_mod.add_alt_features(df2)
     assert loader.call_count["count"] == 2
+
+
+def test_feature_cache_respects_code_hash(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEATURE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("NO_CACHE", raising=False)
+    feature_mod = _import_features(monkeypatch)
+
+    calls = {"count": 0}
+
+    @feature_mod.cache_feature
+    def dummy(df):
+        calls["count"] += 1
+        return df.assign(x=calls["count"])
+
+    df = pd.DataFrame({"a": [1]})
+    monkeypatch.setenv("FEATURE_CACHE_CODE_HASH", "v1")
+    dummy(df)
+    dummy(df)
+    assert calls["count"] == 1
+
+    monkeypatch.setenv("FEATURE_CACHE_CODE_HASH", "v2")
+    dummy(df)
+    assert calls["count"] == 2

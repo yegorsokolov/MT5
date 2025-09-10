@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import List, Tuple
 
 import hashlib
+import inspect
 import os
+import shutil
 from functools import wraps
 
 import numpy as np
@@ -58,10 +60,58 @@ _FEATURE_CACHE_DIR = Path(os.environ.get("FEATURE_CACHE_DIR", "data/feature_cach
 _memory = Memory(str(_FEATURE_CACHE_DIR), verbose=0)
 
 
-def cache_feature(func):
-    """Cache feature computation based on raw data hash and module name."""
+def _dir_size(path: Path) -> int:
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
 
-    def _cached(data_hash, module, df, *args, **kwargs):
+
+def _get_code_signature(func) -> str:
+    override = os.environ.get("FEATURE_CACHE_CODE_HASH")
+    if override:
+        return override
+    try:
+        file_path = Path(inspect.getfile(func))
+        return str(file_path.stat().st_mtime)
+    except Exception:
+        return "0"
+
+
+def _enforce_cache_limit():
+    max_gb = os.environ.get("FEATURE_CACHE_MAX_GB")
+    if not max_gb:
+        return
+    try:
+        max_bytes = float(max_gb) * 1024**3
+    except ValueError:
+        logger.warning("Invalid FEATURE_CACHE_MAX_GB: %s", max_gb)
+        return
+    if not _FEATURE_CACHE_DIR.exists():
+        return
+    total = _dir_size(_FEATURE_CACHE_DIR)
+    if total <= max_bytes:
+        return
+    entries = []
+    for entry in _FEATURE_CACHE_DIR.iterdir():
+        entry_size = _dir_size(entry)
+        entry_atime = entry.stat().st_atime
+        entries.append((entry_atime, entry_size, entry))
+    entries.sort()
+    for _, size, entry in entries:
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            try:
+                entry.unlink()
+            except FileNotFoundError:
+                pass
+        total -= size
+        if total <= max_bytes:
+            break
+
+
+def cache_feature(func):
+    """Cache feature computation based on raw data, module name and code signature."""
+
+    def _cached(data_hash, module, code_sig, df, *args, **kwargs):
         return func(df, *args, **kwargs)
 
     cached_impl = _memory.cache(_cached, ignore=["df"])
@@ -74,7 +124,10 @@ def cache_feature(func):
             pd.util.hash_pandas_object(df, index=True).values.tobytes()
         ).hexdigest()
         module = func.__module__
-        return cached_impl(data_hash, module, df, *args, **kwargs)
+        code_sig = _get_code_signature(func)
+        result = cached_impl(data_hash, module, code_sig, df, *args, **kwargs)
+        _enforce_cache_limit()
+        return result
 
     return wrapper
 
