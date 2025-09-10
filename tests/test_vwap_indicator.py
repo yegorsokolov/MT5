@@ -16,7 +16,7 @@ vwap = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(vwap)
 
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 
 
 def _sample_df():
@@ -53,7 +53,8 @@ def test_baseline_vwap_gating():
     strat = BaselineStrategy(short_window=2, long_window=3, rsi_window=4, atr_window=1)
     signal = 0
     for row in feats.itertuples():
-        signal = strat.update(row.Close, high=row.High, low=row.Low, vwap_cross=row.vwap_cross)
+        ind = IndicatorBundle(high=row.High, low=row.Low, vwap_cross=row.vwap_cross)
+        signal = strat.update(row.Close, ind)
     assert signal == 1
 
     bad = feats.copy()
@@ -61,5 +62,6 @@ def test_baseline_vwap_gating():
     strat = BaselineStrategy(short_window=2, long_window=3, rsi_window=4, atr_window=1)
     signal = 0
     for row in bad.itertuples():
-        signal = strat.update(row.Close, high=row.High, low=row.Low, vwap_cross=row.vwap_cross)
+        ind = IndicatorBundle(high=row.High, low=row.Low, vwap_cross=row.vwap_cross)
+        signal = strat.update(row.Close, ind)
     assert signal == 0

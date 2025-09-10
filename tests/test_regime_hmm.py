@@ -7,7 +7,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from analysis.regime_hmm import fit_regime_hmm
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 
 
 def test_hmm_detects_regime_shift():
@@ -33,16 +33,16 @@ def test_hmm_detects_regime_shift():
 
 def test_baseline_regime_gating():
     strat = BaselineStrategy(short_window=2, long_window=3, atr_window=2, long_regimes={1}, short_regimes=set())
-    strat.update(1, regime=1)
-    strat.update(2, regime=1)
-    sig = strat.update(3, regime=1)
+    strat.update(1, IndicatorBundle(regime=1))
+    strat.update(2, IndicatorBundle(regime=1))
+    sig = strat.update(3, IndicatorBundle(regime=1))
     assert sig == 1 and strat.position == 1
     # Regime disallows long
-    exit_sig = strat.update(4, regime=0)
+    exit_sig = strat.update(4, IndicatorBundle(regime=0))
     assert exit_sig == -1 and strat.position == 0
     # Attempt long in disallowed regime
     strat2 = BaselineStrategy(short_window=2, long_window=3, atr_window=2, long_regimes={1}, short_regimes=set())
-    strat2.update(1, regime=0)
-    strat2.update(2, regime=0)
-    sig2 = strat2.update(3, regime=0)
+    strat2.update(1, IndicatorBundle(regime=0))
+    strat2.update(2, IndicatorBundle(regime=0))
+    sig2 = strat2.update(3, IndicatorBundle(regime=0))
     assert sig2 == 0 and strat2.position == 0

@@ -14,7 +14,7 @@ ram = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(ram)
 
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 
 
 def test_ram_indicator_computation():
@@ -43,7 +43,8 @@ def test_baseline_ram_gating():
     )
     signal = 0
     for row in feats.itertuples():
-        signal = strat.update(row.Close, high=row.High, low=row.Low, ram=row.ram)
+        ind = IndicatorBundle(high=row.High, low=row.Low, ram=row.ram)
+        signal = strat.update(row.Close, ind)
     assert signal == 1
 
     strat = BaselineStrategy(
@@ -56,7 +57,8 @@ def test_baseline_ram_gating():
     )
     signal = 0
     for row in feats.itertuples():
-        signal = strat.update(row.Close, high=row.High, low=row.Low, ram=row.ram)
+        ind = IndicatorBundle(high=row.High, low=row.Low, ram=row.ram)
+        signal = strat.update(row.Close, ind)
     assert signal == 0
 
     prices = [3.0, 2.0, 1.0]
@@ -73,7 +75,8 @@ def test_baseline_ram_gating():
     )
     signal = 0
     for row in feats.itertuples():
-        signal = strat.update(row.Close, high=row.High, low=row.Low, ram=row.ram)
+        ind = IndicatorBundle(high=row.High, low=row.Low, ram=row.ram)
+        signal = strat.update(row.Close, ind)
     assert signal == -1
 
     strat = BaselineStrategy(
@@ -86,5 +89,6 @@ def test_baseline_ram_gating():
     )
     signal = 0
     for row in feats.itertuples():
-        signal = strat.update(row.Close, high=row.High, low=row.Low, ram=row.ram)
+        ind = IndicatorBundle(high=row.High, low=row.Low, ram=row.ram)
+        signal = strat.update(row.Close, ind)
     assert signal == 0

@@ -11,7 +11,7 @@ volume = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(volume)
 
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 
 
 def test_volume_indicator_computation():
@@ -49,7 +49,8 @@ def test_baseline_volume_confirmation():
     strat = BaselineStrategy(short_window=2, long_window=3, rsi_window=4, atr_window=1)
     signal = 0
     for row in bad.itertuples():
-        signal = strat.update(row.Close, high=row.High, low=row.Low, obv=row.obv, mfi=row.mfi)
+        ind = IndicatorBundle(high=row.High, low=row.Low, obv=row.obv, mfi=row.mfi)
+        signal = strat.update(row.Close, ind)
     assert signal == 0
 
     good = feats.copy()
@@ -57,5 +58,6 @@ def test_baseline_volume_confirmation():
     strat = BaselineStrategy(short_window=2, long_window=3, rsi_window=4, atr_window=1)
     signal = 0
     for row in good.itertuples():
-        signal = strat.update(row.Close, high=row.High, low=row.Low, obv=row.obv, mfi=row.mfi)
+        ind = IndicatorBundle(high=row.High, low=row.Low, obv=row.obv, mfi=row.mfi)
+        signal = strat.update(row.Close, ind)
     assert signal == 1
