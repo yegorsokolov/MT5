@@ -195,7 +195,7 @@ over core parameters and logs the best trial to MLflow. Recommended ranges:
 | Script | Parameters |
 | ------ | ---------- |
 | `train.py` | `learning_rate` 1e-4–0.2, `num_leaves` 16–255, `max_depth` 3–12 |
-| `train_nn.py` | `learning_rate` 1e-5–1e-2, `d_model` 32–256, `num_layers` 1–4 |
+| `train_cli.py neural` | `learning_rate` 1e-5–1e-2, `d_model` 32–256, `num_layers` 1–4 |
 | `train_rl.py` | `rl_learning_rate` 1e-5–1e-2, `rl_gamma` 0.90–0.999 |
 
 ### Masked time-series encoder pretraining
@@ -350,7 +350,7 @@ The project can be adapted to any symbol by changing the configuration
 parameters and retraining the model on the corresponding historical data.
 `train.py` now supports training on multiple symbols at once.  By default both
 `XAUUSD` and `GBPUSD` history files will be downloaded and combined.
-The script `train_nn.py` now uses a lightweight Transformer network on sliding
+The `neural` subcommand in `train_cli.py` now uses a lightweight Transformer network on sliding
 windows of features for those wanting to explore deep learning models.
 `train_meta.py` demonstrates a simple meta-learning approach where a global
 model is fitted on all symbols and lightweight adapters are fine-tuned for each
@@ -443,7 +443,7 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    ```bash
    python train.py
    # run the transformer-based neural network
-   python train_nn.py
+   python train_cli.py neural
    # train symbol-specific adapters
    python train_meta.py
    # train an AutoGluon TabularPredictor
@@ -523,7 +523,7 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    3. Install extras as needed, e.g. `pip install .[heavy]` or `pip install .[rl]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
       When the config option `feature_importance: true` is set, `train.py` and
-      `train_nn.py` also write SHAP bar plots under `reports/` and a ranked
+      `train_cli.py neural` also write SHAP bar plots under `reports/` and a ranked
       `feature_importance.csv` file. For ad-hoc interpretation of an existing
       model run `python analysis/interpret_model.py` which produces a similar
       report for the most recent dataset.
@@ -547,7 +547,7 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    1. Still inside the command prompt run `python train.py`.
       The script downloads the backtesting files `XAUUSD.csv` and `GBPUSD.csv`
       from Google Drive and trains a LightGBM model.
-   2. To experiment with the transformer-based neural network instead run `python train_nn.py`.
+   2. To experiment with the transformer-based neural network instead run `python train_cli.py neural`.
       This trains a small transformer on sequences of the same features and saves `model_transformer.pt`.
    3. After either script finishes you will see the resulting model file under the project folder.
    4. To browse logged runs start `scripts/mlflow_ui.sh` and open `http://localhost:5000` in your browser.
@@ -784,7 +784,7 @@ training pass when no `model.joblib` is present, launches the terminal and then
 enters the realtime training loop while uploading logs in the background.
 
 The workflow `.github/workflows/train.yml` retrains both `train.py` and
-`train_nn.py` whenever new data is pushed or on a daily schedule. Generated
+`train_cli.py neural` whenever new data is pushed or on a daily schedule. Generated
 models are committed back to the repository ensuring the EA always uses the
 most recent versions.
 
@@ -955,7 +955,7 @@ behaviour.
 
 ## Mixed Precision and Checkpointing
 
-`train_nn.py` supports memory-saving options controlled by two flags in
+The neural subcommand supports memory-saving options controlled by two flags in
 `config.yaml`:
 
 * `use_amp` – enables automatic mixed precision, cutting GPU memory use and

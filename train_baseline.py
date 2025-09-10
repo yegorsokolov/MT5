@@ -47,4 +47,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry
+    import warnings
+
+    warnings.warn(
+        "train_baseline.py is deprecated; use 'python train_cli.py baseline' instead",
+        DeprecationWarning,
+    )
     main()
