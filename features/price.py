@@ -5,15 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-
-def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    roll_up = up.rolling(period).mean()
-    roll_down = down.rolling(period).mean()
-    rs = roll_up / roll_down.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+from indicators import atr, bollinger, rsi, sma
 
 
 def compute(df: pd.DataFrame) -> pd.DataFrame:
@@ -25,15 +17,11 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
 
     # moving averages
     for win in [5, 10, 30, 60]:
-        df[f"ma_{win}"] = df["mid"].rolling(win).mean()
-    df["ma_h4"] = df["mid"].rolling(4 * 60).mean()
+        df[f"ma_{win}"] = sma(df["mid"], win)
+    df["ma_h4"] = sma(df["mid"], 4 * 60)
 
     # Bollinger bands
-    ma20 = df["mid"].rolling(20)
-    ma = ma20.mean()
-    std = ma20.std()
-    df["boll_upper"] = ma + 2 * std
-    df["boll_lower"] = ma - 2 * std
+    _, df["boll_upper"], df["boll_lower"] = bollinger(df["mid"], 20)
     df["boll_break"] = (
         (df["mid"] > df["boll_upper"]).astype(int)
         - (df["mid"] < df["boll_lower"]).astype(int)
@@ -42,9 +30,7 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
     # ATR (simplified using high/low/mid)
     hl = df.get("High", df["mid"])
     ll = df.get("Low", df["mid"])
-    prev_close = df["mid"].shift(1)
-    tr = pd.concat([hl - ll, (hl - prev_close).abs(), (ll - prev_close).abs()], axis=1).max(axis=1)
-    df["atr_14"] = tr.rolling(14).mean()
+    df["atr_14"] = atr(hl, ll, df["mid"], 14)
     df["atr_stop_long"] = df["mid"] - 3 * df["atr_14"]
     df["atr_stop_short"] = df["mid"] + 3 * df["atr_14"]
 
@@ -58,7 +44,7 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     df["volatility_30"] = df["return"].rolling(30).std()
-    df["rsi_14"] = _rsi(df["mid"], 14)
+    df["rsi_14"] = rsi(df["mid"], 14)
 
     df["mid_change"] = df["mid"].diff().fillna(0)
     df["spread_change"] = df["spread"].diff().fillna(0)
