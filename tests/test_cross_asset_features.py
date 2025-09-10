@@ -15,7 +15,9 @@ spec.loader.exec_module(cross_asset)
 add_cross_asset_features = cross_asset.add_cross_asset_features
 
 
-def _baseline_add_cross_asset_features(df: pd.DataFrame, window: int = 30) -> pd.DataFrame:
+def _baseline_add_cross_asset_features(
+    df: pd.DataFrame, window: int = 30
+) -> pd.DataFrame:
     required = {"Symbol", "Timestamp", "return"}
     if not required.issubset(df.columns):
         return df
@@ -129,3 +131,60 @@ def test_cross_asset_large_universe_runtime():
 
     pd.testing.assert_frame_equal(vec.sort_index(axis=1), base.sort_index(axis=1))
     assert vec_time < base_time
+
+
+def test_cross_asset_top_k_limits_pairs_and_time():
+    symbols = [f"S{i:03d}" for i in range(20)]
+    periods = 30
+    idx = pd.date_range("2020-01-01", periods=periods, freq="D")
+    rng = np.random.default_rng(1)
+    df = pd.DataFrame(
+        {
+            "Timestamp": idx.repeat(len(symbols)),
+            "Symbol": symbols * periods,
+            "return": rng.standard_normal(periods * len(symbols)) / 100,
+        }
+    )
+
+    start = time.perf_counter()
+    limited = add_cross_asset_features(df.copy(), window=5, max_pairs=5, reduce="top_k")
+    limited_time = time.perf_counter() - start
+
+    start = time.perf_counter()
+    full = add_cross_asset_features(df.copy(), window=5)
+    full_time = time.perf_counter() - start
+
+    pair_cols_limited = [
+        c for c in limited.columns if c.startswith("corr_") or c.startswith("relret_")
+    ]
+    pair_cols_full = [
+        c for c in full.columns if c.startswith("corr_") or c.startswith("relret_")
+    ]
+    assert len(pair_cols_limited) == 5 * 4
+    assert len(pair_cols_limited) < len(pair_cols_full)
+    assert limited_time < full_time
+
+
+def test_cross_asset_pca_reduces_columns():
+    symbols = ["AAA", "BBB", "CCC", "DDD"]
+    periods = 20
+    idx = pd.date_range("2020-01-01", periods=periods, freq="D")
+    rng = np.random.default_rng(2)
+    df = pd.DataFrame(
+        {
+            "Timestamp": idx.repeat(len(symbols)),
+            "Symbol": symbols * periods,
+            "return": rng.standard_normal(periods * len(symbols)) / 100,
+        }
+    )
+
+    full = add_cross_asset_features(df.copy(), window=5)
+    pca_df = add_cross_asset_features(df.copy(), window=5, max_pairs=3, reduce="pca")
+
+    pca_cols = [c for c in pca_df.columns if c.startswith("pair_pca_")]
+    full_cols = [
+        c for c in full.columns if c.startswith("corr_") or c.startswith("relret_")
+    ]
+    assert len(pca_cols) == 3
+    assert len(pca_cols) < len(full_cols)
+    assert not any(c.startswith("corr_") for c in pca_df.columns)
