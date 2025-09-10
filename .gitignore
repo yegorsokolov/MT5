@@ -52,3 +52,5 @@ __pycache__/
 analysis/news_impact.parquet
 analytics/*.parquet
 reports/**/*.csv
+# Documentation build artifacts
+docs/_build/
