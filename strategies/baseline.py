@@ -71,6 +71,10 @@ class BaselineStrategy:
         Minimum risk-adjusted momentum required to allow a long entry.
     ram_short_threshold:
         Maximum risk-adjusted momentum permitted for a short entry.
+    hurst_trend_min:
+        Minimum Hurst exponent required to allow a long entry.
+    hurst_mean_reversion_max:
+        Maximum Hurst exponent permitting a short entry.
     """
 
     def __init__(
@@ -90,6 +94,8 @@ class BaselineStrategy:
         short_regimes: Optional[Set[int]] = None,
         ram_long_threshold: float = 0.0,
         ram_short_threshold: float = 0.0,
+        hurst_trend_min: float = 0.5,
+        hurst_mean_reversion_max: float = 0.5,
     ) -> None:
         if short_window >= long_window:
             raise ValueError("short_window must be < long_window")
@@ -108,6 +114,8 @@ class BaselineStrategy:
         self.short_regimes = set(short_regimes) if short_regimes is not None else None
         self.ram_long_threshold = float(ram_long_threshold)
         self.ram_short_threshold = float(ram_short_threshold)
+        self.hurst_trend_min = float(hurst_trend_min)
+        self.hurst_mean_reversion_max = float(hurst_mean_reversion_max)
 
         self._short: Deque[float] = deque(maxlen=short_window)
         self._long: Deque[float] = deque(maxlen=long_window)
@@ -193,6 +201,7 @@ class BaselineStrategy:
         mfi: Optional[float] = None,
         cvd: Optional[float] = None,
         ram: Optional[float] = None,
+        hurst: Optional[float] = None,
         htf_ma: Optional[float] = None,
         htf_rsi: Optional[float] = None,
         supertrend_break: Optional[int] = None,
@@ -228,6 +237,11 @@ class BaselineStrategy:
             Optional risk-adjusted momentum value. Long entries require
             ``ram`` above ``ram_long_threshold`` while short entries
             require it below ``ram_short_threshold``.
+        hurst:
+            Optional Hurst exponent value. Long entries require
+            ``hurst`` to be at least ``hurst_trend_min`` while short
+            entries require it to be at most
+            ``hurst_mean_reversion_max``.
         htf_ma, htf_rsi:
             Optional higher-timeframe moving average and RSI values used
             to align trades with broader trends.
@@ -356,6 +370,13 @@ class BaselineStrategy:
             if raw_signal == 1 and ram < self.ram_long_threshold:
                 raw_signal = 0
             elif raw_signal == -1 and ram > self.ram_short_threshold:
+                raw_signal = 0
+
+        # Hurst exponent gating
+        if raw_signal != 0 and hurst is not None:
+            if raw_signal == 1 and hurst < self.hurst_trend_min:
+                raw_signal = 0
+            elif raw_signal == -1 and hurst > self.hurst_mean_reversion_max:
                 raw_signal = 0
 
         if raw_signal != 0 and vwap_cross is not None and vwap_cross != raw_signal:
