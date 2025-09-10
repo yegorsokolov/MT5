@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+from functools import wraps
 
 try:  # config is optional during import in some tests
     from utils import load_config
@@ -25,6 +26,19 @@ except Exception:  # pragma: no cover - utils may not be available in tests
     load_config = lambda: {}
 
 from utils.resource_monitor import monitor, ResourceCapabilities
+
+def validator(suite_name: str):
+    def decorator(func: Callable):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            from data.expectations import validate_dataframe
+            result = func(*args, **kwargs)
+            validate_dataframe(result, suite_name)
+            return result
+
+        return wrapper
+
+    return decorator
 
 from . import (
     price,
@@ -194,4 +208,4 @@ except Exception:  # pragma: no cover - no running loop during import
     pass
 
 
-__all__ = ["get_feature_pipeline", "report_status"]
+__all__ = ["get_feature_pipeline", "report_status", "validator"]
