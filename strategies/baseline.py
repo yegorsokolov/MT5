@@ -208,6 +208,7 @@ class BaselineStrategy:
         kama_cross: Optional[int] = None,
         kma_cross: Optional[int] = None,
         vwap_cross: Optional[int] = None,
+        macd_cross: Optional[int] = None,
         regime: Optional[int] = None,
         microprice_delta: Optional[float] = None,
     ) -> int:
@@ -258,6 +259,10 @@ class BaselineStrategy:
         vwap_cross:
             Optional session/day VWAP crossover signal. Long entries
             require ``vwap_cross`` of ``1`` while short entries require
+            ``-1``.
+        macd_cross:
+            Optional MACD line/signal crossover confirmation. Long entries
+            require ``macd_cross`` of ``1`` while short entries require
             ``-1``.
         regime:
             Optional discrete regime id used to gate long/short entries.
@@ -391,6 +396,8 @@ class BaselineStrategy:
         if raw_signal != 0 and kama_cross is not None and kama_cross != raw_signal:
             raw_signal = 0
         if raw_signal != 0 and kma_cross is not None and kma_cross != raw_signal:
+            raw_signal = 0
+        if raw_signal != 0 and macd_cross is not None and macd_cross != raw_signal:
             raw_signal = 0
 
         self._prev_short, self._prev_long = short_ma, long_ma
