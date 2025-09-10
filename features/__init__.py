@@ -40,6 +40,7 @@ from . import (
     adaptive_ma,
     kalman_ma,
     regime,
+    macd,
     ram,
     vwap,
 )
@@ -72,6 +73,7 @@ _REGISTRY: Dict[str, FeatureSpec] = {
     "adaptive_ma": FeatureSpec(adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0),
     "kalman_ma": FeatureSpec(kalman_ma.compute, min_cpus=1, min_mem_gb=1.0),
     "regime": FeatureSpec(regime.compute, min_cpus=1, min_mem_gb=1.0),
+    "macd": FeatureSpec(macd.compute, min_cpus=1, min_mem_gb=1.0),
     "ram": FeatureSpec(ram.compute, min_cpus=1, min_mem_gb=1.0),
     "vwap": FeatureSpec(vwap.compute, min_cpus=1, min_mem_gb=1.0),
 }
