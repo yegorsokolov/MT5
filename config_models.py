@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+from typing import List
+
+from pydantic import BaseModel, Field, ConfigDict
+
+
+class TrainingConfig(BaseModel):
+    """Training-related configuration."""
+
+    seed: int = 42
+    use_pseudo_labels: bool = False
+    drift_method: str = "adwin"
+    drift_delta: float = Field(0.002, gt=0)
+    use_focal_loss: bool = False
+    focal_alpha: float = 0.25
+    focal_gamma: float = 2.0
+    num_leaves: int | None = None
+    learning_rate: float | None = None
+    max_depth: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+
+class FeaturesConfig(BaseModel):
+    """Feature pipeline configuration."""
+
+    latency_threshold: float = 0.0
+    features: List[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+
+class StrategyConfig(BaseModel):
+    """Trading strategy configuration."""
+
+    symbols: List[str]
+    risk_per_trade: float = Field(..., gt=0, le=1)
+    model_config = ConfigDict(extra="forbid")
+
+
+class AppConfig(BaseModel):
+    """Root application configuration grouping all sections."""
+
+    training: TrainingConfig = TrainingConfig()
+    features: FeaturesConfig = FeaturesConfig()
+    strategy: StrategyConfig
+    model_config = ConfigDict(extra="forbid")
+
+    def get(self, key: str, default=None):
+        for section in (self.training, self.features, self.strategy):
+            if key in section.model_fields:
+                return getattr(section, key)
+        return default
