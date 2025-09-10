@@ -15,20 +15,17 @@ def _setup_features_stub():
     features_pkg = types.ModuleType("features")
     features_pkg.__path__ = [str(ROOT / "features")]
 
-    def validator(suite_name: str):
-        def decorator(func):
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                from data.expectations import validate_dataframe
-                result = func(*args, **kwargs)
-                validate_dataframe(result, suite_name)
-                return result
+    def validate_module(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            from data.expectations import validate_dataframe
+            result = func(*args, **kwargs)
+            suite = func.__module__.split(".")[-1]
+            validate_dataframe(result, suite)
+            return result
+        return wrapper
 
-            return wrapper
-
-        return decorator
-
-    features_pkg.validator = validator
+    features_pkg.validate_module = validate_module
     sys.modules["features"] = features_pkg
 
 
@@ -51,30 +48,66 @@ def _stub_utils():
 
 def _stub_expectations(called):
     stub = types.ModuleType("data.expectations")
+
     def _validate(df, suite, **_):
         called["suite"] = suite
+        called["columns"] = list(df.columns)
         raise ValueError("failed")
+
     stub.validate_dataframe = _validate
     sys.modules["data.expectations"] = stub
     data_pkg = sys.modules.setdefault("data", types.ModuleType("data"))
     data_pkg.expectations = stub
 
 
-def test_order_flow_validation_failure():
+def _stub_data_features():
+    df_mod = types.ModuleType("data.features")
+
+    def add_economic_calendar_features(df):
+        df = df.copy()
+        df["minutes_to_event"] = 0
+        return df
+
+    def add_news_sentiment_features(df):
+        df = df.copy()
+        df["news_sentiment"] = 0
+        return df
+
+    df_mod.add_economic_calendar_features = add_economic_calendar_features
+    df_mod.add_news_sentiment_features = add_news_sentiment_features
+    data_pkg = sys.modules.setdefault("data", types.ModuleType("data"))
+    data_pkg.features = df_mod
+    sys.modules["data.features"] = df_mod
+    events_mod = types.ModuleType("data.events")
+    events_mod.get_events = lambda past_events=True: []
+    data_pkg.events = events_mod
+    sys.modules["data.events"] = events_mod
+
+
+def _import_feature_module(name: str):
+    spec = importlib.util.spec_from_file_location(f"features.{name}", ROOT / "features" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sys.modules[f"features.{name}"] = module
+    return module
+
+
+def test_price_validation_failure():
     _setup_features_stub()
     _stub_utils()
     called = {}
     _stub_expectations(called)
 
-    spec = importlib.util.spec_from_file_location("features.order_flow", ROOT / "features" / "order_flow.py")
-    order_flow = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(order_flow)
-    sys.modules["features.order_flow"] = order_flow
-
-    df = pd.DataFrame({"bid_sz_0": [1.0], "ask_sz_0": [2.0]})
+    price = _import_feature_module("price")
+    df = pd.DataFrame({
+        "Timestamp": pd.date_range("2020", periods=2, freq="T"),
+        "Bid": [1.0, 1.1],
+        "Ask": [1.2, 1.3],
+    })
     with pytest.raises(ValueError):
-        order_flow.compute(df)
-    assert called["suite"] == "order_flow"
+        price.compute(df)
+    assert called["suite"] == "price"
+    assert "return" in called["columns"]
 
 
 def test_cross_asset_validation_failure():
@@ -86,17 +119,31 @@ def test_cross_asset_validation_failure():
     called = {}
     _stub_expectations(called)
 
-    spec = importlib.util.spec_from_file_location("features.cross_asset", ROOT / "features" / "cross_asset.py")
-    cross_asset = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cross_asset)
-    sys.modules["features.cross_asset"] = cross_asset
-
+    cross_asset = _import_feature_module("cross_asset")
     df = pd.DataFrame({
         "Timestamp": pd.date_range("2020", periods=3, freq="D").tolist() * 2,
         "Symbol": ["A", "B", "A", "B", "A", "B"],
         "return": [0.1, 0.2, -0.1, 0.05, 0.0, -0.05],
     })
-
     with pytest.raises(ValueError):
         cross_asset.compute(df)
     assert called["suite"] == "cross_asset"
+    assert any(c.startswith("rel_strength_") for c in called["columns"])
+
+
+def test_news_validation_failure():
+    _setup_features_stub()
+    _stub_utils()
+    _stub_data_features()
+    called = {}
+    _stub_expectations(called)
+
+    news = _import_feature_module("news")
+    df = pd.DataFrame({
+        "Timestamp": pd.date_range("2020", periods=1, freq="T"),
+        "news_summary": ["test"],
+    })
+    with pytest.raises(ValueError):
+        news.compute(df)
+    assert called["suite"] == "news"
+    assert "news_sentiment" in called["columns"]

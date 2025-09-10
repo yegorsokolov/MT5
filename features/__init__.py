@@ -28,7 +28,34 @@ except Exception:  # pragma: no cover - utils may not be available in tests
 
 from utils.resource_monitor import monitor, ResourceCapabilities
 
+
+def validate_module(func: Callable) -> Callable:
+    """Validate feature outputs against module specific expectation suites.
+
+    The expectation suite name is derived from the module of ``func``. If no
+    suite is found the validation is silently skipped to keep optional suites
+    lightweight for tests.
+    """
+
+    suite_name = func.__module__.split(".")[-1]
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        from data.expectations import validate_dataframe
+
+        result = func(*args, **kwargs)
+        try:
+            validate_dataframe(result, suite_name)
+        except FileNotFoundError:
+            pass
+        return result
+
+    return wrapper
+
+
 def validator(suite_name: str):
+    """Backward compatible validator decorator."""
+
     def decorator(func: Callable):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -250,4 +277,10 @@ except Exception:  # pragma: no cover - no running loop during import
     pass
 
 
-__all__ = ["get_feature_pipeline", "report_status", "validator", "register_feature"]
+__all__ = [
+    "get_feature_pipeline",
+    "report_status",
+    "register_feature",
+    "validate_module",
+    "validator",
+]

@@ -17,14 +17,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-try:  # pragma: no cover - validator optional in standalone tests
-    from . import validator
+try:  # pragma: no cover - decorator optional in standalone tests
+    from . import validate_module
 except Exception:  # pragma: no cover - fallback when imported directly
-    def validator(*_args, **_kwargs):
-        def decorator(func):
-            return func
-
-        return decorator
+    def validate_module(func):
+        return func
 
 
 _BID_CANDIDATES = [
@@ -52,7 +49,7 @@ def _find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
-@validator("order_flow")
+@validate_module
 def compute(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
     """Compute order flow features.
 
