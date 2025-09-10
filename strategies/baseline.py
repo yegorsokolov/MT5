@@ -32,6 +32,7 @@ from math import isnan
 from typing import Deque, Dict, Optional, Set
 
 from indicators import atr as calc_atr, bollinger, rsi as calc_rsi, sma
+from utils import load_config
 
 
 @dataclass
@@ -118,7 +119,7 @@ class BaselineStrategy:
         trailing_stop_pct: float = 0.01,
         trailing_take_profit_pct: float = 0.02,
         session_position_limits: Optional[Dict[str, int]] = None,
-        default_position_limit: int = 1,
+        default_position_limit: Optional[int] = None,
         scale_pos_by_atr: bool = False,
         long_regimes: Optional[Set[int]] = None,
         short_regimes: Optional[Set[int]] = None,
@@ -168,9 +169,16 @@ class BaselineStrategy:
         self.trough_price: Optional[float] = None
         self.take_profit_armed = False
 
+        if session_position_limits is None or default_position_limit is None:
+            cfg = load_config().strategy
+            if session_position_limits is None:
+                session_position_limits = cfg.session_position_limits
+            if default_position_limit is None:
+                default_position_limit = cfg.default_position_limit
+
         self.session_position_limits = session_position_limits or {}
         self.default_position_limit = default_position_limit
-        self.current_position_limit = default_position_limit
+        self.current_position_limit = self.default_position_limit
 
     # ------------------------------------------------------------------
     # Indicator helpers
