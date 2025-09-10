@@ -58,5 +58,5 @@ def test_retrain_scheduled_on_drift(tmp_path, monkeypatch):
 
     process_retrain_events(store)
 
-    assert calls and any("train_nn.py" in part for part in calls[0])
+    assert calls and any("train_cli.py" in part for part in calls[0])
     assert logged and logged[0] == ("nn", "success")
