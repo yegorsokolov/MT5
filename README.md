@@ -428,6 +428,12 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    ```
 3. The realtime trainer stores ticks in a DuckDB database located at `data/realtime.duckdb`. The database is created automatically the first time you run the script and old rows beyond the `realtime_window` setting are pruned on each update.
 4. Set `use_feature_cache: true` in `config.yaml` to cache engineered features in `data/features.duckdb`. The cache is reused when the input history hasn't changed.
+
+   Environment variables controlling the feature cache:
+
+   - `FEATURE_CACHE_MAX_GB`: maximum size in gigabytes before least-recently-used items are evicted. Unset for no limit.
+   - `FEATURE_CACHE_CODE_HASH`: optional code version string or hash included in the cache key. Changing it forces cache invalidation when feature code changes.
+
 5. Optionally configure `feature_service_url` and `feature_service_api_key` to
    pull pre-computed features from a remote service over TLS. When the service
    cannot be reached the pipeline falls back to local feature engineering.
