@@ -8,14 +8,11 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-try:  # pragma: no cover - validator optional in standalone tests
-    from . import validator
+try:  # pragma: no cover - decorator optional in standalone tests
+    from . import validate_module
 except Exception:  # pragma: no cover - fallback when imported directly
-    def validator(*_args, **_kwargs):
-        def decorator(func):
-            return func
-
-        return decorator
+    def validate_module(func):
+        return func
 
 
 def _merge_asof(left: pd.DataFrame, right: pd.DataFrame, **kwargs) -> pd.DataFrame:
@@ -253,7 +250,7 @@ def add_cross_asset_features(
 
     return df
 
-@validator("cross_asset")
+@validate_module
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     """Enrich ``df`` with index and cross-asset features.
 
