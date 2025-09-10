@@ -105,5 +105,14 @@ def test_parallel_feature_pipeline(monkeypatch):
     seq_time = time.perf_counter() - start_seq
 
     assert list(out_parallel.columns[:4]) == ["Timestamp", "f1", "f2", "f3"]
+    pd.testing.assert_frame_equal(
+        out_parallel[["Timestamp", "f1", "f2", "f3"]],
+        df_seq,
+        check_dtype=False,
+    )
     assert parallel_time < seq_time
     assert parallel_time < 0.5
+    timings = out_parallel.attrs.get("feature_timings", {})
+    assert set(timings) == {"f1", "f2", "f3"}
+    for t in timings.values():
+        assert t["end"] - t["start"] > 0
