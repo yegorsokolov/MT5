@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -68,7 +69,9 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_cross_asset_features(df: pd.DataFrame, window: int = 30) -> pd.DataFrame:
+def add_cross_asset_features(
+    df: pd.DataFrame, window: int = 30, whitelist: Iterable[str] | None = None
+) -> pd.DataFrame:
     """Add simple cross-asset interaction features.
 
     For every pair of symbols sharing the same ``Timestamp`` this function
@@ -81,6 +84,16 @@ def add_cross_asset_features(df: pd.DataFrame, window: int = 30) -> pd.DataFrame
 
     Missing values (for example during the warm up period of the rolling
     correlation) are filled with ``0.0`` to keep downstream models simple.
+
+    Parameters
+    ----------
+    df:
+        Input data containing at least ``Symbol``, ``Timestamp`` and ``return``.
+    window:
+        Lookback window for the rolling correlation.
+    whitelist:
+        Optional iterable restricting pairwise calculations to the provided
+        symbols.  If ``None`` all symbols are considered.
     """
 
     required = {"Symbol", "Timestamp", "return"}
@@ -103,27 +116,60 @@ def add_cross_asset_features(df: pd.DataFrame, window: int = 30) -> pd.DataFrame
         df.loc[df["Symbol"] == sym, f"rel_strength_{sym}"] = ts_map.map(
             rel_strength[sym]
         ).fillna(0.0)
+    rel_cols = [f"rel_strength_{sym}" for sym in symbols]
+    df[rel_cols] = df[rel_cols].fillna(0.0)
 
     # ------------------------------------------------------------------
     # Pairwise interactions
     # ------------------------------------------------------------------
-    for sym1 in symbols:
-        for sym2 in symbols:
-            if sym1 == sym2:
-                continue
+    pair_symbols = [s for s in symbols if whitelist is None or s in whitelist]
+    if len(pair_symbols) >= 2:
+        pair_pivot = pivot[pair_symbols]
 
-            corr_series = pivot[sym1].rolling(window).corr(pivot[sym2])
-            ratio_series = (pivot[sym1] / pivot[sym2]).replace(
-                [np.inf, -np.inf], np.nan
+        # Rolling correlations via matrix operations
+        corr = pair_pivot.rolling(window).corr()
+        corr = corr.rename_axis(index=["Timestamp", "Symbol"], columns="other")
+        corr_long = (
+            corr.stack()
+            .reset_index()
+            .rename(columns={0: "value"})
+        )
+        corr_long = corr_long[corr_long["Symbol"] != corr_long["other"]]
+        corr_features = (
+            corr_long.assign(
+                feature=lambda d: "corr_" + d["Symbol"] + "_" + d["other"]
             )
+            .pivot(index=["Timestamp", "Symbol"], columns="feature", values="value")
+        )
 
-            ts_map = df.loc[df["Symbol"] == sym1, "Timestamp"]
-            df.loc[df["Symbol"] == sym1, f"corr_{sym1}_{sym2}"] = ts_map.map(
-                corr_series
-            ).fillna(0.0)
-            df.loc[df["Symbol"] == sym1, f"relret_{sym1}_{sym2}"] = ts_map.map(
-                ratio_series
-            ).fillna(0.0)
+        # Relative return matrix
+        arr = pair_pivot.to_numpy()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            relret_arr = arr[:, :, None] / arr[:, None, :]
+        relret_arr[~np.isfinite(relret_arr)] = np.nan
+        relret_df = pd.DataFrame(
+            relret_arr.reshape(len(pair_pivot.index) * len(pair_symbols), len(pair_symbols)),
+            index=pd.MultiIndex.from_product(
+                [pair_pivot.index, pair_symbols], names=["Timestamp", "Symbol"]
+            ),
+            columns=pair_symbols,
+        )
+        relret_long = (
+            relret_df.stack()
+            .reset_index()
+            .rename(columns={"level_2": "other", 0: "value"})
+        )
+        relret_long = relret_long[relret_long["Symbol"] != relret_long["other"]]
+        relret_features = (
+            relret_long.assign(
+                feature=lambda d: "relret_" + d["Symbol"] + "_" + d["other"]
+            )
+            .pivot(index=["Timestamp", "Symbol"], columns="feature", values="value")
+        )
+
+        pair_features = pd.concat([corr_features, relret_features], axis=1)
+        df = df.join(pair_features, on=["Timestamp", "Symbol"])
+        df[pair_features.columns] = df[pair_features.columns].fillna(0.0)
 
     return df
 
