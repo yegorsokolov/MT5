@@ -200,6 +200,7 @@ class BaselineStrategy:
         kma_cross: Optional[int] = None,
         vwap_cross: Optional[int] = None,
         regime: Optional[int] = None,
+        microprice_delta: Optional[float] = None,
     ) -> int:
         """Process a new bar and return a trading signal.
 
@@ -246,6 +247,9 @@ class BaselineStrategy:
             ``-1``.
         regime:
             Optional discrete regime id used to gate long/short entries.
+        microprice_delta:
+            Optional microprice pressure signal. Long entries require a
+            positive value while short entries require a negative value.
 
         Returns
         -------
@@ -339,6 +343,13 @@ class BaselineStrategy:
             ):
                 raw_signal = 0
         self._prev_cvd = cvd if cvd is not None else self._prev_cvd
+
+        # Microprice confirmation
+        if raw_signal != 0 and microprice_delta is not None:
+            if raw_signal == 1 and microprice_delta <= 0:
+                raw_signal = 0
+            elif raw_signal == -1 and microprice_delta >= 0:
+                raw_signal = 0
 
         # Risk-adjusted momentum confirmation
         if raw_signal != 0 and ram is not None:
