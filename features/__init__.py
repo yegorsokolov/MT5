@@ -44,6 +44,7 @@ from . import (
     macd,
     ram,
     vwap,
+    baseline_signal,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,7 @@ _REGISTRY: Dict[str, FeatureSpec] = {
     "macd": FeatureSpec(macd.compute, min_cpus=1, min_mem_gb=1.0),
     "ram": FeatureSpec(ram.compute, min_cpus=1, min_mem_gb=1.0),
     "vwap": FeatureSpec(vwap.compute, min_cpus=1, min_mem_gb=1.0),
+    "baseline_signal": FeatureSpec(baseline_signal.compute, min_cpus=1, min_mem_gb=1.0),
 }
 
 # Holds latest status report
