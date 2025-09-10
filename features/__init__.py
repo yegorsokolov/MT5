@@ -40,6 +40,7 @@ from . import (
     kalman_ma,
     regime,
     ram,
+    vwap,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ _REGISTRY: Dict[str, FeatureSpec] = {
     "kalman_ma": FeatureSpec(kalman_ma.compute, min_cpus=1, min_mem_gb=1.0),
     "regime": FeatureSpec(regime.compute, min_cpus=1, min_mem_gb=1.0),
     "ram": FeatureSpec(ram.compute, min_cpus=1, min_mem_gb=1.0),
+    "vwap": FeatureSpec(vwap.compute, min_cpus=1, min_mem_gb=1.0),
 }
 
 # Holds latest status report
