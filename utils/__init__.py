@@ -7,9 +7,9 @@ import os
 import yaml
 import mlflow
 import log_utils
-from pydantic import ValidationError
+from pydantic import ValidationError, BaseModel
 from filelock import FileLock
-from config_schema import ConfigSchema
+from config_models import AppConfig
 from .secret_manager import SecretManager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,34 +27,39 @@ def _resolve_secrets(val):
     return val
 
 
-def load_config() -> dict:
-    """Load YAML configuration and validate using ``ConfigSchema``."""
-    cfg_path = os.getenv('CONFIG_FILE')
-    if cfg_path:
-        path = Path(cfg_path)
+def load_config(path: str | Path | None = None) -> AppConfig:
+    """Load YAML configuration and validate using :class:`AppConfig`."""
+    if path is None:
+        cfg_path = os.getenv("CONFIG_FILE")
+        if cfg_path:
+            path = Path(cfg_path)
+        else:
+            path = PROJECT_ROOT / "config.yaml"
     else:
-        path = PROJECT_ROOT / 'config.yaml'
-    with open(path, 'r') as f:
-        data = yaml.safe_load(f)
+        path = Path(path)
+
+    with open(path, "r") as f:
+        data = yaml.safe_load(f) or {}
 
     data = _resolve_secrets(data)
 
     try:
-        cfg = ConfigSchema(**data)
+        cfg = AppConfig(**data)
     except ValidationError as e:
         raise ValueError(f"Invalid configuration: {e}") from e
-    return cfg.model_dump()
+    return cfg
 
 
-def save_config(cfg: dict) -> None:
+def save_config(cfg: AppConfig | dict) -> None:
     """Persist configuration back to the YAML file."""
-    cfg_path = os.getenv('CONFIG_FILE')
+    cfg_path = os.getenv("CONFIG_FILE")
     if cfg_path:
         path = Path(cfg_path)
     else:
-        path = PROJECT_ROOT / 'config.yaml'
-    with open(path, 'w') as f:
-        yaml.safe_dump(cfg, f)
+        path = PROJECT_ROOT / "config.yaml"
+    data = cfg.model_dump() if isinstance(cfg, BaseModel) else cfg
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f)
 
 
 _LOG_PATH = PROJECT_ROOT / 'logs' / 'config_changes.csv'
@@ -87,7 +92,7 @@ def update_config(key: str, value, reason: str) -> None:
     lock = FileLock(str(cfg_path) + '.lock')
 
     with lock:
-        cfg = load_config()
+        cfg = load_config().model_dump()
         old = cfg.get(key)
         if old == value:
             return
@@ -100,13 +105,14 @@ def update_config(key: str, value, reason: str) -> None:
 
 
 @contextmanager
-def mlflow_run(experiment: str, cfg: dict):
+def mlflow_run(experiment: str, cfg):
     """Start an MLflow run under ``logs/mlruns`` and log the given config."""
     logs_dir = getattr(log_utils, "LOG_DIR", PROJECT_ROOT / "logs")
     mlflow.set_tracking_uri(f"file:{logs_dir / 'mlruns'}")
     mlflow.set_experiment(experiment)
     with mlflow.start_run():
-        mlflow.log_dict(cfg, "config.yaml")
+        data = cfg.model_dump() if isinstance(cfg, BaseModel) else cfg
+        mlflow.log_dict(data, "config.yaml")
         yield
 
 

@@ -51,6 +51,7 @@ except Exception:  # noqa: E722
     shap = None
 
 from utils import load_config
+from config_models import AppConfig
 from utils.resource_monitor import monitor
 from data.history import (
     load_history_parquet,
@@ -93,12 +94,19 @@ def _register_clf(clf: LGBMClassifier) -> None:
     _ACTIVE_CLFS.append(clf)
 
 
-def _lgbm_params(cfg: dict) -> dict:
+def _lgbm_params(cfg: AppConfig) -> dict:
     """Extract LightGBM hyper-parameters from config."""
-    return {k: cfg[k] for k in ("num_leaves", "learning_rate", "max_depth") if k in cfg}
+    params: dict[str, float | int] = {}
+    if cfg.training.num_leaves is not None:
+        params["num_leaves"] = cfg.training.num_leaves
+    if cfg.training.learning_rate is not None:
+        params["learning_rate"] = cfg.training.learning_rate
+    if cfg.training.max_depth is not None:
+        params["max_depth"] = cfg.training.max_depth
+    return params
 
 
-def _subscribe_cpu_updates(cfg: dict) -> None:
+def _subscribe_cpu_updates(cfg: AppConfig) -> None:
     async def _watch() -> None:
         q = monitor.subscribe()
         while True:
@@ -286,7 +294,7 @@ def log_shap_importance(
 
 @log_exceptions
 def main(
-    cfg: dict | None = None,
+    cfg: AppConfig | dict | None = None,
     export: bool = False,
     resume_online: bool = False,
     df_override: pd.DataFrame | None = None,
@@ -297,10 +305,12 @@ def main(
     """Train LightGBM model and return weighted F1 score."""
     if cfg is None:
         cfg = load_config()
-    if cfg.get("use_pseudo_labels"):
+    elif isinstance(cfg, dict):
+        cfg = AppConfig(**cfg)
+    if cfg.training.use_pseudo_labels:
         use_pseudo_labels = True
     _subscribe_cpu_updates(cfg)
-    seed = cfg.get("seed", 42)
+    seed = cfg.training.seed
     random.seed(seed)
     np.random.seed(seed)
     root = Path(__file__).resolve().parent
@@ -309,23 +319,23 @@ def main(
     start_time = datetime.now()
 
     drift_monitor = ConceptDriftMonitor(
-        method=cfg.get("drift_method", "adwin"),
-        delta=float(cfg.get("drift_delta", 0.002)),
+        method=cfg.training.drift_method,
+        delta=float(cfg.training.drift_delta),
     )
 
     donor_booster = _load_donor_booster(transfer_from) if transfer_from else None
 
-    use_focal = cfg.get("use_focal_loss", False)
-    focal_alpha = cfg.get("focal_alpha", 0.25)
-    focal_gamma = cfg.get("focal_gamma", 2.0)
+    use_focal = cfg.training.use_focal_loss
+    focal_alpha = cfg.training.focal_alpha
+    focal_gamma = cfg.training.focal_gamma
     fobj = make_focal_loss(focal_alpha, focal_gamma) if use_focal else None
     feval = make_focal_loss_metric(focal_alpha, focal_gamma) if use_focal else None
 
-    mlflow.start_run("training", cfg)
+    mlflow.start_run("training", cfg.model_dump())
     if df_override is not None:
         df = df_override
     else:
-        symbols = cfg.get("symbols") or [cfg.get("symbol")]
+        symbols = cfg.strategy.symbols
         all_dfs = []
         chunk_size = cfg.get("stream_chunk_size", 100_000)
         stream = cfg.get("stream_history", False)
@@ -962,7 +972,7 @@ def main(
 
 
 def launch(
-    cfg: dict | None = None,
+    cfg: AppConfig | dict | None = None,
     export: bool = False,
     resume_online: bool = False,
     transfer_from: str | None = None,
@@ -971,12 +981,14 @@ def launch(
     """Launch training locally or across a Ray cluster."""
     if cfg is None:
         cfg = load_config()
+    elif isinstance(cfg, dict):
+        cfg = AppConfig(**cfg)
     if cluster_available():
-        seeds = cfg.get("seeds", [cfg.get("seed", 42)])
+        seeds = cfg.get("seeds", [cfg.training.seed])
         results = []
         for s in seeds:
-            cfg_s = dict(cfg)
-            cfg_s["seed"] = s
+            cfg_s = cfg.model_dump()
+            cfg_s["training"]["seed"] = s
             results.append(
                 submit(
                     main,
@@ -1050,7 +1062,7 @@ if __name__ == "__main__":
         if args.tune:
             from tuning.bayesian_search import run_search
 
-            cfg = load_config()
+            cfg = load_config().model_dump()
 
             def train_fn(c: dict, _trial) -> float:
                 return main(c)
@@ -1061,7 +1073,7 @@ if __name__ == "__main__":
             from tuning.evolutionary_search import run_evolutionary_search
             from backtest import run_backtest
 
-            cfg = load_config()
+            cfg = load_config().model_dump()
 
             def eval_fn(params: dict) -> tuple[float, float, float]:
                 trial_cfg = deepcopy(cfg)
@@ -1081,7 +1093,7 @@ if __name__ == "__main__":
             }
             run_evolutionary_search(eval_fn, space)
         else:
-            cfg = load_config()
+            cfg = load_config().model_dump()
             if args.meta_train:
                 cfg["meta_train"] = True
             if args.fine_tune:
