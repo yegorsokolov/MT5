@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from collections import deque
 
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 from indicators import atr as calc_atr, bollinger, rsi as calc_rsi, sma
 
 
@@ -22,7 +22,10 @@ def test_trailing_stop_exit_long():
     closes = [1, 2, 3, 2.9, 2.5]
     highs = [c + 0.1 for c in closes]
     lows = [c - 0.1 for c in closes]
-    signals = [strategy.update(c, h, l) for c, h, l in zip(closes, highs, lows)]
+    signals = [
+        strategy.update(c, IndicatorBundle(high=h, low=l))
+        for c, h, l in zip(closes, highs, lows)
+    ]
     assert signals[2] == 1  # Buy on crossover
     assert signals[-1] == -1  # Exit via trailing stop
 
@@ -39,7 +42,10 @@ def test_trailing_take_profit_exit():
     closes = [1, 2, 3, 3.5, 3.6, 3.3]
     highs = [c + 0.1 for c in closes]
     lows = [c - 0.1 for c in closes]
-    signals = [strategy.update(c, h, l) for c, h, l in zip(closes, highs, lows)]
+    signals = [
+        strategy.update(c, IndicatorBundle(high=h, low=l))
+        for c, h, l in zip(closes, highs, lows)
+    ]
     assert signals[2] == 1  # Buy on crossover
     assert signals[-1] == -1  # Trailing take-profit triggers exit
 
@@ -63,7 +69,9 @@ def test_external_indicators_match_internal():
     signals_external = []
 
     for c, h, l in zip(closes, highs, lows):
-        signals_internal.append(strat_internal.update(c, h, l))
+        signals_internal.append(
+            strat_internal.update(c, IndicatorBundle(high=h, low=l))
+        )
 
         short_q.append(c)
         long_q.append(c)
@@ -79,18 +87,16 @@ def test_external_indicators_match_internal():
         else:
             short_ma = long_ma = rsi_val = atr_val = upper = lower = None
 
-        signals_external.append(
-            strat_external.update(
-                c,
-                h,
-                l,
-                short_ma=short_ma,
-                long_ma=long_ma,
-                rsi=rsi_val,
-                atr_val=atr_val,
-                boll_upper=upper,
-                boll_lower=lower,
-            )
+        ind = IndicatorBundle(
+            high=h,
+            low=l,
+            short_ma=short_ma,
+            long_ma=long_ma,
+            rsi=rsi_val,
+            atr=atr_val,
+            boll_upper=upper,
+            boll_lower=lower,
         )
+        signals_external.append(strat_external.update(c, ind))
 
     assert signals_internal == signals_external

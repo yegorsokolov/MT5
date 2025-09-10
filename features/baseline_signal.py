@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 from indicators import sma, rsi, atr, bollinger
 
 
@@ -98,14 +98,13 @@ def compute(
 
     for row in df.itertuples():
         price_val = getattr(row, "Close", getattr(row, "mid", np.nan))
-        sig = strat.update(
-            price_val,
+        ind = IndicatorBundle(
             high=getattr(row, "High", price_val),
             low=getattr(row, "Low", price_val),
             short_ma=row.short_ma if not pd.isna(row.short_ma) else None,
             long_ma=row.long_ma if not pd.isna(row.long_ma) else None,
             rsi=row.rsi if not pd.isna(row.rsi) else None,
-            atr_val=row.atr if not pd.isna(row.atr) else None,
+            atr=row.atr if not pd.isna(row.atr) else None,
             boll_upper=row.boll_upper if not pd.isna(row.boll_upper) else None,
             boll_lower=row.boll_lower if not pd.isna(row.boll_lower) else None,
             obv=(
@@ -184,6 +183,7 @@ def compute(
                 else None
             ),
         )
+        sig = strat.update(price_val, ind)
         signals.append(sig)
 
         if (

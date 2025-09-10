@@ -17,7 +17,7 @@ microprice = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(microprice)
 
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 
 
 def test_microprice_computation():
@@ -56,12 +56,8 @@ def test_baseline_microprice_confirmation():
     strat = BaselineStrategy(short_window=2, long_window=3, rsi_window=3, atr_window=1)
     signal = 0
     for row in feats.itertuples():
-        signal = strat.update(
-            row.Close,
-            high=row.High,
-            low=row.Low,
-            microprice_delta=row.microprice_delta,
-        )
+        ind = IndicatorBundle(high=row.High, low=row.Low, microprice_delta=row.microprice_delta)
+        signal = strat.update(row.Close, ind)
     assert signal == 1
 
     bad = pd.DataFrame(
@@ -79,11 +75,7 @@ def test_baseline_microprice_confirmation():
     strat = BaselineStrategy(short_window=2, long_window=3, rsi_window=3, atr_window=1)
     signal = 0
     for row in feats_bad.itertuples():
-        signal = strat.update(
-            row.Close,
-            high=row.High,
-            low=row.Low,
-            microprice_delta=row.microprice_delta,
-        )
+        ind = IndicatorBundle(high=row.High, low=row.Low, microprice_delta=row.microprice_delta)
+        signal = strat.update(row.Close, ind)
     assert signal == 0
 

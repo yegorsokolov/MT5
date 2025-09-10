@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from strategies.baseline import BaselineStrategy
+from strategies.baseline import BaselineStrategy, IndicatorBundle
 
 spec = importlib.util.spec_from_file_location(
     "keltner_squeeze", Path(__file__).resolve().parents[1] / "features" / "keltner_squeeze.py"
@@ -39,11 +39,13 @@ def test_baseline_integration_with_squeeze():
     lows = [c - 0.1 for c in closes]
     signals = []
     for c, h, l in zip(closes, highs, lows):
-        signals.append(strategy.update(c, h, l, squeeze_break=1))
+        ind = IndicatorBundle(high=h, low=l, squeeze_break=1)
+        signals.append(strategy.update(c, ind))
     assert signals[-1] == 1
 
     strategy = BaselineStrategy(short_window=2, long_window=3, atr_window=2)
     signals = []
     for c, h, l in zip(closes, highs, lows):
-        signals.append(strategy.update(c, h, l, squeeze_break=-1))
+        ind = IndicatorBundle(high=h, low=l, squeeze_break=-1)
+        signals.append(strategy.update(c, ind))
     assert signals[-1] == 0
