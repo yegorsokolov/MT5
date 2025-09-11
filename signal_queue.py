@@ -13,6 +13,7 @@ from services.message_bus import Topics, get_message_bus, MessageBus
 
 from analysis import pipeline_anomaly
 from event_store.event_writer import record as record_event
+from models.conformal import evaluate_coverage
 
 try:  # pragma: no cover - optional dependency
     from models import residual_stacker as _residual_stacker
@@ -44,11 +45,14 @@ def _wrap_ci(row: Dict[str, Any]) -> Dict[str, Any]:
 
     if {"pred", "ci_lower", "ci_upper"}.issubset(row):
         row = row.copy()
-        row["prediction"] = {
-            "mean": row.pop("pred"),
-            "lower": row.pop("ci_lower"),
-            "upper": row.pop("ci_upper"),
-        }
+        lower = row.pop("ci_lower")
+        upper = row.pop("ci_upper")
+        pred = row.pop("pred")
+        row["prediction"] = {"mean": pred, "lower": lower, "upper": upper}
+        y_true = row.get("y_true") or row.get("label")
+        if y_true is not None:
+            cov = evaluate_coverage([y_true], [lower], [upper])
+            row["interval_covered"] = int(round(cov))
     elif {"pred", "pred_var"}.issubset(row):
         row = row.copy()
         row["prediction"] = {"mean": row.pop("pred"), "var": row.pop("pred_var")}
