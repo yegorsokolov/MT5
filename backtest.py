@@ -10,14 +10,15 @@ import pandas as pd
 import numpy as np
 
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
+from data.feature_scaler import FeatureScaler
 
 from utils import load_config
 from analysis.strategy_evaluator import StrategyEvaluator
 from execution import ExecutionEngine
 from utils.resource_monitor import monitor
 from data.history import load_history_parquet, load_history_config
+
 try:  # optional simulator for offline experiments
     from simulation.agent_market import AgentMarketSimulator
 except Exception:  # pragma: no cover - simulator optional
@@ -133,7 +134,7 @@ def fit_model(train_df: pd.DataFrame, cfg: dict) -> Pipeline:
     y = (train_df["return"].shift(-1) > 0).astype(int)
     steps = []
     if cfg.get("use_scaler", True):
-        steps.append(("scaler", StandardScaler()))
+        steps.append(("scaler", FeatureScaler()))
     steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=42)))
     pipe = Pipeline(steps)
     pipe.fit(X, y)
@@ -193,7 +194,11 @@ def backtest_on_df(
 
         engine.record_volume(bid_vol + ask_vol)
         regime = getattr(row, "market_regime", None)
-        thr = regime_thresholds.get(int(regime), threshold) if regime is not None else threshold
+        thr = (
+            regime_thresholds.get(int(regime), threshold)
+            if regime is not None
+            else threshold
+        )
         if not in_position and prob > thr:
             result = asyncio.run(
                 engine.place_order(
@@ -297,7 +302,9 @@ def run_backtest(
 
     model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
-    return backtest_on_df(df, model, cfg, slippage_model=None, return_returns=return_returns)
+    return backtest_on_df(
+        df, model, cfg, slippage_model=None, return_returns=return_returns
+    )
 
 
 @ray.remote

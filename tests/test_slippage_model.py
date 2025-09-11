@@ -41,7 +41,9 @@ sys.modules.setdefault(
 sys.modules.setdefault("utils", types.SimpleNamespace(load_config=lambda: {}))
 sys.modules.setdefault(
     "utils.resource_monitor",
-    types.SimpleNamespace(monitor=types.SimpleNamespace(capability_tier=lambda: "lite")),
+    types.SimpleNamespace(
+        monitor=types.SimpleNamespace(capability_tier=lambda: "lite")
+    ),
 )
 sys.modules.setdefault(
     "analysis.strategy_evaluator", types.SimpleNamespace(StrategyEvaluator=object)
@@ -51,7 +53,9 @@ sys.modules.setdefault(
 )
 sys.modules.setdefault(
     "state_manager",
-    types.SimpleNamespace(load_router_state=lambda *a, **k: None, save_router_state=lambda *a, **k: None),
+    types.SimpleNamespace(
+        load_router_state=lambda *a, **k: None, save_router_state=lambda *a, **k: None
+    ),
 )
 sys.modules.setdefault("event_store", types.SimpleNamespace())
 sys.modules.setdefault(
@@ -60,10 +64,24 @@ sys.modules.setdefault(
 sys.modules.setdefault("model_registry", types.SimpleNamespace(ModelRegistry=object))
 sys.modules.setdefault(
     "execution.execution_optimizer",
-    types.SimpleNamespace(ExecutionOptimizer=type("EO", (), {
-        "get_params": lambda self: {"limit_offset": 0.0, "slice_size": None},
-        "schedule_nightly": lambda self: None,
-    })),
+    types.SimpleNamespace(
+        ExecutionOptimizer=type(
+            "EO",
+            (),
+            {
+                "get_params": lambda self: {"limit_offset": 0.0, "slice_size": None},
+                "schedule_nightly": lambda self: None,
+            },
+        )
+    ),
+)
+sys.modules.setdefault(
+    "crypto_utils",
+    types.SimpleNamespace(
+        _load_key=lambda *a, **k: None,
+        encrypt=lambda *a, **k: b"",
+        decrypt=lambda *a, **k: b"",
+    ),
 )
 
 sk_module = types.ModuleType("sklearn")
@@ -79,11 +97,15 @@ data_history.load_history_parquet = lambda *a, **k: None
 data_history.load_history_config = lambda *a, **k: None
 data_features = types.ModuleType("data.features")
 data_features.make_features = lambda df: df
+data_feature_scaler = types.ModuleType("data.feature_scaler")
+data_feature_scaler.FeatureScaler = object
 data_mod.history = data_history
 data_mod.features = data_features
+data_mod.feature_scaler = data_feature_scaler
 sys.modules["data"] = data_mod
 sys.modules["data.history"] = data_history
 sys.modules["data.features"] = data_features
+sys.modules["data.feature_scaler"] = data_feature_scaler
 ray_stub = types.SimpleNamespace(remote=lambda f: f)
 sys.modules.setdefault(
     "ray_utils",
@@ -131,14 +153,8 @@ def test_slippage_impacts_pnl():
     cfg = {"threshold": 0.5, "trailing_stop_pips": 1000, "order_size": 100}
     metrics_no, _ = backtest.backtest_on_df(df, model, cfg, return_returns=True)
 
-    snaps_buy = [
-        [(row.Ask, 10), (row.Ask + 1.0, 10)]
-        for row in df.itertuples()
-    ]
-    snaps_sell = [
-        [(row.Bid, 10), (row.Bid - 1.0, 10)]
-        for row in df.itertuples()
-    ]
+    snaps_buy = [[(row.Ask, 10), (row.Ask + 1.0, 10)] for row in df.itertuples()]
+    snaps_sell = [[(row.Bid, 10), (row.Bid - 1.0, 10)] for row in df.itertuples()]
     model_buy = SlippageModel(snaps_buy)
     model_sell = SlippageModel(snaps_sell)
 

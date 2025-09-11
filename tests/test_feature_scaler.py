@@ -8,6 +8,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "data"))
 from feature_scaler import FeatureScaler
 
 
+class SimplePipeline:
+    def __init__(self, steps):
+        self.steps = steps
+        self.named_steps = {name: step for name, step in steps}
+
+    def fit(self, X, y=None):
+        data = X
+        for name, step in self.steps:
+            if hasattr(step, "fit"):
+                step.fit(data, y)
+            if hasattr(step, "transform"):
+                data = step.transform(data)
+        return self
+
+
 def test_feature_scaler_streaming(tmp_path):
     rng = np.random.default_rng(0)
     df = pd.DataFrame(
@@ -69,3 +84,33 @@ def test_feature_scaler_median_iqr_scaling():
 
     assert np.allclose(medians, np.zeros(3), atol=1e-6)
     assert np.allclose(iqr, np.ones(3), atol=1e-6)
+
+
+def test_pipeline_scaler_consistency(tmp_path):
+    df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0]})
+    y = [0, 1, 0]
+
+    class DummyClf:
+        def fit(self, X, y):
+            return self
+
+    pipe = SimplePipeline(
+        [
+            ("scaler", FeatureScaler()),
+            ("clf", DummyClf()),
+        ]
+    )
+    pipe.fit(df, y)
+
+    scaler = pipe.named_steps["scaler"]
+    direct = FeatureScaler().fit(df)
+
+    transformed_pipe = scaler.transform(df)
+    transformed_direct = direct.transform(df)
+    assert np.allclose(transformed_pipe, transformed_direct)
+
+    path = tmp_path / "scaler.pkl"
+    scaler.save(path)
+    loaded = FeatureScaler.load(path)
+    transformed_loaded = loaded.transform(df)
+    assert np.allclose(transformed_direct, transformed_loaded)

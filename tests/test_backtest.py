@@ -26,6 +26,12 @@ sys.modules.setdefault(
 )
 
 sys.modules.setdefault("utils", types.SimpleNamespace(load_config=lambda: {}))
+sys.modules.setdefault(
+    "utils.resource_monitor",
+    types.SimpleNamespace(
+        monitor=types.SimpleNamespace(capability_tier=lambda: "lite")
+    ),
+)
 
 sk_module = types.ModuleType("sklearn")
 sk_module.pipeline = types.SimpleNamespace(Pipeline=object)
@@ -40,11 +46,47 @@ data_history.load_history_parquet = lambda *a, **k: None
 data_history.load_history_config = lambda *a, **k: None
 data_features = types.ModuleType("data.features")
 data_features.make_features = lambda df: df
+data_feature_scaler = types.ModuleType("data.feature_scaler")
+data_feature_scaler.FeatureScaler = object
 data_mod.history = data_history
 data_mod.features = data_features
+data_mod.feature_scaler = data_feature_scaler
 sys.modules["data"] = data_mod
 sys.modules["data.history"] = data_history
 sys.modules["data.features"] = data_features
+sys.modules["data.feature_scaler"] = data_feature_scaler
+sys.modules.setdefault(
+    "crypto_utils",
+    types.SimpleNamespace(
+        _load_key=lambda *a, **k: None,
+        encrypt=lambda *a, **k: b"",
+        decrypt=lambda *a, **k: b"",
+    ),
+)
+sys.modules.setdefault(
+    "state_manager",
+    types.SimpleNamespace(
+        load_router_state=lambda *a, **k: None, save_router_state=lambda *a, **k: None
+    ),
+)
+sys.modules.setdefault("event_store", types.SimpleNamespace())
+sys.modules.setdefault(
+    "event_store.event_writer", types.SimpleNamespace(record=lambda *a, **k: None)
+)
+sys.modules.setdefault("model_registry", types.SimpleNamespace(ModelRegistry=object))
+sys.modules.setdefault(
+    "execution.execution_optimizer",
+    types.SimpleNamespace(
+        ExecutionOptimizer=type(
+            "EO",
+            (),
+            {
+                "get_params": lambda self: {"limit_offset": 0.0, "slice_size": None},
+                "schedule_nightly": lambda self: None,
+            },
+        )
+    ),
+)
 ray_stub = types.SimpleNamespace(remote=lambda f: f)
 sys.modules.setdefault(
     "ray_utils",
@@ -52,11 +94,15 @@ sys.modules.setdefault(
 )
 
 # Load backtest module with dummy logging to avoid import side effects
-spec = importlib.util.spec_from_file_location("backtest", Path(__file__).resolve().parents[1] / "backtest.py")
+spec = importlib.util.spec_from_file_location(
+    "backtest", Path(__file__).resolve().parents[1] / "backtest.py"
+)
 sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=object)
 backtest = importlib.util.module_from_spec(spec)
 backtest.setup_logging = lambda: None
-sys.modules['log_utils'] = types.SimpleNamespace(setup_logging=lambda: None, log_exceptions=lambda f: f)
+sys.modules["log_utils"] = types.SimpleNamespace(
+    setup_logging=lambda: None, log_exceptions=lambda f: f
+)
 spec.loader.exec_module(backtest)
 
 trailing_stop = backtest.trailing_stop
