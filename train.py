@@ -223,13 +223,26 @@ def train_multi_output_model(
     pipe = Pipeline(steps)
     pipe.fit(X, y)
 
-    preds = pipe.predict(X)
+    val_probs = pipe.predict_proba(X)
+    preds = np.zeros_like(y.values)
+    thr_dict: dict[str, float] = {}
     reports: dict[str, object] = {}
     f1_scores: list[float] = []
     for i, col in enumerate(y.columns):
+        probs = val_probs[i][:, 1]
+        precision, recall, thresholds = precision_recall_curve(y[col], probs)
+        f1 = 2 * precision * recall / (precision + recall + 1e-12)
+        if len(thresholds) > 0:
+            best_idx = int(np.argmax(f1[:-1]))
+            best_thr = float(thresholds[best_idx])
+        else:
+            best_thr = 0.5
+        thr_dict[col] = best_thr
+        preds[:, i] = (probs >= best_thr).astype(int)
         rep = classification_report(y[col], preds[:, i], output_dict=True)
         reports[col] = rep
         f1_scores.append(rep["weighted avg"]["f1-score"])
+        logger.info("Best threshold for %s: %.4f", col, best_thr)
     reports["aggregate_f1"] = float(np.mean(f1_scores))
     return pipe, reports
 
