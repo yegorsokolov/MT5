@@ -12,9 +12,16 @@ values used during live trading.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Protocol
 
 import pandas as pd
+
+
+class SurvivalModel(Protocol):
+    """Protocol for survival models used by :class:`TradeManager`."""
+
+    def predict_survival(self, features: Dict[str, Any]) -> float:
+        """Return survival probability for a trade given ``features``."""
 
 
 @dataclass
@@ -35,8 +42,10 @@ class TradeManager:
         Multiplier applied to the ATR to derive baseline profit/stop levels.
     vol_threshold: float, default ``1.5``
         Threshold for the ``volatility`` feature beyond which levels are widened.
-    survival_model: Any, optional
-        Model providing ``predict_survival`` returning probability a trade remains profitable.
+    survival_model: SurvivalModel, optional
+        Model implementing ``predict_survival`` returning the probability a
+        trade remains profitable.  The probability is also used to widen or
+        tighten stops.
     survival_threshold: float, default ``0.2``
         Close trade when survival probability falls below this value.
     """
@@ -46,7 +55,7 @@ class TradeManager:
     atr_period: int = 14
     atr_mult: float = 3.0
     vol_threshold: float = 1.5
-    survival_model: Any | None = None
+    survival_model: SurvivalModel | None = None
     survival_threshold: float = 0.2
 
     def __post_init__(self) -> None:  # pragma: no cover - simple assignment
@@ -61,7 +70,9 @@ class TradeManager:
         tr = prices.diff().abs()
         return float(tr.rolling(self.atr_period).mean().iloc[-1])
 
-    def compute_levels(self, prices: pd.Series, features: Dict[str, Any]) -> Dict[str, float]:
+    def compute_levels(
+        self, prices: pd.Series, features: Dict[str, Any]
+    ) -> Dict[str, float]:
         """Compute base and adaptive exit levels.
 
         Parameters
@@ -87,19 +98,36 @@ class TradeManager:
                 factor *= 0.8
 
         regime = features.get("regime")
-        if regime is not None and self._last_regime is not None and regime != self._last_regime:
+        if (
+            regime is not None
+            and self._last_regime is not None
+            and regime != self._last_regime
+        ):
             # regime change -> widen stops slightly
             factor *= 1.2
         self._last_regime = regime if regime is not None else self._last_regime
 
+        survival_prob: float | None = None
+        if self.survival_model is not None:
+            feat = dict(features)
+            feat["age"] = len(prices)
+            survival_prob = float(self.survival_model.predict_survival(feat))
+            if survival_prob > 0.7:
+                factor *= 1.2
+            elif survival_prob < 0.3:
+                factor *= 0.8
+
         adaptive_sl = price - atr * self.atr_mult * factor
         adaptive_tp = price + atr * self.atr_mult * factor
-        return {
+        result = {
             "base_tp": base_tp,
             "base_sl": base_sl,
             "adaptive_tp": adaptive_tp,
             "adaptive_sl": adaptive_sl,
         }
+        if survival_prob is not None:
+            result["survival_prob"] = survival_prob
+        return result
 
     # ------------------------------------------------------------------
     # Public API
@@ -157,30 +185,19 @@ class TradeManager:
                 levels["adaptive_tp"],
                 levels["adaptive_sl"],
             )
-        survival_prob = None
-        if self.survival_model is not None:
-            feat = dict(features)
-            feat["age"] = len(prices)
-            if hasattr(self.survival_model, 'predict_survival'):
-                survival_prob = float(self.survival_model.predict_survival(feat))
-            else:
-                survival_prob = float(self.survival_model.predict(feat))
-            if hasattr(self.trade_log, 'record_survival'):
-                self.trade_log.record_survival(order_id, survival_prob)
+        survival_prob = levels.get("survival_prob")
+        if survival_prob is not None and hasattr(self.trade_log, "record_survival"):
+            self.trade_log.record_survival(order_id, survival_prob)
         force_exit = False
         if survival_prob is not None and survival_prob < self.survival_threshold:
             force_exit = True
         if confirm_score is not None and confirm_score < 0 and not force_exit:
             force_exit = True
         if force_exit:
-            if hasattr(self.execution, 'close_order'):
+            if hasattr(self.execution, "close_order"):
                 self.execution.close_order(order_id)
-            elif hasattr(self.execution, 'close_trade'):
+            elif hasattr(self.execution, "close_trade"):
                 self.execution.close_trade(order_id)
-            elif hasattr(self.execution, 'close_position'):
+            elif hasattr(self.execution, "close_position"):
                 self.execution.close_position(order_id)
-        result = dict(levels)
-        if survival_prob is not None:
-            result['survival_prob'] = survival_prob
-        return result
-
+        return dict(levels)
