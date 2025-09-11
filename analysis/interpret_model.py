@@ -40,6 +40,71 @@ def compute_shap_importance(model, X: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def generate_shap_report(
+    model,
+    X: pd.DataFrame,
+    report_dir: Path | str | None = None,
+) -> dict[str, Path]:
+    """Create SHAP summary plot and ranked feature list.
+
+    Parameters
+    ----------
+    model : fitted estimator or Pipeline
+        Model used for SHAP value computation.  If a Pipeline is provided,
+        the classifier and any preprocessing steps are handled automatically.
+    X : pd.DataFrame
+        Feature matrix used to compute SHAP values.
+    report_dir : Path or str, optional
+        Directory in which to store the plot and CSV report. Defaults to
+        :data:`REPORT_DIR`.
+
+    Returns
+    -------
+    dict[str, Path]
+        Mapping containing paths to the generated ``plot`` and ``features``
+        files.  Returns an empty dict if SHAP or matplotlib are unavailable
+        or computation fails.
+    """
+
+    if shap is None or plt is None:
+        logger.info("shap or matplotlib not installed, skipping SHAP report")
+        return {}
+
+    if hasattr(model, "named_steps"):
+        pipe = model
+        model = pipe.named_steps.get("clf", pipe)
+        X_used = X
+        if "scaler" in pipe.named_steps:
+            X_used = pipe.named_steps["scaler"].transform(X_used)
+    else:
+        X_used = X
+
+    try:
+        fi = compute_shap_importance(model, X_used)
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.warning("Failed to compute SHAP values: %s", exc)
+        return {}
+
+    if report_dir is None:
+        report_dir = REPORT_DIR
+    report_dir = Path(report_dir)
+    report_dir.mkdir(exist_ok=True)
+
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_used)
+    if isinstance(shap_values, list):
+        shap_values = shap_values[1]
+    plt.figure()
+    shap.summary_plot(shap_values, X_used, show=False, plot_type="bar")
+    plot_path = report_dir / "feature_importance.png"
+    plt.tight_layout()
+    plt.savefig(plot_path)
+
+    features_path = report_dir / "feature_importance.csv"
+    fi.to_csv(features_path, index=False)
+    return {"plot": plot_path, "features": features_path}
+
+
 def main() -> None:
     """Load model and data then save a SHAP summary plot under ``reports/``."""
     if shap is None:
