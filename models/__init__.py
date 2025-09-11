@@ -106,6 +106,18 @@ try:  # optional torch dependency
     from .cross_modal_transformer import CrossModalTransformer
 except Exception:  # pragma: no cover - torch may be missing
     CrossModalTransformer = None
+try:  # optional torch dependency
+    from .ts_masked_encoder import initialize_model_with_ts_masked_encoder
+except Exception:  # pragma: no cover - torch may be missing
+    initialize_model_with_ts_masked_encoder = None
+try:  # optional torch dependency
+    from .contrastive_encoder import initialize_model_with_contrastive
+except Exception:  # pragma: no cover - torch may be missing
+    initialize_model_with_contrastive = None
+try:  # optional torch dependency
+    from .ts2vec import initialize_model_with_ts2vec
+except Exception:  # pragma: no cover - torch may be missing
+    initialize_model_with_ts2vec = None
 
 __all__ = [
     "EnsembleModel",
@@ -122,4 +134,7 @@ __all__ = [
     "CrossAssetTransformer",
     "CrossModalTransformer",
     "LazyModel",
+    "initialize_model_with_ts_masked_encoder",
+    "initialize_model_with_contrastive",
+    "initialize_model_with_ts2vec",
 ]

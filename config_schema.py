@@ -126,6 +126,11 @@ class ConfigSchema(BaseModel):
         description="Batch size for time-series encoder pretraining",
     )
 
+    use_ts2vec_pretrain: bool = Field(
+        False,
+        description="Initialise models from TS2Vec encoder weights if available",
+    )
+
     use_contrastive_pretrain: bool = Field(
         False,
         description="Initialise models from contrastive encoder weights if available",
