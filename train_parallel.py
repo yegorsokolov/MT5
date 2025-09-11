@@ -13,6 +13,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
+from data.labels import triple_barrier
 
 from log_utils import setup_logging, log_exceptions
 
@@ -43,6 +44,12 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     df = make_features(df, validate=cfg.get("validate", False))
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+    df["tb_label"] = triple_barrier(
+        df["mid"],
+        cfg.get("pt_mult", 0.01),
+        cfg.get("sl_mult", 0.01),
+        cfg.get("max_horizon", 10),
+    )
     train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
     features = [
         c
@@ -77,9 +84,9 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
         steps.append(("scaler", StandardScaler()))
     steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=seed)))
     pipe = Pipeline(steps)
-    pipe.fit(train_df[features], (train_df["return"].shift(-1) > 0).astype(int))
+    pipe.fit(train_df[features], train_df["tb_label"])
     preds = pipe.predict(test_df[features])
-    report = classification_report((test_df["return"].shift(-1) > 0).astype(int), preds)
+    report = classification_report(test_df["tb_label"], preds)
     out_path = root / "models" / f"{sym}_model.joblib"
     out_path.parent.mkdir(exist_ok=True)
     joblib.dump(pipe, out_path)
