@@ -22,6 +22,12 @@ from typing import Callable, Dict, List, Optional
 from functools import wraps
 from importlib.metadata import entry_points
 
+# Re-export the high level feature construction helper so consumers like RL
+# environments can simply import ``features.make_features`` without depending on
+# the heavier ``data`` package.  This keeps integration points lightweight while
+# still delegating the actual feature engineering to ``data.features``.
+from data.features import make_features
+
 try:  # config is optional during import in some tests
     from utils import load_config
 except Exception:  # pragma: no cover - utils may not be available in tests
@@ -313,6 +319,7 @@ __all__ = [
     "get_feature_pipeline",
     "report_status",
     "register_feature",
+    "make_features",
     "validate_module",
     "validator",
 ]
