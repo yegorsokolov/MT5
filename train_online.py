@@ -3,16 +3,24 @@ from pathlib import Path
 import random
 import logging
 import numpy as np
-import duckdb
 import pandas as pd
 import joblib
 from river import compose, preprocessing, linear_model
 
 from utils import load_config
 from log_utils import setup_logging, log_exceptions
+from feature_store import load_feature, latest_version
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def fetch_features(version: str | None = None) -> pd.DataFrame:
+    """Retrieve features for ``version`` from the feature store."""
+    ver = version or latest_version()
+    if ver is None:
+        return pd.DataFrame()
+    return load_feature(ver)
 
 
 @log_exceptions
@@ -23,12 +31,14 @@ def train_online() -> None:
     random.seed(seed)
     np.random.seed(seed)
     root = Path(__file__).resolve().parent
-    db_path = root / "data" / "realtime.duckdb"
     model_dir = root / "models"
     model_dir.mkdir(exist_ok=True)
     model_path = model_dir / "online.joblib"
 
-    conn = duckdb.connect(db_path.as_posix())
+    version = latest_version()
+    if version is None:
+        logger.warning("No features available in store")
+        return
 
     last_ts = None
     if model_path.exists():
@@ -47,14 +57,9 @@ def train_online() -> None:
         )
 
     while True:
-        if last_ts is None:
-            query = "SELECT * FROM features ORDER BY Timestamp"
-            df = conn.execute(query).fetch_df()
-        else:
-            query = (
-                "SELECT * FROM features WHERE Timestamp > ? ORDER BY Timestamp"
-            )
-            df = conn.execute(query, (last_ts,)).fetch_df()
+        df = fetch_features(version)
+        if last_ts is not None:
+            df = df[df["Timestamp"] > last_ts]
 
         if df.empty:
             time.sleep(60)
