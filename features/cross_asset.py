@@ -11,12 +11,15 @@ import pandas as pd
 try:  # pragma: no cover - decorator optional in standalone tests
     from . import validate_module
 except Exception:  # pragma: no cover - fallback when imported directly
+
     def validate_module(func):
         return func
+
 
 try:  # pragma: no cover - validators optional when running in isolation
     from .validators import require_columns, assert_no_nan
 except Exception:  # pragma: no cover - graceful fallback
+
     def require_columns(df, cols, **_):  # type: ignore[unused-arg]
         return df
 
@@ -89,7 +92,7 @@ def add_cross_asset_features(
     window: int = 30,
     whitelist: Iterable[str] | None = None,
     max_pairs: int | None = None,
-    reduce: str | None = None,
+    reduce: str = "pca",
 ) -> pd.DataFrame:
     """Add simple cross-asset interaction features.
 
@@ -100,8 +103,9 @@ def add_cross_asset_features(
 
     - ``reduce='top_k'`` keeps only the ``max_pairs`` most correlated symbol
       pairs (unique, unordered) and skips the rest.
-    - ``reduce='pca'`` applies PCA to the full pairwise feature matrix and
-      returns ``max_pairs`` principal components labelled ``pair_pca_<i>``.
+    - ``reduce='pca'`` (default) applies PCA to the full pairwise feature
+      matrix and returns ``max_pairs`` principal components labelled
+      ``pair_pca_<i>``.
 
     Missing values (for example during the warm up period of the rolling
     correlation) are filled with ``0.0`` to keep downstream models simple.
@@ -119,8 +123,8 @@ def add_cross_asset_features(
         Maximum number of pairwise relationships to keep.  If ``None`` all
         combinations are generated.
     reduce:
-        Reduction strategy when ``max_pairs`` is set.  Options are ``"top_k"``
-        and ``"pca"``.  ``None`` disables reduction.
+        Reduction strategy when ``max_pairs`` is set. Options are ``"top_k"``
+        or ``"pca"`` (default) for dimensionality compression.
     """
 
     required = {"Symbol", "Timestamp", "return"}
@@ -149,8 +153,8 @@ def add_cross_asset_features(
     # ------------------------------------------------------------------
     # Pairwise interactions
     # ------------------------------------------------------------------
-    if reduce not in {None, "top_k", "pca"}:
-        raise ValueError("reduce must be one of None, 'top_k', 'pca'")
+    if reduce not in {"top_k", "pca"}:
+        raise ValueError("reduce must be one of 'top_k', 'pca'")
 
     pair_symbols = [s for s in symbols if whitelist is None or s in whitelist]
     if len(pair_symbols) >= 2:
@@ -258,6 +262,7 @@ def add_cross_asset_features(
                 df[pair_features.columns] = df[pair_features.columns].fillna(0.0)
 
     return df
+
 
 @validate_module
 def compute(df: pd.DataFrame) -> pd.DataFrame:
