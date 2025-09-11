@@ -3,6 +3,14 @@ Welcome to MT5's documentation
 
 .. toctree::
    :maxdepth: 2
+   :caption: Tutorials
+
+   tutorials/training
+   tutorials/extending-features
+   tutorials/deploying-models
+
+.. toctree::
+   :maxdepth: 2
    :caption: How-To Guides
 
    how-to/training
