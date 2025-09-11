@@ -39,6 +39,7 @@ def load_api(tmp_log, monkeypatch):
         Gauge=lambda *a, **k: None,
         generate_latest=lambda: b"",
         CONTENT_TYPE_LATEST="text/plain",
+        REGISTRY=types.SimpleNamespace(_names_to_collectors={}),
     )
     sys.modules['yaml'] = types.SimpleNamespace(
         safe_load=lambda *a, **k: {},

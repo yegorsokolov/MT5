@@ -4,6 +4,8 @@ import types
 import importlib
 import contextlib
 import time
+import logging
+from logging.handlers import RotatingFileHandler
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,6 +44,7 @@ def load_api(tmp_path, monkeypatch, rate=2):
         Gauge=lambda *a, **k: None,
         generate_latest=lambda: b"",
         CONTENT_TYPE_LATEST="text/plain",
+        REGISTRY=types.SimpleNamespace(_names_to_collectors={}),
     )
     sys.modules["yaml"] = types.SimpleNamespace(
         safe_load=lambda *a, **k: {},
@@ -64,6 +67,12 @@ def load_api(tmp_path, monkeypatch, rate=2):
     sys.modules["mlflow"] = mlflow_mod
     mod = importlib.reload(importlib.import_module("remote_api"))
     mod.AUDIT_LOG = tmp_path / "audit.csv"
+    for h in list(mod.audit_logger.handlers):
+        mod.audit_logger.removeHandler(h)
+        h.close()
+    handler = RotatingFileHandler(mod.AUDIT_LOG, maxBytes=1024, backupCount=1)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    mod.audit_logger.addHandler(handler)
     return mod
 
 
@@ -88,7 +97,7 @@ def test_rate_limiting_and_logging(tmp_path, monkeypatch):
 
     lines = (tmp_path / "audit.csv").read_text().strip().splitlines()
     assert len(lines) == 4
-    statuses = [line.split(",")[-1] for line in lines]
+    statuses = [line.split(",")[3] for line in lines]
     assert statuses == ["401", "200", "200", "429"]
 
 
