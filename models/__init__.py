@@ -102,6 +102,10 @@ try:  # optional torch dependency
     from .cross_asset_transformer import CrossAssetTransformer
 except Exception:  # pragma: no cover - torch may be missing
     CrossAssetTransformer = None
+try:  # optional torch dependency
+    from .cross_modal_transformer import CrossModalTransformer
+except Exception:  # pragma: no cover - torch may be missing
+    CrossModalTransformer = None
 
 __all__ = [
     "EnsembleModel",
@@ -116,5 +120,6 @@ __all__ = [
     "QuantileLoss",
     "SlimmableNetwork",
     "CrossAssetTransformer",
+    "CrossModalTransformer",
     "LazyModel",
 ]
