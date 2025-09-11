@@ -153,6 +153,7 @@ def initialize_model_with_ts2vec(model: nn.Module, store_dir: Optional[Path] = N
     return model
 
 
+# Explicit re-exports to mirror other pretraining helpers
 __all__ = [
     "TS2VecEncoder",
     "train_ts2vec_encoder",
