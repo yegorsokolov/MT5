@@ -179,6 +179,11 @@ def compute(
                 if not pd.isna(getattr(row, "regime", np.nan))
                 else None
             ),
+            vae_regime=(
+                getattr(row, "vae_regime", None)
+                if not pd.isna(getattr(row, "vae_regime", np.nan))
+                else None
+            ),
             microprice_delta=(
                 getattr(row, "microprice_delta", None)
                 if not pd.isna(getattr(row, "microprice_delta", np.nan))
