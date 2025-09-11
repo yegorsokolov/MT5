@@ -125,7 +125,7 @@ cross_asset:
   # maximum number of symbol pairs to retain (None for all)
   max_pairs: 50
   # reduction method: "top_k" to keep most correlated pairs or "pca" for compression
-  reduce: top_k
+  reduce: pca
 
 # enable or disable the ATR stop plugin
 use_atr: true

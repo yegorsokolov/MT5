@@ -149,8 +149,8 @@ class ConfigSchema(BaseModel):
         max_pairs: int | None = Field(
             None, ge=1, description="Maximum number of symbol pairs to retain"
         )
-        reduce: str | None = Field(
-            "top_k", description="Reduction strategy", pattern="^(top_k|pca)$"
+        reduce: str = Field(
+            "pca", description="Reduction strategy", pattern="^(top_k|pca)$"
         )
 
     cross_asset: CrossAssetConfig | None = Field(
