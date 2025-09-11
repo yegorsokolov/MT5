@@ -19,6 +19,7 @@ from analytics import decision_logger
 from portfolio.robust_optimizer import RobustOptimizer
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
 from analysis.exposure_matrix import ExposureMatrix
+from analysis.scenario_mc import generate_correlated_shocks
 
 try:
     from news.impact_model import get_impact
@@ -424,6 +425,56 @@ class RiskManager:
         self.exposure_matrix.update_returns(returns)
         net = self._current_positions()
         self.exposure_matrix.snapshot(net)
+
+    def run_scenarios(
+        self,
+        cov: np.ndarray,
+        n_steps: int,
+        n_paths: int = 1000,
+        df: float = 5.0,
+        weights: np.ndarray | None = None,
+        rng: np.random.Generator | None = None,
+    ) -> float:
+        """Simulate correlated return paths and evaluate drawdown limits.
+
+        Parameters
+        ----------
+        cov:
+            Covariance matrix describing asset return correlations.
+        n_steps:
+            Number of timesteps per scenario.
+        n_paths:
+            Number of simulated paths.
+        df:
+            Degrees of freedom for the Student's t shocks.
+        weights:
+            Optional portfolio weights. Defaults to equal weighting.
+        rng:
+            Optional ``numpy.random.Generator`` for deterministic testing.
+
+        Returns
+        -------
+        float
+            Worst drawdown observed across all simulated paths.
+        """
+        shocks = generate_correlated_shocks(cov, n_steps, n_paths, df, rng)
+        d = cov.shape[0]
+        if weights is None:
+            weights = np.ones(d) / d
+        port_ret = shocks @ weights
+        equity_paths = self.equity * np.cumprod(1.0 + port_ret, axis=1)
+        peaks = np.maximum.accumulate(equity_paths, axis=1)
+        drawdowns = peaks - equity_paths
+        worst_dd = float(drawdowns.max())
+        total_dd = float(self.equity - equity_paths.min())
+        try:
+            record_metric("scenario_mc_max_drawdown", worst_dd)
+            record_metric("scenario_mc_total_drawdown", total_dd)
+        except Exception:
+            pass
+        if worst_dd >= self.max_drawdown or total_dd >= self.max_total_drawdown:
+            self.metrics.trading_halted = True
+        return worst_dd
 
     async def monitor(self, queue: "asyncio.Queue[tuple[str, float, float]]") -> None:
         """Consume trade/PnL events from ``queue`` and update metrics."""
