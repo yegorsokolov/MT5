@@ -9,6 +9,7 @@ import torch
 from utils.resource_monitor import monitor
 from models.multi_head import MultiHeadTransformer
 from models.graph_net import GraphNet
+from models.cross_modal_transformer import CrossModalTransformer
 from models.ts_masked_encoder import initialize_model_with_ts_masked_encoder
 from models.contrastive_encoder import initialize_model_with_contrastive
 
@@ -51,7 +52,19 @@ def build_model(
     nhead = max(1, int(cfg.get("nhead", 4) * scale_factor))
     num_layers = max(1, int(cfg.get("num_layers", 2) * scale_factor))
 
-    if cfg.get("graph_model"):
+    model_cfg = cfg.get("model", {})
+    if model_cfg.get("type") == "cross_modal_transformer":
+        news_dim = model_cfg.get("news_dim", input_size)
+        model = CrossModalTransformer(
+            input_size,
+            news_dim,
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=num_layers,
+            dropout=cfg.get("dropout", 0.1),
+            output_dim=model_cfg.get("output_dim", 1),
+        )
+    elif cfg.get("graph_model"):
         model = GraphNet(
             input_size,
             hidden_channels=d_model,

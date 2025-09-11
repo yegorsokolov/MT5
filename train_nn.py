@@ -1053,6 +1053,14 @@ def main(
                     torch.save(model.last_attention.cpu(), attn_path)
                     mlflow.log_artifact(str(attn_path))
                     logger.info("TFT attention weights logged to %s", attn_path)
+            elif getattr(model, "last_attention", None) is not None:
+                attn_path = root / "attention.pt"
+                torch.save(model.last_attention, attn_path)
+                try:
+                    mlflow.log_artifact(str(attn_path))
+                except Exception:  # pragma: no cover - mlflow optional
+                    pass
+                logger.info("Attention weights logged to %s", attn_path)
             if cfg.get("quantize"):
                 qmodel = apply_quantization(
                     model.module if isinstance(model, DDP) else model

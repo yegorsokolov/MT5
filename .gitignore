@@ -41,6 +41,7 @@ models/*
 !models/news_meta_label.py
 !models/gp_calibrator.py
 !models/cross_asset_transformer.py
+!models/cross_modal_transformer.py
 !models/ftrl.py
 !models/feature_autoencoder.py
 !models/orderbook_gnn.py
