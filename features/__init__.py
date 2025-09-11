@@ -113,6 +113,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
         regime,
         macd,
         ram,
+        cointegration,
         vwap,
         baseline_signal,
     )
@@ -172,6 +173,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
     register_feature("regime", regime.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("macd", macd.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("ram", ram.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("cointegration", cointegration.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("vwap", vwap.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature(
         "baseline_signal", baseline_signal.compute, min_cpus=1, min_mem_gb=1.0

@@ -56,15 +56,72 @@ def generate_signals(
     exit_z: float = 0.5,
     significance: float = 0.05,
 ) -> PairSignalResult:
-    """Detect cointegrated pairs and compute trading signals.
+    """Generate pair-trading signals using cointegration features.
 
-    Returns a :class:`PairSignalResult` containing the enriched dataframe and
-    the list of detected pairs.  The dataframe includes z-score columns named
-    ``pair_z_<SYM1>_<SYM2>`` together with ``pair_long``/``pair_short`` entry
-    signals and cumulative ``pair_pnl`` based on the spread return.
+    When the dataframe already contains columns named ``pair_z_*`` the
+    corresponding z-scores and hedge ratios are used directly.  Otherwise the
+    function performs the Engle–Granger test to discover cointegrated pairs
+    and computes the required features on-the-fly.
     """
 
     df = df.sort_values("Timestamp").reset_index(drop=True)
+    zcols = [c for c in df.columns if c.startswith("pair_z_")]
+
+    if zcols:
+        pairs: List[Pair] = []
+        wide = df.pivot(index="Timestamp", columns="Symbol", values="Bid").sort_index()
+        long_sig = pd.Series(0, index=wide.index)
+        short_sig = pd.Series(0, index=wide.index)
+        pnl = pd.Series(0.0, index=wide.index)
+
+        for col in zcols:
+            parts = col.split("_")
+            if len(parts) < 4:
+                continue
+            sym1, sym2 = parts[2], parts[3]
+            pcol = f"coint_p_{sym1}_{sym2}"
+            pval = float(df[pcol].dropna().iloc[0]) if pcol in df.columns else np.nan
+            pairs.append((sym1, sym2, pval))
+
+            z = df.groupby("Timestamp")[col].first().reindex(wide.index)
+            if f"hedge_{sym1}_{sym2}" in df.columns:
+                beta = float(df[f"hedge_{sym1}_{sym2}"].dropna().iloc[0])
+            else:
+                beta = _hedge_ratio(wide[sym1], wide[sym2])
+            spread = wide[sym1] - beta * wide[sym2]
+            prev_spread = spread.shift(1)
+
+            position = 0
+            for t in range(len(z)):
+                z_t = z.iloc[t]
+                if np.isnan(z_t):
+                    continue
+                if position == 0:
+                    if z_t < -entry_z:
+                        long_sig.iloc[t] += 1
+                        position = 1
+                    elif z_t > entry_z:
+                        short_sig.iloc[t] += 1
+                        position = -1
+                elif position == 1 and z_t > -exit_z:
+                    position = 0
+                elif position == -1 and z_t < exit_z:
+                    position = 0
+                if (
+                    t > 0
+                    and not np.isnan(prev_spread.iloc[t])
+                    and not np.isnan(spread.iloc[t])
+                ):
+                    pnl.iloc[t] += position * (spread.iloc[t] - prev_spread.iloc[t])
+
+        df["pair_long"] = long_sig.reindex(df["Timestamp"]).fillna(0).astype(int).values
+        df["pair_short"] = (
+            short_sig.reindex(df["Timestamp"]).fillna(0).astype(int).values
+        )
+        df["pair_pnl"] = pnl.reindex(df["Timestamp"]).fillna(0.0).values
+        return PairSignalResult(df, pairs)
+
+    # Fallback: discover pairs and compute features
     pairs = find_cointegrated_pairs(df, significance=significance)
     if not pairs:
         out = df.copy()
@@ -105,7 +162,11 @@ def generate_signals(
                 position = 0
             elif position == -1 and z_t < exit_z:
                 position = 0
-            if t > 0 and not np.isnan(prev_spread.iloc[t]) and not np.isnan(spread.iloc[t]):
+            if (
+                t > 0
+                and not np.isnan(prev_spread.iloc[t])
+                and not np.isnan(spread.iloc[t])
+            ):
                 pnl.iloc[t] += position * (spread.iloc[t] - prev_spread.iloc[t])
 
     df["pair_long"] = long_sig.reindex(df["Timestamp"]).fillna(0).astype(int).values

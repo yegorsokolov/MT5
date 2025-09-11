@@ -533,6 +533,19 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     df = add_time_features(df)
 
     pipeline = list(get_feature_pipeline())
+    try:
+        cfg = load_config()
+        feat_cfg = cfg.get("features", [])
+    except Exception:  # pragma: no cover - config optional in tests
+        feat_cfg = []
+    cointegration_enabled = (
+        isinstance(feat_cfg, dict) and feat_cfg.get("cointegration")
+    ) or (isinstance(feat_cfg, list) and "cointegration" in feat_cfg)
+    if cointegration_enabled:
+        from features import cointegration as _cointegration
+
+        if _cointegration.compute not in pipeline:
+            pipeline.append(_cointegration.compute)
 
     import concurrent.futures
     import threading
