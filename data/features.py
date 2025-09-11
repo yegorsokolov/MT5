@@ -48,6 +48,7 @@ from analysis.garch_vol import garch_volatility
 from .expectations import validate_dataframe
 from .multitimeframe import aggregate_timeframes
 from feature_store import register_feature, load_feature
+from analysis.feature_evolver import FeatureEvolver
 
 logger = logging.getLogger(__name__)
 
@@ -629,6 +630,23 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         )
     except Exception:
         logger.debug("regime classification failed", exc_info=True)
+
+    evolver = FeatureEvolver()
+    df = evolver.apply_stored_features(df)
+    feat_opts = cfg.get("features", {}) if isinstance(cfg.get("features"), dict) else {}
+    if feat_opts.get("auto_evolve"):
+        target_col = feat_opts.get("target_col")
+        if not target_col:
+            for cand in ("target", "return", "y"):
+                if cand in df.columns:
+                    target_col = cand
+                    break
+        if target_col:
+            df = evolver.maybe_evolve(
+                df,
+                target_col=target_col,
+                module_path=Path("feature_store") / "evolved_features.py",
+            )
 
     # Allow runtime plugins to extend the feature set
     adjacency = df.attrs.get("adjacency_matrices")
