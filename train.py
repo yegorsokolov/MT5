@@ -79,6 +79,7 @@ from analysis.concept_drift import ConceptDriftMonitor
 from analysis.pseudo_labeler import generate_pseudo_labels
 from models.meta_label import train_meta_classifier
 from analysis.evaluate import bootstrap_classification_metrics
+from analysis.interpret_model import generate_shap_report
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -1052,7 +1053,13 @@ def main(
         and cfg.get("feature_importance", False)
     ):
         report_dir = Path(__file__).resolve().parent / "reports"
-        log_shap_importance(final_pipe, X_train_final, features, report_dir)
+        paths = generate_shap_report(
+            final_pipe,
+            X_train_final[features],
+            report_dir,
+        )
+        for p in paths.values():
+            mlflow.log_artifact(str(p))
 
     if export and final_pipe is not None:
         from models.export import export_lightgbm
