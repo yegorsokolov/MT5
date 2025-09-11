@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from collections import deque
 from time import perf_counter
-from typing import Deque, Iterable, List, Optional
+from typing import Callable, Deque, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
 from brokers import connection_manager as conn_mgr
 from analysis.broker_tca import broker_tca
 
-from .algorithms import twap_schedule, vwap_schedule
+from .algorithms import (
+    twap_schedule,
+    vwap_schedule,
+    twap_schedule_async,
+    vwap_schedule_async,
+)
 from .rl_executor import RLExecutor
 from .execution_optimizer import ExecutionOptimizer
 from .fill_history import record_fill
@@ -54,6 +60,9 @@ class ExecutionEngine:
         self.rl_executor = rl_executor
         self.rl_threshold = rl_threshold
         self.optimizer = optimizer or ExecutionOptimizer()
+        # Queue used to emit fill or cancellation events for asynchronous
+        # execution.  Tests consume from this queue to verify event ordering.
+        self.event_queue: asyncio.Queue = asyncio.Queue()
         try:
             self.optimizer.schedule_nightly()
         except Exception:
@@ -65,7 +74,7 @@ class ExecutionEngine:
         self.recent_volume.append(volume)
 
     # ------------------------------------------------------------------
-    def place_order(
+    async def place_order(
         self,
         *,
         side: str,
@@ -77,6 +86,7 @@ class ExecutionEngine:
         mid: float,
         strategy: str = "ioc",
         expected_slippage_bps: float = 0.0,
+        depth_cb: Optional[Callable[[], Tuple[float, float]]] = None,
     ) -> dict:
         """Execute an order using the requested ``strategy``.
 
@@ -101,6 +111,7 @@ class ExecutionEngine:
         order_ts = pd.Timestamp.utcnow()
         start = perf_counter()
         strat = strategy.lower()
+        sign = 1 if side.lower() == "buy" else -1
 
         order_payload = {
             "side": side,
@@ -148,10 +159,10 @@ class ExecutionEngine:
             )
 
         if strat == "vwap" and self.recent_volume:
-            slices = vwap_schedule(quantity, self.recent_volume)
+            slices = await vwap_schedule_async(quantity, self.recent_volume)
         elif strat == "twap":
             intervals = max(len(self.recent_volume), 1)
-            slices = twap_schedule(quantity, intervals)
+            slices = await twap_schedule_async(quantity, intervals)
         elif slice_size:
             slices: List[float] = []
             remaining = quantity
@@ -162,25 +173,29 @@ class ExecutionEngine:
         else:
             slices = [quantity]
 
+        # Closure returning latest market depth.  When ``depth_cb`` is not
+        # supplied the initial bid/ask volumes are used.
+        static_depth = (bid_vol, ask_vol)
+
+        def _depth() -> Tuple[float, float]:
+            return depth_cb() if depth_cb else static_depth
+
         filled = 0.0
         price_accum = 0.0
         for qty in slices:
-            if side.lower() == "buy":
-                avail = ask_vol
-                price = ask
-                sign = 1
-            else:
-                avail = bid_vol
-                price = bid
-                sign = -1
-            adj_price = price * (
-                1 + sign * (expected_slippage_bps + limit_offset) / 10000.0
+            fill_qty, price_part = await self._execute_slice(
+                qty,
+                side,
+                bid,
+                ask,
+                expected_slippage_bps,
+                limit_offset,
+                _depth,
             )
-            fill_qty = min(qty, avail)
-            if fill_qty <= 0:
-                continue
             filled += fill_qty
-            price_accum += fill_qty * adj_price
+            price_accum += price_part
+            # Yield control to allow callers to modify depth between slices
+            await asyncio.sleep(0)
 
         avg_price = (
             price_accum / filled if filled else (ask if side.lower() == "buy" else bid)
@@ -217,3 +232,50 @@ class ExecutionEngine:
         except Exception:
             pass
         return {"avg_price": avg_price, "filled": filled}
+
+    # ------------------------------------------------------------------
+    async def _execute_slice(
+        self,
+        qty: float,
+        side: str,
+        bid: float,
+        ask: float,
+        expected_slippage_bps: float,
+        limit_offset: float,
+        depth_fn: Callable[[], Tuple[float, float]],
+    ) -> Tuple[float, float]:
+        """Send a child order to the broker and wait for acknowledgement.
+
+        The coroutine determines the available depth via ``depth_fn`` which
+        allows callers to dynamically update market conditions.  Events are
+        placed onto :attr:`event_queue` to signal fills or cancellations.
+        Returns the filled quantity and price contribution for averaging.
+        """
+
+        # Simulate an asynchronous broker round-trip
+        await asyncio.sleep(0)
+        bid_vol, ask_vol = depth_fn()
+        if side.lower() == "buy":
+            avail = ask_vol
+            price = ask
+            sign = 1
+        else:
+            avail = bid_vol
+            price = bid
+            sign = -1
+
+        fill_qty = min(qty, avail)
+        if fill_qty <= 0:
+            await self.event_queue.put({"type": "cancel", "qty": 0})
+            return 0.0, 0.0
+
+        adj_price = price * (1 + sign * (expected_slippage_bps + limit_offset) / 10000.0)
+        await self.event_queue.put(
+            {
+                "type": "fill",
+                "qty": fill_qty,
+                "price": adj_price,
+                "partial": fill_qty < qty,
+            }
+        )
+        return fill_qty, fill_qty * adj_price
