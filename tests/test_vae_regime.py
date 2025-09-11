@@ -1,32 +1,42 @@
 import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-
+sys.modules.pop("scipy", None)
+sys.modules.pop("scipy.stats", None)
 import numpy as np
-from sklearn.metrics import accuracy_score
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score
 
-from analysis.vae_regime import VAERegime, window_features
-
-
-def _make_dataset(n: int = 200, window: int = 5):
-    rng = np.random.default_rng(42)
-    regime0 = rng.normal(0.0, 0.1, size=(n, 2))
-    regime1 = rng.normal(3.0, 0.1, size=(n, 2))
-    features = np.vstack([regime0, regime1])
-    labels = np.array([0] * n + [1] * n)
-    windows = window_features(features, window)
-    return windows, labels[window - 1 :]
+from analysis.regime_detection import periodic_reclassification  # noqa: E402
 
 
-def test_vae_regime_separation():
-    windows, true_labels = _make_dataset()
-    model = VAERegime(input_dim=windows.shape[1], latent_dim=2, hidden_dim=8)
-    model.fit(windows, epochs=20, batch_size=32, lr=1e-2)
-    embeddings = model.transform(windows)
-    pred = model.assign_regimes(embeddings, n_clusters=2)
-    acc = max(
-        accuracy_score(true_labels, pred),
-        accuracy_score(true_labels, 1 - pred),
-    )
-    assert acc > 0.8
+def _make_data(n: int = 200) -> pd.DataFrame:
+    rng = np.random.default_rng(0)
+    ret = rng.normal(0, 1, size=n)
+    vol = np.concatenate([np.full(n // 2, 0.5), np.full(n // 2, 2.0)])
+    return pd.DataFrame({"return": ret, "volatility_30": vol})
+
+
+def test_vae_regime_labels_change_on_shift():
+    df = _make_data()
+    labeled = periodic_reclassification(df, step=len(df) // 2, n_states=2)
+    regimes = labeled["vae_regime"].to_numpy()
+    first = regimes[: len(regimes) // 2]
+    second = regimes[len(regimes) // 2 :]
+    assert np.bincount(first).argmax() != np.bincount(second).argmax()
+
+
+def test_vae_regime_improves_f1():
+    df = _make_data()
+    df["target"] = np.array([0] * (len(df) // 2) + [1] * (len(df) // 2))
+    labeled = periodic_reclassification(df, step=len(df) // 2, n_states=2)
+
+    X = labeled[["return"]].values
+    y = labeled["target"].values
+    clf = LogisticRegression().fit(X, y)
+    f1_no = f1_score(y, clf.predict(X))
+
+    X_regime = labeled[["return", "vae_regime"]].values
+    clf2 = LogisticRegression().fit(X_regime, y)
+    f1_with = f1_score(y, clf2.predict(X_regime))
+
+    assert f1_with > f1_no
