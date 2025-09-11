@@ -42,11 +42,11 @@ data_urls:
 api_history:
   GBPUSD:
     provider: mt5
-    start: 2023-01-01
+    start: 2020-01-01
     end: 2025-01-01
   XAUUSD:
     provider: mt5
-    start: 2023-01-01
+    start: 2020-01-01
     end: 2025-01-01
 index_data:
   sp500: data/sp500.csv
