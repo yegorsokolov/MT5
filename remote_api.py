@@ -14,6 +14,8 @@ from typing import Dict, Any, Set, Optional
 import asyncio
 from pydantic import BaseModel
 import os
+import logging
+from logging.handlers import RotatingFileHandler
 from utils.secret_manager import SecretManager
 from pathlib import Path
 import uvicorn
@@ -22,7 +24,8 @@ from utils.graceful_exit import graceful_exit
 import socket
 import time
 import datetime
-import csv
+import hmac
+import hashlib
 
 try:
     from utils.alerting import send_alert
@@ -33,7 +36,7 @@ except Exception:  # pragma: no cover - utils may be stubbed in tests
 
 
 from log_utils import LOG_FILE, setup_logging
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Gauge, REGISTRY
 from fastapi.responses import Response
 from dataclasses import dataclass
 from risk_manager import risk_manager
@@ -134,6 +137,16 @@ BUCKET_TTL = int(os.getenv("BUCKET_TTL", str(15 * 60)))
 AUDIT_LOG = Path("logs/api_audit.csv")
 AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
 
+AUDIT_SECRET = SecretManager().get_secret("AUDIT_LOG_SECRET")
+if not AUDIT_SECRET:
+    raise RuntimeError("AUDIT_LOG_SECRET is required")
+
+_audit_handler = RotatingFileHandler(AUDIT_LOG, maxBytes=1_000_000, backupCount=5)
+_audit_handler.setFormatter(logging.Formatter("%(message)s"))
+audit_logger = logging.getLogger("api_audit")
+audit_logger.setLevel(logging.INFO)
+audit_logger.addHandler(_audit_handler)
+
 
 @dataclass
 class TokenBucket:
@@ -143,6 +156,17 @@ class TokenBucket:
 
 
 _buckets: Dict[str, TokenBucket] = {}
+
+try:
+    API_RATE_LIMIT_REMAINING = Gauge(
+        "api_rate_limit_remaining", "Remaining API rate limit tokens", ["key"]
+    )
+except ValueError:
+    API_RATE_LIMIT_REMAINING = REGISTRY._names_to_collectors.get(
+        "api_rate_limit_remaining"
+    )
+except Exception:
+    API_RATE_LIMIT_REMAINING = None
 
 
 def _allow_request(key: str) -> bool:
@@ -161,17 +185,21 @@ def _allow_request(key: str) -> bool:
         bucket.last = now
         bucket.last_seen = now
     if bucket.tokens < 1:
+        if API_RATE_LIMIT_REMAINING:
+            API_RATE_LIMIT_REMAINING.labels(key=key).set(bucket.tokens)
         return False
     bucket.tokens -= 1
+    if API_RATE_LIMIT_REMAINING:
+        API_RATE_LIMIT_REMAINING.labels(key=key).set(bucket.tokens)
     return True
 
 
 def _audit_log(key: str, action: str, status: int) -> None:
     AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with open(AUDIT_LOG, "a", newline="") as f:
-        csv.writer(f).writerow(
-            [datetime.datetime.utcnow().isoformat(), key, action, status]
-        )
+    ts = datetime.datetime.utcnow().isoformat()
+    line = f"{ts},{key},{action},{status}"
+    sig = hmac.new(AUDIT_SECRET.encode(), line.encode(), hashlib.sha256).hexdigest()
+    audit_logger.info("%s,%s", line, sig)
 
 
 @app.middleware("http")
