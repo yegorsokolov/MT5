@@ -78,6 +78,7 @@ from analysis.regime_thresholds import find_regime_thresholds
 from analysis.concept_drift import ConceptDriftMonitor
 from analysis.pseudo_labeler import generate_pseudo_labels
 from models.meta_label import train_meta_classifier
+from analysis.evaluate import bootstrap_classification_metrics
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -921,6 +922,30 @@ def main(
     aggregate_report = classification_report(all_true, all_preds, output_dict=True)
     logger.info("\n%s", classification_report(all_true, all_preds))
 
+    # Bootstrap confidence intervals for metrics
+    boot_metrics = bootstrap_classification_metrics(all_true, all_preds)
+    prec_ci = boot_metrics["precision_ci"]
+    rec_ci = boot_metrics["recall_ci"]
+    f1_ci = boot_metrics["f1_ci"]
+    logger.info(
+        "Precision: %.3f (95%% CI %.3f-%.3f)",
+        boot_metrics["precision"],
+        prec_ci[0],
+        prec_ci[1],
+    )
+    logger.info(
+        "Recall: %.3f (95%% CI %.3f-%.3f)",
+        boot_metrics["recall"],
+        rec_ci[0],
+        rec_ci[1],
+    )
+    logger.info(
+        "F1: %.3f (95%% CI %.3f-%.3f)",
+        boot_metrics["f1"],
+        f1_ci[0],
+        f1_ci[1],
+    )
+
     if final_pipe is not None:
         setattr(final_pipe, "regime_thresholds", regime_thresholds)
     joblib.dump(final_pipe, root / "model.joblib")
@@ -928,11 +953,15 @@ def main(
         final_pipe.named_steps["scaler"].save(scaler_path)
     logger.info("Model saved to %s", root / "model.joblib")
     mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
-    mlflow.log_metric("f1_weighted", aggregate_report["weighted avg"]["f1-score"])
-    mlflow.log_metric(
-        "precision_weighted", aggregate_report["weighted avg"]["precision"]
-    )
-    mlflow.log_metric("recall_weighted", aggregate_report["weighted avg"]["recall"])
+    mlflow.log_metric("f1_weighted", boot_metrics["f1"])
+    mlflow.log_metric("precision_weighted", boot_metrics["precision"])
+    mlflow.log_metric("recall_weighted", boot_metrics["recall"])
+    mlflow.log_metric("f1_ci_lower", f1_ci[0])
+    mlflow.log_metric("f1_ci_upper", f1_ci[1])
+    mlflow.log_metric("precision_ci_lower", prec_ci[0])
+    mlflow.log_metric("precision_ci_upper", prec_ci[1])
+    mlflow.log_metric("recall_ci_lower", rec_ci[0])
+    mlflow.log_metric("recall_ci_upper", rec_ci[1])
     mlflow.log_artifact(str(root / "model.joblib"))
     if final_pipe is not None and df_unlabeled is not None:
         X_unlabeled = df_unlabeled[features]
@@ -958,7 +987,12 @@ def main(
     meta_clf = train_meta_classifier(meta_features, all_true)
     meta_version_id = model_store.save_model(meta_clf, cfg, {"type": "meta"})
     perf = {
-        "f1_weighted": aggregate_report["weighted avg"]["f1-score"],
+        "f1_weighted": boot_metrics["f1"],
+        "precision_weighted": boot_metrics["precision"],
+        "recall_weighted": boot_metrics["recall"],
+        "f1_ci": [f1_ci[0], f1_ci[1]],
+        "precision_ci": [prec_ci[0], prec_ci[1]],
+        "recall_ci": [rec_ci[0], rec_ci[1]],
         "regime_thresholds": regime_thresholds,
         "meta_model_id": meta_version_id,
     }
