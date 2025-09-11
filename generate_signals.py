@@ -43,6 +43,7 @@ from signal_queue import publish_dataframe_async, get_signal_backend
 from models.ensemble import EnsembleModel
 from models import model_store
 from analysis.concept_drift import ConceptDriftMonitor
+from models.conformal import predict_interval, evaluate_coverage
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -72,11 +73,15 @@ def load_models(paths, versions=None, return_meta: bool = False):
     for vid in versions:
         try:
             m, meta = model_store.load_model(vid)
-            thr = meta.get("performance", {}).get("regime_thresholds")
+            perf = meta.get("performance", {})
+            thr = perf.get("regime_thresholds")
             if thr is not None:
                 setattr(m, "regime_thresholds", thr)
+            q = perf.get("interval_q")
+            if q is not None:
+                setattr(m, "interval_q", q)
             if meta_model is None:
-                meta_id = meta.get("performance", {}).get("meta_model_id")
+                meta_id = perf.get("meta_model_id")
                 if meta_id:
                     try:
                         meta_model, _ = model_store.load_model(meta_id)
@@ -619,6 +624,21 @@ def main():
             "pred": preds,
         }
     )
+    interval_qs = [getattr(m, "interval_q", None) for m in models if getattr(m, "interval_q", None) is not None]
+    if interval_qs:
+        q = float(np.median(interval_qs))
+        lower, upper = predict_interval(combined, q)
+        out["ci_lower"] = lower
+        out["ci_upper"] = upper
+        y_true = None
+        if "y_true" in df.columns:
+            y_true = df["y_true"].to_numpy()
+        elif "label" in df.columns:
+            y_true = df["label"].to_numpy()
+        if y_true is not None:
+            out["interval_covered"] = ((y_true >= lower) & (y_true <= upper)).astype(int)
+            cov = evaluate_coverage(y_true, lower, upper)
+            logger.info("Interval coverage: %.3f", cov)
     log_df = df[["Timestamp"] + features].copy()
     log_df["Symbol"] = cfg.get("symbol")
     for name, arr in pred_dict.items():
