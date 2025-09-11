@@ -13,6 +13,15 @@ except Exception:  # pragma: no cover - fallback without validation
     def validate_module(func):
         return func
 
+try:  # pragma: no cover - validators optional in some environments
+    from .validators import require_columns, assert_no_nan
+except Exception:  # pragma: no cover - graceful fallback when validators missing
+    def require_columns(df, cols, **_):  # type: ignore[unused-arg]
+        return df
+
+    def assert_no_nan(df, cols=None, **_):  # type: ignore[unused-arg]
+        return df
+
 # Default transformer used for sentiment analysis.  Tests may monkeypatch this
 # to a lightweight model.
 MODEL_NAME = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -130,6 +139,9 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
 @validate_module
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     from data import features as base
+
+    require_columns(df, ["Timestamp"])
+    assert_no_nan(df, ["Timestamp"])
 
     df = base.add_economic_calendar_features(df)
     df = base.add_news_sentiment_features(df)
