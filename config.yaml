@@ -109,6 +109,9 @@ use_ts_pretrain: false
 ts_pretrain_epochs: 20
 ts_pretrain_batch_size: 32
 
+# pretraining options for TS2Vec encoder
+use_ts2vec_pretrain: false
+
 # pretraining options for contrastive encoder
 use_contrastive_pretrain: false
 contrastive_epochs: 20

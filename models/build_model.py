@@ -12,6 +12,7 @@ from models.graph_net import GraphNet
 from models.cross_modal_transformer import CrossModalTransformer
 from models.ts_masked_encoder import initialize_model_with_ts_masked_encoder
 from models.contrastive_encoder import initialize_model_with_contrastive
+from models.ts2vec import initialize_model_with_ts2vec
 
 
 def compute_scale_factor(capabilities=None) -> float:
@@ -87,6 +88,8 @@ def build_model(
 
     if cfg.get("use_ts_pretrain"):
         initialize_model_with_ts_masked_encoder(model)
+    if cfg.get("use_ts2vec_pretrain"):
+        initialize_model_with_ts2vec(model)
     if cfg.get("use_contrastive_pretrain"):
         initialize_model_with_contrastive(model)
     return model

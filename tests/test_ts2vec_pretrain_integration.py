@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from torch import nn
 
-# Setup model_store and ts_masked_encoder modules dynamically
+# Dynamically load model_store and ts2vec modules
 repo_root = Path(__file__).resolve().parents[1]
 model_store_spec = importlib.util.spec_from_file_location(
     "models.model_store", repo_root / "models" / "model_store.py"
@@ -19,26 +19,26 @@ models_pkg.model_store = model_store
 sys.modules["models"] = models_pkg
 
 spec = importlib.util.spec_from_file_location(
-    "models.ts_masked_encoder", repo_root / "models" / "ts_masked_encoder.py"
+    "models.ts2vec", repo_root / "models" / "ts2vec.py"
 )
-ts_masked = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = ts_masked
-spec.loader.exec_module(ts_masked)
+ts2vec = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = ts2vec
+spec.loader.exec_module(ts2vec)
 
-train_ts_masked_encoder = ts_masked.train_ts_masked_encoder
-TSMaskedEncoder = ts_masked.TSMaskedEncoder
+train_ts2vec_encoder = ts2vec.train_ts2vec_encoder
+TS2VecEncoder = ts2vec.TS2VecEncoder
 
-ts2vec_stub = types.ModuleType("models.ts2vec")
+ts_masked_stub = types.ModuleType("models.ts_masked_encoder")
 def _noop(model, store_dir=None):
     return model
-ts2vec_stub.initialize_model_with_ts2vec = _noop
-sys.modules["models.ts2vec"] = ts2vec_stub
+ts_masked_stub.initialize_model_with_ts_masked_encoder = _noop
+sys.modules["models.ts_masked_encoder"] = ts_masked_stub
 
 contrastive_stub = types.ModuleType("models.contrastive_encoder")
 contrastive_stub.initialize_model_with_contrastive = _noop
 sys.modules["models.contrastive_encoder"] = contrastive_stub
 
-# Stubs for dependencies of build_model
+# Stub dependencies for build_model
 res_mod = types.ModuleType("utils.resource_monitor")
 res_mod.monitor = types.SimpleNamespace(capabilities=types.SimpleNamespace(has_gpu=False, cpus=4))
 sys.modules["utils.resource_monitor"] = res_mod
@@ -61,10 +61,10 @@ class CrossModalTransformer(nn.Module):
 cross_mod.CrossModalTransformer = CrossModalTransformer
 sys.modules["models.cross_modal_transformer"] = cross_mod
 
-class MultiHeadTransformer(TSMaskedEncoder):
+class MultiHeadTransformer(TS2VecEncoder):
     def __init__(self, input_size: int, num_symbols: int, **kwargs):
         super().__init__(input_size)
-        self.head = nn.Linear(64, 1)
+        self.head = nn.Linear(32, 1)
     def forward(self, x: torch.Tensor, symbol: int) -> torch.Tensor:
         h, _ = super().forward(x)
         return self.head(h[:, -1])
@@ -105,13 +105,13 @@ def _train_one_epoch(model: nn.Module, x: torch.Tensor, y: torch.Tensor) -> floa
     return float(loss.detach())
 
 
-def test_build_model_uses_pretrained_weights(tmp_path):
+def test_build_model_uses_ts2vec_pretrain(tmp_path):
     torch.manual_seed(0)
     pre_win, shift_win, shift_tar = _make_regime_shift()
-    train_ts_masked_encoder(pre_win, epochs=5, batch_size=16, store_dir=tmp_path)
+    train_ts2vec_encoder(pre_win, epochs=5, batch_size=16, store_dir=tmp_path)
 
-    model_pre = build_model(2, {"use_ts_pretrain": True}, num_symbols=1)
-    model_rand = build_model(2, {"use_ts_pretrain": False}, num_symbols=1)
+    model_pre = build_model(2, {"use_ts2vec_pretrain": True}, num_symbols=1)
+    model_rand = build_model(2, {"use_ts2vec_pretrain": False}, num_symbols=1)
 
     loss_pre = _train_one_epoch(model_pre, shift_win[:10], shift_tar[:10])
     loss_rand = _train_one_epoch(model_rand, shift_win[:10], shift_tar[:10])

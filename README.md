@@ -219,6 +219,20 @@ ts_pretrain_batch_size: 32
 This initialisation typically reduces early training loss compared to random
 weights.
 
+### TS2Vec pretraining
+
+A simplified TS2Vec-style encoder can also be pre-trained on unlabeled windows
+using the :func:`models.ts2vec.train_ts2vec_encoder` helper. Training scripts
+will automatically load these weights when `use_ts2vec_pretrain` is enabled in
+`config.yaml`:
+
+```yaml
+use_ts2vec_pretrain: true
+```
+
+This initialisation typically lowers early training loss versus random
+weights.
+
 ### Contrastive encoder pretraining
 
 A lightweight contrastive encoder can also be trained on unlabeled windows to
