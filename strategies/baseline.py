@@ -33,6 +33,7 @@ from typing import Deque, Dict, Optional, Set
 
 from indicators import atr as calc_atr, bollinger, rsi as calc_rsi, sma
 from utils import load_config
+from config_models import ConfigError
 
 
 @dataclass
@@ -59,6 +60,7 @@ class IndicatorBundle:
     macd_cross: Optional[int] = None
     squeeze_break: Optional[int] = None
     regime: Optional[int] = None
+    vae_regime: Optional[int] = None
     microprice_delta: Optional[float] = None
 
 
@@ -98,6 +100,10 @@ class BaselineStrategy:
     short_regimes:
         Optional set of regime ids permitting short positions. ``None``
         allows shorts in any regime.
+    long_vae_regimes:
+        Optional set of VAE regime ids permitting long positions.
+    short_vae_regimes:
+        Optional set of VAE regime ids permitting short positions.
     ram_long_threshold:
         Minimum risk-adjusted momentum required to allow a long entry.
     ram_short_threshold:
@@ -123,6 +129,8 @@ class BaselineStrategy:
         scale_pos_by_atr: bool = False,
         long_regimes: Optional[Set[int]] = None,
         short_regimes: Optional[Set[int]] = None,
+        long_vae_regimes: Optional[Set[int]] = None,
+        short_vae_regimes: Optional[Set[int]] = None,
         ram_long_threshold: float = 0.0,
         ram_short_threshold: float = 0.0,
         hurst_trend_min: float = 0.5,
@@ -143,6 +151,12 @@ class BaselineStrategy:
         self.scale_pos_by_atr = scale_pos_by_atr
         self.long_regimes = set(long_regimes) if long_regimes is not None else None
         self.short_regimes = set(short_regimes) if short_regimes is not None else None
+        self.long_vae_regimes = (
+            set(long_vae_regimes) if long_vae_regimes is not None else None
+        )
+        self.short_vae_regimes = (
+            set(short_vae_regimes) if short_vae_regimes is not None else None
+        )
         self.ram_long_threshold = float(ram_long_threshold)
         self.ram_short_threshold = float(ram_short_threshold)
         self.hurst_trend_min = float(hurst_trend_min)
@@ -170,11 +184,17 @@ class BaselineStrategy:
         self.take_profit_armed = False
 
         if session_position_limits is None or default_position_limit is None:
-            cfg = load_config().strategy
-            if session_position_limits is None:
-                session_position_limits = cfg.session_position_limits
-            if default_position_limit is None:
-                default_position_limit = cfg.default_position_limit
+            try:
+                cfg = load_config().strategy
+                if session_position_limits is None:
+                    session_position_limits = cfg.session_position_limits
+                if default_position_limit is None:
+                    default_position_limit = cfg.default_position_limit
+            except Exception:
+                if session_position_limits is None:
+                    session_position_limits = {}
+                if default_position_limit is None:
+                    default_position_limit = 1
 
         self.session_position_limits = session_position_limits or {}
         self.default_position_limit = default_position_limit
@@ -215,7 +235,9 @@ class BaselineStrategy:
 
         signal = self._compute_signal(price, indicators)
         signal = self._apply_filters(signal, indicators, price)
-        return self._manage_position(price, signal, indicators.regime)
+        return self._manage_position(
+            price, signal, indicators.regime, indicators.vae_regime
+        )
 
     # ------------------------------------------------------------------
     # Signal computation helpers
@@ -367,13 +389,34 @@ class BaselineStrategy:
             return self._manage_short(price)
         return 0
 
-    def _manage_position(self, price: float, signal: int, regime: Optional[int]) -> int:
+    def _manage_position(
+        self,
+        price: float,
+        signal: int,
+        regime: Optional[int],
+        vae_regime: Optional[int],
+    ) -> int:
         # Exit immediately if current regime disallows the held position
         if regime is not None:
             if self.position == 1 and self.long_regimes is not None and regime not in self.long_regimes:
                 self.position = 0
                 return -1
             if self.position == -1 and self.short_regimes is not None and regime not in self.short_regimes:
+                self.position = 0
+                return 1
+        if vae_regime is not None:
+            if (
+                self.position == 1
+                and self.long_vae_regimes is not None
+                and vae_regime not in self.long_vae_regimes
+            ):
+                self.position = 0
+                return -1
+            if (
+                self.position == -1
+                and self.short_vae_regimes is not None
+                and vae_regime not in self.short_vae_regimes
+            ):
                 self.position = 0
                 return 1
 
@@ -385,9 +428,30 @@ class BaselineStrategy:
         # No open position - consider new entries
         if self.position == 0 and signal != 0:
             if regime is not None:
-                if signal == 1 and self.long_regimes is not None and regime not in self.long_regimes:
+                if (
+                    signal == 1
+                    and self.long_regimes is not None
+                    and regime not in self.long_regimes
+                ):
                     return 0
-                if signal == -1 and self.short_regimes is not None and regime not in self.short_regimes:
+                if (
+                    signal == -1
+                    and self.short_regimes is not None
+                    and regime not in self.short_regimes
+                ):
+                    return 0
+            if vae_regime is not None:
+                if (
+                    signal == 1
+                    and self.long_vae_regimes is not None
+                    and vae_regime not in self.long_vae_regimes
+                ):
+                    return 0
+                if (
+                    signal == -1
+                    and self.short_vae_regimes is not None
+                    and vae_regime not in self.short_vae_regimes
+                ):
                     return 0
             limit = self.current_position_limit
             if self.scale_pos_by_atr and self.latest_atr:
