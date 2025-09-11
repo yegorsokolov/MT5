@@ -1,6 +1,7 @@
 import os
 import sys
 
+os.environ.setdefault("MT5_DOCS_BUILD", "1")
 sys.path.insert(0, os.path.abspath(".."))
 
 project = "MT5"
@@ -33,9 +34,6 @@ autodoc_mock_imports = [
     "cryptography",
     "pydantic",
     "filelock",
-    "utils",
-    "data",
-    "features",
 ]
 
 exclude_patterns = [
@@ -48,6 +46,7 @@ exclude_patterns = [
     "online_updates.md",
     "strategy_approval.md",
     "config.html",
+    "EXTENDING.md",
 ]
 
 source_suffix = {

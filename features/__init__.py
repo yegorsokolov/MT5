@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -26,7 +27,25 @@ try:  # config is optional during import in some tests
 except Exception:  # pragma: no cover - utils may not be available in tests
     load_config = lambda: {}
 
-from utils.resource_monitor import monitor, ResourceCapabilities
+try:
+    from utils.resource_monitor import monitor, ResourceCapabilities
+except Exception:  # pragma: no cover - utils may be unavailable for docs
+
+    @dataclass
+    class ResourceCapabilities:  # type: ignore
+        cpus: int = 1
+        memory_gb: float = 0.0
+        has_gpu: bool = False
+        gpu_count: int = 0
+
+    class _Monitor:  # pragma: no cover - lightweight stand-in
+        capabilities = ResourceCapabilities()
+
+        @staticmethod
+        def subscribe():
+            return asyncio.Queue()
+
+    monitor = _Monitor()
 
 
 def validate_module(func: Callable) -> Callable:
@@ -60,6 +79,7 @@ def validator(suite_name: str):
         @wraps(func)
         def wrapper(*args, **kwargs):
             from data.expectations import validate_dataframe
+
             result = func(*args, **kwargs)
             validate_dataframe(result, suite_name)
             return result
@@ -68,26 +88,28 @@ def validator(suite_name: str):
 
     return decorator
 
-from . import (
-    price,
-    news,
-    cross_asset,
-    orderbook,
-    order_flow,
-    microprice,
-    auto_indicator,
-    volume,
-    multi_timeframe,
-    supertrend,
-    keltner_squeeze,
-    adaptive_ma,
-    kalman_ma,
-    regime,
-    macd,
-    ram,
-    vwap,
-    baseline_signal,
-)
+
+if not os.getenv("MT5_DOCS_BUILD"):
+    from . import (
+        price,
+        news,
+        cross_asset,
+        orderbook,
+        order_flow,
+        microprice,
+        auto_indicator,
+        volume,
+        multi_timeframe,
+        supertrend,
+        keltner_squeeze,
+        adaptive_ma,
+        kalman_ma,
+        regime,
+        macd,
+        ram,
+        vwap,
+        baseline_signal,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -121,24 +143,33 @@ def register_feature(
 
 
 # Register built-in features
-register_feature("price", price.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("news", news.compute, min_cpus=2, min_mem_gb=4.0)
-register_feature("cross_asset", cross_asset.compute, min_cpus=4, min_mem_gb=8.0)
-register_feature("orderbook", orderbook.compute, min_cpus=2, min_mem_gb=2.0)
-register_feature("order_flow", order_flow.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("microprice", microprice.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("auto_indicator", auto_indicator.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("volume", volume.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("multi_timeframe", multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("supertrend", supertrend.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("keltner_squeeze", keltner_squeeze.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("adaptive_ma", adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("kalman_ma", kalman_ma.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("regime", regime.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("macd", macd.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("ram", ram.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("vwap", vwap.compute, min_cpus=1, min_mem_gb=1.0)
-register_feature("baseline_signal", baseline_signal.compute, min_cpus=1, min_mem_gb=1.0)
+if not os.getenv("MT5_DOCS_BUILD"):
+    register_feature("price", price.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("news", news.compute, min_cpus=2, min_mem_gb=4.0)
+    register_feature("cross_asset", cross_asset.compute, min_cpus=4, min_mem_gb=8.0)
+    register_feature("orderbook", orderbook.compute, min_cpus=2, min_mem_gb=2.0)
+    register_feature("order_flow", order_flow.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("microprice", microprice.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature(
+        "auto_indicator", auto_indicator.compute, min_cpus=1, min_mem_gb=1.0
+    )
+    register_feature("volume", volume.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature(
+        "multi_timeframe", multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0
+    )
+    register_feature("supertrend", supertrend.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature(
+        "keltner_squeeze", keltner_squeeze.compute, min_cpus=1, min_mem_gb=1.0
+    )
+    register_feature("adaptive_ma", adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("kalman_ma", kalman_ma.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("regime", regime.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("macd", macd.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("ram", ram.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("vwap", vwap.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature(
+        "baseline_signal", baseline_signal.compute, min_cpus=1, min_mem_gb=1.0
+    )
 
 # Holds latest status report
 _STATUS: Dict[str, object] = {}
@@ -269,12 +300,13 @@ async def _watch_capabilities(queue: asyncio.Queue[str]) -> None:
 
 
 # Initialise on import and subscribe to capability changes when possible
-_update_status()
-try:
-    loop = asyncio.get_running_loop()
-    loop.create_task(_watch_capabilities(monitor.subscribe()))
-except Exception:  # pragma: no cover - no running loop during import
-    pass
+if not os.getenv("MT5_DOCS_BUILD"):
+    _update_status()
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_watch_capabilities(monitor.subscribe()))
+    except Exception:  # pragma: no cover - no running loop during import
+        pass
 
 
 __all__ = [
