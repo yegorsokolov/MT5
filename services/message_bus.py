@@ -162,6 +162,24 @@ class MessageBus:
                 data = await queue.get()
                 yield data
 
+    # ------------------------------------------------------------------
+    async def close(self) -> None:
+        """Close backend connections and flush async logs."""
+
+        try:
+            from log_utils import shutdown_logging
+
+            shutdown_logging()
+        except Exception:
+            pass
+
+        if self.backend == "nats" and self._nats is not None:  # pragma: no cover
+            await self._nats.close()
+            self._nats = None
+        if self.backend == "kafka" and self._kafka_producer is not None:  # pragma: no cover
+            await self._kafka_producer.stop()
+            self._kafka_producer = None
+
 
 # ----------------------------------------------------------------------
 _message_bus: Optional[MessageBus] = None
