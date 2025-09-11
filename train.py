@@ -575,10 +575,10 @@ def main(
         mask = df["market_regime"] == regime
         X_reg = torch.tensor(df.loc[mask, features].values, dtype=torch.float32)
         y_reg = torch.tensor(
-            (df.loc[mask, "return"].shift(-1) > 0).astype(float).values[:-1],
+            df.loc[mask, "tb_label"].values,
             dtype=torch.float32,
         )
-        dataset = TensorDataset(X_reg[:-1], y_reg)
+        dataset = TensorDataset(X_reg, y_reg)
         state = load_meta_weights("lgbm")
         new_state, _ = fine_tune_model(
             state, dataset, lambda: _LinearModel(len(features)), steps=5
@@ -1027,7 +1027,7 @@ def main(
     for regime in sorted(df["market_regime"].unique()):
         mask = df["market_regime"] == regime
         X_reg = df.loc[mask, base_features]
-        y_reg = (df.loc[mask, "return"].shift(-1) > 0).astype(int)
+        y_reg = df.loc[mask, "tb_label"].astype(int)
         steps_reg: list[tuple[str, object]] = []
         if cfg.get("use_scaler", True):
             steps_reg.append(("scaler", FeatureScaler()))

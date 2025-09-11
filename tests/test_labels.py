@@ -11,6 +11,7 @@ spec = importlib.util.spec_from_file_location(
 labels_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(labels_mod)
 triple_barrier = labels_mod.triple_barrier
+labels_mod.log_lineage = lambda *a, **k: None
 
 
 def test_triple_barrier_pt_hit():

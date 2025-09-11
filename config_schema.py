@@ -71,6 +71,21 @@ class ConfigSchema(BaseModel):
         gt=0,
         description="Sensitivity parameter for concept drift detector",
     )
+    pt_mult: float = Field(
+        0.01,
+        gt=0,
+        description="Profit-taking multiplier for triple barrier labels",
+    )
+    sl_mult: float = Field(
+        0.01,
+        gt=0,
+        description="Stop-loss multiplier for triple barrier labels",
+    )
+    max_horizon: int = Field(
+        10,
+        ge=1,
+        description="Max lookahead steps for triple barrier labels",
+    )
     service_cmds: dict[str, list[str]] | None = Field(
         None,
         description="Mapping of service name to command used to (re)start it",

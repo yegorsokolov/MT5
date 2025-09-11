@@ -22,6 +22,9 @@ class TrainingConfig(BaseModel):
     num_leaves: int | None = None
     learning_rate: float | None = None
     max_depth: int | None = None
+    pt_mult: float = Field(0.01, gt=0)
+    sl_mult: float = Field(0.01, gt=0)
+    max_horizon: int = Field(10, ge=1)
     model_config = ConfigDict(extra="forbid")
 
 
