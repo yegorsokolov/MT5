@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
+from data.feature_scaler import FeatureScaler
 import random
 
 from utils import load_config
@@ -59,7 +59,7 @@ def train_base_model(df: pd.DataFrame, features: List[str], cfg: dict):
     y = (df["return"].shift(-1) > 0).astype(int)
     steps = []
     if cfg.get("use_scaler", True):
-        steps.append(("scaler", StandardScaler()))
+        steps.append(("scaler", FeatureScaler()))
     seed = cfg.get("seed", 42)
     steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=seed)))
     pipe = Pipeline(steps)
@@ -118,7 +118,9 @@ def main():
 
     # load and combine histories
     dfs = [load_symbol_data(s, cfg, root) for s in symbols]
-    df = make_features(pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False))
+    df = make_features(
+        pd.concat(dfs, ignore_index=True), validate=cfg.get("validate", False)
+    )
     df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
     features = [
@@ -145,12 +147,14 @@ def main():
     features.append("SymbolCode")
 
     base_model = train_base_model(df, features, cfg)
-    joblib.dump(base_model, root / "models" / "base_model.joblib")
+    models_dir = root / "models"
+    models_dir.mkdir(exist_ok=True)
+    joblib.dump(base_model, models_dir / "base_model.joblib")
+    if "scaler" in base_model.named_steps:
+        base_model.named_steps["scaler"].save(models_dir / "base_scaler.pkl")
 
     train_meta_network(df, features, base_model, root / "models" / "meta_adapter.pt")
-    logger.info(
-        "Meta-learning model saved to %s", root / "models" / "meta_adapter.pt"
-    )
+    logger.info("Meta-learning model saved to %s", root / "models" / "meta_adapter.pt")
 
 
 if __name__ == "__main__":
