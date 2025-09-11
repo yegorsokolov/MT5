@@ -24,6 +24,7 @@ from .execution_optimizer import ExecutionOptimizer
 from .fill_history import record_fill
 from metrics import SLIPPAGE_BPS, REALIZED_SLIPPAGE_BPS
 from event_store.event_writer import record as record_event
+from model_registry import ModelRegistry
 
 try:  # optional dependency
     from utils.resource_monitor import monitor
@@ -55,11 +56,16 @@ class ExecutionEngine:
         rl_executor: Optional[RLExecutor] = None,
         rl_threshold: float = 0.0,
         optimizer: Optional[ExecutionOptimizer] = None,
+        registry: Optional[ModelRegistry] = None,
     ) -> None:
         self.recent_volume: Deque[float] = deque(maxlen=volume_window)
         self.rl_executor = rl_executor
         self.rl_threshold = rl_threshold
         self.optimizer = optimizer or ExecutionOptimizer()
+        # Registry used to dynamically load RL policies on demand.  When
+        # provided, an ``RLExecutor`` will be instantiated lazily when the
+        # ``rl`` strategy is requested.
+        self.registry = registry
         # Queue used to emit fill or cancellation events for asynchronous
         # execution.  Tests consume from this queue to verify event ordering.
         self.event_queue: asyncio.Queue = asyncio.Queue()
@@ -138,16 +144,29 @@ class ExecutionEngine:
         slice_size = params.get("slice_size")
 
         use_rl = False
-        if self.rl_executor is not None:
+        if strat == "rl":
+            if self.rl_executor is None and self.registry is not None:
+                try:
+                    path = self.registry.get_policy_path()
+                except Exception:
+                    path = None
+                self.rl_executor = RLExecutor()
+                if path:
+                    try:
+                        self.rl_executor.load(path)
+                    except Exception:  # pragma: no cover - loading is best effort
+                        self.rl_executor = None
+            use_rl = self.rl_executor is not None
+        elif self.rl_executor is not None:
             tier = getattr(monitor.capabilities, "capability_tier", lambda: "lite")()
-            if strat == "rl" or (
+            if (
                 tier != "lite"
                 and quantity >= self.rl_threshold
                 and strat not in {"twap", "vwap"}
             ):
                 use_rl = True
 
-        if use_rl:
+        if use_rl and self.rl_executor is not None:
             return self.rl_executor.execute(
                 side=side,
                 quantity=quantity,
