@@ -1,0 +1,79 @@
+import sys
+import types
+import importlib
+import hmac
+import hashlib
+import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+import pytest
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def load_api(tmp_path):
+    sm_mod = types.ModuleType("utils.secret_manager")
+
+    class SM:
+        def get_secret(self, name, *a, **k):
+            if name == "AUDIT_LOG_SECRET":
+                return "secret"
+            return "token"
+
+    sm_mod.SecretManager = SM
+    sys.modules["utils.secret_manager"] = sm_mod
+    logger = types.SimpleNamespace(
+        info=lambda *a, **k: None,
+        warning=lambda *a, **k: None,
+        error=lambda *a, **k: None,
+    )
+    sys.modules["log_utils"] = types.SimpleNamespace(
+        LOG_FILE=tmp_path / "app.log", setup_logging=lambda: logger
+    )
+    risk_mod = types.ModuleType("risk_manager")
+    risk_mod.risk_manager = types.SimpleNamespace(status=lambda: {})
+    sys.modules["risk_manager"] = risk_mod
+    sched_mod = types.ModuleType("scheduler")
+    sched_mod.start_scheduler = lambda: None
+    sched_mod.stop_scheduler = lambda: None
+    sys.modules["scheduler"] = sched_mod
+    sys.modules["utils"] = types.SimpleNamespace(update_config=lambda *a, **k: None)
+    sys.modules["utils.graceful_exit"] = types.SimpleNamespace(
+        graceful_exit=lambda *a, **k: None
+    )
+    if "prometheus_client" in sys.modules:
+        del sys.modules["prometheus_client"]
+    import prometheus_client
+    sys.modules["prometheus_client"] = prometheus_client
+    mod = importlib.reload(importlib.import_module("remote_api"))
+    mod.AUDIT_LOG = tmp_path / "audit.csv"
+    for h in list(mod.audit_logger.handlers):
+        mod.audit_logger.removeHandler(h)
+        h.close()
+    handler = RotatingFileHandler(mod.AUDIT_LOG, maxBytes=1024, backupCount=1)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    mod.audit_logger.addHandler(handler)
+    mod._buckets.clear()
+    return mod
+
+
+def test_audit_log_hmac(tmp_path):
+    api = load_api(tmp_path)
+    api._audit_log("key1", "/test", 200)
+    line = api.AUDIT_LOG.read_text().strip().splitlines()[-1]
+    parts = line.split(",")
+    data = ",".join(parts[:-1])
+    expected = hmac.new(b"secret", data.encode(), hashlib.sha256).hexdigest()
+    assert parts[-1] == expected
+
+
+def test_rate_limit_metric(tmp_path):
+    api = load_api(tmp_path)
+    key = "client"
+    assert api._allow_request(key)
+    child = api.API_RATE_LIMIT_REMAINING.labels(key=key)
+    assert child._value.get() == pytest.approx(api.RATE_LIMIT - 1, rel=1e-3)
+    assert api._allow_request(key)
+    assert child._value.get() == pytest.approx(api.RATE_LIMIT - 2, rel=1e-3)
