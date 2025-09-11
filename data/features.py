@@ -31,6 +31,7 @@ from analysis.cross_spectral import (
     compute as cross_spectral_compute,
     REQUIREMENTS as CROSS_SPECTRAL_REQ,
 )
+from analysis.dtw_features import add_dtw_features
 from analysis.knowledge_graph import (
     load_knowledge_graph,
     risk_score,
@@ -614,6 +615,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     # Cross-spectral coherence metrics between symbols
     df = add_cross_spectral_features(df)
 
+    # Dynamic time warping distances between select symbol pairs
+    df = add_dtw_features(df)
+
     # Knowledge graph-based risk and opportunity scores
     df = add_knowledge_graph_features(df)
 
@@ -931,6 +935,7 @@ __all__ = [
     "add_news_sentiment_features",
     "add_cross_asset_features",
     "add_cross_spectral_features",
+    "add_dtw_features",
     "add_frequency_features",
     "add_fractal_features",
     "add_garch_volatility",

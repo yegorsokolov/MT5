@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from itertools import combinations
+from typing import Iterable
+
 import numpy as np
 import pandas as pd
 
@@ -78,3 +81,55 @@ def compute(
 
 # DTW features are computationally intensive
 compute.min_capability = "hpc"  # type: ignore[attr-defined]
+
+
+def add_dtw_features(
+    df: pd.DataFrame,
+    window: int = 30,
+    whitelist: Iterable[str] | None = None,
+) -> pd.DataFrame:
+    """Append DTW distance features between selected symbol pairs.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing at least ``Timestamp``, ``Symbol`` and ``return``.
+    window:
+        Rolling lookback window for the DTW calculation.
+    whitelist:
+        Optional list of symbols to include. When ``None`` the first ten
+        symbols (sorted) are used to cap computational complexity.
+
+    Returns
+    -------
+    pd.DataFrame
+        Original dataframe with additional columns ``dtw_<sym1>_<sym2>`` for
+        each evaluated symbol pair. Distances are ``0.0`` for periods before the
+        rolling window is available.
+    """
+
+    required = {"Symbol", "Timestamp", "return"}
+    if not required.issubset(df.columns):
+        return df
+
+    df = df.copy().sort_values("Timestamp")
+    pivot = df.pivot(index="Timestamp", columns="Symbol", values="return")
+    pivot = pivot.fillna(0.0)
+
+    symbols = sorted(pivot.columns if whitelist is None else whitelist)
+    if whitelist is None:
+        symbols = symbols[:10]
+
+    for s1, s2 in combinations(symbols, 2):
+        a = pivot[s1].to_numpy(dtype=float)
+        b = pivot[s2].to_numpy(dtype=float)
+        n = len(pivot)
+        dists = np.full(n, np.nan, dtype=float)
+        for end in range(window, n + 1):
+            seg_a = a[end - window : end]
+            seg_b = b[end - window : end]
+            dists[end - 1] = _dtw_distance(seg_a, seg_b)
+        dtw_series = pd.Series(dists, index=pivot.index)
+        df[f"dtw_{s1}_{s2}"] = df["Timestamp"].map(dtw_series).fillna(0.0)
+
+    return df
