@@ -13,6 +13,7 @@ import pandas as pd
 from gplearn.genetic import SymbolicTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import KFold, cross_val_score
+from feature_store import register_feature as store_register_feature
 
 
 @dataclass
@@ -184,6 +185,14 @@ class FeatureEvolver:
                 pickle.dump(prog, fh)
             manifest.append(meta.__dict__)
             selected_feats.append(meta)
+            try:
+                store_register_feature(
+                    name,
+                    pd.DataFrame({name: values}),
+                    {"expression": meta.expression},
+                )
+            except Exception:
+                pass
 
         if selected_feats and module_path is not None:
             self._append_to_module(selected_feats, Path(module_path))
