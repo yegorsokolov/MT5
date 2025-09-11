@@ -93,6 +93,7 @@ class ExecutionEngine:
         strategy: str = "ioc",
         expected_slippage_bps: float = 0.0,
         depth_cb: Optional[Callable[[], Tuple[float, float]]] = None,
+        slippage_model: Optional[Callable[[float, str], float]] = None,
     ) -> dict:
         """Execute an order using the requested ``strategy``.
 
@@ -112,12 +113,22 @@ class ExecutionEngine:
             ``"ioc"`` (immediate-or-cancel), ``"twap"`` or ``"vwap"``.
         expected_slippage_bps: float, optional
             Configured slippage assumption for logging/metrics.
+        slippage_model: Callable, optional
+            When provided, called with ``(quantity, side)`` to estimate slippage
+            in basis points prior to execution.  Overrides ``expected_slippage_bps``.
         """
 
         order_ts = pd.Timestamp.utcnow()
         start = perf_counter()
         strat = strategy.lower()
         sign = 1 if side.lower() == "buy" else -1
+
+        if slippage_model is not None:
+            try:
+                expected_slippage_bps = float(slippage_model(quantity, side))
+            except Exception:
+                # fall back to provided assumption when estimation fails
+                pass
 
         order_payload = {
             "side": side,
