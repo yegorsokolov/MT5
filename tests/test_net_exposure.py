@@ -23,6 +23,7 @@ sys.modules["news"] = types.SimpleNamespace()
 sys.modules["news.impact_model"] = types.SimpleNamespace(
     get_impact=lambda *a, **k: (0.0, 0.0)
 )
+sys.modules["requests"] = types.SimpleNamespace(Session=lambda *a, **k: None)
 
 repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
@@ -35,6 +36,7 @@ def test_net_exposure_limits_and_logging(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ms, "record_metric", lambda name, value, tags=None, path=None: logged.append((name, value, tags))
     )
+    monkeypatch.chdir(tmp_path)
 
     from risk_manager import RiskManager
 
@@ -85,13 +87,14 @@ def test_net_exposure_limits_and_logging(tmp_path, monkeypatch):
     assert short_val == pytest.approx(80.0)
 
 
-def test_correlation_limiter(monkeypatch):
+def test_correlation_limiter(tmp_path, monkeypatch):
     import analytics.metrics_store as ms
 
     logged: list[tuple[str, float]] = []
     monkeypatch.setattr(
         ms, "record_metric", lambda name, value, tags=None, path=None: logged.append((name, value))
     )
+    monkeypatch.chdir(tmp_path)
 
     import importlib
     from risk import net_exposure as ne_mod
@@ -111,3 +114,51 @@ def test_correlation_limiter(monkeypatch):
     assert ne.corr.loc["AAA", "BBB"] > 0.9
     avg = [v for n, v in logged if n == "avg_correlation"][-1]
     assert avg > 0.9
+
+
+def test_net_exposure_thread_safe(tmp_path, monkeypatch):
+    import analytics.metrics_store as ms
+
+    monkeypatch.setattr(
+        ms, "record_metric", lambda *a, **k: None
+    )
+    monkeypatch.chdir(tmp_path)
+
+    from risk.net_exposure import NetExposure
+
+    ne = NetExposure()
+
+    import threading
+
+    def worker():
+        for _ in range(100):
+            ne.update("AAA", 1)
+
+    threads = [threading.Thread(target=worker) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    totals = ne.totals()
+    assert totals["long"] == pytest.approx(1000.0)
+
+
+def test_net_exposure_persistence_round_trip(tmp_path, monkeypatch):
+    import analytics.metrics_store as ms
+
+    monkeypatch.setattr(
+        ms, "record_metric", lambda *a, **k: None
+    )
+    monkeypatch.chdir(tmp_path)
+
+    from risk.net_exposure import NetExposure
+
+    ne = NetExposure()
+    ne.update("AAA", 10)
+    ne.update("BBB", -5)
+
+    ne2 = NetExposure()
+    assert ne2.long["AAA"] == pytest.approx(10.0)
+    assert ne2.short["BBB"] == pytest.approx(5.0)
+    assert ne2.totals() == ne.totals()
