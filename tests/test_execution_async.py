@@ -1,8 +1,32 @@
 import asyncio
 import sys
+import types
 from pathlib import Path
 
 import pytest
+
+sys.modules.setdefault(
+    "analysis.broker_tca", types.SimpleNamespace(broker_tca=types.SimpleNamespace(record=lambda *a, **k: None))
+)
+sys.modules.setdefault(
+    "brokers.connection_manager", types.SimpleNamespace(get_active_broker=lambda: types.SimpleNamespace(__class__=type("B", (), {"__name__": "Dummy"})))
+)
+sys.modules.setdefault(
+    "metrics",
+    types.SimpleNamespace(
+        SLIPPAGE_BPS=types.SimpleNamespace(set=lambda *a, **k: None),
+        REALIZED_SLIPPAGE_BPS=types.SimpleNamespace(set=lambda *a, **k: None),
+    ),
+)
+sys.modules.setdefault(
+    "event_store.event_writer", types.SimpleNamespace(record=lambda *a, **k: None)
+)
+sys.modules.setdefault("event_store", types.SimpleNamespace())
+sys.modules.setdefault("model_registry", types.SimpleNamespace(ModelRegistry=object))
+sys.modules.setdefault(
+    "utils.resource_monitor",
+    types.SimpleNamespace(monitor=types.SimpleNamespace(capability_tier=lambda: "lite")),
+)
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 

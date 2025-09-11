@@ -1,6 +1,7 @@
 """Simple backtesting for the Adaptive MT5 bot."""
 
 import logging
+import asyncio
 from log_utils import setup_logging, log_exceptions
 
 from pathlib import Path
@@ -140,7 +141,12 @@ def fit_model(train_df: pd.DataFrame, cfg: dict) -> Pipeline:
 
 
 def backtest_on_df(
-    df: pd.DataFrame, model, cfg: dict, *, return_returns: bool = False
+    df: pd.DataFrame,
+    model,
+    cfg: dict,
+    *,
+    slippage_model=None,
+    return_returns: bool = False,
 ) -> dict | tuple[dict, pd.Series]:
     """Run the trading simulation on a dataframe using the given model.
 
@@ -152,6 +158,9 @@ def backtest_on_df(
         Trained sklearn-compatible model used to generate probabilities.
     cfg: dict
         Configuration with threshold and trailing stop settings.
+    slippage_model: Callable, optional
+        When provided, ``ExecutionEngine`` will query this callable with
+        ``(order_size, side)`` to estimate slippage in basis points.
     return_returns: bool, optional
         When ``True`` the list of trade returns is also returned for
         statistical testing.
@@ -186,16 +195,19 @@ def backtest_on_df(
         regime = getattr(row, "market_regime", None)
         thr = regime_thresholds.get(int(regime), threshold) if regime is not None else threshold
         if not in_position and prob > thr:
-            result = engine.place_order(
-                side="buy",
-                quantity=order_size,
-                bid=bid,
-                ask=ask,
-                bid_vol=bid_vol,
-                ask_vol=ask_vol,
-                mid=price_mid,
-                strategy=strategy,
-                expected_slippage_bps=cfg.get("slippage_bps", 0.0),
+            result = asyncio.run(
+                engine.place_order(
+                    side="buy",
+                    quantity=order_size,
+                    bid=bid,
+                    ask=ask,
+                    bid_vol=bid_vol,
+                    ask_vol=ask_vol,
+                    mid=price_mid,
+                    strategy=strategy,
+                    expected_slippage_bps=cfg.get("slippage_bps", 0.0),
+                    slippage_model=slippage_model,
+                )
             )
             if result["filled"] < order_size:
                 skipped_trades += 1
@@ -207,16 +219,19 @@ def backtest_on_df(
         if in_position:
             stop = trailing_stop(entry, price_mid, stop, distance)
             if price_mid <= stop:
-                result = engine.place_order(
-                    side="sell",
-                    quantity=order_size,
-                    bid=bid,
-                    ask=ask,
-                    bid_vol=bid_vol,
-                    ask_vol=ask_vol,
-                    mid=price_mid,
-                    strategy=strategy,
-                    expected_slippage_bps=cfg.get("slippage_bps", 0.0),
+                result = asyncio.run(
+                    engine.place_order(
+                        side="sell",
+                        quantity=order_size,
+                        bid=bid,
+                        ask=ask,
+                        bid_vol=bid_vol,
+                        ask_vol=ask_vol,
+                        mid=price_mid,
+                        strategy=strategy,
+                        expected_slippage_bps=cfg.get("slippage_bps", 0.0),
+                        slippage_model=slippage_model,
+                    )
                 )
                 fill_frac = min(result["filled"] / order_size, 1.0)
                 if fill_frac < 1.0:
@@ -282,7 +297,7 @@ def run_backtest(
 
     model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
-    return backtest_on_df(df, model, cfg, return_returns=return_returns)
+    return backtest_on_df(df, model, cfg, slippage_model=None, return_returns=return_returns)
 
 
 @ray.remote
@@ -291,7 +306,7 @@ def _backtest_window(
 ) -> dict:
     """Train a model on ``train_df`` and backtest on ``test_df``."""
     model = fit_model(train_df, cfg)
-    metrics = backtest_on_df(test_df, model, cfg)
+    metrics = backtest_on_df(test_df, model, cfg, slippage_model=None)
     metrics["period_start"] = start
     metrics["period_end"] = end
     return metrics
@@ -362,7 +377,7 @@ def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dic
                 metrics = run_external_strategy(test_df, external_strategy)
             else:
                 model = fit_model(train_df, cfg)
-                metrics = backtest_on_df(test_df, model, cfg)
+                metrics = backtest_on_df(test_df, model, cfg, slippage_model=None)
             metrics["period_start"] = start_iso
             metrics["period_end"] = end_iso
             logger.info(
