@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 from typing import Any, Tuple
 from datetime import datetime
+import hashlib
 import shutil
 import joblib
 from filelock import FileLock
@@ -13,6 +14,10 @@ try:  # optional during tests
     from core import state_sync
 except Exception:  # pragma: no cover - optional dependency
     state_sync = None
+
+
+class StateCorruptionError(Exception):
+    """Raised when a checkpoint's integrity check fails."""
 
 
 def _checkpoint_dir(directory: str | None = None) -> Path:
@@ -54,7 +59,21 @@ def save_checkpoint(
     path = ckpt_dir / f"checkpoint_{step}.pkl.enc"
     data = joblib.dumps(state)
     key = _load_key("CHECKPOINT_AES_KEY")
-    path.write_bytes(encrypt(data, key))
+    encrypted = encrypt(data, key)
+    tmp_path = path.with_name(path.name + ".tmp")
+    with open(tmp_path, "wb") as f:
+        f.write(encrypted)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+    digest = hashlib.sha256(encrypted).hexdigest()
+    hash_path = path.with_name(path.name + ".sha256")
+    tmp_hash = hash_path.with_name(hash_path.name + ".tmp")
+    with open(tmp_hash, "w") as f:
+        f.write(digest)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_hash, hash_path)
     if state_sync:
         state_sync.sync_checkpoints()
     return path
@@ -81,13 +100,21 @@ def load_latest_checkpoint(
     if not checkpoints:
         return None
     latest = max(checkpoints, key=lambda p: p.stat().st_mtime)
+    hash_path = latest.with_name(latest.name + ".sha256")
+    if not hash_path.exists():
+        raise StateCorruptionError("Missing checkpoint checksum")
+    blob = latest.read_bytes()
+    actual = hashlib.sha256(blob).hexdigest()
+    expected = hash_path.read_text().strip()
+    if actual != expected:
+        raise StateCorruptionError("Checkpoint file corrupted")
     step_str = latest.stem.split("_")[-1]
     try:
         step = int(step_str)
     except ValueError:
         step = 0
     key = _load_key("CHECKPOINT_AES_KEY")
-    data = decrypt(latest.read_bytes(), key)
+    data = decrypt(blob, key)
     state = joblib.loads(data)
     return step, state
 
