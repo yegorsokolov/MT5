@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
+from pathlib import Path
+import threading
 from typing import Dict
 
 import numpy as np
@@ -26,6 +28,9 @@ class NetExposure:
         self._returns: Dict[str, deque[float]] = defaultdict(
             lambda: deque(maxlen=self.window)
         )
+        self._lock = threading.Lock()
+        self._log_dir = Path("logs")
+        self._load_state()
 
     # ------------------------------------------------------------------
     def _totals(self) -> tuple[float, float]:
@@ -54,12 +59,15 @@ class NetExposure:
     def limit(self, symbol: str, notional: float) -> float:
         """Return notional allowed for a proposed trade."""
 
-        if notional > 0:
-            return self._limit_trade(symbol, notional, self.long, self.max_long)
-        elif notional < 0:
-            allowed = self._limit_trade(symbol, -notional, self.short, self.max_short)
-            return -allowed
-        return 0.0
+        with self._lock:
+            if notional > 0:
+                return self._limit_trade(symbol, notional, self.long, self.max_long)
+            elif notional < 0:
+                allowed = self._limit_trade(
+                    symbol, -notional, self.short, self.max_short
+                )
+                return -allowed
+            return 0.0
 
     # ------------------------------------------------------------------
     def _limit_trade(
@@ -96,23 +104,61 @@ class NetExposure:
     def update(self, symbol: str, notional: float) -> None:
         """Record executed trade notional for ``symbol``."""
 
-        if notional > 0:
-            self.long[symbol] += notional
-        elif notional < 0:
-            self.short[symbol] += -notional
-        long_tot, short_tot = self._totals()
-        try:
-            record_metric("long_exposure", long_tot)
-            record_metric("short_exposure", short_tot)
-        except Exception:
-            pass
+        with self._lock:
+            if notional > 0:
+                self.long[symbol] += notional
+            elif notional < 0:
+                self.short[symbol] += -notional
+            long_tot, short_tot = self._totals()
+            try:
+                record_metric("long_exposure", long_tot)
+                record_metric("short_exposure", short_tot)
+            except Exception:
+                pass
+            self._persist()
 
     # ------------------------------------------------------------------
     def totals(self) -> Dict[str, float]:
         """Return dictionary of long, short and net exposure."""
 
-        long_tot, short_tot = self._totals()
+        with self._lock:
+            long_tot, short_tot = self._totals()
         return {"long": long_tot, "short": short_tot, "net": long_tot - short_tot}
+
+    # ------------------------------------------------------------------
+    def _persist(self) -> None:
+        """Persist exposure books to parquet for crash recovery."""
+
+        try:
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                list(self.long.items()), columns=["symbol", "notional"]
+            ).to_parquet(self._log_dir / "net_exposure_long.parquet")
+            pd.DataFrame(
+                list(self.short.items()), columns=["symbol", "notional"]
+            ).to_parquet(self._log_dir / "net_exposure_short.parquet")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    def _load_state(self) -> None:
+        """Load exposure books from parquet if available."""
+
+        try:
+            long_path = self._log_dir / "net_exposure_long.parquet"
+            short_path = self._log_dir / "net_exposure_short.parquet"
+            if long_path.exists():
+                df_long = pd.read_parquet(long_path)
+                self.long.update(
+                    df_long.set_index("symbol")["notional"].to_dict()
+                )
+            if short_path.exists():
+                df_short = pd.read_parquet(short_path)
+                self.short.update(
+                    df_short.set_index("symbol")["notional"].to_dict()
+                )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     def record_returns(self, returns: Dict[str, float]) -> None:
