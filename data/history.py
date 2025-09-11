@@ -12,6 +12,7 @@ from utils.data_backend import get_dataframe_module
 
 pd = get_dataframe_module()
 import pandas as _pd
+
 IS_CUDF = pd.__name__ == "cudf"
 
 
@@ -27,6 +28,7 @@ def _tz_localize_none(series):
     if IS_CUDF:
         return pd.Series(series.to_pandas().dt.tz_localize(None))
     return series.dt.tz_localize(None)
+
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -80,17 +82,40 @@ def load_history_from_urls(urls: List[str]) -> pd.DataFrame:
             dfs.append(pd.read_csv(dest))
 
     df = pd.concat(dfs, ignore_index=True)
-    df["Timestamp"] = _to_datetime(
-        df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
-    )
+    df["Timestamp"] = _to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
     logger.info("Loaded %d rows from URLs", len(df))
     return df
 
 
-def load_history_mt5(symbol: str, start: dt.datetime, end: dt.datetime) -> pd.DataFrame:
-    """Download tick history from the MetaTrader 5 terminal history center."""
+def load_history_mt5(
+    symbol: str,
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+    min_years: int = 5,
+) -> pd.DataFrame:
+    """Download tick history from the MetaTrader 5 terminal history center.
+
+    Parameters
+    ----------
+    symbol : str
+        Instrument symbol to download.
+    start : datetime, optional
+        Start of the history range. When ``None`` or when the period between
+        ``start`` and ``end`` is shorter than ``min_years`` years, the range is
+        automatically expanded to span at least ``min_years`` years ending at
+        ``end``.
+    end : datetime, optional
+        End of the history range. Defaults to the current UTC time.
+    min_years : int, optional
+        Minimum number of years of history to fetch.
+    """
 
     from brokers import mt5_direct
+
+    if end is None:
+        end = dt.datetime.utcnow()
+    if start is None or (end - start).days < min_years * 365:
+        start = end - dt.timedelta(days=min_years * 365)
 
     return mt5_direct.fetch_history(symbol, start, end)
 
@@ -112,8 +137,8 @@ def load_history_config(
     api_cfg = (cfg.get("api_history") or {}).get(sym)
     if api_cfg:
         provider = api_cfg.get("provider", "mt5")
-        start = _pd.to_datetime(api_cfg.get("start"))
-        end = _pd.to_datetime(api_cfg.get("end"))
+        start = _pd.to_datetime(api_cfg.get("start")) if api_cfg.get("start") else None
+        end = _pd.to_datetime(api_cfg.get("end")) if api_cfg.get("end") else None
         if provider == "mt5":
             logger.info("Downloading history for %s from MetaTrader5", sym)
             df = load_history_mt5(sym, start, end)
@@ -155,9 +180,7 @@ def load_history(path: Path, validate: bool = False) -> pd.DataFrame:
 
     logger.info("Loading CSV history from %s", path)
     df = pd.read_csv(path)
-    df["Timestamp"] = _to_datetime(
-        df["Timestamp"], format="%Y%m%d %H:%M:%S:%f"
-    )
+    df["Timestamp"] = _to_datetime(df["Timestamp"], format="%Y%m%d %H:%M:%S:%f")
 
     ds = DeltaStore()
     delta = ds.ingest(path, df)
@@ -224,9 +247,7 @@ def load_history_parquet(path: Path, validate: bool = False) -> pd.DataFrame:
     if IS_CUDF and isinstance(df, _pd.DataFrame):
         df = pd.DataFrame(df)
     if "Timestamp" in df.columns:
-        df["Timestamp"] = _tz_localize_none(
-            _to_datetime(df["Timestamp"], utc=True)
-        )
+        df["Timestamp"] = _tz_localize_none(_to_datetime(df["Timestamp"], utc=True))
     if "date" in df.columns:
         df.drop(columns=["date"], inplace=True)
 
@@ -291,11 +312,13 @@ def load_history_iter(path: Path, chunk_size: int):
     disk_pressure = usage.get("disk_read", 0) + usage.get("disk_write", 0)
     if disk_pressure > 50 * 1024 * 1024:  # 50MB/s
         chunk_size = max(chunk_size // 2, 1)
-        logger.debug("Disk pressure %.1fMB/s; reducing chunk size to %d", disk_pressure / (1024**2), chunk_size)
+        logger.debug(
+            "Disk pressure %.1fMB/s; reducing chunk size to %d",
+            disk_pressure / (1024**2),
+            chunk_size,
+        )
 
-    logger.info(
-        "Streaming Parquet history from %s in chunks of %d", path, chunk_size
-    )
+    logger.info("Streaming Parquet history from %s in chunks of %d", path, chunk_size)
     try:  # Prefer the pyarrow dataset API for efficient streaming
         import pyarrow.dataset as ds  # type: ignore
 
@@ -314,9 +337,7 @@ def load_history_iter(path: Path, chunk_size: int):
     # Fallback to pandas iterator which also yields chunks
     for df in _pd.read_parquet(path, chunksize=chunk_size):
         if "Timestamp" in df.columns:
-            df["Timestamp"] = _tz_localize_none(
-                _to_datetime(df["Timestamp"], utc=True)
-            )
+            df["Timestamp"] = _tz_localize_none(_to_datetime(df["Timestamp"], utc=True))
         yield pd.DataFrame(df) if IS_CUDF else df
 
 
@@ -396,6 +417,7 @@ def load_multiple_histories(paths: Dict[str, Path]) -> pd.DataFrame:
     combined = pd.concat(dfs, ignore_index=True)
     logger.info("Loaded %d total rows", len(combined))
     return combined
+
 
 __all__ = [
     "load_history_from_urls",

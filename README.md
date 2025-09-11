@@ -426,6 +426,11 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
 
    df = fetch_history("EURUSD", datetime(2024, 1, 1), datetime(2024, 1, 2))
    ```
+
+   When `api_history` entries omit `start` and `end`, or specify a period
+   shorter than five years, the loader automatically requests at least five
+   years of tick history ending at the provided `end` time (or the current
+   time if `end` is not given).
 3. The realtime trainer stores ticks in a DuckDB database located at `data/realtime.duckdb`. The database is created automatically the first time you run the script and old rows beyond the `realtime_window` setting are pruned on each update.
 4. Set `use_feature_cache: true` in `config.yaml` to cache engineered features in `data/features.duckdb`. The cache is reused when the input history hasn't changed.
 
