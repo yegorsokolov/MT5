@@ -92,6 +92,9 @@ symbols:
 threshold: 0.55
 trailing_stop_pips: 20
 train_rows: 50000
+pt_mult: 0.01
+sl_mult: 0.01
+max_horizon: 10
 time_decay_half_life: null  # in bars
 balance_classes: false
 use_ray: true
