@@ -13,11 +13,24 @@ except Exception:  # pragma: no cover - fallback without validation
     def validate_module(func):
         return func
 
+try:  # pragma: no cover - validators may be optional in some environments
+    from .validators import require_columns, assert_no_nan
+except Exception:  # pragma: no cover - graceful fallback when validators missing
+    def require_columns(df, cols, **_):  # type: ignore[unused-arg]
+        return df
+
+    def assert_no_nan(df, cols=None, **_):  # type: ignore[unused-arg]
+        return df
+
 
 @validate_module
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     """Compute standard price/volume technical features."""
     df = df.copy()
+    # Basic input validation
+    require_columns(df, ["Bid", "Ask", "Timestamp"])
+    assert_no_nan(df, ["Bid", "Ask"])
+
     df["spread"] = df["Ask"] - df["Bid"]
     df["mid"] = (df["Ask"] + df["Bid"]) / 2
     df["return"] = df["mid"].pct_change().fillna(0)
