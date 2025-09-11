@@ -1,4 +1,10 @@
+import sys
 import numpy as np
+
+# Remove scipy stubs inserted by tests.conftest so real scipy/sklearn can be used
+sys.modules.pop("scipy", None)
+sys.modules.pop("scipy.stats", None)
+from sklearn.metrics import f1_score, precision_recall_curve
 
 
 def test_threshold_optimization_improves_f1():
@@ -6,23 +12,12 @@ def test_threshold_optimization_improves_f1():
     y_true = np.array([0, 0, 1, 1])
     probs = np.array([0.1, 0.4, 0.35, 0.8])
 
-    def f1_score(y_true, y_pred):
-        tp = np.sum((y_true == 1) & (y_pred == 1))
-        fp = np.sum((y_true == 0) & (y_pred == 1))
-        fn = np.sum((y_true == 1) & (y_pred == 0))
-        if tp == 0 and (fp > 0 or fn > 0):
-            return 0.0
-        precision = tp / (tp + fp) if tp + fp > 0 else 0.0
-        recall = tp / (tp + fn) if tp + fn > 0 else 0.0
-        return 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0.0
-
-    thresholds = np.unique(probs)
-    f1_default = f1_score(y_true, (probs > 0.5).astype(int))
-    best_thr, f1_best = 0.5, f1_default
-    for thr in thresholds:
-        f1_val = f1_score(y_true, (probs > thr).astype(int))
-        if f1_val > f1_best:
-            best_thr, f1_best = thr, f1_val
+    precision, recall, thresholds = precision_recall_curve(y_true, probs)
+    f1 = 2 * precision * recall / (precision + recall + 1e-12)
+    best_idx = int(np.argmax(f1[:-1]))
+    best_thr = thresholds[best_idx]
+    f1_best = f1_score(y_true, (probs >= best_thr).astype(int))
+    f1_default = f1_score(y_true, (probs >= 0.5).astype(int))
 
     assert abs(best_thr - 0.5) > 1e-6
     assert f1_best > f1_default
