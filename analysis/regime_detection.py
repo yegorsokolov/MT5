@@ -11,6 +11,7 @@ except Exception:  # pragma: no cover - hmmlearn may not be installed
     GaussianHMM = None  # type: ignore
 
 from .market_baskets import cluster_market_baskets
+from .vae_regime import VAERegime, window_features
 
 
 def detect_regimes(
@@ -62,13 +63,16 @@ def detect_regimes(
 def periodic_reclassification(
     df: pd.DataFrame,
     step: int = 500,
+    vae_window: int = 30,
     **kwargs,
 ) -> pd.DataFrame:
     """Periodically re-estimate regimes to adapt to structural shifts.
 
     The data is split into blocks of ``step`` rows. After each block the regimes are
     re-estimated using ``detect_regimes`` on all data up to the end of the block and
-    the latest labels are assigned to that block. This mimics an expanding window
+    the latest labels are assigned to that block. In parallel a variational
+    autoencoder is trained on rolling windows of the same feature set and clustered
+    to obtain ``vae_regime`` labels. This mimics an expanding window
     reclassification schedule.
 
     Parameters
@@ -77,19 +81,37 @@ def periodic_reclassification(
         Input market data.
     step: int
         Number of rows between reclassification runs.
+    vae_window: int
+        Length of the sliding window for the VAE based regime model.
     **kwargs:
         Additional arguments forwarded to :func:`detect_regimes`.
 
     Returns
     -------
     pd.DataFrame
-        ``df`` with/updated ``market_regime`` column.
+        ``df`` with/updated ``market_regime`` and ``vae_regime`` columns.
     """
     df = df.copy()
     labels = np.zeros(len(df), dtype=int)
+    vae_labels = np.zeros(len(df), dtype=int)
+    columns = kwargs.get("columns", ("return", "volatility_30"))
+    n_states = kwargs.get("n_states", 3)
     for end in range(step, len(df) + step, step):
         sub = df.iloc[:end]
         latest = detect_regimes(sub, **kwargs).iloc[-min(step, len(sub)) :]
         labels[end - len(latest) : end] = latest
+
+        feats = sub.loc[:, list(columns)].fillna(0).values
+        if len(feats) >= vae_window:
+            windows = window_features(feats, vae_window)
+            vae = VAERegime(windows.shape[1])
+            vlabels = vae.fit_predict(windows, n_clusters=n_states)
+            aligned = np.concatenate(
+                [np.zeros(vae_window - 1, dtype=int), vlabels]
+            )
+            latest_v = aligned[-min(step, len(sub)) :]
+            vae_labels[end - len(latest_v) : end] = latest_v
+
     df["market_regime"] = labels[: len(df)]
+    df["vae_regime"] = vae_labels[: len(df)]
     return df

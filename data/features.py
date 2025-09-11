@@ -36,6 +36,7 @@ from analysis.knowledge_graph import (
     risk_score,
     opportunity_score,
 )
+from analysis.regime_detection import periodic_reclassification
 from utils.resource_monitor import monitor, ResourceCapabilities
 from utils import load_config
 from config_models import ConfigError
@@ -620,6 +621,14 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     # Fractal metrics derived from mid-price after price-based features
     df = add_fractal_features(df)
+
+    # Estimate market and VAE regimes for gating features
+    try:
+        df = periodic_reclassification(
+            df, step=cfg.get("regime_reclass_period", 500)
+        )
+    except Exception:
+        logger.debug("regime classification failed", exc_info=True)
 
     # Allow runtime plugins to extend the feature set
     adjacency = df.attrs.get("adjacency_matrices")
