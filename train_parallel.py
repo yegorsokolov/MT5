@@ -10,8 +10,8 @@ import numpy as np
 import random
 from sklearn.metrics import classification_report
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
+from data.feature_scaler import FeatureScaler
 from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 from data.labels import triple_barrier
 
@@ -81,7 +81,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
 
     steps = []
     if cfg.get("use_scaler", True):
-        steps.append(("scaler", StandardScaler()))
+        steps.append(("scaler", FeatureScaler()))
     steps.append(("clf", LGBMClassifier(n_estimators=200, random_state=seed)))
     pipe = Pipeline(steps)
     pipe.fit(train_df[features], train_df["tb_label"])
@@ -90,6 +90,8 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     out_path = root / "models" / f"{sym}_model.joblib"
     out_path.parent.mkdir(exist_ok=True)
     joblib.dump(pipe, out_path)
+    if "scaler" in pipe.named_steps:
+        pipe.named_steps["scaler"].save(root / "models" / f"{sym}_scaler.pkl")
     return f"{sym} saved to {out_path}\n{report}"
 
 
