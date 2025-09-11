@@ -6,6 +6,7 @@ sequence of child orders.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Iterable, List
 
 
@@ -41,3 +42,31 @@ def vwap_schedule(total_qty: float, volumes: Iterable[float]) -> List[float]:
     if total_vol == 0:
         return [total_qty]
     return [total_qty * v / total_vol for v in vols]
+
+
+# ---------------------------------------------------------------------------
+async def twap_schedule_async(total_qty: float, intervals: int) -> List[float]:
+    """Async wrapper around :func:`twap_schedule`.
+
+    The helper mirrors :func:`twap_schedule` but provides an ``await`` point so
+    callers can schedule slice generation without blocking the event loop.
+    ``asyncio.sleep(0)`` yields control and therefore keeps behaviour
+    deterministic for tests.
+    """
+
+    await asyncio.sleep(0)
+    return twap_schedule(total_qty, intervals)
+
+
+async def vwap_schedule_async(total_qty: float, volumes: Iterable[float]) -> List[float]:
+    """Async wrapper around :func:`vwap_schedule`.
+
+    Similar to :func:`twap_schedule_async`, this simply delegates to the
+    synchronous implementation after yielding to the event loop.  Having an
+    asynchronous entry point keeps the scheduling API uniform for synchronous
+    and asynchronous execution engines.
+    """
+
+    await asyncio.sleep(0)
+    return vwap_schedule(total_qty, volumes)
+
