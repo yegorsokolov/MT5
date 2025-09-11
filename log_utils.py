@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 import os
 import socket
 import io
+import queue
+import threading
 
 import yaml
 import requests
@@ -76,6 +78,135 @@ def _save_order_id_index() -> None:
         return
     df = pd.DataFrame({"order_id": list(_order_id_cache)})
     df.to_parquet(ORDER_ID_INDEX, engine="pyarrow")
+
+
+# ---------------------------------------------------------------------------
+# Asynchronous trade/decision logging
+# ---------------------------------------------------------------------------
+
+LOG_QUEUE: "queue.Queue[tuple[str, object]]" = queue.Queue()
+_worker_thread: threading.Thread | None = None
+_trade_handler: RotatingFileHandler | None = None
+_decision_handler: RotatingFileHandler | None = None
+
+
+def _get_trade_handler() -> RotatingFileHandler:
+    """Return or create the rotating handler for the trade CSV."""
+    global _trade_handler
+    if _trade_handler is None:
+        _trade_handler = RotatingFileHandler(
+            TRADE_LOG, maxBytes=5 * 1024 * 1024, backupCount=5
+        )
+    return _trade_handler
+
+
+def _get_decision_handler() -> RotatingFileHandler:
+    """Return or create the rotating handler for the decision log."""
+    global _decision_handler
+    if _decision_handler is None:
+        _decision_handler = RotatingFileHandler(
+            DECISION_LOG, maxBytes=5 * 1024 * 1024, backupCount=5
+        )
+    return _decision_handler
+
+
+def _log_decision_sync(df: pd.DataFrame, handler: RotatingFileHandler) -> None:
+    """Write decisions DataFrame to encrypted parquet using ``handler``."""
+
+    key = _load_key("DECISION_AES_KEY")
+    if DECISION_LOG.exists():
+        existing = read_decisions()
+        df = pd.concat([existing, df], ignore_index=True)
+    buf = io.BytesIO()
+    df.to_parquet(buf, engine="pyarrow")
+    data = encrypt(buf.getvalue(), key)
+
+    if DECISION_LOG.exists() and DECISION_LOG.stat().st_size >= handler.maxBytes:
+        # ensure the handler stream is open for rollover
+        if handler.stream is None:
+            handler.stream = handler._open()
+        handler.doRollover()
+        handler.stream.close()
+        handler.stream = None
+
+    with open(DECISION_LOG, "wb") as f:
+        f.write(data)
+
+    if state_sync:
+        state_sync.sync_decisions()
+
+
+def _log_trade_sync(row: dict, t_handler: RotatingFileHandler, d_handler: RotatingFileHandler) -> None:
+    """Synchronously write trade row using ``t_handler`` and record decision."""
+
+    # Add timestamp and build row
+    row = {"timestamp": datetime.now(UTC).isoformat(), **row}
+
+    # Expand columns if needed
+    new_cols = [c for c in row if c not in TRADE_COLUMNS]
+    if new_cols:
+        TRADE_COLUMNS.extend(new_cols)
+
+    if t_handler.stream is None:
+        t_handler.stream = t_handler._open()
+
+    header_needed = t_handler.stream.tell() == 0
+    if t_handler.stream.tell() >= t_handler.maxBytes:
+        t_handler.doRollover()
+        t_handler.stream = t_handler._open()
+        header_needed = True
+
+    writer = csv.DictWriter(t_handler.stream, fieldnames=TRADE_COLUMNS)
+    if header_needed:
+        writer.writeheader()
+    writer.writerow({k: row.get(k, "") for k in TRADE_COLUMNS})
+    t_handler.stream.flush()
+    TRADE_COUNT.inc()
+
+    _log_decision_sync(pd.DataFrame([row]), d_handler)
+
+
+def _log_worker() -> None:
+    """Background worker that processes queued log events."""
+
+    t_handler = _get_trade_handler()
+    d_handler = _get_decision_handler()
+    while True:
+        item = LOG_QUEUE.get()
+        if item is None:
+            LOG_QUEUE.task_done()
+            break
+        kind, payload = item
+        try:
+            if kind == "trade":
+                _log_trade_sync(payload, t_handler, d_handler)
+            elif kind == "decision":
+                _log_decision_sync(payload, d_handler)
+        finally:
+            LOG_QUEUE.task_done()
+
+    t_handler.close()
+    d_handler.close()
+
+
+def _ensure_worker() -> None:
+    """Start logging worker thread if not already running."""
+
+    global _worker_thread
+    if _worker_thread is None or not _worker_thread.is_alive():
+        _worker_thread = threading.Thread(target=_log_worker, daemon=True)
+        _worker_thread.start()
+
+
+def shutdown_logging() -> None:
+    """Flush and stop the logging worker."""
+
+    global _worker_thread
+    if _worker_thread and _worker_thread.is_alive():
+        LOG_QUEUE.put(None)
+        LOG_QUEUE.join()
+        _worker_thread.join()
+        _worker_thread = None
 
 
 class JsonFormatter(logging.Formatter):
@@ -248,41 +379,11 @@ def log_exceptions(func):
 
 
 def log_trade(event: str, **fields) -> None:
-    """Append a trade event to the CSV log and decision store.
+    """Queue a trade event for asynchronous logging."""
 
-    The trade CSV uses columns defined in :data:`TRADE_COLUMNS` with the
-    order shown below. Standard columns are::
-
-        timestamp, event, symbol, price, qty, order_id, pnl, exit_time, model, regime
-
-    When additional fields are provided, they are appended to the header
-    once and subsequent writes preserve the expanded order.
-    """
-
-    row = {"timestamp": datetime.now(UTC).isoformat(), "event": event}
-    row.update(fields)
-
-    # Add any new fields to the global column list and rewrite header if needed
-    new_cols = [c for c in row if c not in TRADE_COLUMNS]
-    if new_cols:
-        TRADE_COLUMNS.extend(new_cols)
-        if TRADE_LOG.exists():
-            with open(TRADE_LOG, newline="") as f:
-                existing_rows = list(csv.DictReader(f))
-            with open(TRADE_LOG, "w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=TRADE_COLUMNS)
-                writer.writeheader()
-                for r in existing_rows:
-                    writer.writerow({k: r.get(k, "") for k in TRADE_COLUMNS})
-
-    header_needed = not TRADE_LOG.exists()
-    with open(TRADE_LOG, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=TRADE_COLUMNS)
-        if header_needed:
-            writer.writeheader()
-        writer.writerow({k: row.get(k, "") for k in TRADE_COLUMNS})
-    TRADE_COUNT.inc()
-    log_decision(pd.DataFrame([row]))
+    _ensure_worker()
+    LOG_QUEUE.put(("trade", {"event": event, **fields}))
+    LOG_QUEUE.join()
 
 
 def log_trade_history(record: dict) -> None:
@@ -314,16 +415,11 @@ def log_trade_history(record: dict) -> None:
 
 
 def log_decision(df: pd.DataFrame) -> None:
-    """Append rows describing decisions to the encrypted parquet log."""
-    key = _load_key("DECISION_AES_KEY")
-    if DECISION_LOG.exists():
-        existing = read_decisions()
-        df = pd.concat([existing, df], ignore_index=True)
-    buf = io.BytesIO()
-    df.to_parquet(buf, engine="pyarrow")
-    DECISION_LOG.write_bytes(encrypt(buf.getvalue(), key))
-    if state_sync:
-        state_sync.sync_decisions()
+    """Queue decision rows for asynchronous logging."""
+
+    _ensure_worker()
+    LOG_QUEUE.put(("decision", df))
+    LOG_QUEUE.join()
 
 
 def read_decisions() -> pd.DataFrame:
