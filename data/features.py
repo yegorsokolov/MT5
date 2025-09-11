@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 import hashlib
+import json
 import inspect
 import os
 import shutil
@@ -45,6 +46,7 @@ from analysis.frequency_features import spectral_features, wavelet_energy
 from analysis.garch_vol import garch_volatility
 from .expectations import validate_dataframe
 from .multitimeframe import aggregate_timeframes
+from feature_store import register_feature, load_feature
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,14 @@ def hash_dataframe(df: pd.DataFrame) -> str:
     return hashlib.sha256(
         pd.util.hash_pandas_object(df, index=True).values.tobytes()
     ).hexdigest()
+
+
+def _version_hash(df: pd.DataFrame, feat_cfg: object) -> str:
+    """Compute a deterministic hash for ``df`` and ``feat_cfg``."""
+    m = hashlib.sha1()
+    m.update(hash_dataframe(df).encode())
+    m.update(json.dumps(feat_cfg, sort_keys=True).encode())
+    return m.hexdigest()
 
 
 def _get_code_signature(func) -> str:
@@ -523,6 +533,19 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     """
 
     try:
+        cfg = load_config()
+        feat_cfg = cfg.get("features", [])
+    except Exception:  # pragma: no cover - config optional in tests
+        feat_cfg = []
+        cfg = {}
+
+    version = _version_hash(df, feat_cfg)
+    try:
+        return load_feature(version)
+    except FileNotFoundError:
+        logger.debug("feature version %s not found in store", version)
+
+    try:
         mtf = aggregate_timeframes(df, ["1min", "15min", "1h"]).drop(
             columns=["Timestamp"]
         )
@@ -533,11 +556,6 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     df = add_time_features(df)
 
     pipeline = list(get_feature_pipeline())
-    try:
-        cfg = load_config()
-        feat_cfg = cfg.get("features", [])
-    except Exception:  # pragma: no cover - config optional in tests
-        feat_cfg = []
     cointegration_enabled = (
         isinstance(feat_cfg, dict) and feat_cfg.get("cointegration")
     ) or (isinstance(feat_cfg, list) and "cointegration" in feat_cfg)
@@ -796,7 +814,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     if validate:
         validate_dataframe(df, "engineered_features")
-
+    register_feature(version, df, {"features": feat_cfg})
     return df
 
 
