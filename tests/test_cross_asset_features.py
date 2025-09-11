@@ -134,7 +134,7 @@ def test_cross_asset_large_universe_runtime():
 
 
 def test_cross_asset_top_k_limits_pairs_and_time():
-    symbols = [f"S{i:03d}" for i in range(20)]
+    symbols = [f"S{i:03d}" for i in range(50)]
     periods = 30
     idx = pd.date_range("2020-01-01", periods=periods, freq="D")
     rng = np.random.default_rng(1)
@@ -165,8 +165,8 @@ def test_cross_asset_top_k_limits_pairs_and_time():
     assert limited_time < full_time
 
 
-def test_cross_asset_pca_reduces_columns():
-    symbols = ["AAA", "BBB", "CCC", "DDD"]
+def test_cross_asset_default_pca_reduces_columns_large_universe():
+    symbols = [f"S{i:03d}" for i in range(40)]
     periods = 20
     idx = pd.date_range("2020-01-01", periods=periods, freq="D")
     rng = np.random.default_rng(2)
@@ -179,12 +179,14 @@ def test_cross_asset_pca_reduces_columns():
     )
 
     full = add_cross_asset_features(df.copy(), window=5)
-    pca_df = add_cross_asset_features(df.copy(), window=5, max_pairs=3, reduce="pca")
+    pca_df = add_cross_asset_features(df.copy(), window=5, max_pairs=5)
 
     pca_cols = [c for c in pca_df.columns if c.startswith("pair_pca_")]
     full_cols = [
         c for c in full.columns if c.startswith("corr_") or c.startswith("relret_")
     ]
-    assert len(pca_cols) == 3
+    assert len(pca_cols) == 5
     assert len(pca_cols) < len(full_cols)
-    assert not any(c.startswith("corr_") for c in pca_df.columns)
+    assert not any(
+        c.startswith("corr_") or c.startswith("relret_") for c in pca_df.columns
+    )
