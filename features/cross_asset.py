@@ -14,6 +14,15 @@ except Exception:  # pragma: no cover - fallback when imported directly
     def validate_module(func):
         return func
 
+try:  # pragma: no cover - validators optional when running in isolation
+    from .validators import require_columns, assert_no_nan
+except Exception:  # pragma: no cover - graceful fallback
+    def require_columns(df, cols, **_):  # type: ignore[unused-arg]
+        return df
+
+    def assert_no_nan(df, cols=None, **_):  # type: ignore[unused-arg]
+        return df
+
 
 def _merge_asof(left: pd.DataFrame, right: pd.DataFrame, **kwargs) -> pd.DataFrame:
     return pd.merge_asof(left, right, **kwargs)
@@ -273,6 +282,10 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
         cfg = load_config().get("cross_asset", {})
     except Exception:  # pragma: no cover - config issues shouldn't fail
         cfg = {}
+
+    # Validate essential inputs before heavy processing
+    require_columns(df, ["Timestamp", "Symbol", "return"])
+    assert_no_nan(df, ["return"])
 
     df = add_index_features(df)
     params = {
