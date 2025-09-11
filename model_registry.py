@@ -214,6 +214,10 @@ class ModelRegistry:
         self._finalizers: Dict[str, weakref.finalize] = {}
         self._last_used: Dict[str, float] = {}
         self._weights: Dict[str, Path] = {}
+        # Metadata associated with stored policies or models.  This allows
+        # training routines to annotate artefacts with useful information such
+        # as feature sets or training regimes.
+        self._policy_meta: Dict[str, Dict[str, Any]] = {}
         self._variant_by_name: Dict[str, ModelVariant] = {}
         self.latency = latency or InferenceLatency()
         self.cfg = cfg or {}
@@ -279,6 +283,41 @@ class ModelRegistry:
                     self._weights[v.quantized] = Path(v.quantized_weights)
         # Re-run selection to include the new task
         self._pick_models()
+
+    # ------------------------------------------------------------------
+    def register_policy(
+        self, name: str, path: str | Path, metadata: Dict[str, Any]
+    ) -> None:
+        """Register a trained RL policy under ``name`` with accompanying metadata.
+
+        The policy path is stored so that executors can later load the model
+        dynamically.  ``metadata`` is persisted next to the weights file for
+        external introspection and also kept in‑memory for quick access.
+        """
+
+        p = Path(path)
+        self._weights[name] = p
+        self._policy_meta[name] = metadata
+        try:
+            with open(p.with_suffix(".json"), "w") as fh:
+                json.dump(metadata, fh)
+        except Exception:  # pragma: no cover - best effort
+            self.logger.exception("Failed to write metadata for %s", name)
+
+    # ------------------------------------------------------------------
+    def get_policy_path(self, name: str | None = None) -> Optional[Path]:
+        """Return the weights path for the active RL policy.
+
+        When ``name`` is ``None`` the currently selected variant for the
+        ``rl_policy`` task is used.
+        """
+
+        if name is None:
+            try:
+                name = self.get("rl_policy")
+            except Exception:
+                return None
+        return self._weights.get(name)
 
     def _pick_models(self) -> None:
         with tracer.start_as_current_span("pick_models"):
@@ -653,3 +692,15 @@ def select_models() -> list[str]:
 
     _GLOBAL_REGISTRY.refresh()
     return [_GLOBAL_REGISTRY.get(task) for task in _GLOBAL_REGISTRY.selected]
+
+
+def register_policy(name: str, path: str | Path, metadata: Dict[str, Any]) -> None:
+    """Convenience wrapper around :meth:`ModelRegistry.register_policy`."""
+
+    _GLOBAL_REGISTRY.register_policy(name, path, metadata)
+
+
+def get_policy_path(name: str | None = None) -> Optional[Path]:
+    """Return the stored policy path from the global registry."""
+
+    return _GLOBAL_REGISTRY.get_policy_path(name)

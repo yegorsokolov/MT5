@@ -122,7 +122,9 @@ try:
     from models import model_store  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
-from data.features import make_features
+from features import make_features
+from model_registry import register_policy
+from datetime import datetime
 from analytics.metrics_store import record_metric, TS_PATH
 
 try:
@@ -1060,14 +1062,22 @@ def main(
             if algo == "RECURRENTPPO":
                 rec_dir = root / "models" / "recurrent_rl"
                 rec_dir.mkdir(parents=True, exist_ok=True)
-                model.save(rec_dir / "recurrent_model")
-                logger.info("RL model saved to %s", rec_dir / "recurrent_model.zip")
+                policy_path = rec_dir / "recurrent_model"
+                model.save(policy_path)
+                logger.info("RL model saved to %s", policy_path.with_suffix(".zip"))
             elif algo == "HIERARCHICALPPO":
-                model.save(root / "model_hierarchical")
-                logger.info("RL model saved to %s", root / "model_hierarchical.zip")
+                policy_path = root / "model_hierarchical"
+                model.save(policy_path)
+                logger.info("RL model saved to %s", policy_path.with_suffix(".zip"))
             else:
-                model.save(root / "model_rl")
-                logger.info("RL model saved to %s", root / "model_rl.zip")
+                policy_path = root / "model_rl"
+                model.save(policy_path)
+                logger.info("RL model saved to %s", policy_path.with_suffix(".zip"))
+            register_policy(
+                "rl_small",
+                policy_path,
+                {"algo": algo, "timestamp": datetime.utcnow().isoformat()},
+            )
             # evaluate trained policy
             eval_size = max(2, len(df) // 5)
             eval_df = df.tail(eval_size).reset_index(drop=True)
@@ -1416,6 +1426,11 @@ def train_execution(cfg: dict) -> float:
     if cfg.get("checkpoint_dir"):
         path = Path(cfg["checkpoint_dir"]) / "rl_executor"
         executor.save(path)
+        register_policy(
+            "rl_small",
+            path,
+            {"algo": "rl_executor", "timestamp": datetime.utcnow().isoformat()},
+        )
     return 0.0
 
 
