@@ -65,6 +65,18 @@ def _dir_size(path: Path) -> int:
     return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
 
 
+def hash_dataframe(df: pd.DataFrame) -> str:
+    """Return a SHA256 hash for the given DataFrame.
+
+    The hash is computed from the pandas hash of the frame to ensure that
+    equivalent frames produce identical hashes regardless of index ordering.
+    """
+
+    return hashlib.sha256(
+        pd.util.hash_pandas_object(df, index=True).values.tobytes()
+    ).hexdigest()
+
+
 def _get_code_signature(func) -> str:
     override = os.environ.get("FEATURE_CACHE_CODE_HASH")
     if override:
