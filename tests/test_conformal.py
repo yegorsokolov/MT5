@@ -1,8 +1,20 @@
 import numpy as np
 from pathlib import Path
 import sys
+import types
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+sys.modules.setdefault(
+    "telemetry",
+    types.SimpleNamespace(
+        get_meter=lambda name: types.SimpleNamespace(
+            create_histogram=lambda *a, **k: types.SimpleNamespace(
+                record=lambda *a, **k: None
+            )
+        )
+    ),
+)
 
 from models import conformal
 

@@ -649,6 +649,7 @@ def main(
     all_conf: list[float] = []
     all_lower: list[float] = []
     all_upper: list[float] = []
+    all_residuals: list[float] = []
     final_pipe: Pipeline | None = None
     X_train_final: pd.DataFrame | None = None
     last_val_X: pd.DataFrame | None = None
@@ -667,6 +668,7 @@ def main(
         all_regimes = state.get("all_regimes", [])
         all_lower = state.get("all_lower", [])
         all_upper = state.get("all_upper", [])
+        all_residuals = state.get("all_residuals", [])
         final_pipe = state.get("model")
         scaler_state = state.get("scaler_state")
         if final_pipe and scaler_state and "scaler" in final_pipe.named_steps:
@@ -785,6 +787,7 @@ def main(
             regimes_val,
         )
         residuals = y_val.values - probs
+        all_residuals.extend(residuals)
         q = fit_residuals(residuals, alpha=cfg.get("interval_alpha", 0.1))
         lower, upper = predict_interval(probs, q)
         cov = evaluate_coverage(y_val, lower, upper)
@@ -822,6 +825,7 @@ def main(
             "all_regimes": all_regimes,
             "all_lower": all_lower,
             "all_upper": all_upper,
+            "all_residuals": all_residuals,
             "metrics": report,
             "regime_thresholds": thr_dict,
         }
@@ -836,6 +840,10 @@ def main(
 
     overall_cov = (
         evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
+    )
+    interval_alpha = cfg.get("interval_alpha", 0.1)
+    overall_q = (
+        fit_residuals(all_residuals, alpha=interval_alpha) if all_residuals else None
     )
     if cfg.get("use_price_distribution") and last_split is not None:
         from train_price_distribution import train_price_distribution
@@ -954,6 +962,9 @@ def main(
         "regime_thresholds": regime_thresholds,
         "meta_model_id": meta_version_id,
     }
+    if overall_q is not None:
+        perf["interval_q"] = overall_q
+        perf["interval_alpha"] = interval_alpha
     version_id = model_store.save_model(
         final_pipe,
         cfg,
