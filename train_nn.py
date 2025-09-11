@@ -20,7 +20,7 @@ from datetime import datetime
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.checkpoint import checkpoint
 from torch.cuda.amp import autocast, GradScaler
-from sklearn.model_selection import train_test_split as sk_train_test_split
+from analysis.purged_cv import PurgedTimeSeriesSplit
 from tqdm import tqdm
 from models import model_store
 from models.distillation import distill_teacher_student
@@ -318,6 +318,7 @@ def main(
 
     try:  # avoid starting nested runs
         import mlflow as _mlflow  # type: ignore
+
         active = _mlflow.active_run()
     except Exception:  # pragma: no cover - mlflow optional
         active = None
@@ -465,11 +466,20 @@ def main(
             X_te, y_te = make_sequence_arrays(
                 test_sym, features, seq_len, label_col="tb_label"
             )
-            if len(X_tr) == 0 or len(X_te) == 0:
+            if len(X_tr) <= 1 or len(X_te) == 0:
                 continue
-            X_tr, X_va, y_tr, y_va = sk_train_test_split(
-                X_tr, y_tr, test_size=cfg.get("val_size", 0.2), random_state=seed
+            val_size = cfg.get("val_size", 0.2)
+            n_splits = max(int(round(1 / val_size)) - 1, 1)
+            n_splits = min(n_splits, len(X_tr) - 1) or 1
+            splitter = PurgedTimeSeriesSplit(
+                n_splits=n_splits, embargo=cfg.get("max_horizon", 0)
             )
+            groups = np.full(len(X_tr), code)
+            for tr_idx, va_idx in splitter.split(X_tr, groups=groups):
+                X_tr_fold, y_tr_fold = X_tr[tr_idx], y_tr[tr_idx]
+                X_va_fold, y_va_fold = X_tr[va_idx], y_tr[va_idx]
+            X_tr, y_tr = X_tr_fold, y_tr_fold
+            X_va, y_va = X_va_fold, y_va_fold
             if X_sample is None and len(X_tr) > 0:
                 X_sample = X_tr
             train_ds = TensorDataset(
