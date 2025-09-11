@@ -6,6 +6,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from analysis.slippage_model import SlippageModel
+
+
+def test_slippage_scales_with_liquidity():
+    high_liq = [[(100.0, 1000), (100.01, 1000)]]
+    low_liq = [[(100.0, 10), (100.01, 10)]]
+    high_model = SlippageModel(high_liq)
+    low_model = SlippageModel(low_liq)
+    order_size = 20
+    high_slip = high_model(order_size, "buy")
+    low_slip = low_model(order_size, "buy")
+    assert low_slip > high_slip
+
 
 class DummyGauge:
     def __init__(self, *args, **kwargs):
@@ -77,7 +90,6 @@ sys.modules.setdefault(
     types.SimpleNamespace(ray=ray_stub, init=lambda **k: None, shutdown=lambda: None),
 )
 
-# load backtest module with dummy dependencies
 spec = importlib.util.spec_from_file_location(
     "backtest", Path(__file__).resolve().parents[1] / "backtest.py"
 )
@@ -90,7 +102,7 @@ spec.loader.exec_module(backtest)
 
 
 class DummyModel:
-    def predict_proba(self, X):  # always signal to enter
+    def predict_proba(self, X):
         return np.tile([0.4, 0.6], (len(X), 1))
 
 
@@ -113,21 +125,31 @@ def _make_df() -> pd.DataFrame:
     return df
 
 
-def test_slippage_reduces_returns():
+def test_slippage_impacts_pnl():
     model = DummyModel()
     df = _make_df()
-    base_cfg = {"threshold": 0.5, "trailing_stop_pips": 1000, "order_size": 100}
-    metrics_no_slip, _ = backtest.backtest_on_df(
-        df, model, base_cfg, return_returns=True
-    )
+    cfg = {"threshold": 0.5, "trailing_stop_pips": 1000, "order_size": 100}
+    metrics_no, _ = backtest.backtest_on_df(df, model, cfg, return_returns=True)
 
-    cfg_slip = dict(base_cfg)
-    cfg_slip["slippage_bps"] = 10
+    snaps_buy = [
+        [(row.Ask, 10), (row.Ask + 1.0, 10)]
+        for row in df.itertuples()
+    ]
+    snaps_sell = [
+        [(row.Bid, 10), (row.Bid - 1.0, 10)]
+        for row in df.itertuples()
+    ]
+    model_buy = SlippageModel(snaps_buy)
+    model_sell = SlippageModel(snaps_sell)
+
+    def slip(order_size, side):
+        return (
+            model_buy(order_size, side)
+            if side == "buy"
+            else model_sell(order_size, side)
+        )
+
     metrics_slip, _ = backtest.backtest_on_df(
-        df, model, cfg_slip, return_returns=True
+        df, model, cfg, slippage_model=slip, return_returns=True
     )
-
-    assert metrics_slip["total_return"] < metrics_no_slip["total_return"]
-    assert metrics_slip["skipped_trades"] == 0
-    assert metrics_slip["partial_fills"] == 0
-
+    assert metrics_slip["total_return"] < metrics_no["total_return"]
