@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from analysis.ensemble_diversity import error_correlation_matrix
+from analysis.information_coefficient import information_coefficient
 
 
 # Lightweight import of mixture-of-experts utilities without requiring the full
@@ -191,6 +192,10 @@ def main(
 
     try:  # pragma: no cover - optional dependency
         from analytics import mlflow_client as mlflow
+        if not hasattr(mlflow, "log_dict"):  # provide passthrough if missing
+            import mlflow as _mlf  # type: ignore
+
+            mlflow.log_dict = lambda data, name: _mlf.log_dict(data, name)
     except Exception:  # noqa: BLE001 - provide a lightweight stub for tests
         mlflow = types.SimpleNamespace(
             start_run=lambda *a, **k: contextlib.nullcontext(),
@@ -231,6 +236,8 @@ def main(
     models: Dict[str, Any] = {}
     val_preds: Dict[str, np.ndarray] = {}
     metrics: Dict[str, float] = {}
+    coefficients: Dict[str, float] = {}
+    div_weights: Dict[str, float] | None = None
 
     mlflow.start_run("ensemble_training", cfg)
     try:
@@ -251,8 +258,10 @@ def main(
             f1 = f1_score(y_val, (prob > 0.5).astype(int))
             metrics[name] = f1
             mlflow.log_metric(f"f1_{name}", f1)
+            ic = information_coefficient(prob, y_val)
+            coefficients[name] = ic
+            mlflow.log_metric(f"ic_{name}", ic)
 
-        weights = None
         if len(val_preds) > 1:
             corr = error_correlation_matrix(val_preds, y_val)
             if hasattr(mlflow, "log_dict"):
@@ -267,9 +276,31 @@ def main(
                 diversity = np.clip(1.0 - mean_corr, 0.0, None)
                 if not np.allclose(diversity.sum(), 0.0):
                     div_w = diversity / diversity.sum()
-                    weights = {name: float(w) for name, w in zip(corr.index, div_w)}
+                    div_weights = {name: float(w) for name, w in zip(corr.index, div_w)}
                     if hasattr(mlflow, "log_dict"):
-                        mlflow.log_dict(weights, "diversity_weights.json")
+                        mlflow.log_dict(div_weights, "diversity_weights.json")
+
+        coef_vals = np.array([coefficients[n] for n in models])
+        if np.any(~np.isfinite(coef_vals)):
+            weights = {n: 1.0 / len(models) for n in models}
+        else:
+            coef_vals = np.abs(coef_vals)
+            if np.allclose(coef_vals.sum(), 0.0):
+                weights = {n: 1.0 / len(models) for n in models}
+            else:
+                exp_vals = np.exp(coef_vals)
+                total = float(exp_vals.sum())
+                weights = {n: float(v / total) for n, v in zip(models, exp_vals)}
+        if div_weights is not None:
+            weights = {n: weights[n] * div_weights[n] for n in weights}
+            total = sum(weights.values())
+            if total > 0:
+                weights = {n: w / total for n, w in weights.items()}
+            else:
+                weights = {n: 1.0 / len(models) for n in models}
+        if hasattr(mlflow, "log_dict"):
+            mlflow.log_dict(coefficients, "information_coefficients.json")
+            mlflow.log_dict(weights, "ensemble_weights.json")
 
         meta_model = None
         if ens_cfg.get("meta_learner"):

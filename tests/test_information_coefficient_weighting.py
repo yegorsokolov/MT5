@@ -1,8 +1,4 @@
 import sys
-import numpy as np
-import pandas as pd
-import types
-import sys
 import types
 import numpy as np
 import pandas as pd
@@ -23,25 +19,25 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 _spec = importlib.util.spec_from_file_location(
-    "train_ensemble", Path(__file__).resolve().parents[1] / "train_ensemble.py"
+    "train_ensemble", ROOT / "train_ensemble.py"
 )
 _te = importlib.util.module_from_spec(_spec)
 assert _spec and _spec.loader
 sys.modules["train_ensemble"] = _te
 _spec.loader.exec_module(_te)  # type: ignore
 main = _te.main
+rng = np.random.default_rng(0)
 
 
-def _run(div_weight: bool) -> tuple[float, dict[str, float]]:
-    rng = np.random.default_rng(0)
-    X = pd.DataFrame(rng.normal(size=(300, 2)), columns=["a", "b"])
-    y = ((0.1 * X["a"] + X["b"]) > 0).astype(int)
+def _run(use_ic: bool = True) -> tuple[dict[str, float], dict[str, dict]]:
+    a = rng.normal(size=200)
+    X = pd.DataFrame({"a": a, "b": -a + rng.normal(size=200)})
+    y = (a + 0.5 * rng.normal(size=200) > 0).astype(int)
     cfg = {
         "risk_per_trade": 0.1,
         "symbols": ["EURUSD"],
         "ensemble": {
             "enabled": True,
-            "diversity_weighting": div_weight,
             "base_models": {
                 "m1": {
                     "type": "lightgbm",
@@ -54,16 +50,6 @@ def _run(div_weight: bool) -> tuple[float, dict[str, float]]:
                     },
                 },
                 "m2": {
-                    "type": "lightgbm",
-                    "features": ["a"],
-                    "params": {
-                        "n_estimators": 5,
-                        "min_child_samples": 1,
-                        "min_data_in_bin": 1,
-                        "random_state": 0,
-                    },
-                },
-                "m3": {
                     "type": "lightgbm",
                     "features": ["b"],
                     "params": {
@@ -85,13 +71,26 @@ def _run(div_weight: bool) -> tuple[float, dict[str, float]]:
         end_run=lambda *a, **k: None,
     )
     with mock.patch.dict(sys.modules, {"analytics.mlflow_client": mlflow_stub}):
-        metrics = main(cfg=cfg, data=(X, y))
-    weights = logs.get("ensemble_weights.json", {})
-    return metrics["ensemble"], weights
+        patcher = (
+            contextlib.nullcontext()
+            if use_ic
+            else mock.patch(
+                "train_ensemble.information_coefficient",
+                return_value=float("nan"),
+            )
+        )
+        with patcher:
+            metrics = main(cfg=cfg, data=(X, y))
+    return metrics, logs
 
 
-def test_diversity_weighting_shifts_weights_to_diverse_model():
-    base_f1, base_w = _run(False)
-    div_f1, div_w = _run(True)
-    assert div_w["m3"] > base_w["m3"]
-    assert div_f1 >= base_f1
+def test_information_coefficient_weighting_improves_ensemble():
+    metrics_w, logs_w = _run(True)
+    coeffs = logs_w["information_coefficients.json"]
+    weights = logs_w["ensemble_weights.json"]
+    assert coeffs["m1"] > coeffs["m2"]
+    assert weights["m1"] > weights["m2"]
+    assert metrics_w["ensemble"] >= max(metrics_w["m1"], metrics_w["m2"])
+    metrics_eq, logs_eq = _run(False)
+    eq_w = logs_eq["ensemble_weights.json"]
+    assert abs(eq_w["m1"] - eq_w["m2"]) < 1e-6
