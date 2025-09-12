@@ -24,13 +24,13 @@ from analysis.purged_cv import PurgedTimeSeriesSplit
 from tqdm import tqdm
 from models import model_store
 from models.distillation import distill_teacher_student
-from models.build_model import build_model, compute_scale_factor
+from models.build_model import build_model, compute_scale_factor, initialize_tft
 from models.hier_forecast import HierarchicalForecaster
 from models.quantize import apply_quantization
 from models.contrastive_encoder import initialize_model_with_contrastive
 from models.slimmable_network import SlimmableNetwork, select_width_multiplier
 from analysis.feature_selector import select_features
-from models.tft import TemporalFusionTransformer, TFTConfig, QuantileLoss
+from models.tft import QuantileLoss
 from models.cross_asset_transformer import CrossAssetTransformer
 from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
 from analysis.active_learning import ActiveLearningQueue, merge_labels
@@ -424,6 +424,17 @@ def main(
         features = select_features(df[features], y_full)
         if "SymbolCode" in features:
             features.remove("SymbolCode")
+        model_cfg = cfg.get("model", {})
+        use_tft = model_cfg.get("type") == "tft" and TIERS.get(tier, 0) >= TIERS["gpu"]
+        if use_tft:
+            known_features = model_cfg.get("known_features", features)
+            observed_features = model_cfg.get("observed_features", [])
+            static_features = model_cfg.get("static_features", [])
+            features = list(
+                dict.fromkeys(known_features + observed_features + static_features)
+            )
+        else:
+            known_features = observed_features = static_features = []
         feat_path = root / "selected_features.json"
         feat_path.write_text(json.dumps(features))
 
@@ -460,40 +471,104 @@ def main(
                 if "SymbolCode" in test_df.columns
                 else test_df
             )
-            X_tr, y_tr = make_sequence_arrays(
-                train_sym, features, seq_len, label_col="tb_label"
-            )
-            X_te, y_te = make_sequence_arrays(
-                test_sym, features, seq_len, label_col="tb_label"
-            )
-            if len(X_tr) <= 1 or len(X_te) == 0:
-                continue
-            val_size = cfg.get("val_size", 0.2)
-            n_splits = max(int(round(1 / val_size)) - 1, 1)
-            n_splits = min(n_splits, len(X_tr) - 1) or 1
-            splitter = PurgedTimeSeriesSplit(
-                n_splits=n_splits, embargo=cfg.get("max_horizon", 0)
-            )
-            groups = np.full(len(X_tr), code)
-            for tr_idx, va_idx in splitter.split(X_tr, groups=groups):
-                X_tr_fold, y_tr_fold = X_tr[tr_idx], y_tr[tr_idx]
-                X_va_fold, y_va_fold = X_tr[va_idx], y_tr[va_idx]
-            X_tr, y_tr = X_tr_fold, y_tr_fold
-            X_va, y_va = X_va_fold, y_va_fold
-            if X_sample is None and len(X_tr) > 0:
-                X_sample = X_tr
-            train_ds = TensorDataset(
-                torch.tensor(X_tr, dtype=torch.float32),
-                torch.tensor(y_tr, dtype=torch.float32),
-            )
-            val_ds = TensorDataset(
-                torch.tensor(X_va, dtype=torch.float32),
-                torch.tensor(y_va, dtype=torch.float32),
-            )
-            test_ds = TensorDataset(
-                torch.tensor(X_te, dtype=torch.float32),
-                torch.tensor(y_te, dtype=torch.float32),
-            )
+            if use_tft:
+                Xk_tr, y_tr = make_sequence_arrays(
+                    train_sym, known_features, seq_len, label_col="tb_label"
+                )
+                Xk_te, y_te = make_sequence_arrays(
+                    test_sym, known_features, seq_len, label_col="tb_label"
+                )
+                if observed_features:
+                    Xo_tr = make_sequence_arrays(
+                        train_sym, observed_features, seq_len, label_col="tb_label"
+                    )[0]
+                    Xo_te = make_sequence_arrays(
+                        test_sym, observed_features, seq_len, label_col="tb_label"
+                    )[0]
+                else:
+                    Xo_tr = np.zeros((len(Xk_tr), seq_len, 0), dtype=np.float32)
+                    Xo_te = np.zeros((len(Xk_te), seq_len, 0), dtype=np.float32)
+                if static_features:
+                    Xs_tr = train_sym[static_features].to_numpy()[
+                        seq_len - 1 : seq_len - 1 + len(Xk_tr)
+                    ]
+                    Xs_te = test_sym[static_features].to_numpy()[seq_len - 1 :]
+                else:
+                    Xs_tr = np.zeros((len(Xk_tr), 0), dtype=np.float32)
+                    Xs_te = np.zeros((len(Xk_te), 0), dtype=np.float32)
+                if len(Xk_tr) <= 1 or len(Xk_te) == 0:
+                    continue
+                val_size = cfg.get("val_size", 0.2)
+                n_splits = max(int(round(1 / val_size)) - 1, 1)
+                n_splits = min(n_splits, len(Xk_tr) - 1) or 1
+                splitter = PurgedTimeSeriesSplit(
+                    n_splits=n_splits, embargo=cfg.get("max_horizon", 0)
+                )
+                groups = np.full(len(Xk_tr), code)
+                for tr_idx, va_idx in splitter.split(Xk_tr, groups=groups):
+                    Xk_tr_fold, y_tr_fold = Xk_tr[tr_idx], y_tr[tr_idx]
+                    Xk_va_fold, y_va_fold = Xk_tr[va_idx], y_tr[va_idx]
+                    Xo_tr_fold, Xo_va_fold = Xo_tr[tr_idx], Xo_tr[va_idx]
+                    Xs_tr_fold, Xs_va_fold = Xs_tr[tr_idx], Xs_tr[va_idx]
+                Xk_tr, y_tr = Xk_tr_fold, y_tr_fold
+                Xk_va, y_va = Xk_va_fold, y_va_fold
+                Xo_tr, Xo_va = Xo_tr_fold, Xo_va_fold
+                Xs_tr, Xs_va = Xs_tr_fold, Xs_va_fold
+                if X_sample is None and len(Xk_tr) > 0:
+                    X_sample = Xk_tr
+                train_ds = TensorDataset(
+                    torch.tensor(Xk_tr, dtype=torch.float32),
+                    torch.tensor(Xs_tr, dtype=torch.float32),
+                    torch.tensor(Xo_tr, dtype=torch.float32),
+                    torch.tensor(y_tr, dtype=torch.float32),
+                )
+                val_ds = TensorDataset(
+                    torch.tensor(Xk_va, dtype=torch.float32),
+                    torch.tensor(Xs_va, dtype=torch.float32),
+                    torch.tensor(Xo_va, dtype=torch.float32),
+                    torch.tensor(y_va, dtype=torch.float32),
+                )
+                test_ds = TensorDataset(
+                    torch.tensor(Xk_te, dtype=torch.float32),
+                    torch.tensor(Xs_te, dtype=torch.float32),
+                    torch.tensor(Xo_te, dtype=torch.float32),
+                    torch.tensor(y_te, dtype=torch.float32),
+                )
+            else:
+                X_tr, y_tr = make_sequence_arrays(
+                    train_sym, features, seq_len, label_col="tb_label"
+                )
+                X_te, y_te = make_sequence_arrays(
+                    test_sym, features, seq_len, label_col="tb_label"
+                )
+                if len(X_tr) <= 1 or len(X_te) == 0:
+                    continue
+                val_size = cfg.get("val_size", 0.2)
+                n_splits = max(int(round(1 / val_size)) - 1, 1)
+                n_splits = min(n_splits, len(X_tr) - 1) or 1
+                splitter = PurgedTimeSeriesSplit(
+                    n_splits=n_splits, embargo=cfg.get("max_horizon", 0)
+                )
+                groups = np.full(len(X_tr), code)
+                for tr_idx, va_idx in splitter.split(X_tr, groups=groups):
+                    X_tr_fold, y_tr_fold = X_tr[tr_idx], y_tr[tr_idx]
+                    X_va_fold, y_va_fold = X_tr[va_idx], y_tr[va_idx]
+                X_tr, y_tr = X_tr_fold, y_tr_fold
+                X_va, y_va = X_va_fold, y_va_fold
+                if X_sample is None and len(X_tr) > 0:
+                    X_sample = X_tr
+                train_ds = TensorDataset(
+                    torch.tensor(X_tr, dtype=torch.float32),
+                    torch.tensor(y_tr, dtype=torch.float32),
+                )
+                val_ds = TensorDataset(
+                    torch.tensor(X_va, dtype=torch.float32),
+                    torch.tensor(y_va, dtype=torch.float32),
+                )
+                test_ds = TensorDataset(
+                    torch.tensor(X_te, dtype=torch.float32),
+                    torch.tensor(y_te, dtype=torch.float32),
+                )
             sampler = (
                 DistributedSampler(
                     train_ds, num_replicas=world_size, rank=rank, shuffle=True
@@ -566,7 +641,6 @@ def main(
         ]
 
         quantiles = cfg.get("quantiles", [0.1, 0.5, 0.9])
-        use_tft = cfg.get("use_tft", False) and TIERS.get(tier, 0) >= TIERS["gpu"]
         use_cross_asset = (
             cfg.get("cross_asset_transformer") and TIERS.get(tier, 0) >= TIERS["gpu"]
         )
@@ -586,15 +660,15 @@ def main(
                 layer_norm=cfg.get("layer_norm", False),
             ).to(device)
         elif use_tft:
-            tft_cfg = TFTConfig(
-                static_size=0,
-                known_size=len(features),
-                observed_size=0,
-                hidden_size=cfg.get("d_model", 64),
-                num_heads=cfg.get("nhead", 4),
-                quantiles=quantiles,
-            )
-            model = TemporalFusionTransformer(tft_cfg).to(device)
+            tft_cfg = {
+                "static_size": len(static_features),
+                "known_size": len(known_features) or len(features),
+                "observed_size": len(observed_features),
+                "hidden_size": cfg.get("d_model", 64),
+                "num_heads": cfg.get("nhead", 4),
+                "quantiles": quantiles,
+            }
+            model = initialize_tft(tft_cfg).to(device)
         elif cfg.get("slimmable"):
             width_multipliers = cfg.get("width_multipliers", [0.25, 0.5, 1.0])
             model = SlimmableNetwork(
@@ -717,7 +791,8 @@ def main(
         if not accumulate_steps:
             try:
                 first_loader = next(iter(train_loaders.values()))
-                sample_x, _ = next(iter(first_loader))
+                sample_batch = next(iter(first_loader))
+                sample_x = sample_batch[0]
                 batch_mem_mb = sample_x.element_size() * sample_x.nelement() / (1024**2)
                 if monitor.capabilities.has_gpu and device.type == "cuda":
                     free_mem_mb = torch.cuda.mem_get_info()[0] / (1024**2)
@@ -778,11 +853,18 @@ def main(
                 losses = []
                 for code, it in iterators.items():
                     try:
-                        xb, yb = next(it)
+                        batch = next(it)
                     except StopIteration:
                         iterators[code] = iter(train_loaders[code])
-                        xb, yb = next(iterators[code])
-                    xb = xb.to(device)
+                        batch = next(iterators[code])
+                    if use_tft:
+                        xb, xs, xo, yb = batch
+                        xb = xb.to(device)
+                        xs = xs.to(device)
+                        xo = xo.to(device)
+                    else:
+                        xb, yb = batch
+                        xb = xb.to(device)
                     yb = yb.to(device)
                     if use_amp:
                         with autocast():
@@ -790,17 +872,23 @@ def main(
                                 preds = model(xb)
                                 losses.append(loss_fn(preds, yb.float()))
                             else:
-                                preds = model(xb) if use_tft else model(xb, code)
-                                losses.append(
-                                    loss_fn(preds, yb.float() if use_tft else yb)
-                                )
+                                if use_tft:
+                                    preds = model(xb, static=xs, observed=xo)
+                                    losses.append(loss_fn(preds, yb.float()))
+                                else:
+                                    preds = model(xb, code)
+                                    losses.append(loss_fn(preds, yb))
                     else:
                         if isinstance(model, HierarchicalForecaster):
                             preds = model(xb)
                             losses.append(loss_fn(preds, yb.float()))
                         else:
-                            preds = model(xb) if use_tft else model(xb, code)
-                            losses.append(loss_fn(preds, yb.float() if use_tft else yb))
+                            if use_tft:
+                                preds = model(xb, static=xs, observed=xo)
+                                losses.append(loss_fn(preds, yb.float()))
+                            else:
+                                preds = model(xb, code)
+                                losses.append(loss_fn(preds, yb))
                 raw_loss = sum(losses) / len(losses)
                 if use_amp:
                     scaler.scale(raw_loss / accumulate_steps).backward()
@@ -856,16 +944,27 @@ def main(
                 total = 0
                 with torch.no_grad():
                     for code, loader in val_loaders.items():
-                        for xb, yb in loader:
-                            xb = xb.to(device)
+                        for batch in loader:
+                            if use_tft:
+                                xb, xs, xo, yb = batch
+                                xb = xb.to(device)
+                                xs = xs.to(device)
+                                xo = xo.to(device)
+                            else:
+                                xb, yb = batch
+                                xb = xb.to(device)
                             yb = yb.to(device)
                             with autocast(enabled=use_amp):
                                 if isinstance(model, HierarchicalForecaster):
                                     preds = model(xb)
                                     loss = loss_fn(preds, yb.float())
                                 else:
-                                    preds = model(xb) if use_tft else model(xb, code)
-                                    loss = loss_fn(preds, yb.float() if use_tft else yb)
+                                    if use_tft:
+                                        preds = model(xb, static=xs, observed=xo)
+                                        loss = loss_fn(preds, yb.float())
+                                    else:
+                                        preds = model(xb, code)
+                                        loss = loss_fn(preds, yb)
                             val_loss += loss.item() * xb.size(0)
                             if isinstance(model, HierarchicalForecaster):
                                 pred_labels = (preds[:, 0] > 0.5).int()
@@ -933,14 +1032,24 @@ def main(
                 val_true: list[np.ndarray] = []
                 with torch.no_grad():
                     for code, loader in val_loaders.items():
-                        for xb, yb in loader:
-                            xb = xb.to(device)
+                        for batch in loader:
+                            if use_tft:
+                                xb, xs, xo, yb = batch
+                                xb = xb.to(device)
+                                xs = xs.to(device)
+                                xo = xo.to(device)
+                            else:
+                                xb, yb = batch
+                                xb = xb.to(device)
                             yb = yb.to(device)
                             with autocast(enabled=use_amp):
                                 if isinstance(model, HierarchicalForecaster):
                                     preds = model(xb)
                                 else:
-                                    preds = model(xb) if use_tft else model(xb, code)
+                                    if use_tft:
+                                        preds = model(xb, static=xs, observed=xo)
+                                    else:
+                                        preds = model(xb, code)
                             if isinstance(model, HierarchicalForecaster):
                                 prob = preds[:, 0]
                                 val_true.append(yb[:, 0].cpu().numpy())
@@ -972,22 +1081,37 @@ def main(
 
             correct = 0
             total = 0
+            q_metrics = np.zeros(len(quantiles)) if use_tft else None
             with torch.no_grad():
                 for code, loader in test_loaders.items():
-                    for xb, yb in loader:
-                        xb = xb.to(device)
+                    for batch in loader:
+                        if use_tft:
+                            xb, xs, xo, yb = batch
+                            xb = xb.to(device)
+                            xs = xs.to(device)
+                            xo = xo.to(device)
+                        else:
+                            xb, yb = batch
+                            xb = xb.to(device)
                         yb = yb.to(device)
                         with autocast(enabled=use_amp):
                             if isinstance(model, HierarchicalForecaster):
                                 preds = model(xb)
                                 prob = preds[:, 0]
                             else:
-                                preds = model(xb) if use_tft else model(xb, code)
-                                prob = (
-                                    preds[:, len(quantiles) // 2]
-                                    if use_tft
-                                    else preds.squeeze()
-                                )
+                                if use_tft:
+                                    preds = model(xb, static=xs, observed=xo)
+                                    prob = preds[:, len(quantiles) // 2]
+                                else:
+                                    preds = model(xb, code)
+                                    prob = preds.squeeze()
+                        if use_tft:
+                            errors = yb.unsqueeze(1) - preds
+                            q_tensor = torch.tensor(quantiles, device=errors.device)
+                            q_loss = torch.maximum(
+                                (q_tensor - 1) * errors, q_tensor * errors
+                            )
+                            q_metrics += q_loss.sum(0).cpu().numpy()
                         if calibrator is not None:
                             prob_np = prob.cpu().numpy()
                             prob = torch.tensor(
@@ -1008,6 +1132,10 @@ def main(
             mlflow.log_param("patience", cfg.get("patience", 3))
             mlflow.log_metric("test_accuracy", acc)
             mlflow.log_metric("best_val_loss", best_val_loss)
+            if use_tft and q_metrics is not None and total:
+                q_metrics /= total
+                for i, q in enumerate(quantiles):
+                    mlflow.log_metric(f"pinball_q{int(q*100)}", float(q_metrics[i]))
             logger.info("Model saved to %s", model_path)
             mlflow.log_artifact(str(model_path))
             saved_state = joblib.load(model_path)
@@ -1045,10 +1173,15 @@ def main(
             if use_tft:
                 quantile_preds = []
                 for _code, loader in test_loaders.items():
-                    for xb, _ in loader:
+                    for batch in loader:
+                        xb, xs, xo, _ = batch
                         xb = xb.to(device)
+                        xs = xs.to(device)
+                        xo = xo.to(device)
                         with torch.no_grad():
-                            quantile_preds.append(model(xb).cpu())
+                            quantile_preds.append(
+                                model(xb, static=xs, observed=xo).cpu()
+                            )
                 if quantile_preds:
                     q_pred = torch.cat(quantile_preds).numpy()
                     q_cols = [f"q{int(q*100)}" for q in quantiles]
