@@ -658,6 +658,7 @@ def main(
                 dim_feedforward=cfg.get("dim_feedforward"),
                 dropout=cfg.get("dropout", 0.1),
                 layer_norm=cfg.get("layer_norm", False),
+                time_encoding=cfg.get("time_encoding", False),
             ).to(device)
         elif use_tft:
             tft_cfg = {

@@ -49,6 +49,7 @@ models/*
 !models/slimmable_network.py
 !models/residual_learner.py
 !models/residual_stacker.py
+!models/time_encoding.py
 __pycache__/
 analysis/news_impact.parquet
 analytics/*.parquet
