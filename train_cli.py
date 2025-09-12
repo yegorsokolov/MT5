@@ -6,7 +6,8 @@ from typing import Optional
 import typer
 import pandas as pd
 
-from tuning.baseline_opt import backtest, run_search
+from tuning.baseline_opt import backtest, run_search as baseline_run_search
+from tuning.auto_search import run_search as auto_model_search
 from train_graphnet import train_graphnet
 from train_price_distribution import prepare_features, train_price_distribution
 from train_nn import main as train_nn_main
@@ -30,7 +31,7 @@ def baseline(
     else:
         df = pd.read_parquet(p)
     if tune:
-        best = run_search(df, n_trials=trials)
+        best = baseline_run_search(df, n_trials=trials)
         typer.echo(best)
     else:
         params = {
@@ -103,6 +104,29 @@ def walk_forward(
     cfg = setup_training(config, experiment="walk_forward")
     results = walk_forward_train(data, window_length, step_size, model_type)
     typer.echo(results.to_json(orient="records"))
+    end_training()
+
+
+@app.command("auto-search")
+def auto_search(
+    data: Path = typer.Option(
+        ..., help="CSV or parquet with feature columns and target column"
+    ),
+    target: str = typer.Option("y", help="Name of target column in data"),
+    trials: int = typer.Option(10, help="Number of Optuna trials"),
+    config: Optional[Path] = typer.Option(None, help="Path to config YAML"),
+) -> None:
+    cfg = setup_training(config, experiment="auto_search")
+    p = Path(data)
+    if p.suffix == ".csv":
+        df = pd.read_csv(p)
+    else:
+        df = pd.read_parquet(p)
+    y = df[target].values
+    X = df.drop(columns=[target]).values
+    best, summary = auto_model_search(X, y, n_trials=trials)
+    typer.echo(best)
+    typer.echo(summary.to_json(orient="records"))
     end_training()
 
 
