@@ -43,6 +43,7 @@ class StrategyConfig(BaseModel):
     risk_per_trade: float = Field(..., gt=0, le=1)
     session_position_limits: Dict[str, int] = Field(default_factory=dict)
     default_position_limit: int = 1
+    use_kalman_smoothing: bool = False
     model_config = ConfigDict(extra="forbid")
 
 

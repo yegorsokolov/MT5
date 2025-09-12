@@ -34,6 +34,7 @@ from typing import Deque, Dict, Optional, Set
 from indicators import atr as calc_atr, bollinger, rsi as calc_rsi, sma
 from utils import load_config
 from config_models import ConfigError
+from analysis.kalman_filter import KalmanState, smooth_price
 
 
 @dataclass
@@ -135,6 +136,7 @@ class BaselineStrategy:
         ram_short_threshold: float = 0.0,
         hurst_trend_min: float = 0.5,
         hurst_mean_reversion_max: float = 0.5,
+        use_kalman_smoothing: bool | None = None,
     ) -> None:
         if short_window >= long_window:
             raise ValueError("short_window must be < long_window")
@@ -200,6 +202,14 @@ class BaselineStrategy:
         self.default_position_limit = default_position_limit
         self.current_position_limit = self.default_position_limit
 
+        if use_kalman_smoothing is None:
+            try:
+                use_kalman_smoothing = load_config().get("use_kalman_smoothing", False)
+            except Exception:
+                use_kalman_smoothing = False
+        self.use_kalman_smoothing = bool(use_kalman_smoothing)
+        self._kf_state: Optional[KalmanState] = None
+
     # ------------------------------------------------------------------
     # Indicator helpers
     # ------------------------------------------------------------------
@@ -233,10 +243,14 @@ class BaselineStrategy:
         if session is not None:
             self.set_session(session)
 
+        raw_price = price
+        if self.use_kalman_smoothing:
+            price, self._kf_state = smooth_price(price, self._kf_state)
+
         signal = self._compute_signal(price, indicators)
         signal = self._apply_filters(signal, indicators, price)
         return self._manage_position(
-            price, signal, indicators.regime, indicators.vae_regime
+            raw_price, signal, indicators.regime, indicators.vae_regime
         )
 
     # ------------------------------------------------------------------
