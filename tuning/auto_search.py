@@ -111,22 +111,22 @@ def _train_crossasset(
         nhead=int(params["nhead"]),
         num_layers=int(params["num_layers"]),
         dropout=float(params.get("dropout", 0.1)),
+        time_encoding=bool(params.get("time_encoding", False)),
     )
     opt = torch.optim.Adam(model.parameters(), lr=float(params["lr"]))
     X_t = torch.tensor(X_tr, dtype=torch.float32).unsqueeze(1).unsqueeze(1)
+    times_t = torch.zeros(X_t.shape[0], 1, 1)
     y_t = torch.tensor(y_tr, dtype=torch.float32).unsqueeze(1)
     for _ in range(1):
         opt.zero_grad()
-        out = model(X_t).squeeze(1)
+        out = model(X_t, times_t).squeeze(1)
         loss = nn.functional.mse_loss(out, y_t)
         loss.backward()
         opt.step()
     with torch.no_grad():
-        preds = (
-            model(torch.tensor(X_va, dtype=torch.float32).unsqueeze(1).unsqueeze(1))
-            .squeeze(1)
-            .numpy()
-        )
+        X_va_t = torch.tensor(X_va, dtype=torch.float32).unsqueeze(1).unsqueeze(1)
+        times_va = torch.zeros(X_va_t.shape[0], 1, 1)
+        preds = model(X_va_t, times_va).squeeze(1).numpy()
     preds = preds.reshape(-1)
     return -float(np.mean((y_va - preds) ** 2))
 

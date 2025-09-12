@@ -13,6 +13,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from .time_encoding import TimeEncoding
+
 
 class PositionalEncoding(nn.Module):
     """Sinusoidal positional encoding."""
@@ -47,12 +49,14 @@ class CrossAssetTransformer(nn.Module):
         dim_feedforward: int | None = None,
         dropout: float = 0.1,
         layer_norm: bool = False,
+        time_encoding: bool = False,
     ) -> None:
         super().__init__()
         self.n_symbols = n_symbols
         self.input_proj = nn.Linear(input_dim, d_model)
         self.symbol_emb = nn.Embedding(n_symbols, d_model)
         self.pos_enc = PositionalEncoding(d_model)
+        self.time_encoder = TimeEncoding(d_model) if time_encoding else None
         ff_dim = dim_feedforward if dim_feedforward is not None else 4 * d_model
         enc_layer = nn.TransformerEncoderLayer(
             d_model,
@@ -65,7 +69,9 @@ class CrossAssetTransformer(nn.Module):
         self.norm = nn.LayerNorm(d_model) if layer_norm else None
         self.head = nn.Linear(d_model, output_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, times: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Return per-symbol outputs for ``x``.
 
         Parameters
@@ -78,6 +84,10 @@ class CrossAssetTransformer(nn.Module):
         x = self.input_proj(x)
         sym_idx = torch.arange(s, device=x.device).view(1, s, 1).expand(b, s, t)
         x = x + self.symbol_emb(sym_idx)
+        if self.time_encoder is not None:
+            if times is None:
+                raise ValueError("times tensor required when time_encoding is enabled")
+            x = x + self.time_encoder(times)
         x = x.reshape(b, s * t, -1)
         x = self.pos_enc(x)
         x = self.encoder(x)
