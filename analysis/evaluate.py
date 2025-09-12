@@ -71,3 +71,45 @@ def bootstrap_classification_metrics(
         "recall_ci": (float(lower[1]), float(upper[1])),
         "f1_ci": (float(lower[2]), float(upper[2])),
     }
+
+
+def risk_adjusted_metrics(
+    y_true: Iterable[int], y_pred: Iterable[int]
+) -> Dict[str, float]:
+    """Compute simple risk-adjusted metrics from predictions.
+
+    The helper derives a pseudo return series from ``y_true`` and ``y_pred``
+    by assuming a unit position is taken when the prediction is ``1``.
+    Correct predictions yield ``+1`` while incorrect positives result in
+    ``-1``.  No trade corresponds to a zero return.  From this return
+    sequence the Sharpe and Calmar ratios are calculated.
+
+    Parameters
+    ----------
+    y_true, y_pred:
+        Iterable of true labels and binary predictions.
+
+    Returns
+    -------
+    dict
+        Dictionary with ``sharpe`` and ``calmar`` ratios.
+    """
+
+    yt = np.asarray(list(y_true), dtype=float)
+    yp = np.asarray(list(y_pred), dtype=int)
+    if yt.size != yp.size:
+        raise ValueError("y_true and y_pred must have the same length")
+
+    returns = np.where(yp == 1, np.where(yt == 1, 1.0, -1.0), 0.0)
+    mean_ret = returns.mean()
+    std_ret = returns.std()
+    sharpe = float(mean_ret / (std_ret + 1e-9))
+
+    cumulative = np.cumsum(returns)
+    peak = np.maximum.accumulate(cumulative)
+    max_dd = np.max(peak - cumulative) if len(cumulative) else 0.0
+    calmar = float(mean_ret / (max_dd + 1e-9))
+
+    logger.info("Sharpe %.3f | Calmar %.3f", sharpe, calmar)
+
+    return {"sharpe": sharpe, "calmar": calmar}
