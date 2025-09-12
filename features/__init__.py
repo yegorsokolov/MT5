@@ -110,6 +110,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
         cointegration,
         vwap,
         baseline_signal,
+        divergence,
     )
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
     register_feature("kalman_ma", kalman_ma.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("regime", regime.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("macd", macd.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature("divergence", divergence.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("ram", ram.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("cointegration", cointegration.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("vwap", vwap.compute, min_cpus=1, min_mem_gb=1.0)
