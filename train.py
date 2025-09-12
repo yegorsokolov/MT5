@@ -79,7 +79,10 @@ from analysis.regime_thresholds import find_regime_thresholds
 from analysis.concept_drift import ConceptDriftMonitor
 from analysis.pseudo_labeler import generate_pseudo_labels
 from models.meta_label import train_meta_classifier
-from analysis.evaluate import bootstrap_classification_metrics
+from analysis.evaluate import (
+    bootstrap_classification_metrics,
+    risk_adjusted_metrics,
+)
 from analysis.interpret_model import generate_shap_report
 
 setup_logging()
@@ -234,21 +237,43 @@ def train_multi_output_model(
     thr_dict: dict[str, float] = {}
     reports: dict[str, object] = {}
     f1_scores: list[float] = []
+    threshold_metric = cfg.get("threshold_metric", "f1")
     for i, col in enumerate(y.columns):
         probs = val_probs[i][:, 1]
-        precision, recall, thresholds = precision_recall_curve(y[col], probs)
-        f1 = 2 * precision * recall / (precision + recall + 1e-12)
-        if len(thresholds) > 0:
-            best_idx = int(np.argmax(f1[:-1]))
-            best_thr = float(thresholds[best_idx])
+        if threshold_metric == "f1":
+            precision, recall, thresholds = precision_recall_curve(y[col], probs)
+            f1 = 2 * precision * recall / (precision + recall + 1e-12)
+            if len(thresholds) > 0:
+                best_idx = int(np.argmax(f1[:-1]))
+                best_thr = float(thresholds[best_idx])
+                best_metric = float(f1[best_idx])
+            else:
+                best_thr = 0.5
+                best_metric = 0.0
         else:
+            unique_thr = np.unique(probs)
             best_thr = 0.5
+            best_metric = -np.inf
+            for thr in unique_thr:
+                pred = (probs >= thr).astype(int)
+                metrics = risk_adjusted_metrics(y[col], pred)
+                metric_val = metrics.get(threshold_metric, float("-inf"))
+                if metric_val > best_metric:
+                    best_metric = metric_val
+                    best_thr = float(thr)
         thr_dict[col] = best_thr
         preds[:, i] = (probs >= best_thr).astype(int)
         rep = classification_report(y[col], preds[:, i], output_dict=True)
         reports[col] = rep
         f1_scores.append(rep["weighted avg"]["f1-score"])
-        logger.info("Best threshold for %s: %.4f", col, best_thr)
+        logger.info(
+            "Best threshold for %s (%s): %.4f", col, threshold_metric, best_thr
+        )
+        try:
+            mlflow.log_metric(f"thr_{col}", best_thr)
+            mlflow.log_metric(f"{threshold_metric}_{col}", best_metric)
+        except Exception:  # pragma: no cover - mlflow optional
+            pass
     reports["aggregate_f1"] = float(np.mean(f1_scores))
     return pipe, reports
 
