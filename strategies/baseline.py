@@ -60,6 +60,8 @@ class IndicatorBundle:
     vwap_cross: Optional[int] = None
     macd_cross: Optional[int] = None
     squeeze_break: Optional[int] = None
+    div_rsi: Optional[int] = None
+    div_macd: Optional[int] = None
     regime: Optional[int] = None
     vae_regime: Optional[int] = None
     microprice_delta: Optional[float] = None
@@ -269,13 +271,23 @@ class BaselineStrategy:
         if ind.atr is not None:
             self.latest_atr = ind.atr
         elif len(self._closes) >= self.atr_window + 1:
-            self.latest_atr = calc_atr(self._highs, self._lows, self._closes, self.atr_window)
+            self.latest_atr = calc_atr(
+                self._highs, self._lows, self._closes, self.atr_window
+            )
 
         if len(self._long) < self.long_window or self.latest_atr is None:
             return 0
 
-        short_ma_val = ind.short_ma if ind.short_ma is not None else sma(self._short, self.short_window)
-        if ind.long_ma is not None and ind.boll_upper is not None and ind.boll_lower is not None:
+        short_ma_val = (
+            ind.short_ma
+            if ind.short_ma is not None
+            else sma(self._short, self.short_window)
+        )
+        if (
+            ind.long_ma is not None
+            and ind.boll_upper is not None
+            and ind.boll_lower is not None
+        ):
             long_ma_val = ind.long_ma
             upper_band = ind.boll_upper
             lower_band = ind.boll_lower
@@ -285,7 +297,9 @@ class BaselineStrategy:
             upper_band = ind.boll_upper if ind.boll_upper is not None else ub
             lower_band = ind.boll_lower if ind.boll_lower is not None else lb
 
-        rsi_val = ind.rsi if ind.rsi is not None else calc_rsi(self._long, self.rsi_window)
+        rsi_val = (
+            ind.rsi if ind.rsi is not None else calc_rsi(self._long, self.rsi_window)
+        )
         if isinstance(rsi_val, float) and isnan(rsi_val):
             rsi_val = 50.0
 
@@ -308,7 +322,9 @@ class BaselineStrategy:
         self._prev_short, self._prev_long = short_ma_val, long_ma_val
         return raw_signal
 
-    def _apply_filters(self, raw_signal: int, ind: IndicatorBundle, price: float) -> int:
+    def _apply_filters(
+        self, raw_signal: int, ind: IndicatorBundle, price: float
+    ) -> int:
         signal = raw_signal
 
         if signal == 1:
@@ -364,7 +380,11 @@ class BaselineStrategy:
 
         if signal != 0 and ind.vwap_cross is not None and ind.vwap_cross != signal:
             signal = 0
-        if signal != 0 and ind.supertrend_break is not None and ind.supertrend_break != signal:
+        if (
+            signal != 0
+            and ind.supertrend_break is not None
+            and ind.supertrend_break != signal
+        ):
             signal = 0
         if signal != 0 and ind.kama_cross is not None and ind.kama_cross != signal:
             signal = 0
@@ -372,7 +392,15 @@ class BaselineStrategy:
             signal = 0
         if signal != 0 and ind.macd_cross is not None and ind.macd_cross != signal:
             signal = 0
-        if signal != 0 and ind.squeeze_break is not None and ind.squeeze_break != signal:
+        if (
+            signal != 0
+            and ind.squeeze_break is not None
+            and ind.squeeze_break != signal
+        ):
+            signal = 0
+        if signal != 0 and ind.div_rsi is not None and ind.div_rsi != signal:
+            signal = 0
+        if signal != 0 and ind.div_macd is not None and ind.div_macd != signal:
             signal = 0
 
         return signal
@@ -412,10 +440,18 @@ class BaselineStrategy:
     ) -> int:
         # Exit immediately if current regime disallows the held position
         if regime is not None:
-            if self.position == 1 and self.long_regimes is not None and regime not in self.long_regimes:
+            if (
+                self.position == 1
+                and self.long_regimes is not None
+                and regime not in self.long_regimes
+            ):
                 self.position = 0
                 return -1
-            if self.position == -1 and self.short_regimes is not None and regime not in self.short_regimes:
+            if (
+                self.position == -1
+                and self.short_regimes is not None
+                and regime not in self.short_regimes
+            ):
                 self.position = 0
                 return 1
         if vae_regime is not None:
