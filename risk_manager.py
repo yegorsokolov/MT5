@@ -16,7 +16,12 @@ from risk.net_exposure import NetExposure
 from risk.currency_exposure import CurrencyExposure
 from analytics.metrics_aggregator import record_metric
 from analytics import decision_logger
-from portfolio.robust_optimizer import RobustOptimizer
+from portfolio import (
+    HRPOptimizer,
+    PortfolioOptimizer,
+    RobustOptimizer,
+    optimizer_from_config,
+)
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
 from analysis.exposure_matrix import ExposureMatrix
 from analysis.scenario_mc import generate_correlated_shocks
@@ -73,7 +78,7 @@ class RiskManager:
         risk_of_ruin_downscale: float = 1.0,
         ruin_downscale_factor: float = 0.5,
         initial_capital: float = 1.0,
-        optimizer: RobustOptimizer | None = None,
+        optimizer: PortfolioOptimizer | HRPOptimizer | RobustOptimizer | None = None,
         tail_threshold: float | None = None,
         tail_prob_limit: float = 0.05,
         max_long_exposure: float = float("inf"),
@@ -101,7 +106,7 @@ class RiskManager:
         self.risk_of_ruin_downscale = risk_of_ruin_downscale
         self.ruin_downscale_factor = ruin_downscale_factor
         self.initial_capital = initial_capital
-        self.robust_optimizer = optimizer or RobustOptimizer()
+        self.optimizer = optimizer or RobustOptimizer()
         self._regime_pnl_history: Dict[int, Dict[str, List[float]]] = {}
         self._last_regime: int | None = None
         self.tail_threshold = tail_threshold or max_drawdown
@@ -526,13 +531,13 @@ class RiskManager:
         regime: int | None = None,
         factor_exposures: Dict[str, pd.Series] | None = None,
     ) -> Dict[str, float]:
-        """Recompute risk budgets using a robust optimiser.
+        """Recompute risk budgets using a portfolio optimiser.
 
         When ``regime`` is provided (or inferred from the most recent update) the
         allocation is computed from returns observed in that market regime using a
-        :class:`~portfolio.robust_optimizer.RobustOptimizer` to guard against
-        estimation error.  If insufficient data is available the allocator falls
-        back to the naive :class:`~risk.budget_allocator.BudgetAllocator` weights.
+        configurable optimiser (mean-variance or HRP).  If insufficient data is
+        available the allocator falls back to the naive
+        :class:`~risk.budget_allocator.BudgetAllocator` weights.
         """
 
         returns = {
@@ -577,7 +582,14 @@ class RiskManager:
         data = np.vstack([s.tail(min_len).to_numpy() for s in reg_hist.values()])
         mu = data.mean(axis=1)
         cov = np.cov(data)
-        weights = self.robust_optimizer.compute_weights(mu, cov)
+        weights = self.optimizer.compute_weights(mu, cov)
+        try:
+            record_metric("diversification_ratio", self.optimizer.diversification_ratio())
+        except Exception:
+            pass
+        weights = np.clip(weights, 0.0, None)
+        if weights.sum() > 0:
+            weights = weights / weights.sum()
         total = sum(budgets.values()) or self.budget_allocator.capital
         self.budget_allocator.budgets = {
             bot: total * w for bot, w in zip(reg_hist.keys(), weights)
@@ -606,6 +618,7 @@ INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "1.0"))
 MAX_LONG_EXPOSURE = float(os.getenv("MAX_LONG_EXPOSURE", "inf"))
 MAX_SHORT_EXPOSURE = float(os.getenv("MAX_SHORT_EXPOSURE", "inf"))
 EWMA_ALPHA = float(os.getenv("EWMA_ALPHA", "0.06"))
+OPTIMIZER_METHOD = os.getenv("PORTFOLIO_OPTIMIZER")
 
 risk_manager = RiskManager(
     MAX_DRAWDOWN,
@@ -618,6 +631,7 @@ risk_manager = RiskManager(
     initial_capital=INITIAL_CAPITAL,
     max_long_exposure=MAX_LONG_EXPOSURE,
     max_short_exposure=MAX_SHORT_EXPOSURE,
+    optimizer=optimizer_from_config(OPTIMIZER_METHOD),
 )
 tail_hedger = TailHedger(risk_manager, TAIL_HEDGE_VAR)
 risk_manager.attach_tail_hedger(tail_hedger)

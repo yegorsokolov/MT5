@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
-from typing import Sequence
+from typing import Sequence, Any
 
 import numpy as np
 
 from analytics.metrics_store import record_metric
+from .hrp_optimizer import HRPOptimizer
+from .robust_optimizer import RobustOptimizer
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +55,9 @@ class PortfolioOptimizer:
 class PortfolioRebalancer:
     """Periodically rebalance portfolio and log drawdown/diversification."""
 
-    optimizer: PortfolioOptimizer
+    optimizer: PortfolioOptimizer | HRPOptimizer | RobustOptimizer = field(
+        default_factory=lambda: __import__("portfolio").optimizer_from_config()
+    )
     rebalance_interval: int = 20
     step: int = 0
     returns: list[float] = field(default_factory=list)
