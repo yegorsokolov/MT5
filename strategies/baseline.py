@@ -524,3 +524,23 @@ class BaselineStrategy:
                 self.position = 0
                 return 1
         return 0
+
+
+def run_backtest(
+    cfg: dict,
+    *,
+    latency_ms: int = 0,
+    slippage_model=None,
+):
+    """Run a backtest of the baseline strategy with execution settings."""
+
+    from backtest import run_backtest as _run_backtest
+
+    return _run_backtest(
+        cfg,
+        latency_ms=latency_ms,
+        slippage_model=slippage_model,
+    )
+
+
+__all__ = ["BaselineStrategy", "IndicatorBundle", "run_backtest"]
