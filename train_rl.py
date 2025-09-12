@@ -13,6 +13,7 @@ import pandas as pd
 import random
 import torch
 import pickle
+import json
 
 try:  # optional dependency
     from utils.lr_scheduler import LookaheadAdamW
@@ -27,7 +28,10 @@ except Exception:  # pragma: no cover - torch may be stubbed
 import gym
 from gym import spaces
 from datetime import datetime
-from stable_baselines3 import PPO, SAC, A2C
+try:  # optional dependency
+    from stable_baselines3 import PPO, SAC, A2C
+except Exception:  # pragma: no cover - optional dependency
+    PPO = SAC = A2C = object  # type: ignore
 
 try:
     from stable_baselines3.common.policies import ActorCriticPolicy
@@ -39,8 +43,11 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     SubprocVecEnv = DummyVecEnv = None  # type: ignore
 from stable_baselines3.common.evaluation import evaluate_policy
-from sb3_contrib.qrdqn import QRDQN
-from sb3_contrib import TRPO, RecurrentPPO
+try:  # optional dependency
+    from sb3_contrib.qrdqn import QRDQN
+    from sb3_contrib import TRPO, RecurrentPPO
+except Exception:  # pragma: no cover - optional dependency
+    QRDQN = TRPO = RecurrentPPO = object  # type: ignore
 
 try:  # optional dependency
     from torch.utils.data import DataLoader, TensorDataset
@@ -229,6 +236,9 @@ except Exception:  # pragma: no cover
 
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
+
+
+from strategy.self_review import self_review_strategy
 
 
 class PositionClosePolicy(ActorCriticPolicy):
@@ -1639,6 +1649,14 @@ if __name__ == "__main__":
         cfg["strategy_prompts"] = generate_strategy_examples(
             epa_template, 1, strat_cfg
         )
+        review_dir = Path("logs/strategy_reviews")
+        refined_prompts = []
+        for i, prompt in enumerate(cfg["strategy_prompts"]):
+            refined = self_review_strategy(
+                prompt, epa_template, review_dir / f"strategy_{i}", strat_cfg
+            )
+            refined_prompts.append(refined)
+        cfg["strategy_prompts"] = refined_prompts
     if args.ddp:
         cfg["ddp"] = True
     if args.export:
