@@ -1,0 +1,13 @@
+{
+  "expectation_suite_name": "prices",
+  "expectations": [
+    {
+      "expectation_type": "expect_column_to_exist",
+      "kwargs": {"column": "price"}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {"column": "price"}
+    }
+  ]
+}
