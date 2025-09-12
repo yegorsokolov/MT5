@@ -3,6 +3,8 @@ from typing import Iterable, List
 
 import torch
 
+from .time_encoding import TimeEncoding
+
 
 class PositionalEncoding(torch.nn.Module):
     """Sinusoidal positional encoding used by the multi-head model."""
@@ -38,11 +40,13 @@ class MultiHeadTransformer(torch.nn.Module):
         dropout: float = 0.1,
         ff_dim: int | None = None,
         layer_norm: bool = False,
+        time_encoding: bool = False,
     ) -> None:
         super().__init__()
         self.use_checkpointing = use_checkpointing
         self.regime_emb = None
         self.regime_idx = None
+        self.time_encoder = TimeEncoding(d_model) if time_encoding else None
         if num_regimes is not None:
             self.regime_idx = input_size - 1
             self.regime_emb = torch.nn.Embedding(num_regimes, emb_dim)
@@ -65,12 +69,18 @@ class MultiHeadTransformer(torch.nn.Module):
             {str(i): torch.nn.Linear(d_model, 1) for i in range(num_symbols)}
         )
 
-    def forward(self, x: torch.Tensor, symbol: int) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, symbol: int, times: torch.Tensor | None = None
+    ) -> torch.Tensor:
         if self.regime_emb is not None and self.regime_idx is not None:
             reg = x[:, :, self.regime_idx].long()
             base = x[:, :, : self.regime_idx]
             x = torch.cat([base, self.regime_emb(reg)], dim=-1)
         x = self.input_linear(x)
+        if self.time_encoder is not None:
+            if times is None:
+                raise ValueError("times tensor required when time_encoding is enabled")
+            x = x + self.time_encoder(times)
         x = self.pos_encoder(x)
         if self.use_checkpointing:
             for layer in self.transformer.layers:

@@ -107,6 +107,7 @@ def build_model(
             dropout=cfg.get("dropout", 0.1),
             ff_dim=cfg.get("ff_dim"),
             layer_norm=cfg.get("layer_norm", False),
+            time_encoding=cfg.get("time_encoding", False),
         )
 
     if cfg.get("use_ts_pretrain"):
