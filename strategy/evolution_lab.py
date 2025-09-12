@@ -45,13 +45,51 @@ class EvolutionLab:
 
     # ------------------------------------------------------------------
     def _mutate(self, scale: float = 0.1) -> Strategy:
-        """Return a slightly perturbed variant of :attr:`base`.
+        """Return a perturbed or composite variant of :attr:`base`.
 
-        The mutation simply adds Gaussian noise to the base strategy's output.
-        Real implementations can override this with more sophisticated
-        hyperparameter or architecture search.
+        Historically mutation simply injected Gaussian noise into the base
+        strategy's output.  To allow the evolution laboratory to explore more
+        complex behaviours we now support three simple operators:
+
+        ``noise``
+            add Gaussian noise to the base output (original behaviour)
+        ``scale``
+            multiply the base output by a random factor
+        ``mix``
+            blend the base with a previously spawned variant, enabling
+            higher‑order strategy combinations
+
+        Real applications may override this with domain specific logic but the
+        built in operators already yield richer search spaces for tests and
+        lightweight deployments.
         """
 
+        op_choices = ["noise", "scale"]
+        if self.variants:
+            op_choices.append("mix")
+        op = random.choice(op_choices)
+
+        if op == "scale":
+            factor = 1.0 + random.gauss(0.0, scale)
+
+            def variant(features: Dict[str, Any], *, _factor=factor) -> float:
+                return float(self.base(features)) * _factor
+
+            return variant
+
+        if op == "mix" and self.variants:
+            other = random.choice(list(self.variants.values()))
+            weight = random.random()
+
+            def variant(
+                features: Dict[str, Any], *, _other=other, _w=weight
+            ) -> float:
+                base_val = float(self.base(features))
+                return _w * base_val + (1.0 - _w) * float(_other(features))
+
+            return variant
+
+        # Default: additive noise mutation
         def variant(features: Dict[str, Any]) -> float:
             base_val = float(self.base(features))
             return base_val + random.gauss(0.0, scale)
