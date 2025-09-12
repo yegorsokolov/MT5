@@ -10,6 +10,7 @@ from tuning.baseline_opt import backtest, run_search
 from train_graphnet import train_graphnet
 from train_price_distribution import prepare_features, train_price_distribution
 from train_nn import main as train_nn_main
+from walk_forward import walk_forward_train
 from train_utils import setup_training, end_training
 
 app = typer.Typer(help="Unified training interface")
@@ -48,7 +49,9 @@ def baseline(
 def neural(
     config: Optional[Path] = typer.Option(None, help="Path to config YAML"),
     resume_online: bool = typer.Option(False, help="Resume online training"),
-    transfer_from: Optional[str] = typer.Option(None, help="Donor symbol for transfer learning"),
+    transfer_from: Optional[str] = typer.Option(
+        None, help="Donor symbol for transfer learning"
+    ),
 ) -> None:
     cfg = setup_training(config, experiment="training_nn")
     train_nn_main(cfg=cfg, resume_online=resume_online, transfer_from=transfer_from)
@@ -86,6 +89,20 @@ def price_distribution(
     train_price_distribution(
         X_train, y_train, X_val, y_val, n_components=n_components, epochs=epochs
     )
+    end_training()
+
+
+@app.command("walk-forward")
+def walk_forward(
+    data: Path = typer.Option(..., help="CSV or parquet file containing returns"),
+    window_length: int = typer.Option(100, help="Length of the training window"),
+    step_size: int = typer.Option(10, help="Step size and test window length"),
+    model_type: str = typer.Option("mean", help="Type of model to train"),
+    config: Optional[Path] = typer.Option(None, help="Path to config YAML"),
+) -> None:
+    cfg = setup_training(config, experiment="walk_forward")
+    results = walk_forward_train(data, window_length, step_size, model_type)
+    typer.echo(results.to_json(orient="records"))
     end_training()
 
 
