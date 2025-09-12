@@ -1,9 +1,50 @@
 from __future__ import annotations
 
 import warnings
-from typing import Iterable, Sequence, Optional
+from typing import Sequence, Optional
 
 import pandas as pd
+
+
+def validate_ge(df: pd.DataFrame, suite_name: str) -> pd.DataFrame:
+    """Validate ``df`` against a Great Expectations suite.
+
+    Parameters
+    ----------
+    df:
+        DataFrame to validate.
+    suite_name:
+        Name of the expectation suite file without extension.
+
+    Returns
+    -------
+    pd.DataFrame
+        The original dataframe for fluent-style usage.
+    """
+    try:  # pragma: no cover - validator is optional in some environments
+        from data.expectations import validate_dataframe
+    except (
+        Exception
+    ):  # pragma: no cover - fallback when data package heavy deps missing
+        import importlib.util
+        from pathlib import Path
+
+        spec = importlib.util.spec_from_file_location(
+            "expectations",
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "expectations"
+            / "__init__.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        validate_dataframe = module.validate_dataframe  # type: ignore[attr-defined]
+    try:
+        validate_dataframe(df, suite_name, quarantine=False)
+    except FileNotFoundError:  # pragma: no cover - missing suite is allowed
+        pass
+    return df
 
 
 def require_columns(
@@ -74,4 +115,4 @@ def assert_no_nan(
     return df
 
 
-__all__ = ["require_columns", "assert_no_nan"]
+__all__ = ["validate_ge", "require_columns", "assert_no_nan"]

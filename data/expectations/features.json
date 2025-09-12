@@ -1,0 +1,13 @@
+{
+  "expectation_suite_name": "features",
+  "expectations": [
+    {
+      "expectation_type": "expect_column_to_exist",
+      "kwargs": {"column": "feature"}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {"column": "feature"}
+    }
+  ]
+}

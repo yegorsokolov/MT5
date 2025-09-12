@@ -51,7 +51,7 @@ from analysis.data_lineage import log_lineage
 from analysis.fractal_features import rolling_fractal_features
 from analysis.frequency_features import spectral_features, wavelet_energy
 from analysis.garch_vol import garch_volatility
-from .expectations import validate_dataframe
+from features.validators import validate_ge
 from .multitimeframe import aggregate_timeframes
 from feature_store import register_feature, load_feature
 from analysis.feature_evolver import FeatureEvolver
@@ -856,7 +856,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     df = optimize_dtypes(df)
 
     if validate:
-        validate_dataframe(df, "engineered_features")
+        validate_ge(df, "engineered_features")
     register_feature(version, df, {"features": feat_cfg})
     return df
 
