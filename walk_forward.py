@@ -6,15 +6,14 @@ import pandas as pd
 
 from utils import load_config
 from backtest import run_rolling_backtest
+from backtesting.walk_forward import rolling_windows
 from log_utils import setup_logging, log_exceptions
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
 # default location for walk forward summary output
-_LOG_PATH = (
-    Path(__file__).resolve().parent / "logs" / "walk_forward_summary.csv"
-)
+_LOG_PATH = Path(__file__).resolve().parent / "logs" / "walk_forward_summary.csv"
 _LOG_PATH.parent.mkdir(exist_ok=True)
 
 
@@ -34,6 +33,64 @@ def aggregate_results(results: dict[str, dict]) -> pd.DataFrame:
     return pd.DataFrame.from_records(
         records, columns=["symbol", "avg_sharpe", "worst_drawdown"]
     )
+
+
+def walk_forward_train(
+    data: Path,
+    window_length: int,
+    step_size: int,
+    model_type: str = "mean",
+) -> pd.DataFrame:
+    """Run a simple walk-forward training loop.
+
+    Parameters
+    ----------
+    data:
+        Path to a CSV or parquet file containing a ``return`` column.
+    window_length:
+        Number of rows to use for the training window.
+    step_size:
+        Size of the forward evaluation window and stride between windows.
+    model_type:
+        Which toy model to train.  Currently only ``"mean"`` is supported.
+
+    Returns
+    -------
+    DataFrame
+        Metrics for each window including the train/test split positions.
+    """
+
+    if data.suffix == ".csv":
+        df = pd.read_csv(data)
+    else:
+        df = pd.read_parquet(data)
+
+    windows = rolling_windows(df, window_length, step_size, step_size)
+    records = []
+
+    # import mlflow lazily so tests can stub it easily
+    import mlflow
+
+    for i, (train, test) in enumerate(windows):
+        with mlflow.start_run(run_name=f"window_{i}"):
+            if model_type == "mean":
+                pred = train["return"].mean()
+            else:
+                raise ValueError(f"Unsupported model type: {model_type}")
+
+            rmse = float(((test["return"] - pred) ** 2).mean() ** 0.5)
+            mlflow.log_metric("rmse", rmse)
+
+            records.append(
+                {
+                    "window": i,
+                    "train_end": int(train.index.max()),
+                    "test_start": int(test.index.min()),
+                    "rmse": rmse,
+                }
+            )
+
+    return pd.DataFrame.from_records(records)
 
 
 @log_exceptions
