@@ -5,11 +5,16 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+try:  # pragma: no cover - polars optional
+    import polars as pl
+except Exception:  # pragma: no cover
+    pl = None  # type: ignore
+
 from strategies.baseline import BaselineStrategy, IndicatorBundle
 from indicators import sma, rsi, atr, bollinger
 
 
-def compute(
+def _compute_pandas(
     df: pd.DataFrame,
     short_window: int = 5,
     long_window: int = 20,
@@ -225,6 +230,47 @@ def compute(
     df["long_stop"] = long_stops
     df["short_stop"] = short_stops
     return df
+
+
+def compute(
+    df,
+    short_window: int = 5,
+    long_window: int = 20,
+    rsi_window: int = 14,
+    atr_window: int = 14,
+    atr_stop_long: float = 3.0,
+    atr_stop_short: float = 3.0,
+    trailing_stop_pct: float = 0.01,
+    trailing_take_profit_pct: float = 0.02,
+):
+    if pl is not None and isinstance(df, pl.DataFrame):
+        pdf = df.to_pandas()
+        result = _compute_pandas(
+            pdf,
+            short_window=short_window,
+            long_window=long_window,
+            rsi_window=rsi_window,
+            atr_window=atr_window,
+            atr_stop_long=atr_stop_long,
+            atr_stop_short=atr_stop_short,
+            trailing_stop_pct=trailing_stop_pct,
+            trailing_take_profit_pct=trailing_take_profit_pct,
+        )
+        return pl.from_pandas(result)
+    return _compute_pandas(
+        df,
+        short_window=short_window,
+        long_window=long_window,
+        rsi_window=rsi_window,
+        atr_window=atr_window,
+        atr_stop_long=atr_stop_long,
+        atr_stop_short=atr_stop_short,
+        trailing_stop_pct=trailing_stop_pct,
+        trailing_take_profit_pct=trailing_take_profit_pct,
+    )
+
+
+compute.supports_polars = True  # type: ignore[attr-defined]
 
 
 __all__ = ["compute"]

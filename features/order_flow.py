@@ -17,9 +17,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+try:  # pragma: no cover - polars optional
+    import polars as pl
+except Exception:  # pragma: no cover
+    pl = None  # type: ignore
+
 try:  # pragma: no cover - decorator optional in standalone tests
     from . import validate_module
 except Exception:  # pragma: no cover - fallback when imported directly
+
     def validate_module(func):
         return func
 
@@ -42,7 +48,7 @@ _ASK_CANDIDATES = [
 ]
 
 
-def _find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+def _find_col(df, candidates: list[str]) -> str | None:
     for c in candidates:
         if c in df.columns:
             return c
@@ -50,7 +56,7 @@ def _find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
 
 
 @validate_module
-def compute(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
+def compute(df, window: int = 10):
     """Compute order flow features.
 
     Parameters
@@ -72,6 +78,25 @@ def compute(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
     if bid_col is None or ask_col is None:
         return df
 
+    if pl is not None and isinstance(df, pl.DataFrame):
+        delta = pl.col(bid_col) - pl.col(ask_col)
+        total = pl.col(bid_col) + pl.col(ask_col)
+        df = df.with_columns(
+            [
+                (delta / total.replace(0, None)).fill_null(0.0).alias("imbalance"),
+                delta.cum_sum().alias("cvd"),
+            ]
+        )
+        df = df.with_columns(
+            [
+                pl.col("imbalance").rolling_mean(window).alias("imbalance_roll_mean"),
+                pl.col("imbalance").rolling_std(window).alias("imbalance_roll_std"),
+                pl.col("cvd").rolling_mean(window).alias("cvd_roll_mean"),
+                pl.col("cvd").rolling_std(window).alias("cvd_roll_std"),
+            ]
+        )
+        return df
+
     df = df.copy()
     bid = df[bid_col]
     ask = df[ask_col]
@@ -87,6 +112,9 @@ def compute(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
         df[f"{col}_roll_std"] = roll.std()
 
     return df
+
+
+compute.supports_polars = True  # type: ignore[attr-defined]
 
 
 __all__ = ["compute"]
