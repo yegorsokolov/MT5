@@ -211,10 +211,39 @@ def apply_quality_checks(
     return frame, report
 
 
+# ---------------------------------------------------------------------------
+# Sample scoring
+# ---------------------------------------------------------------------------
+
+def score_samples(X: pd.DataFrame) -> np.ndarray:
+    """Return per-sample data quality weights in the ``[0, 1]`` range.
+
+    The weight is defined as ``1 / (1 + mean(|z|))`` where ``z`` denotes the
+    z-score of numeric features.  Samples with large deviations across many
+    features therefore receive lower weights. Non-numeric columns are ignored
+    and samples containing only non-numeric data are assigned a weight of ``1``.
+    """
+
+    if X.empty:
+        return np.array([], dtype=float)
+    num = X.select_dtypes(include=[np.number])
+    if num.empty:
+        return np.ones(len(X), dtype=float)
+    arr = num.to_numpy(dtype=float)
+    mean = np.nanmean(arr, axis=0, keepdims=True)
+    std = np.nanstd(arr, axis=0, ddof=0, keepdims=True)
+    std[std == 0] = 1.0
+    z = np.abs((arr - mean) / std)
+    score = 1.0 / (1.0 + np.nanmean(z, axis=1))
+    score = np.clip(score, 0.0, 1.0)
+    return np.nan_to_num(score, nan=0.0)
+
+
 __all__ = [
     "detect_gaps",
     "zscore_filter",
     "median_filter",
     "interpolate_gaps",
     "apply_quality_checks",
+    "score_samples",
 ]
