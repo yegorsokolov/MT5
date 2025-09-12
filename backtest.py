@@ -147,6 +147,7 @@ def backtest_on_df(
     cfg: dict,
     *,
     slippage_model=None,
+    latency_ms: int = 0,
     return_returns: bool = False,
 ) -> dict | tuple[dict, pd.Series]:
     """Run the trading simulation on a dataframe using the given model.
@@ -162,6 +163,9 @@ def backtest_on_df(
     slippage_model: Callable, optional
         When provided, ``ExecutionEngine`` will query this callable with
         ``(order_size, side)`` to estimate slippage in basis points.
+    latency_ms: int, optional
+        Artificial execution latency in milliseconds.  Orders are filled
+        using market data delayed by this amount.
     return_returns: bool, optional
         When ``True`` the list of trade returns is also returned for
         statistical testing.
@@ -178,6 +182,15 @@ def backtest_on_df(
     tier = getattr(monitor, "capability_tier", "lite")
     strategy = "ioc" if tier == "lite" else cfg.get("execution_strategy", "vwap")
 
+    # Pre-compute indices for delayed market data if latency is specified
+    if latency_ms > 0 and "Timestamp" in df.columns:
+        ts = pd.to_datetime(df["Timestamp"]).to_numpy()
+        delays = ts + np.timedelta64(int(latency_ms), "ms")
+        delay_idx = np.searchsorted(ts, delays, side="left")
+        delay_idx = np.clip(delay_idx, 0, len(df) - 1)
+    else:
+        delay_idx = np.arange(len(df))
+
     in_position = False
     entry = 0.0
     stop = 0.0
@@ -185,12 +198,13 @@ def backtest_on_df(
     skipped_trades = 0
     partial_fills = 0
 
-    for row, prob in zip(df.itertuples(index=False), probs):
-        price_mid = getattr(row, "mid")
-        bid = getattr(row, "Bid", price_mid)
-        ask = getattr(row, "Ask", price_mid)
-        bid_vol = getattr(row, "BidVolume", np.inf)
-        ask_vol = getattr(row, "AskVolume", np.inf)
+    for i, (row, prob) in enumerate(zip(df.itertuples(index=False), probs)):
+        delayed = df.iloc[delay_idx[i]]
+        price_mid = getattr(delayed, "mid")
+        bid = getattr(delayed, "Bid", price_mid)
+        ask = getattr(delayed, "Ask", price_mid)
+        bid_vol = getattr(delayed, "BidVolume", np.inf)
+        ask_vol = getattr(delayed, "AskVolume", np.inf)
 
         engine.record_volume(bid_vol + ask_vol)
         regime = getattr(row, "market_regime", None)
@@ -222,8 +236,9 @@ def backtest_on_df(
             stop = entry - distance
             continue
         if in_position:
-            stop = trailing_stop(entry, price_mid, stop, distance)
-            if price_mid <= stop:
+            current_mid = getattr(row, "mid")
+            stop = trailing_stop(entry, current_mid, stop, distance)
+            if current_mid <= stop:
                 result = asyncio.run(
                     engine.place_order(
                         side="sell",
@@ -265,6 +280,8 @@ def run_backtest(
     *,
     return_returns: bool = False,
     external_strategy: str | None = None,
+    latency_ms: int = 0,
+    slippage_model=None,
 ) -> dict | tuple[dict, pd.Series]:
     if cfg.get("sim_env") and AgentMarketSimulator is not None:
         sim = AgentMarketSimulator(
@@ -303,23 +320,47 @@ def run_backtest(
     model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
 
     return backtest_on_df(
-        df, model, cfg, slippage_model=None, return_returns=return_returns
+        df,
+        model,
+        cfg,
+        slippage_model=slippage_model,
+        latency_ms=latency_ms,
+        return_returns=return_returns,
     )
 
 
 @ray.remote
 def _backtest_window(
-    train_df: pd.DataFrame, test_df: pd.DataFrame, cfg: dict, start: str, end: str
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    cfg: dict,
+    start: str,
+    end: str,
+    *,
+    latency_ms: int = 0,
+    slippage_model=None,
 ) -> dict:
     """Train a model on ``train_df`` and backtest on ``test_df``."""
     model = fit_model(train_df, cfg)
-    metrics = backtest_on_df(test_df, model, cfg, slippage_model=None)
+    metrics = backtest_on_df(
+        test_df,
+        model,
+        cfg,
+        slippage_model=slippage_model,
+        latency_ms=latency_ms,
+    )
     metrics["period_start"] = start
     metrics["period_end"] = end
     return metrics
 
 
-def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dict:
+def run_rolling_backtest(
+    cfg: dict,
+    external_strategy: str | None = None,
+    *,
+    latency_ms: int = 0,
+    slippage_model=None,
+) -> dict:
     """Perform rolling train/test backtests and aggregate metrics."""
     if cfg.get("sim_env") and AgentMarketSimulator is not None:
         sim = AgentMarketSimulator(
@@ -375,7 +416,15 @@ def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dic
         end_iso = test_end.date().isoformat()
         if parallel:
             futures.append(
-                _backtest_window.remote(train_df, test_df, cfg, start_iso, end_iso)
+                _backtest_window.remote(
+                    train_df,
+                    test_df,
+                    cfg,
+                    start_iso,
+                    end_iso,
+                    latency_ms=latency_ms,
+                    slippage_model=slippage_model,
+                )
             )
         else:
             if external_strategy:
@@ -384,7 +433,13 @@ def run_rolling_backtest(cfg: dict, external_strategy: str | None = None) -> dic
                 metrics = run_external_strategy(test_df, external_strategy)
             else:
                 model = fit_model(train_df, cfg)
-                metrics = backtest_on_df(test_df, model, cfg, slippage_model=None)
+                metrics = backtest_on_df(
+                    test_df,
+                    model,
+                    cfg,
+                    slippage_model=slippage_model,
+                    latency_ms=latency_ms,
+                )
             metrics["period_start"] = start_iso
             metrics["period_end"] = end_iso
             logger.info(
