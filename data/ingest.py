@@ -7,6 +7,17 @@ import json
 from pathlib import Path
 from typing import List
 
+import pandas as pd
+
+try:  # pragma: no cover - optional dependency
+    from features.validators import validate_ge
+except Exception:  # pragma: no cover - fallback when features package missing
+    import runpy
+
+    validate_ge = runpy.run_path(  # type: ignore[assignment]
+        str(Path(__file__).resolve().parents[1] / "features" / "validators.py")
+    )["validate_ge"]
+
 try:
     from .versioning import compute_hash
 except Exception:  # pragma: no cover - import without package context
@@ -56,6 +67,9 @@ def ingest(raw_path: Path, record: bool = False) -> List[List[str]]:
     """Read CSV rows from ``raw_path`` and optionally record lineage."""
     with raw_path.open() as f:
         rows = list(csv.reader(f))
+    if rows:
+        df = pd.DataFrame(rows[1:], columns=rows[0])
+        validate_ge(df, "prices")
     if record:
         record_lineage(raw_path, rows)
     return rows
