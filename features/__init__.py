@@ -27,6 +27,7 @@ from importlib.metadata import entry_points
 # the heavier ``data`` package.  This keeps integration points lightweight while
 # still delegating the actual feature engineering to ``data.features``.
 from data.features import make_features
+from .validators import validate_ge
 
 try:  # config is optional during import in some tests
     from utils import load_config
@@ -66,13 +67,8 @@ def validate_module(func: Callable) -> Callable:
 
     @wraps(func)
     def wrapper(*args, **kwargs):
-        from data.expectations import validate_dataframe
-
         result = func(*args, **kwargs)
-        try:
-            validate_dataframe(result, suite_name)
-        except FileNotFoundError:
-            pass
+        validate_ge(result, suite_name)
         return result
 
     return wrapper
@@ -84,10 +80,8 @@ def validator(suite_name: str):
     def decorator(func: Callable):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            from data.expectations import validate_dataframe
-
             result = func(*args, **kwargs)
-            validate_dataframe(result, suite_name)
+            validate_ge(result, suite_name)
             return result
 
         return wrapper
