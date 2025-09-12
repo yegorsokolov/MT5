@@ -11,6 +11,7 @@ found in production trading systems:
 * Average True Range (ATR) driven risk management including optional
   position sizing adjustments in volatile environments.
 * Trailing take-profit and stop-loss logic for open positions.
+* Optional liquidity exhaustion filter derived from order book depth.
 
 Despite the extra functionality the implementation remains
 dependency-free and operates purely on streaming price data.
@@ -65,6 +66,7 @@ class IndicatorBundle:
     regime: Optional[int] = None
     vae_regime: Optional[int] = None
     microprice_delta: Optional[float] = None
+    liq_exhaustion: Optional[int] = None
 
 
 class BaselineStrategy:
@@ -365,6 +367,9 @@ class BaselineStrategy:
                 signal = 0
             elif signal == -1 and ind.microprice_delta >= 0:
                 signal = 0
+
+        if signal != 0 and ind.liq_exhaustion is not None and ind.liq_exhaustion != signal:
+            signal = 0
 
         if signal != 0 and ind.ram is not None:
             if signal == 1 and ind.ram < self.ram_long_threshold:
