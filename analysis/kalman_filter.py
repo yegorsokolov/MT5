@@ -2,8 +2,45 @@ from __future__ import annotations
 
 """Simple Kalman filter utilities."""
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
+
+
+@dataclass
+class KalmanState:
+    """State container for :func:`smooth_price`."""
+
+    price: float
+    variance: float
+
+
+def smooth_price(
+    price: float,
+    state: KalmanState | None = None,
+    process_var: float = 1e-2,
+    measurement_var: float = 1e-1,
+) -> tuple[float, KalmanState]:
+    """Return the filtered ``price`` and updated state.
+
+    This helper performs a single Kalman filter update making it suitable for
+    streaming price data. ``state`` captures the previous estimate and
+    variance. When ``state`` is ``None`` the function initialises it using the
+    current ``price``.
+    """
+
+    if state is None:
+        return price, KalmanState(price=float(price), variance=1.0)
+
+    # Predict
+    p_minus = state.variance + process_var
+
+    # Update
+    k = p_minus / (p_minus + measurement_var)
+    x = state.price + k * (price - state.price)
+    new_var = (1 - k) * p_minus
+    return x, KalmanState(price=x, variance=new_var)
 
 
 def kalman_smooth(series: pd.Series, process_var: float = 1e-2, measurement_var: float | None = None) -> pd.DataFrame:
@@ -58,4 +95,4 @@ def kalman_smooth(series: pd.Series, process_var: float = 1e-2, measurement_var:
     return pd.DataFrame({"price": xhat, "volatility": vol}, index=series.index)
 
 
-__all__ = ["kalman_smooth"]
+__all__ = ["kalman_smooth", "smooth_price", "KalmanState"]
