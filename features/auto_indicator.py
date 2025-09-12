@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from typing import Iterable, Sequence, Optional, Union
+from typing import Callable, Iterable, Mapping, Sequence, Optional, Union
 
 
 def _generate_lags(series: pd.Series, lags: Sequence[int]) -> pd.DataFrame:
@@ -36,6 +36,7 @@ def compute(
     lags: Union[int, Sequence[int]] = 3,
     windows: Sequence[int] = (5, 10),
     skip: Optional[Iterable[str]] = None,
+    custom_funcs: Optional[Mapping[str, Callable[[pd.Series], pd.Series]]] = None,
 ) -> pd.DataFrame:
     """Create additional indicators from numeric columns.
 
@@ -52,6 +53,11 @@ def compute(
     skip:
         Optional iterable of column names to exclude from transformation,
         e.g. target columns to avoid data leakage.
+    custom_funcs:
+        Optional mapping of ``name -> function`` applied to each numeric
+        series.  Each function should accept a ``pd.Series`` and return a
+        ``pd.Series`` of the same length.  The resulting columns are named
+        ``{column}_{name}``.
     """
     df = df.copy()
     numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -64,6 +70,13 @@ def compute(
         series = df[col]
         df = df.join(_generate_lags(series, lag_seq))
         df = df.join(_rolling_stats(series, win_seq))
+        if custom_funcs:
+            for name, func in custom_funcs.items():
+                try:
+                    df[f"{col}_{name}"] = func(series)
+                except Exception:
+                    # Skip failing custom functions to keep core pipeline robust
+                    continue
     df = df.dropna(axis=1, how="all")
     return df
 

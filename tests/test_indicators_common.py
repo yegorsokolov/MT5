@@ -6,7 +6,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from indicators import atr, bollinger, ema, rsi, sma
+from indicators import atr, bollinger, ema, rsi, sma, macd, stochastic
 
 
 def _old_rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -19,9 +19,13 @@ def _old_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def _old_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+def _old_atr(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
+) -> pd.Series:
     prev_close = close.shift(1)
-    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    tr = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
     return tr.rolling(period).mean()
 
 
@@ -31,6 +35,29 @@ def _old_bollinger(series: pd.Series, period: int = 20, num_std: float = 2.0):
     upper = ma + num_std * std
     lower = ma - num_std * std
     return ma, upper, lower
+
+
+def _old_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    fast_ema = series.ewm(span=fast, adjust=False).mean()
+    slow_ema = series.ewm(span=slow, adjust=False).mean()
+    macd_line = fast_ema - slow_ema
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist
+
+
+def _old_stochastic(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    k_period: int = 14,
+    d_period: int = 3,
+):
+    lowest_low = low.rolling(k_period).min()
+    highest_high = high.rolling(k_period).max()
+    k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+    d = k.rolling(d_period).mean()
+    return k, d
 
 
 def test_rsi_parity():
@@ -70,3 +97,22 @@ def test_ema_parity():
     expected = prices.ewm(span=5, adjust=False).mean()
     result = ema(prices, 5)
     pd.testing.assert_series_equal(result, expected)
+
+
+def test_macd_parity():
+    prices = pd.Series(np.arange(1, 101, dtype=float))
+    exp_macd, exp_signal, exp_hist = _old_macd(prices)
+    macd_line, signal_line, hist = macd(prices)
+    pd.testing.assert_series_equal(macd_line, exp_macd)
+    pd.testing.assert_series_equal(signal_line, exp_signal)
+    pd.testing.assert_series_equal(hist, exp_hist)
+
+
+def test_stochastic_parity():
+    high = pd.Series(np.arange(1, 31) + 1, dtype=float)
+    low = pd.Series(np.arange(1, 31) - 1, dtype=float)
+    close = pd.Series(np.arange(1, 31), dtype=float)
+    exp_k, exp_d = _old_stochastic(high, low, close)
+    k, d = stochastic(high, low, close)
+    pd.testing.assert_series_equal(k, exp_k)
+    pd.testing.assert_series_equal(d, exp_d)
