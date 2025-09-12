@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Utilities for constructing model architectures scaled to hardware resources."""
 
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import torch
 
@@ -13,6 +13,7 @@ from models.cross_modal_transformer import CrossModalTransformer
 from models.ts_masked_encoder import initialize_model_with_ts_masked_encoder
 from models.contrastive_encoder import initialize_model_with_contrastive
 from models.ts2vec import initialize_model_with_ts2vec
+from models.tft import TemporalFusionTransformer, TFTConfig
 
 
 def compute_scale_factor(capabilities=None) -> float:
@@ -29,6 +30,28 @@ def compute_scale_factor(capabilities=None) -> float:
     if caps.cpus <= 1:
         return 0.5
     return 1.0
+
+
+def initialize_tft(config: Mapping[str, Any]) -> TemporalFusionTransformer:
+    """Return a :class:`TemporalFusionTransformer` built from ``config``.
+
+    Parameters
+    ----------
+    config:
+        Mapping containing model parameters. Expected keys are ``static_size``,
+        ``known_size``, ``observed_size``, ``hidden_size``, ``num_heads`` and
+        ``quantiles``. Missing values fall back to sensible defaults.
+    """
+
+    tft_cfg = TFTConfig(
+        static_size=int(config.get("static_size", 0)),
+        known_size=int(config.get("known_size", 0)),
+        observed_size=int(config.get("observed_size", 0)),
+        hidden_size=int(config.get("hidden_size", config.get("d_model", 64))),
+        num_heads=int(config.get("num_heads", config.get("nhead", 4))),
+        quantiles=config.get("quantiles", (0.1, 0.5, 0.9)),
+    )
+    return TemporalFusionTransformer(tft_cfg)
 
 
 def build_model(
