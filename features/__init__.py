@@ -97,6 +97,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
         orderbook,
         order_flow,
         microprice,
+        liquidity_exhaustion,
         auto_indicator,
         volume,
         multi_timeframe,
@@ -152,6 +153,9 @@ if not os.getenv("MT5_DOCS_BUILD"):
     register_feature("orderbook", orderbook.compute, min_cpus=2, min_mem_gb=2.0)
     register_feature("order_flow", order_flow.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("microprice", microprice.compute, min_cpus=1, min_mem_gb=1.0)
+    register_feature(
+        "liquidity_exhaustion", liquidity_exhaustion.compute, min_cpus=1, min_mem_gb=1.0
+    )
     register_feature(
         "auto_indicator", auto_indicator.compute, min_cpus=1, min_mem_gb=1.0
     )
