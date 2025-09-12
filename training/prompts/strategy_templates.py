@@ -6,10 +6,14 @@ agent through a structured reasoning process. Currently only an
 stages: *evaluate*, *plan* and *act*.
 """
 
+from __future__ import annotations
+
 from typing import Dict
 
+from training.config import StrategyConfig
 
-def epa_template(goal: str, context: str) -> Dict[str, str]:
+
+def epa_template(goal: str, context: str, config: StrategyConfig | None = None) -> Dict[str, str]:
     """Create an Evaluate-Plan-Act prompt template.
 
     The template divides reasoning into three sequential sections:
@@ -40,6 +44,11 @@ def epa_template(goal: str, context: str) -> Dict[str, str]:
         "List key factors, constraints, and unknowns."
     )
 
+    if config and config.budget_limit is not None:
+        evaluate += f" Budget limit: {config.budget_limit}."
+    if config and config.risk_tolerance is not None:
+        evaluate += f" Risk tolerance: {config.risk_tolerance}."
+
     # Plan: outline a strategy using insights from the evaluation stage.
     plan = (
         "Plan a step-by-step approach to achieve the goal. "
@@ -52,5 +61,8 @@ def epa_template(goal: str, context: str) -> Dict[str, str]:
         "Explain how the actions address the goal."
     )
 
-    return {"evaluate": evaluate, "plan": plan, "act": act}
+    sections = {"evaluate": evaluate, "plan": plan, "act": act}
+    if config and config.custom_sections:
+        sections.update(config.custom_sections)
+    return sections
 

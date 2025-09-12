@@ -12,12 +12,14 @@ import json
 from pathlib import Path
 from typing import Callable, Dict, List
 
+from training.config import StrategyConfig
 from training.prompts.strategy_templates import epa_template
 
 
 def generate_strategy_examples(
-    template_fn: Callable[[str, str], Dict[str, str]],
+    template_fn: Callable[[str, str, StrategyConfig | None], Dict[str, str]],
     n_examples: int,
+    config: StrategyConfig | None = None,
 ) -> List[Dict[str, str]]:
     """Generate ``n_examples`` strategy prompts using ``template_fn``.
 
@@ -28,6 +30,9 @@ def generate_strategy_examples(
         mapping with ``evaluate``, ``plan`` and ``act`` instructions.
     n_examples:
         Number of examples to generate.
+    config:
+        Optional :class:`~training.config.StrategyConfig` to influence prompt
+        generation.
 
     Returns
     -------
@@ -40,7 +45,7 @@ def generate_strategy_examples(
     for i in range(n_examples):
         goal = f"Example goal {i}"
         context = f"Example context {i}"
-        sample = template_fn(goal, context)
+        sample = template_fn(goal, context, config)
         sample["goal"] = goal
         sample["context"] = context
         examples.append(sample)
