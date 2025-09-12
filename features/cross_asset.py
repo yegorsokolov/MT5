@@ -8,6 +8,11 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+try:  # pragma: no cover - polars optional
+    import polars as pl
+except Exception:  # pragma: no cover
+    pl = None  # type: ignore
+
 try:  # pragma: no cover - decorator optional in standalone tests
     from . import validate_module
 except Exception:  # pragma: no cover - fallback when imported directly
@@ -31,7 +36,7 @@ def _merge_asof(left: pd.DataFrame, right: pd.DataFrame, **kwargs) -> pd.DataFra
     return pd.merge_asof(left, right, **kwargs)
 
 
-def load_index_ohlc(source: str) -> pd.DataFrame:
+def load_index_ohlc(source: str):
     try:
         if str(source).startswith("http"):
             df = pd.read_csv(source)
@@ -44,7 +49,7 @@ def load_index_ohlc(source: str) -> pd.DataFrame:
     return df
 
 
-def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_index_features(df):
     try:
         from utils import load_config
 
@@ -53,6 +58,10 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:  # pragma: no cover - config issues shouldn't fail
         index_sources = {}
 
+    if pl is not None and isinstance(df, pl.DataFrame):
+        pdf = df.to_pandas()
+        pdf = add_index_features(pdf)
+        return pl.from_pandas(pdf)
     df = df.sort_values("Timestamp")
     for name, src in index_sources.items():
         idx_df = load_index_ohlc(src)
@@ -88,7 +97,7 @@ def add_index_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_cross_asset_features(
-    df: pd.DataFrame,
+    df,
     window: int = 30,
     whitelist: Iterable[str] | None = None,
     max_pairs: int | None = None,
@@ -126,6 +135,16 @@ def add_cross_asset_features(
         Reduction strategy when ``max_pairs`` is set. Options are ``"top_k"``
         or ``"pca"`` (default) for dimensionality compression.
     """
+
+    if pl is not None and isinstance(df, pl.DataFrame):
+        pdf = add_cross_asset_features(
+            df.to_pandas(),
+            window=window,
+            whitelist=whitelist,
+            max_pairs=max_pairs,
+            reduce=reduce,
+        )
+        return pl.from_pandas(pdf)
 
     required = {"Symbol", "Timestamp", "return"}
     if not required.issubset(df.columns):
@@ -265,7 +284,7 @@ def add_cross_asset_features(
 
 
 @validate_module
-def compute(df: pd.DataFrame) -> pd.DataFrame:
+def compute(df) -> pd.DataFrame:
     """Enrich ``df`` with index and cross-asset features.
 
     The following columns are appended:
@@ -307,6 +326,11 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
             matrices = {ts: eye for ts in pd.to_datetime(df["Timestamp"]).unique()}
         df.attrs["adjacency_matrices"] = matrices
     return df
+
+
+add_index_features.supports_polars = True  # type: ignore[attr-defined]
+add_cross_asset_features.supports_polars = True  # type: ignore[attr-defined]
+compute.supports_polars = True  # type: ignore[attr-defined]
 
 
 __all__ = ["add_index_features", "add_cross_asset_features", "compute"]

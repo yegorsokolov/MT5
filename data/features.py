@@ -17,6 +17,11 @@ import numpy as np
 import pandas as pd
 from joblib import Memory
 
+try:  # pragma: no cover - optional dependency
+    from data.polars_utils import to_polars_df, to_pandas_df
+except Exception:  # pragma: no cover - polars optional
+    to_polars_df = to_pandas_df = None  # type: ignore
+
 from analytics.metrics_store import record_metric
 from features import get_feature_pipeline
 from features.news import (
@@ -57,6 +62,11 @@ try:
     LATENCY_THRESHOLD = float(load_config().features.latency_threshold)
 except ConfigError:  # pragma: no cover - config may be unavailable
     LATENCY_THRESHOLD = 0.0
+
+try:  # pragma: no cover - backend configuration optional
+    BACKEND = load_config().features.backend  # type: ignore[attr-defined]
+except Exception:
+    BACKEND = "pandas"
 
 # Location for persisted factor exposure matrices
 FACTOR_EXPOSURE_DIR = Path("data/factors")
@@ -180,6 +190,10 @@ def _apply_transform(fn, df):
         except Exception:
             pass
         return df
+    if BACKEND == "polars" and to_polars_df and getattr(fn, "supports_polars", False):
+        pl_df = to_polars_df(df)
+        result = fn(pl_df)
+        return to_pandas_df(result)
     return fn(df)
 
 
@@ -629,9 +643,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     # Estimate market and VAE regimes for gating features
     try:
-        df = periodic_reclassification(
-            df, step=cfg.get("regime_reclass_period", 500)
-        )
+        df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
     except Exception:
         logger.debug("regime classification failed", exc_info=True)
 
