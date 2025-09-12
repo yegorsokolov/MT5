@@ -5,7 +5,8 @@ import importlib.util
 
 def test_parameterised_generation_and_skip():
     spec = importlib.util.spec_from_file_location(
-        "auto_indicator", Path(__file__).resolve().parents[1] / "features" / "auto_indicator.py"
+        "auto_indicator",
+        Path(__file__).resolve().parents[1] / "features" / "auto_indicator.py",
     )
     auto_indicator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(auto_indicator)  # type: ignore
@@ -24,5 +25,23 @@ def test_parameterised_generation_and_skip():
     assert {"a_mean3", "a_std3", "b_mean3", "b_std3"}.issubset(out.columns)
 
     # target column should not be transformed
-    assert not any(col.startswith("target_lag") or col.startswith("target_mean") for col in out.columns)
+    assert not any(
+        col.startswith("target_lag") or col.startswith("target_mean")
+        for col in out.columns
+    )
     assert out.shape[0] == df.shape[0]
+
+
+def test_custom_function_application():
+    spec = importlib.util.spec_from_file_location(
+        "auto_indicator",
+        Path(__file__).resolve().parents[1] / "features" / "auto_indicator.py",
+    )
+    auto_indicator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(auto_indicator)  # type: ignore
+
+    df = pd.DataFrame({"a": [1, 2, 3, 4, 5]})
+    funcs = {"pct": lambda s: s.pct_change()}
+    out = auto_indicator.compute(df, custom_funcs=funcs)
+
+    assert "a_pct" in out.columns
