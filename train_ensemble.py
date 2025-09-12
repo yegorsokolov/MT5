@@ -118,11 +118,12 @@ def _train_cross_asset_transformer(
     opt = torch.optim.Adam(net.parameters(), lr=0.001)
     loss_fn = torch.nn.BCEWithLogitsLoss()
     X_t = torch.tensor(X.values, dtype=torch.float32).view(-1, 1, 1, X.shape[1])
+    times_t = torch.zeros(X_t.shape[0], 1, 1)
     y_t = torch.tensor(y, dtype=torch.float32).view(-1, 1)
     net.train()
     for _ in range(epochs):
         opt.zero_grad()
-        out = net(X_t).view(-1, 1)
+        out = net(X_t, times_t).view(-1, 1)
         loss = loss_fn(out, y_t)
         loss.backward()
         opt.step()
@@ -135,7 +136,8 @@ def _train_cross_asset_transformer(
         def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
             with torch.no_grad():
                 x = torch.tensor(X.values, dtype=torch.float32).view(-1, 1, 1, X.shape[1])
-                logits = self.net(x).view(-1)
+                times = torch.zeros(x.shape[0], 1, 1)
+                logits = self.net(x, times).view(-1)
                 prob = torch.sigmoid(logits).numpy()
             return np.column_stack([1 - prob, prob])
 
