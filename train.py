@@ -631,9 +631,16 @@ def main(
             dq_w = dq_score_samples(Xb)
             if "scaler" in pipe.named_steps:
                 scaler = pipe.named_steps["scaler"]
-                if hasattr(scaler, "partial_fit"):
-                    scaler.partial_fit(Xb)
-                Xb = scaler.transform(Xb)
+                if getattr(scaler, "group_col", None):
+                    Xb_sym = Xb.copy()
+                    Xb_sym[scaler.group_col] = groups.iloc[start:end].values
+                    if hasattr(scaler, "partial_fit"):
+                        scaler.partial_fit(Xb_sym)
+                    Xb = scaler.transform(Xb_sym).drop(columns=[scaler.group_col])
+                else:
+                    if hasattr(scaler, "partial_fit"):
+                        scaler.partial_fit(Xb)
+                    Xb = scaler.transform(Xb)
             clf = pipe.named_steps["clf"]
             init_model = (
                 donor_booster

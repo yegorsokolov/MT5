@@ -114,3 +114,41 @@ def test_pipeline_scaler_consistency(tmp_path):
     loaded = FeatureScaler.load(path)
     transformed_loaded = loaded.transform(df)
     assert np.allclose(transformed_direct, transformed_loaded)
+
+
+def test_feature_scaler_group_scaling(tmp_path):
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(
+        {
+            "x": np.concatenate([rng.normal(0, 1, 50), rng.normal(5, 2, 50)]),
+            "y": np.concatenate([rng.normal(0, 1, 50), rng.normal(-3, 4, 50)]),
+            "Symbol": ["A"] * 50 + ["B"] * 50,
+        }
+    )
+    scaler = FeatureScaler(group_col="Symbol")
+    scaler.partial_fit(df)
+    path = tmp_path / "scaler.pkl"
+    scaler.save(path)
+    loaded = FeatureScaler.load(path)
+    transformed = loaded.transform(df)
+    for _, grp in transformed.groupby("Symbol"):
+        means = grp[["x", "y"]].mean().values
+        stds = grp[["x", "y"]].std(ddof=0).values
+        assert np.allclose(means, np.zeros(2), atol=1e-1)
+        assert np.allclose(stds, np.ones(2), atol=1e-1)
+
+
+def test_feature_scaler_backward_compatibility():
+    rng = np.random.default_rng(1)
+    df = pd.DataFrame(rng.normal(size=(100, 2)), columns=["a", "b"])
+    scaler = FeatureScaler()
+    scaler.partial_fit(df)
+    state = scaler.state_dict()
+    assert "group_col" not in state
+    scaler2 = FeatureScaler()
+    scaler2.load_state_dict(state)
+    transformed = scaler2.transform(df)
+    means = transformed.mean().values
+    stds = transformed.std(ddof=0).values
+    assert np.allclose(means, np.zeros(2), atol=1e-6)
+    assert np.allclose(stds, np.ones(2), atol=1e-2)

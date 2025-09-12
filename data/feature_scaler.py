@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 import joblib
 import numpy as np
@@ -14,10 +14,16 @@ class FeatureScaler:
     Maintains running statistics for each feature allowing normalisation of
     streaming data. The scaler can optionally clip values to a percentile and
     use median/IQR based scaling for robustness. Statistics can be updated with
-    ``partial_fit`` and serialised to disk for later reuse.
+    ``partial_fit`` and serialised to disk for later reuse. When ``group_col`` is
+    provided, statistics are maintained separately for each group value.
     """
 
-    def __init__(self, clip_pct: float | None = None, use_median: bool = False) -> None:
+    def __init__(
+        self,
+        clip_pct: float | None = None,
+        use_median: bool = False,
+        group_col: str | None = None,
+    ) -> None:
         self.mean_: np.ndarray | None = None
         self.m2_: np.ndarray | None = None
         self.n_: int = 0
@@ -25,6 +31,8 @@ class FeatureScaler:
 
         self.clip_pct = clip_pct
         self.use_median = use_median
+        self.group_col = group_col
+        self.scalers_: Dict[Any, "FeatureScaler"] | None = None
         self.median_: np.ndarray | None = None
         self.q1_: np.ndarray | None = None
         self.q3_: np.ndarray | None = None
@@ -39,6 +47,9 @@ class FeatureScaler:
         self, X: pd.DataFrame | np.ndarray, y: Any | None = None
     ) -> "FeatureScaler":
         """Reset and fit on ``X``. Provided for sklearn compatibility."""
+        if self.group_col:
+            self.scalers_ = {}
+            return self.partial_fit(X)
         self.mean_ = None
         self.m2_ = None
         self.n_ = 0
@@ -55,6 +66,22 @@ class FeatureScaler:
         self, X: pd.DataFrame | np.ndarray, y: Any | None = None
     ) -> "FeatureScaler":
         """Update running statistics with a new batch ``X``."""
+        if self.group_col:
+            if not isinstance(X, pd.DataFrame):
+                raise TypeError("X must be a DataFrame when group_col is set")
+            if self.group_col not in X.columns:
+                raise ValueError(f"Missing group column '{self.group_col}'")
+            if self.scalers_ is None:
+                self.scalers_ = {}
+            for group, df_g in X.groupby(self.group_col):
+                sub = df_g.drop(columns=[self.group_col])
+                scaler = self.scalers_.get(group)
+                if scaler is None:
+                    scaler = FeatureScaler(self.clip_pct, self.use_median)
+                    self.scalers_[group] = scaler
+                scaler.partial_fit(sub)
+            return self
+
         if isinstance(X, pd.DataFrame):
             data = X.to_numpy(dtype=float)
             cols = list(X.columns)
@@ -101,6 +128,30 @@ class FeatureScaler:
     # ------------------------------------------------------------------
     def transform(self, X: pd.DataFrame | np.ndarray) -> pd.DataFrame | np.ndarray:
         """Normalise ``X`` using the running statistics."""
+        if self.group_col:
+            if not isinstance(X, pd.DataFrame):
+                raise TypeError("X must be a DataFrame when group_col is set")
+            if self.scalers_ is None:
+                return X
+            if self.group_col not in X.columns:
+                raise ValueError(f"Missing group column '{self.group_col}'")
+            parts: list[pd.DataFrame] = []
+            for group, df_g in X.groupby(self.group_col):
+                scaler = self.scalers_.get(group)
+                if scaler is None:
+                    parts.append(df_g)
+                    continue
+                sub = df_g.drop(columns=[self.group_col])
+                transformed = scaler.transform(sub)
+                if not isinstance(transformed, pd.DataFrame):
+                    transformed = pd.DataFrame(
+                        transformed, columns=sub.columns, index=sub.index
+                    )
+                transformed[self.group_col] = group
+                parts.append(transformed)
+            result = pd.concat(parts).sort_index()
+            return result[X.columns]
+
         if self.mean_ is None or self.m2_ is None or self.n_ < 2:
             return X
 
@@ -143,6 +194,15 @@ class FeatureScaler:
     # Serialisation helpers
     # ------------------------------------------------------------------
     def state_dict(self) -> dict[str, Any]:
+        if self.group_col:
+            return {
+                "group_col": self.group_col,
+                "scalers": {
+                    k: s.state_dict() for k, s in (self.scalers_ or {}).items()
+                },
+                "clip_pct": self.clip_pct,
+                "use_median": self.use_median,
+            }
         return {
             "mean": self.mean_,
             "m2": self.m2_,
@@ -158,6 +218,16 @@ class FeatureScaler:
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
+        self.group_col = state.get("group_col")
+        self.clip_pct = state.get("clip_pct", self.clip_pct)
+        self.use_median = state.get("use_median", self.use_median)
+        if self.group_col:
+            self.scalers_ = {}
+            for k, s_state in state.get("scalers", {}).items():
+                sc = FeatureScaler()
+                sc.load_state_dict(s_state)
+                self.scalers_[k] = sc
+            return
         self.mean_ = state.get("mean")
         self.m2_ = state.get("m2")
         self.n_ = state.get("n", 0)
@@ -167,8 +237,6 @@ class FeatureScaler:
         self.q3_ = state.get("q3")
         self.clip_min_ = state.get("clip_min")
         self.clip_max_ = state.get("clip_max")
-        self.clip_pct = state.get("clip_pct", self.clip_pct)
-        self.use_median = state.get("use_median", self.use_median)
 
     def save(self, path: Path | str) -> Path:
         path = Path(path)
