@@ -319,6 +319,35 @@ class ModelRegistry:
                 return None
         return self._weights.get(name)
 
+    # ------------------------------------------------------------------
+    def save_model(
+        self,
+        name: str,
+        model: Any,
+        metadata: Dict[str, Any] | None = None,
+        path: str | Path | None = None,
+    ) -> Path:
+        """Serialize ``model`` to ``path`` and register it under ``name``.
+
+        Parameters
+        ----------
+        name:
+            Identifier used to later retrieve the model.
+        model:
+            Object implementing the policy to be persisted.
+        metadata:
+            Optional dictionary describing the model.
+        path:
+            Target file location.  When omitted the model is stored under
+            ``models/<name>.pkl`` relative to the repository root.
+        """
+
+        p = Path(path) if path is not None else Path("models") / f"{name}.pkl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(model, p)
+        self.register_policy(name, p, metadata or {})
+        return p
+
     def _pick_models(self) -> None:
         with tracer.start_as_current_span("pick_models"):
             caps = self.monitor.capabilities
@@ -704,3 +733,14 @@ def get_policy_path(name: str | None = None) -> Optional[Path]:
     """Return the stored policy path from the global registry."""
 
     return _GLOBAL_REGISTRY.get_policy_path(name)
+
+
+def save_model(
+    name: str,
+    model: Any,
+    metadata: Dict[str, Any] | None = None,
+    path: str | Path | None = None,
+) -> Path:
+    """Serialize ``model`` and register it in the global registry."""
+
+    return _GLOBAL_REGISTRY.save_model(name, model, metadata or {}, path)

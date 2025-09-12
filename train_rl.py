@@ -123,7 +123,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     model_store = None  # type: ignore
 from features import make_features
-from model_registry import register_policy
+from model_registry import register_policy, save_model, get_policy_path
+import joblib
 from datetime import datetime
 from analytics.metrics_store import record_metric, TS_PATH
 
@@ -1300,6 +1301,8 @@ def launch(cfg: dict | None = None) -> float:
         return train_execution(cfg)
     if cfg.get("graph_rl"):
         return train_graph_rl(cfg)
+    if cfg.get("hierarchical_eval"):
+        return eval_hierarchical(cfg)
     if cfg.get("hierarchical"):
         return train_hierarchical(cfg)
     if cluster_available():
@@ -1375,15 +1378,17 @@ def train_graph_rl(cfg: dict) -> float:
 
 def train_hierarchical(cfg: dict) -> float:
     """Run a lightweight training loop for :class:`HierarchicalAgent`."""
-    # create a tiny synthetic dataset to drive the environment
-    df = pd.DataFrame(
-        {
-            "Timestamp": pd.date_range("2020-01-01", periods=20, freq="min"),
-            "Symbol": ["A"] * 20,
-            "mid": np.linspace(1.0, 1.1, 20),
-            "return": np.random.randn(20) / 100,
-        }
-    )
+
+    symbol = cfg.get("symbol", "A")
+    root = Path(__file__).resolve().parent
+    if cfg.get("history_path"):
+        df = pd.read_csv(cfg["history_path"])
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+    else:
+        df = load_history_config(symbol, cfg, root)
+    df["Symbol"] = symbol
+    df = make_features(df, validate=cfg.get("validate", False))
+
     env = HierarchicalTradingEnv(df, ["return"], max_position=1.0)
     workers = {
         "mean_reversion": MeanReversionPolicy(),
@@ -1401,6 +1406,56 @@ def train_hierarchical(cfg: dict) -> float:
         obs = next_obs
         if done:
             obs = env.reset()
+
+    if cfg.get("checkpoint_dir"):
+        base = Path(cfg["checkpoint_dir"])
+        save_model("hier_manager", manager, {"role": "manager"}, base / "hier_manager.pkl")
+        for name, pol in workers.items():
+            save_model(
+                f"hier_worker_{name}",
+                pol,
+                {"role": "worker", "name": name},
+                base / f"hier_worker_{name}.pkl",
+            )
+
+    return 0.0
+
+
+def eval_hierarchical(cfg: dict) -> float:
+    """Evaluate a saved hierarchical policy by running a short backtest."""
+
+    symbol = cfg.get("symbol", "A")
+    root = Path(__file__).resolve().parent
+    if cfg.get("history_path"):
+        df = pd.read_csv(cfg["history_path"])
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+    else:
+        df = load_history_config(symbol, cfg, root)
+    df["Symbol"] = symbol
+    df = make_features(df, validate=cfg.get("validate", False))
+
+    env = HierarchicalTradingEnv(df, ["return"], max_position=1.0)
+
+    base = Path(cfg.get("checkpoint_dir", "."))
+    manager_path = get_policy_path("hier_manager")
+    if manager_path is None or not manager_path.exists():
+        manager_path = base / "hier_manager.pkl"
+    manager = joblib.load(manager_path)
+    workers = {}
+    for name in ["mean_reversion", "news", "trend"]:
+        w_path = get_policy_path(f"hier_worker_{name}")
+        if w_path is None or not w_path.exists():
+            w_path = base / f"hier_worker_{name}.pkl"
+        if w_path.exists():
+            workers[name] = joblib.load(w_path)
+
+    agent = HierarchicalAgent(manager, workers)
+    obs = env.reset()
+    for _ in range(cfg.get("hierarchical_steps", 10)):
+        act = agent.act(obs)
+        obs, _, done, _ = env.step(act)
+        if done:
+            break
     return 0.0
 
 
@@ -1444,6 +1499,21 @@ if __name__ == "__main__":
     parser.add_argument("--quantize", action="store_true", help="Save quantized model")
     parser.add_argument(
         "--hierarchical", action="store_true", help="Use hierarchical agent"
+    )
+    parser.add_argument(
+        "--eval-hierarchical",
+        action="store_true",
+        help="Evaluate a saved hierarchical policy in a backtest",
+    )
+    parser.add_argument(
+        "--history-path",
+        type=str,
+        help="CSV file with historical prices for hierarchical agent",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        help="Directory to save or load hierarchical policies",
     )
     parser.add_argument(
         "--distributional",
@@ -1553,6 +1623,8 @@ if __name__ == "__main__":
         cfg["quantize"] = True
     if args.hierarchical:
         cfg["hierarchical"] = True
+    if args.eval_hierarchical:
+        cfg["hierarchical_eval"] = True
     if args.distributional:
         cfg["distributional"] = True
     if args.rl_exec:
@@ -1595,6 +1667,10 @@ if __name__ == "__main__":
         cfg["use_news"] = True
     if args.sim_env:
         cfg["sim_env"] = True
+    if args.history_path:
+        cfg["history_path"] = args.history_path
+    if args.checkpoint_dir:
+        cfg["checkpoint_dir"] = args.checkpoint_dir
     if args.tune:
         from tuning.bayesian_search import run_search
 
