@@ -2,8 +2,8 @@
 
 This module defines high-level prompt templates used to guide an
 agent through a structured reasoning process. Currently only an
-``epa_template`` is provided which separates reasoning into three
-stages: *evaluate*, *plan* and *act*.
+``epa_template`` is provided which separates reasoning into four
+stages: *evaluate*, *plan*, *custom_tactics* and *act*.
 """
 
 from __future__ import annotations
@@ -16,10 +16,11 @@ from training.config import StrategyConfig
 def epa_template(goal: str, context: str, config: StrategyConfig | None = None) -> Dict[str, str]:
     """Create an Evaluate-Plan-Act prompt template.
 
-    The template divides reasoning into three sequential sections:
+    The template divides reasoning into four sequential sections:
 
     - ``evaluate``: Understand the goal and analyse any relevant context.
     - ``plan``: Devise a concise step-by-step strategy based on the evaluation.
+    - ``custom_tactics``: Brainstorm novel tactics or frameworks that could be applied.
     - ``act``: Execute the plan and produce a final answer or decision.
 
     Parameters
@@ -32,8 +33,8 @@ def epa_template(goal: str, context: str, config: StrategyConfig | None = None) 
     Returns
     -------
     Dict[str, str]
-        A mapping containing the ``evaluate``, ``plan`` and ``act``
-        sections of the template. Each value is a short instructional
+        A mapping containing the ``evaluate``, ``plan``, ``custom_tactics`` and
+        ``act`` sections of the template. Each value is a short instructional
         string describing the intent of that stage.
     """
 
@@ -55,13 +56,24 @@ def epa_template(goal: str, context: str, config: StrategyConfig | None = None) 
         "Address the factors identified during evaluation."
     )
 
+    # Custom tactics: explore creative techniques or frameworks.
+    custom_tactics = (
+        "Suggest any novel tactics or frameworks that could improve the "
+        "strategy. Focus on unconventional or tailored approaches."
+    )
+
     # Act: execute the plan and deliver the final outcome.
     act = (
         "Act on the plan and provide the resulting output or decision. "
         "Explain how the actions address the goal."
     )
 
-    sections = {"evaluate": evaluate, "plan": plan, "act": act}
+    sections = {
+        "evaluate": evaluate,
+        "plan": plan,
+        "custom_tactics": custom_tactics,
+        "act": act,
+    }
     if config and config.custom_sections:
         sections.update(config.custom_sections)
     return sections

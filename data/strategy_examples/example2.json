@@ -1,0 +1,8 @@
+{
+  "goal": "Optimize warehouse operations",
+  "context": "Seasonal demand surge expected",
+  "evaluate": "Assess current throughput and staffing levels",
+  "plan": "Hire temporary workers and adjust shift schedules",
+  "custom_tactics": "Use swarm robotics for dynamic shelf arrangement",
+  "act": "Roll out new workflow before peak season"
+}

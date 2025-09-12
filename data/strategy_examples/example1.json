@@ -1,0 +1,8 @@
+{
+  "goal": "Increase user engagement",
+  "context": "Mobile app with declining daily active users",
+  "evaluate": "Review usage analytics and identify drop-off points",
+  "plan": "Implement push notifications and in-app rewards",
+  "custom_tactics": "Gamify onboarding with surprise challenges to encourage exploration",
+  "act": "Deploy features and monitor retention metrics"
+}
