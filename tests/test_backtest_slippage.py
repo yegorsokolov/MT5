@@ -6,9 +6,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from analysis.slippage_model import SlippageModel
 
+# minimal stubs for optional dependencies
 class DummyGauge:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *a, **k):
         pass
 
     def set(self, value):
@@ -17,20 +20,16 @@ class DummyGauge:
     def inc(self, value=1):
         pass
 
-
 DummyCounter = DummyGauge
 
 sys.modules.setdefault(
     "prometheus_client",
     types.SimpleNamespace(Gauge=DummyGauge, Counter=DummyCounter),
 )
-
 sys.modules.setdefault("utils", types.SimpleNamespace(load_config=lambda: {}))
 sys.modules.setdefault(
     "utils.resource_monitor",
-    types.SimpleNamespace(
-        monitor=types.SimpleNamespace(capability_tier=lambda: "lite")
-    ),
+    types.SimpleNamespace(monitor=types.SimpleNamespace(capability_tier=lambda: "lite")),
 )
 sys.modules.setdefault(
     "analysis.strategy_evaluator", types.SimpleNamespace(StrategyEvaluator=object)
@@ -99,7 +98,6 @@ sys.modules.setdefault(
     types.SimpleNamespace(ray=ray_stub, init=lambda **k: None, shutdown=lambda: None),
 )
 
-# load backtest module with dummy dependencies
 spec = importlib.util.spec_from_file_location(
     "backtest", Path(__file__).resolve().parents[1] / "backtest.py"
 )
@@ -112,12 +110,14 @@ spec.loader.exec_module(backtest)
 
 
 class DummyModel:
-    def predict_proba(self, X):  # always signal to enter
+    def predict_proba(self, X):
         return np.tile([0.4, 0.6], (len(X), 1))
 
 
 def _make_df() -> pd.DataFrame:
+    ts = pd.date_range("2020-01-01", periods=7, freq="ms")
     data = {
+        "Timestamp": ts,
         "Bid": [100.0, 100.02, 100.05, 99.90, 99.95, 100.00, 99.80],
         "Ask": [100.02, 100.04, 100.07, 99.92, 99.97, 100.02, 99.82],
         "BidVolume": [200] * 7,
@@ -135,18 +135,27 @@ def _make_df() -> pd.DataFrame:
     return df
 
 
-def test_slippage_reduces_returns():
+def test_pnl_drops_with_latency_and_slippage():
     model = DummyModel()
     df = _make_df()
-    base_cfg = {"threshold": 0.5, "trailing_stop_pips": 1000, "order_size": 100}
-    metrics_no_slip, _ = backtest.backtest_on_df(
-        df, model, base_cfg, return_returns=True
+    cfg = {"threshold": 0.5, "trailing_stop_pips": 1000, "order_size": 100}
+    metrics_base, _ = backtest.backtest_on_df(df, model, cfg, return_returns=True)
+
+    metrics_latency, _ = backtest.backtest_on_df(
+        df, model, cfg, latency_ms=1, return_returns=True
     )
 
-    cfg_slip = dict(base_cfg)
-    cfg_slip["slippage_bps"] = 10
-    metrics_slip, _ = backtest.backtest_on_df(df, model, cfg_slip, return_returns=True)
+    snaps_buy = [[(row.Ask, 10), (row.Ask + 1.0, 10)] for row in df.itertuples()]
+    snaps_sell = [[(row.Bid, 10), (row.Bid - 1.0, 10)] for row in df.itertuples()]
+    model_buy = SlippageModel(snaps_buy)
+    model_sell = SlippageModel(snaps_sell)
 
-    assert metrics_slip["total_return"] < metrics_no_slip["total_return"]
-    assert metrics_slip["skipped_trades"] == 0
-    assert metrics_slip["partial_fills"] == 0
+    def slip(order_size, side):
+        return model_buy(order_size, side) if side == "buy" else model_sell(order_size, side)
+
+    metrics_slip, _ = backtest.backtest_on_df(
+        df, model, cfg, slippage_model=slip, return_returns=True
+    )
+
+    assert metrics_latency["total_return"] < metrics_base["total_return"]
+    assert metrics_slip["total_return"] < metrics_base["total_return"]

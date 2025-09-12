@@ -66,3 +66,23 @@ def generate_signals(df: pd.DataFrame, config: Optional[PairsBaselineConfig] = N
 
 
 __all__ = ["PairsBaselineConfig", "generate_signals"]
+
+
+def run_backtest(
+    cfg: dict,
+    *,
+    latency_ms: int = 0,
+    slippage_model=None,
+):
+    """Convenience wrapper to backtest with execution settings."""
+
+    from backtest import run_backtest as _run_backtest
+
+    return _run_backtest(
+        cfg,
+        latency_ms=latency_ms,
+        slippage_model=slippage_model,
+    )
+
+
+__all__.append("run_backtest")
