@@ -29,6 +29,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.utils.class_weight import compute_sample_weight
 from analysis.purged_cv import PurgedTimeSeriesSplit
+from analysis.data_quality import score_samples as dq_score_samples
 from lightgbm import LGBMClassifier
 from analytics import mlflow_client as mlflow
 from datetime import datetime
@@ -146,10 +147,15 @@ def _combined_sample_weight(
     t_max: int,
     balance: bool,
     half_life: int | None,
+    dq_w: np.ndarray | None = None,
 ) -> np.ndarray | None:
-    """Compute optional class and time-decay sample weights."""
+    """Compute optional data-quality, class and time-decay sample weights."""
     sw = np.ones(len(y), dtype=float)
     applied = False
+    if dq_w is not None:
+        sw *= dq_w
+        applied = True
+        logger.info("Average data-quality weight: %.3f", float(np.mean(dq_w)))
     if balance:
         sw *= compute_sample_weight("balanced", y)
         applied = True
@@ -534,12 +540,14 @@ def main(
                     "early_stopping_rounds": cfg.get("early_stopping_rounds", 50),
                     "verbose": False,
                 }
+                dq_w = dq_score_samples(X_tr)
                 sw = _combined_sample_weight(
                     y_tr.to_numpy(),
                     timestamps[tr_idx],
                     t_max,
                     balance,
                     half_life,
+                    dq_w,
                 )
                 if sw is not None:
                     fit_kwargs["sample_weight"] = sw
@@ -620,6 +628,7 @@ def main(
             end = min(len(X), start + batch_size)
             Xb = X.iloc[start:end]
             yb = y.iloc[start:end]
+            dq_w = dq_score_samples(Xb)
             if "scaler" in pipe.named_steps:
                 scaler = pipe.named_steps["scaler"]
                 if hasattr(scaler, "partial_fit"):
@@ -641,6 +650,7 @@ def main(
                 t_max,
                 cfg.get("balance_classes"),
                 half_life,
+                dq_w,
             )
             if sw is not None:
                 fit_kwargs["sample_weight"] = sw
@@ -771,12 +781,14 @@ def main(
             fit_params["clf__early_stopping_rounds"] = esr
         if donor_booster is not None:
             fit_params["clf__init_model"] = donor_booster
+        dq_w = dq_score_samples(X_train)
         sw = _combined_sample_weight(
             y_train.to_numpy(),
             timestamps[train_idx],
             t_max,
             balance,
             half_life,
+            dq_w,
         )
         if sw is not None:
             fit_params["clf__sample_weight"] = sw
