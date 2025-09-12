@@ -1540,6 +1540,11 @@ if __name__ == "__main__":
         help="Path to pickled adjacency matrices for graph RL",
     )
     parser.add_argument(
+        "--strategy-config",
+        type=str,
+        help="Path to YAML/JSON strategy configuration",
+    )
+    parser.add_argument(
         "--offline-pretrain",
         action="store_true",
         help="Initialize policy using offline data before online fine-tuning",
@@ -1615,6 +1620,25 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     cfg = load_config()
+    if args.strategy_config:
+        path = Path(args.strategy_config)
+        with path.open() as fh:
+            if path.suffix in {".yaml", ".yml"}:
+                import yaml  # type: ignore
+
+                raw = yaml.safe_load(fh)
+            else:
+                import json
+
+                raw = json.load(fh)
+        from training.config import StrategyConfig
+        from training.data.build_strategies import generate_strategy_examples
+        from training.prompts.strategy_templates import epa_template
+
+        strat_cfg = StrategyConfig(**raw)
+        cfg["strategy_prompts"] = generate_strategy_examples(
+            epa_template, 1, strat_cfg
+        )
     if args.ddp:
         cfg["ddp"] = True
     if args.export:
