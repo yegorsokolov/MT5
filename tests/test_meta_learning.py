@@ -6,10 +6,11 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from analysis.meta_learning import (
+from models.meta_learner import (
     _LinearModel,
-    meta_train_model,
     fine_tune_model,
+    meta_train_reptile,
+    _steps_to,
 )
 
 
@@ -28,13 +29,6 @@ def _generate_task(weight, n_samples: int = 40):
     return train_ds, val_ds
 
 
-def _steps_to(history, thr=0.9):
-    for i, a in enumerate(history, 1):
-        if a >= thr:
-            return i
-    return len(history) + 1
-
-
 def test_meta_learning_faster_convergence():
     np.random.seed(0)
     torch.manual_seed(0)
@@ -42,7 +36,7 @@ def test_meta_learning_faster_convergence():
     w2 = np.array([-2.0, 2.0])
     tasks = [_generate_task(w1), _generate_task(w2)]
     build = lambda: _LinearModel(2)
-    state = meta_train_model(tasks, build, epochs=25)
+    state = meta_train_reptile(tasks, build, epochs=25)
 
     X_new = np.random.randn(20, 2)
     y_new = (X_new @ w1 > 0).astype(float)
@@ -56,3 +50,4 @@ def test_meta_learning_faster_convergence():
 
     assert meta_hist[-1] >= base_hist[-1]
     assert _steps_to(meta_hist) <= _steps_to(base_hist)
+
