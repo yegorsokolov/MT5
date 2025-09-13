@@ -84,6 +84,7 @@ from analysis.evaluate import (
     risk_adjusted_metrics,
 )
 from analysis.interpret_model import generate_shap_report
+from analysis.similar_days import add_similar_day_features
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -496,6 +497,15 @@ def main(
     features = select_features(df[features], y)
     feat_path = root / "selected_features.json"
     feat_path.write_text(json.dumps(features))
+    index_path = root / "similar_days_index.pkl"
+    df, _ = add_similar_day_features(
+        df,
+        feature_cols=features,
+        return_col="return",
+        k=cfg.get("nn_k", 5),
+        index_path=index_path,
+    )
+    features.extend(["nn_return_mean", "nn_vol"])
 
     X = df[features]
     # Use symbol identifiers as group labels so cross-validation folds
