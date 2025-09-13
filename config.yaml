@@ -12,6 +12,8 @@ active_learning:
   k: 10
 drift_method: adwin
 drift_delta: 0.002
+drift_threshold: 3
+drift_cooldown: 3600
 service_cmds:
   signal_queue:
     - python
