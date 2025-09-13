@@ -69,6 +69,15 @@ class IndicatorBundle:
     liq_exhaustion: Optional[int] = None
 
 
+@dataclass
+class RiskProfile:
+    """User-defined risk preferences used to scale signals."""
+
+    tolerance: float = 1.0
+    leverage_cap: float = 1.0
+    drawdown_limit: float = 0.0
+
+
 class BaselineStrategy:
     """Moving-average crossover strategy with basic risk management.
 
@@ -141,6 +150,7 @@ class BaselineStrategy:
         hurst_trend_min: float = 0.5,
         hurst_mean_reversion_max: float = 0.5,
         use_kalman_smoothing: bool | None = None,
+        risk_profile: Optional[RiskProfile] = None,
     ) -> None:
         if short_window >= long_window:
             raise ValueError("short_window must be < long_window")
@@ -155,6 +165,7 @@ class BaselineStrategy:
         self.trailing_stop_pct = float(trailing_stop_pct)
         self.trailing_take_profit_pct = float(trailing_take_profit_pct)
         self.scale_pos_by_atr = scale_pos_by_atr
+        self.risk_profile = risk_profile or RiskProfile()
         self.long_regimes = set(long_regimes) if long_regimes is not None else None
         self.short_regimes = set(short_regimes) if short_regimes is not None else None
         self.long_vae_regimes = (
@@ -240,7 +251,7 @@ class BaselineStrategy:
         indicators: Optional[IndicatorBundle] = None,
         session: Optional[str] = None,
         cross_confirm: Optional[Dict[str, float]] = None,
-    ) -> int:
+    ) -> float:
         """Process a new bar and return a trading signal.
 
         Trades are only permitted when ``cross_confirm`` is supplied and all
@@ -259,9 +270,10 @@ class BaselineStrategy:
 
         signal = self._compute_signal(price, indicators)
         signal = self._apply_filters(signal, indicators, price, cross_confirm)
-        return self._manage_position(
+        sig = self._manage_position(
             raw_price, signal, indicators.regime, indicators.vae_regime
         )
+        return self._apply_risk(sig)
 
     # ------------------------------------------------------------------
     # Signal computation helpers
@@ -538,6 +550,10 @@ class BaselineStrategy:
         assert self.entry_price is not None and self.entry_atr is not None
         self.peak_price = max(self.peak_price or price, price)
         stop_loss = self.entry_price - self.entry_atr * self.atr_stop_long
+        if self.risk_profile.drawdown_limit > 0:
+            stop_loss = max(
+                stop_loss, self.entry_price * (1 - self.risk_profile.drawdown_limit)
+            )
         stop_loss = max(stop_loss, self.peak_price * (1 - self.trailing_stop_pct))
 
         if price <= stop_loss:
@@ -561,6 +577,10 @@ class BaselineStrategy:
         assert self.entry_price is not None and self.entry_atr is not None
         self.trough_price = min(self.trough_price or price, price)
         stop_loss = self.entry_price + self.entry_atr * self.atr_stop_short
+        if self.risk_profile.drawdown_limit > 0:
+            stop_loss = min(
+                stop_loss, self.entry_price * (1 + self.risk_profile.drawdown_limit)
+            )
         stop_loss = min(stop_loss, self.trough_price * (1 + self.trailing_stop_pct))
 
         if price >= stop_loss:
@@ -580,6 +600,15 @@ class BaselineStrategy:
                 return 1
         return 0
 
+    def _apply_risk(self, signal: int) -> float:
+        rp = self.risk_profile
+        if rp.tolerance == 1.0 and rp.leverage_cap == 1.0:
+            return float(signal)
+        adj = signal * rp.tolerance
+        if rp.leverage_cap > 0:
+            adj = max(min(adj, rp.leverage_cap), -rp.leverage_cap)
+        return adj
+
 
 def run_backtest(
     cfg: dict,
@@ -598,4 +627,5 @@ def run_backtest(
     )
 
 
-__all__ = ["BaselineStrategy", "IndicatorBundle", "run_backtest"]
+__all__ = ["BaselineStrategy", "IndicatorBundle", "RiskProfile", "run_backtest"]
+
