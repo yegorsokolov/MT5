@@ -104,6 +104,7 @@ except Exception:  # pragma: no cover - analytics optional in tests
 from utils import load_config
 from state_manager import save_checkpoint, load_latest_checkpoint
 from analysis.grad_monitor import GradientMonitor, GradMonitorCallback
+from analysis.market_simulator import AdversarialMarketSimulator
 
 try:
     from utils.resource_monitor import monitor  # type: ignore
@@ -469,6 +470,10 @@ def main(
         decay=cfg.get("grad_lr_decay", 0.5),
         growth=cfg.get("grad_lr_growth", 2.0),
     )
+
+    adv_sim = None
+    if cfg.get("adversarial_market"):
+        adv_sim = AdversarialMarketSimulator(seq_len=int(cfg.get("adv_seq_len", 32)))
 
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
@@ -1049,6 +1054,13 @@ def main(
                 )
             except TypeError:  # pragma: no cover - stub algos may not support kwarg
                 model.learn(total_timesteps=learn_steps, callback=grad_callback)
+
+            if adv_sim is not None and hasattr(env, "price_history") and hasattr(model, "policy"):
+                try:
+                    history = np.array(env.price_history[-adv_sim.seq_len:])  # type: ignore
+                    env.price_history[-adv_sim.seq_len:] = adv_sim.perturb(history, model.policy)  # type: ignore
+                except Exception:  # pragma: no cover - environment may not support adversary
+                    logger.exception("Adversarial simulator step failed")
             current += learn_steps
             if rank == 0 and hasattr(model.policy, "optimizer"):
                 mlflow.log_metric("lr", model.policy.optimizer.get_lr(), step=current)
