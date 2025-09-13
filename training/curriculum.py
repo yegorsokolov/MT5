@@ -18,7 +18,7 @@ implemented outside of this module.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Tuple, Any
+from typing import Callable, Iterable, List, Tuple, Any, Sequence
 
 
 @dataclass
@@ -99,4 +99,29 @@ class CurriculumScheduler:
         return cls(stages)
 
 
-__all__ = ["CurriculumStage", "CurriculumScheduler"]
+def build_strategy_curriculum(
+    simple_fn: Callable[[], float],
+    combo_fn: Callable[[], float],
+    graph_fn: Callable[[], float],
+    thresholds: Sequence[float] | None = None,
+) -> "CurriculumScheduler":
+    """Create a three stage curriculum used in tests and examples.
+
+    The stages progress from simple single-indicator strategies to
+    combinations of multiple indicators and finally graph based strategies.
+    Each ``*_fn`` should execute the training for the respective stage and
+    return a validation metric between 0 and 1.  The scheduler will
+    automatically advance to the next stage once the metric meets the
+    associated threshold.
+    """
+
+    thresholds = list(thresholds or (0.6, 0.7, 0.8))
+    stages = [
+        CurriculumStage("simple", simple_fn, thresholds[0]),
+        CurriculumStage("combo", combo_fn, thresholds[1]),
+        CurriculumStage("graph", graph_fn, thresholds[2]),
+    ]
+    return CurriculumScheduler(stages)
+
+
+__all__ = ["CurriculumStage", "CurriculumScheduler", "build_strategy_curriculum"]
