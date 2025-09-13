@@ -1,0 +1,6 @@
+[
+  {
+    "name": "evo_ind_0",
+    "formula": "(df['price'].diff()/df['volume']).rolling(2).mean()"
+  }
+]
