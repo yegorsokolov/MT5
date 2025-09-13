@@ -53,7 +53,7 @@ mt5-train = "mt5.cli:train_entry"
 mt5-train-nn = "mt5.cli:train_nn_entry"
 mt5-train-rl = "mt5.cli:train_rl_entry"
 
-[project.entry-points."mt5.features"]
+[project.entry-points."mt5.indicators"]
 
 [project.entry-points."mt5.strategies"]
 
