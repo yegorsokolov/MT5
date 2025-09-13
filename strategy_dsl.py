@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import operator
 from dataclasses import dataclass
-from typing import List, Sequence, Union, Iterable
+from typing import Iterable, List, Sequence, Union
+
+# Re-export graph based DSL components for convenience
+from strategies.graph_dsl import (
+    IndicatorNode,
+    PositionNode,
+    RiskNode,
+    ExitNode,
+    StrategyGraph,
+    node_from_dict,
+)
 
 
 @dataclass
@@ -92,3 +102,20 @@ class StrategyInterpreter:
                 cash += price
         # Wait does nothing
         return cash, position
+
+
+# Public API re-exporting both sequential and graph-based primitives
+__all__ = [
+    "Buy",
+    "Sell",
+    "Wait",
+    "Indicator",
+    "StrategyInterpreter",
+    # Graph components
+    "IndicatorNode",
+    "RiskNode",
+    "PositionNode",
+    "ExitNode",
+    "StrategyGraph",
+    "node_from_dict",
+]

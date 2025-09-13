@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+# Ensure project root on path for direct execution
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 from strategy_dsl import Buy, Indicator, Sell, StrategyInterpreter
 from models.strategy_controller import (
     evaluate_controller,
