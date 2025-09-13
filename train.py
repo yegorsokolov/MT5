@@ -706,7 +706,7 @@ def main(
     all_conf: list[float] = []
     all_lower: list[float] = []
     all_upper: list[float] = []
-    all_residuals: list[float] = []
+    all_residuals: dict[int, list[float]] = {}
     final_pipe: Pipeline | None = None
     X_train_final: pd.DataFrame | None = None
     last_val_X: pd.DataFrame | None = None
@@ -725,7 +725,7 @@ def main(
         all_regimes = state.get("all_regimes", [])
         all_lower = state.get("all_lower", [])
         all_upper = state.get("all_upper", [])
-        all_residuals = state.get("all_residuals", [])
+        all_residuals = state.get("all_residuals", {})
         final_pipe = state.get("model")
         scaler_state = state.get("scaler_state")
         if final_pipe and scaler_state and "scaler" in final_pipe.named_steps:
@@ -846,9 +846,15 @@ def main(
             regimes_val,
         )
         residuals = y_val.values - probs
-        all_residuals.extend(residuals)
-        q = fit_residuals(residuals, alpha=cfg.get("interval_alpha", 0.1))
-        lower, upper = predict_interval(probs, q)
+        for reg in np.unique(regimes_val):
+            mask = regimes_val == reg
+            all_residuals.setdefault(int(reg), []).extend(residuals[mask])
+        q = fit_residuals(
+            residuals,
+            alpha=cfg.get("interval_alpha", 0.1),
+            regimes=regimes_val,
+        )
+        lower, upper = predict_interval(probs, q, regimes_val)
         cov = evaluate_coverage(y_val, lower, upper)
         mlflow.log_metric(f"fold_{fold}_interval_coverage", cov)
         logger.info("Fold %d interval coverage: %.3f", fold, cov)
@@ -902,7 +908,12 @@ def main(
     )
     interval_alpha = cfg.get("interval_alpha", 0.1)
     overall_q = (
-        fit_residuals(all_residuals, alpha=interval_alpha) if all_residuals else None
+        {
+            reg: fit_residuals(res, alpha=interval_alpha)
+            for reg, res in all_residuals.items()
+        }
+        if all_residuals
+        else {}
     )
     if cfg.get("use_price_distribution") and last_split is not None:
         from train_price_distribution import train_price_distribution
@@ -1054,9 +1065,11 @@ def main(
         "regime_thresholds": regime_thresholds,
         "meta_model_id": meta_version_id,
     }
-    if overall_q is not None:
+    if overall_q:
         perf["interval_q"] = overall_q
         perf["interval_alpha"] = interval_alpha
+        if final_pipe is not None:
+            setattr(final_pipe, "interval_q", overall_q)
     version_id = model_store.save_model(
         final_pipe,
         cfg,
