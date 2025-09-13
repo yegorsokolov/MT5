@@ -6,7 +6,7 @@ import logging
 import asyncio
 from collections import deque
 from time import perf_counter
-from typing import Callable, Deque, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -42,6 +42,9 @@ except Exception:  # pragma: no cover - light fallback
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:  # pragma: no cover
+    from models.capital_allocator import CapitalAllocator
+
 
 class ExecutionEngine:
     """Route orders using basic execution algorithms.
@@ -57,11 +60,14 @@ class ExecutionEngine:
         rl_threshold: float = 0.0,
         optimizer: Optional[ExecutionOptimizer] = None,
         registry: Optional[ModelRegistry] = None,
+        capital_allocator: Optional["CapitalAllocator"] = None,
     ) -> None:
         self.recent_volume: Deque[float] = deque(maxlen=volume_window)
         self.rl_executor = rl_executor
         self.rl_threshold = rl_threshold
         self.optimizer = optimizer or ExecutionOptimizer()
+        self.capital_allocator = capital_allocator
+        self.strategy_weights: Dict[str, float] = {}
         # Registry used to dynamically load RL policies on demand.  When
         # provided, an ``RLExecutor`` will be instantiated lazily when the
         # ``rl`` strategy is requested.
@@ -73,6 +79,16 @@ class ExecutionEngine:
             self.optimizer.schedule_nightly()
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    def rebalance_capital(
+        self, pnl: Dict[str, float], risk: Dict[str, float]
+    ) -> Dict[str, float]:
+        """Recompute capital weights using the allocator, if present."""
+        if self.capital_allocator is None:
+            return {}
+        self.strategy_weights = self.capital_allocator.allocate(pnl, risk)
+        return self.strategy_weights
 
     # ------------------------------------------------------------------
     def record_volume(self, volume: float) -> None:
