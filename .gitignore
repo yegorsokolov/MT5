@@ -50,6 +50,7 @@ models/*
 !models/residual_learner.py
 !models/residual_stacker.py
 !models/time_encoding.py
+!models/strategy_controller.py
 __pycache__/
 analysis/news_impact.parquet
 analytics/*.parquet
