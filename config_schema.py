@@ -71,6 +71,16 @@ class ConfigSchema(BaseModel):
         gt=0,
         description="Sensitivity parameter for concept drift detector",
     )
+    drift_threshold: int = Field(
+        3,
+        ge=1,
+        description="Number of drift events required to trigger retraining",
+    )
+    drift_cooldown: float = Field(
+        3600.0,
+        ge=0,
+        description="Seconds to wait before reacting to repeated drift",
+    )
     pt_mult: float = Field(
         0.01,
         gt=0,
