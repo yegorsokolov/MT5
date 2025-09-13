@@ -1,1 +1,1 @@
-"""Example plugin providing a feature and a strategy."""
+"""Example plugin providing an indicator and a strategy."""
