@@ -1,0 +1,6 @@
+[
+  {
+    "name": "evo_sym_0",
+    "formula": "(df['price'].rolling(2).mean() / df['volume']).fillna(0.0)"
+  }
+]
