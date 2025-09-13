@@ -21,6 +21,6 @@ Welcome to MT5's documentation
    :maxdepth: 2
    :caption: API Reference
 
-   api/features
    api/models
    api/strategies
+   api/indicators

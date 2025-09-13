@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "MT5"
 extensions = [
     "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
     "sphinx.ext.napoleon",
     "sphinx.ext.doctest",
     "myst_parser",
@@ -45,8 +46,10 @@ exclude_patterns = [
     "monitoring.md",
     "online_updates.md",
     "strategy_approval.md",
+    "strategy_training.md",
     "config.html",
     "EXTENDING.md",
+    "api/features.rst",
 ]
 
 source_suffix = {
