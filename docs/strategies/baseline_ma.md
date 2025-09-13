@@ -5,6 +5,11 @@ short-term moving average crosses a long-term moving average.  A configurable
 ``min_diff`` parameter allows ignoring small, potentially noisy differences
 between the averages before triggering a trade.
 
+```{eval-rst}
+The strategy relies on :func:`indicators.common.sma` and
+:func:`indicators.common.ema` for its moving-average calculations.
+```
+
 ## Setup
 
 ```python
@@ -14,6 +19,16 @@ from src.modes import Mode
 
 strategy = get_strategy("baseline_ma", short_window=5, long_window=20, min_diff=0.1)
 executor = StrategyExecutor(mode=Mode.LIVE_TRADING, strategy=strategy)
+```
+
+## Indicator Usage
+
+```python
+from indicators import common as ind
+
+prices = [1, 2, 3, 4, 5]
+short_ma = ind.sma(prices, period=5)
+long_ma = ind.ema(prices, period=20)
 ```
 
 ## Expected Behavior
