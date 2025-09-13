@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Type
 from importlib.metadata import entry_points
+import logging
 
 from .baseline_ma import BaselineMovingAverageStrategy
+
+logger = logging.getLogger(__name__)
 
 _STRATEGIES: Dict[str, Type[BaselineMovingAverageStrategy]] = {}
 
@@ -63,8 +66,9 @@ def _load_external_strategies() -> None:
         try:
             hook = ep.load()
             hook(register_strategy)
+            logger.info("Loaded strategy plugin %s", ep.name)
         except Exception:  # pragma: no cover - plugin errors shouldn't crash
-            pass
+            logger.debug("Failed to load strategy plugin %s", ep.name, exc_info=True)
     _external_loaded = True
 
 

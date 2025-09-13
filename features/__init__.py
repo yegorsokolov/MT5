@@ -278,7 +278,7 @@ def report_status() -> Dict[str, object]:
 
 def get_feature_pipeline() -> List[Callable[["pd.DataFrame"], "pd.DataFrame"]]:
     """Return the list of compute functions enabled in the config and resources."""
-    _load_external_features()
+    _load_external_indicators()
     _update_status()
     active = [f["name"] for f in _STATUS.get("features", []) if f["status"] == "active"]
     return [_REGISTRY[name].compute for name in active]
@@ -287,25 +287,25 @@ def get_feature_pipeline() -> List[Callable[["pd.DataFrame"], "pd.DataFrame"]]:
 _external_loaded = False
 
 
-def _load_external_features() -> None:
-    """Load feature plugins declared via entry points."""
+def _load_external_indicators() -> None:
+    """Load indicator plugins declared via entry points."""
 
     global _external_loaded
     if _external_loaded:
         return
     try:
-        eps = entry_points(group="mt5.features")
+        eps = entry_points(group="mt5.indicators")
     except TypeError:  # pragma: no cover - Python<3.10
-        eps = entry_points().get("mt5.features", [])
+        eps = entry_points().get("mt5.indicators", [])
     except Exception:  # pragma: no cover - missing metadata
         eps = []
     for ep in eps:
         try:
             hook = ep.load()
             hook(register_feature)
-            logger.info("Loaded feature plugin %s", ep.name)
+            logger.info("Loaded indicator plugin %s", ep.name)
         except Exception:  # pragma: no cover - plugin errors shouldn't crash
-            logger.debug("Failed to load feature plugin %s", ep.name, exc_info=True)
+            logger.debug("Failed to load indicator plugin %s", ep.name, exc_info=True)
     _external_loaded = True
 
 
