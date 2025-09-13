@@ -16,6 +16,8 @@ class TrainingConfig(BaseModel):
     use_pseudo_labels: bool = False
     drift_method: str = "adwin"
     drift_delta: float = Field(0.002, gt=0)
+    drift_threshold: int = Field(3, ge=1)
+    drift_cooldown: float = Field(3600.0, ge=0)
     use_focal_loss: bool = False
     focal_alpha: float = 0.25
     focal_gamma: float = 2.0
