@@ -16,6 +16,7 @@ Welcome to MT5's documentation
    how-to/training
    how-to/feature-development
    how-to/deployment
+   how-to/strategy-benchmark
 
 .. toctree::
    :maxdepth: 2
