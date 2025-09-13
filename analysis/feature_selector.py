@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence
 
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
+
+try:  # pragma: no cover - optional dependency
+    from sklearn.linear_model import LogisticRegression
+except Exception:  # pragma: no cover
+    LogisticRegression = None  # type: ignore
 
 try:  # pragma: no cover - shap is optional
     import shap  # type: ignore
@@ -56,15 +64,24 @@ def select_features(
     if y.nunique() < 2:
         return list(X.columns)
 
-    model = LogisticRegression(
-        penalty="l1",
-        solver="liblinear",
-        max_iter=200,
-        random_state=0,
-    )
-    model.fit(X, y)
-    coef = np.abs(model.coef_)[0]
-    importance = pd.Series(coef, index=X.columns)
+    if LogisticRegression is not None:
+        model = LogisticRegression(
+            penalty="l1",
+            solver="liblinear",
+            max_iter=200,
+            random_state=0,
+        )
+        model.fit(X, y)
+        coef = np.abs(model.coef_)[0]
+        importance = pd.Series(coef, index=X.columns)
+    else:  # pragma: no cover - correlation-based fallback
+        corr = {}
+        for col in X.columns:
+            if X[col].std() == 0 or y.std() == 0:
+                corr[col] = 0.0
+            else:
+                corr[col] = float(np.corrcoef(X[col], y)[0, 1])
+        importance = pd.Series(np.abs(pd.Series(corr)), index=X.columns)
 
     # If shap is available and top_k requested, use shap-based ranking
     if shap is not None and top_k is not None:
@@ -78,9 +95,59 @@ def select_features(
     if top_k is not None:
         selected = importance.nlargest(top_k)
     else:
-        selected = importance[importance > 0]
+        thresh = 0.01 if LogisticRegression is not None else 0.1
+        selected = importance[importance > thresh]
 
     if selected.empty:  # fallback to all features
         selected = importance
 
     return selected.index.tolist()
+
+
+def _feature_version(features: Iterable[str]) -> str:
+    """Compute a short hash for a feature list."""
+    text = ",".join(sorted(features))
+    return hashlib.sha1(text.encode()).hexdigest()[:8]
+
+
+def save_feature_set(features: Iterable[str], path: Path) -> str:
+    """Persist selected features with a version hash.
+
+    Parameters
+    ----------
+    features:
+        Iterable of selected feature names.
+    path:
+        Destination path where the feature list is written as JSON.
+
+    Returns
+    -------
+    str
+        Version hash computed from the feature list.
+    """
+
+    feats = list(features)
+    version = _feature_version(feats)
+    payload = {"version": version, "features": feats}
+    path.write_text(json.dumps(payload))
+    return version
+
+
+def load_feature_set(path: Path) -> tuple[list[str], str | None]:
+    """Load a persisted feature set.
+
+    Parameters
+    ----------
+    path:
+        Path to the JSON file produced by :func:`save_feature_set`.
+
+    Returns
+    -------
+    list[str], str | None
+        Tuple of feature list and version hash (``None`` if missing).
+    """
+
+    if not path.exists():
+        return [], None
+    data = json.loads(path.read_text())
+    return data.get("features", []), data.get("version")
