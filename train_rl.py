@@ -135,6 +135,7 @@ from model_registry import register_policy, save_model, get_policy_path
 import joblib
 from datetime import datetime
 from analytics.metrics_store import record_metric, TS_PATH
+from training.curriculum import CurriculumScheduler
 
 try:
     from analysis import model_card
@@ -1317,6 +1318,18 @@ def main(
 def launch(cfg: dict | None = None) -> float:
     if cfg is None:
         cfg = load_config()
+    curriculum_cfg = cfg.get("curriculum") if isinstance(cfg, dict) else None
+    if curriculum_cfg:
+        def _build_fn(stage_cfg: dict) -> callable:
+            def _run_stage() -> float:
+                cfg_stage = dict(cfg)
+                cfg_stage.update(stage_cfg.get("config", {}))
+                return main(0, 1, cfg_stage)
+            return _run_stage
+        scheduler = CurriculumScheduler.from_config(curriculum_cfg, _build_fn)
+        if scheduler is not None:
+            scheduler.run()
+            return float(scheduler.final_metric)
     if cfg.get("constrained"):
         return train_constrained(cfg)
     if cfg.get("rl_exec"):
