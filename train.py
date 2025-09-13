@@ -1345,6 +1345,11 @@ if __name__ == "__main__":
         help="Number of mixture components for PriceDistributionModel",
     )
     parser.add_argument(
+        "--strategy-graph",
+        action="store_true",
+        help="Generate and backtest strategy graphs",
+    )
+    parser.add_argument(
         "--strategy-controller",
         action="store_true",
         help="Train a neural controller that emits DSL trading actions",
@@ -1373,6 +1378,20 @@ if __name__ == "__main__":
             ]
             pnl = evaluate_controller(controller, market_data)
             print(f"Strategy controller PnL: {pnl:.2f}")
+        elif args.strategy_graph:
+            from models.strategy_graph_controller import StrategyGraphController
+            import numpy as np
+
+            features = np.array([[1.0, 2.0]])
+            risk_profile = (risk_target or {}).get("risk", 0.5)
+            controller = StrategyGraphController(input_dim=features.shape[1])
+            graph = controller.generate(features, risk_profile)
+            data = [
+                {"price": 1.0, "ma": 0.0},
+                {"price": 2.0, "ma": 3.0},
+            ]
+            pnl = graph.run(data)
+            print(f"Strategy graph PnL: {pnl:.2f}")
         elif args.tune:
             from tuning.bayesian_search import run_search
 
