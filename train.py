@@ -1251,10 +1251,29 @@ if __name__ == "__main__":
         default=None,
         help="Number of mixture components for PriceDistributionModel",
     )
+    parser.add_argument(
+        "--strategy-controller",
+        action="store_true",
+        help="Train a neural controller that emits DSL trading actions",
+    )
     args = parser.parse_args()
     ray_init()
     try:
-        if args.tune:
+        if args.strategy_controller:
+            from models.strategy_controller import (
+                evaluate_controller,
+                train_strategy_controller,
+            )
+
+            controller = train_strategy_controller()
+            market_data = [
+                {"price": 1.0, "ma": 2.0},
+                {"price": 3.0, "ma": 2.0},
+                {"price": 1.0, "ma": 2.0},
+            ]
+            pnl = evaluate_controller(controller, market_data)
+            print(f"Strategy controller PnL: {pnl:.2f}")
+        elif args.tune:
             from tuning.bayesian_search import run_search
 
             cfg = load_config().model_dump()
