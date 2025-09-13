@@ -112,6 +112,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
         vwap,
         baseline_signal,
         divergence,
+        evolved_indicators,
     )
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,9 @@ if not os.getenv("MT5_DOCS_BUILD"):
     register_feature("vwap", vwap.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature(
         "baseline_signal", baseline_signal.compute, min_cpus=1, min_mem_gb=1.0
+    )
+    register_feature(
+        "evolved_indicators", evolved_indicators.compute, min_cpus=1, min_mem_gb=1.0
     )
 
 # Holds latest status report
