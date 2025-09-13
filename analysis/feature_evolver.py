@@ -14,6 +14,7 @@ from gplearn.genetic import SymbolicTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import KFold, cross_val_score
 from feature_store import register_feature as store_register_feature
+from models.indicator_hypernet import IndicatorHyperNet
 
 
 @dataclass
@@ -42,6 +43,7 @@ class FeatureEvolver:
         self.store_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_file = self.store_dir / "manifest.json"
         self.regime_file = self.store_dir / "last_regime.txt"
+        self.hypernet = IndicatorHyperNet(self.store_dir)
 
     # ------------------------------------------------------------------
     def _expression_to_code(self, expression: str, cols: List[str]) -> str:
@@ -104,6 +106,26 @@ class FeatureEvolver:
                 df[feat["name"]] = prog.execute(X)
             except Exception:
                 continue
+        return df
+
+    # ------------------------------------------------------------------
+    def apply_hypernet(
+        self, df: pd.DataFrame, target_col: str | None = None
+    ) -> pd.DataFrame:
+        """Request indicators from the hypernetwork and log performance."""
+
+        df, generated = self.hypernet.apply_or_generate(df)
+        for name, formula in generated.items():
+            try:
+                store_register_feature(name, df[[name]], {"formula": formula})
+            except Exception:
+                pass
+            if target_col and target_col in df.columns:
+                base = df[target_col].shift(1)
+                indicator = df[name]
+                baseline_err = float(((df[target_col] - base) ** 2).mean())
+                indicator_err = float(((df[target_col] - indicator) ** 2).mean())
+                self.hypernet.log_performance(name, baseline_err - indicator_err)
         return df
 
     # ------------------------------------------------------------------
