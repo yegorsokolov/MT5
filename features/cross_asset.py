@@ -102,6 +102,7 @@ def add_cross_asset_features(
     whitelist: Iterable[str] | None = None,
     max_pairs: int | None = None,
     reduce: str = "pca",
+    confirm_peers: Iterable[str] | None = None,
 ) -> pd.DataFrame:
     """Add simple cross-asset interaction features.
 
@@ -134,6 +135,12 @@ def add_cross_asset_features(
     reduce:
         Reduction strategy when ``max_pairs`` is set. Options are ``"top_k"``
         or ``"pca"`` (default) for dimensionality compression.
+    confirm_peers:
+        Optional iterable of peer symbols for which ``cross_confirm``
+        correlation columns will be exposed.  For each requested peer a
+        ``cross_confirm_<peer>`` column is created containing the rolling
+        correlation between the current symbol and that peer.  Missing values
+        are filled with ``0.0``.
     """
 
     if pl is not None and isinstance(df, pl.DataFrame):
@@ -143,6 +150,7 @@ def add_cross_asset_features(
             whitelist=whitelist,
             max_pairs=max_pairs,
             reduce=reduce,
+            confirm_peers=confirm_peers,
         )
         return pl.from_pandas(pdf)
 
@@ -279,7 +287,25 @@ def add_cross_asset_features(
             else:
                 df = df.join(pair_features, on=["Timestamp", "Symbol"])
                 df[pair_features.columns] = df[pair_features.columns].fillna(0.0)
-
+    # --------------------------------------------------------------
+    # Expose key peer correlations as cross_confirm_<peer>
+    # --------------------------------------------------------------
+    if confirm_peers:
+        peers = [p for p in confirm_peers if p in symbols]
+        for peer in peers:
+            colname = f"cross_confirm_{peer}"
+            df[colname] = 0.0
+            for sym in symbols:
+                if sym == peer:
+                    continue
+                corr_col = f"corr_{sym}_{peer}"
+                if corr_col in df.columns:
+                    mask = df["Symbol"] == sym
+                    df.loc[mask, colname] = df.loc[mask, corr_col]
+        if peers:
+            df[[f"cross_confirm_{p}" for p in peers]] = df[
+                [f"cross_confirm_{p}" for p in peers]
+            ].fillna(0.0)
     return df
 
 
@@ -313,7 +339,9 @@ def compute(df) -> pd.DataFrame:
 
     df = add_index_features(df)
     params = {
-        k: cfg[k] for k in ["window", "whitelist", "max_pairs", "reduce"] if k in cfg
+        k: cfg[k]
+        for k in ["window", "whitelist", "max_pairs", "reduce", "confirm_peers"]
+        if k in cfg
     }
     df = add_cross_asset_features(df, **params)
 
