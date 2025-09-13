@@ -78,6 +78,7 @@ from models.conformal import fit_residuals, predict_interval, evaluate_coverage
 from analysis.regime_thresholds import find_regime_thresholds
 from analysis.concept_drift import ConceptDriftMonitor
 from analysis.pseudo_labeler import generate_pseudo_labels
+from analysis.risk_objectives import cvar, max_drawdown, risk_penalty
 from models.meta_label import train_meta_classifier
 from analysis.evaluate import (
     bootstrap_classification_metrics,
@@ -267,9 +268,7 @@ def train_multi_output_model(
         rep = classification_report(y[col], preds[:, i], output_dict=True)
         reports[col] = rep
         f1_scores.append(rep["weighted avg"]["f1-score"])
-        logger.info(
-            "Best threshold for %s (%s): %.4f", col, threshold_metric, best_thr
-        )
+        logger.info("Best threshold for %s (%s): %.4f", col, threshold_metric, best_thr)
         try:
             mlflow.log_metric(f"thr_{col}", best_thr)
             mlflow.log_metric(f"{threshold_metric}_{col}", best_metric)
@@ -380,8 +379,17 @@ def main(
     transfer_from: str | None = None,
     use_pseudo_labels: bool = False,
     df_unlabeled: pd.DataFrame | None = None,
+    risk_target: dict | None = None,
 ) -> float:
-    """Train LightGBM model and return weighted F1 score."""
+    """Train LightGBM model and return weighted F1 score.
+
+    Parameters
+    ----------
+    risk_target:
+        Optional dictionary specifying risk constraints. Supported keys are
+        ``"max_drawdown"`` and ``"cvar"`` (expected shortfall). When provided,
+        the final score is penalised if the constraints are violated.
+    """
     if cfg is None:
         cfg = load_config()
     elif isinstance(cfg, dict):
@@ -1001,6 +1009,36 @@ def main(
     aggregate_report = classification_report(all_true, all_preds, output_dict=True)
     logger.info("\n%s", classification_report(all_true, all_preds))
 
+    # Evaluate risk metrics on realised returns and apply optional penalties
+    base_f1 = float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
+    if risk_target and "return" in df.columns:
+        returns = df["return"].to_numpy()
+        alpha = float(risk_target.get("cvar_level", 0.05))
+        penalty = 0.0
+        if "cvar" in risk_target:
+            cvar_val = float(-cvar(returns, alpha))
+            logger.info("CVaR@%.2f: %.4f", alpha, cvar_val)
+            try:
+                mlflow.log_metric("cvar", cvar_val)
+            except Exception:  # pragma: no cover - mlflow optional
+                pass
+            penalty += float(
+                risk_penalty(returns, cvar_target=risk_target["cvar"], level=alpha)
+            )
+        if "max_drawdown" in risk_target:
+            mdd = float(max_drawdown(returns))
+            logger.info("Max drawdown: %.4f", mdd)
+            try:
+                mlflow.log_metric("max_drawdown", mdd)
+            except Exception:  # pragma: no cover
+                pass
+            penalty += float(
+                risk_penalty(returns, mdd_target=risk_target["max_drawdown"])
+            )
+        if penalty > 0:
+            logger.warning("Risk constraints violated: penalty %.4f", penalty)
+            base_f1 -= penalty
+
     # Bootstrap confidence intervals for metrics
     boot_metrics = bootstrap_classification_metrics(all_true, all_preds)
     prec_ci = boot_metrics["precision_ci"]
@@ -1163,7 +1201,7 @@ def main(
         (datetime.now() - start_time).total_seconds(),
     )
     mlflow.end_run()
-    return float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
+    return float(base_f1)
 
 
 def launch(
@@ -1172,6 +1210,7 @@ def launch(
     resume_online: bool = False,
     transfer_from: str | None = None,
     use_pseudo_labels: bool = False,
+    risk_target: dict | None = None,
 ) -> list[float]:
     """Launch training locally or across a Ray cluster."""
     if cfg is None:
@@ -1192,6 +1231,7 @@ def launch(
                     resume_online=resume_online,
                     transfer_from=transfer_from,
                     use_pseudo_labels=use_pseudo_labels,
+                    risk_target=risk_target,
                 )
             )
         return results
@@ -1202,6 +1242,7 @@ def launch(
             resume_online=resume_online,
             transfer_from=transfer_from,
             use_pseudo_labels=use_pseudo_labels,
+            risk_target=risk_target,
         )
     ]
 
@@ -1256,7 +1297,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Train a neural controller that emits DSL trading actions",
     )
+    parser.add_argument(
+        "--risk-target",
+        type=str,
+        default=None,
+        help="JSON string specifying risk constraints",
+    )
     args = parser.parse_args()
+    risk_target = json.loads(args.risk_target) if args.risk_target else None
     ray_init()
     try:
         if args.strategy_controller:
@@ -1279,7 +1327,7 @@ if __name__ == "__main__":
             cfg = load_config().model_dump()
 
             def train_fn(c: dict, _trial) -> float:
-                return main(c)
+                return main(c, risk_target=risk_target)
 
             run_search(train_fn, cfg)
         elif args.evo_search:
@@ -1292,7 +1340,7 @@ if __name__ == "__main__":
             def eval_fn(params: dict) -> tuple[float, float, float]:
                 trial_cfg = deepcopy(cfg)
                 trial_cfg.update(params)
-                main(trial_cfg)
+                main(trial_cfg, risk_target=risk_target)
                 metrics = run_backtest(trial_cfg)
                 return (
                     -float(metrics.get("return", 0.0)),
@@ -1325,6 +1373,7 @@ if __name__ == "__main__":
                 resume_online=args.resume_online,
                 transfer_from=args.transfer_from,
                 use_pseudo_labels=args.use_pseudo_labels,
+                risk_target=risk_target,
             )
     finally:
         ray_shutdown()
