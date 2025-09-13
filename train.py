@@ -91,6 +91,7 @@ from analysis.evaluate import (
 )
 from analysis.interpret_model import generate_shap_report
 from analysis.similar_days import add_similar_day_features
+from training.curriculum import CurriculumScheduler
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -1269,6 +1270,27 @@ def launch(
         cfg = load_config()
     elif isinstance(cfg, dict):
         cfg = AppConfig(**cfg)
+    curriculum_cfg = cfg.get("curriculum") if hasattr(cfg, "get") else None
+    if curriculum_cfg:
+        def _build_fn(stage_cfg: dict) -> callable:
+            def _run_stage() -> float:
+                base = cfg.model_dump()
+                base.update(stage_cfg.get("config", {}))
+                stage_cfg_obj = AppConfig(**base)
+                return main(
+                    stage_cfg_obj,
+                    export=export,
+                    resume_online=resume_online,
+                    transfer_from=transfer_from,
+                    use_pseudo_labels=use_pseudo_labels,
+                    risk_target=risk_target,
+                )
+            return _run_stage
+        scheduler = CurriculumScheduler.from_config(curriculum_cfg, _build_fn)
+        if scheduler is not None:
+            scheduler.run()
+            # return metrics from each stage for transparency
+            return [m for _, m in scheduler.metrics]
     if cluster_available():
         seeds = cfg.get("seeds", [cfg.training.seed])
         results = []
