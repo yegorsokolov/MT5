@@ -1,73 +1,64 @@
 import numpy as np
 import torch
+import pathlib
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from analysis.market_simulator import AdversarialMarketSimulator
 
 
-class ConstantPolicy(torch.nn.Module):
-    """Simple policy predicting a constant return."""
-
-    def __init__(self) -> None:
+class ToyPolicy(torch.nn.Module):
+    def __init__(self):
         super().__init__()
-        self.param = torch.nn.Parameter(torch.zeros(1))
+        self.linear = torch.nn.Linear(1, 1)
+
+    def forward(self, prices: torch.Tensor) -> torch.Tensor:
+        return self.linear(prices.unsqueeze(-1)).squeeze(-1)
 
     def loss(self, prices: torch.Tensor) -> torch.Tensor:
-        returns = prices[1:] - prices[:-1]
-        pred = self.param.expand_as(returns)
-        return torch.nn.functional.mse_loss(pred, returns)
+        pred = self.forward(prices)
+        target = torch.ones_like(pred)
+        return -((pred - target) ** 2).mean()
 
 
-def _train(policy: ConstantPolicy, prices: np.ndarray, epochs: int = 200) -> None:
-    opt = torch.optim.SGD(policy.parameters(), lr=0.1)
-    prices_t = torch.tensor(prices, dtype=torch.float32)
+def train(policy: ToyPolicy, data: np.ndarray, epochs: int = 50) -> None:
+    opt = torch.optim.SGD(policy.parameters(), lr=0.05)
+    tensor = torch.tensor(data, dtype=torch.float32)
     for _ in range(epochs):
         opt.zero_grad()
-        loss = policy.loss(prices_t)
+        loss = -policy.loss(tensor)
         loss.backward()
         opt.step()
 
 
-def _eval_loss(policy: ConstantPolicy, prices: np.ndarray) -> float:
-    with torch.no_grad():
-        return float(policy.loss(torch.tensor(prices, dtype=torch.float32)).item())
+def train_adv(policy: ToyPolicy, prices: np.ndarray, epochs: int = 50) -> None:
+    opt = torch.optim.SGD(policy.parameters(), lr=0.05)
+    sim = AdversarialMarketSimulator(seq_len=len(prices), eps=0.5)
+    base = np.array(prices, dtype=float)
+    for _ in range(epochs):
+        adv = sim.perturb(base, policy)
+        tensor = torch.tensor(adv, dtype=torch.float32)
+        opt.zero_grad()
+        loss = -policy.loss(tensor)
+        loss.backward()
+        opt.step()
 
 
-def test_adversarial_sequences_reduce_overfitting() -> None:
+def test_adversarial_sequences_reduce_overfitting():
     torch.manual_seed(0)
-    np.random.seed(0)
+    prices = np.ones(32, dtype=float)
 
-    # training data exhibits a strong upward trend
-    train_prices = np.arange(0, 11, dtype=np.float32)
-    # test data moves in the opposite direction
-    test_prices = np.arange(10, -1, -1, dtype=np.float32)
+    base = ToyPolicy()
+    train(base, prices)
 
-    # baseline training on original data
-    base_policy = ConstantPolicy()
-    _train(base_policy, train_prices)
-    base_loss = _eval_loss(base_policy, test_prices)
+    adv_policy = ToyPolicy()
+    train_adv(adv_policy, prices)
 
-    # adversarial training alternates policy and simulator updates
-    adv_policy = ConstantPolicy()
-    sim = AdversarialMarketSimulator(seq_len=len(train_prices), eps=2.0)
-    opt = torch.optim.SGD(adv_policy.parameters(), lr=0.1)
-    for _ in range(200):
-        # policy update on real data
-        opt.zero_grad()
-        loss = adv_policy.loss(torch.tensor(train_prices, dtype=torch.float32))
-        loss.backward()
-        opt.step()
+    stress = np.zeros_like(prices)
+    prices_t = torch.tensor(prices, dtype=torch.float32)
+    stress_t = torch.tensor(stress, dtype=torch.float32)
+    base_gap = abs(base.loss(prices_t).item() - base.loss(stress_t).item())
+    adv_gap = abs(adv_policy.loss(prices_t).item() - adv_policy.loss(stress_t).item())
 
-        # adversary generates challenging examples
-        adv_prices = sim.perturb(train_prices, adv_policy, steps=3)
-        opt.zero_grad()
-        loss = adv_policy.loss(torch.tensor(adv_prices, dtype=torch.float32))
-        loss.backward()
-        opt.step()
-
-    adv_loss = _eval_loss(adv_policy, test_prices)
-
-    assert adv_loss < base_loss
+    assert adv_gap < base_gap

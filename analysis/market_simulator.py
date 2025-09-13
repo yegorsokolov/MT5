@@ -1,11 +1,15 @@
 """Adversarial market simulator.
 
-This module implements a simple generative adversarial model that perturbs
-historical price sequences in order to maximise the loss of a trading agent.
-It is intentionally lightweight so it can be used within unit tests.  The
-simulator learns a small neural network that proposes perturbations of a price
-series.  The network is updated via gradient ascent on the agent's loss,
-analogous to the generator in a GAN.
+This module implements a small generator that perturbs historical price
+sequences to *minimise* an agent's reward.  It is intentionally lightweight so
+it can be used within unit tests.  The simulator learns a tiny neural network
+that proposes perturbations of a price series.  The network is updated via
+gradient ascent on the agent's loss, analogous to the generator in a GAN.
+
+In addition to adversarial perturbations the module exposes a helper function
+``generate_stress_scenarios`` which creates simple synthetic shocks (e.g. price
+crash or rally).  These can be used to benchmark an agent's robustness to
+unseen regimes.
 
 The primary entry point is :class:`AdversarialMarketSimulator` with a single
 method :meth:`perturb` which adjusts a given price series.
@@ -13,7 +17,7 @@ method :meth:`perturb` which adjusts a given price series.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Dict, Iterable
 
 import numpy as np
 import torch
@@ -80,4 +84,32 @@ class AdversarialMarketSimulator:
         return adv.cpu().numpy()
 
 
-__all__ = ["AdversarialMarketSimulator"]
+# ---------------------------------------------------------------------------
+def generate_stress_scenarios(prices: Iterable[float]) -> Dict[str, np.ndarray]:
+    """Create a couple of synthetic stress scenarios.
+
+    Parameters
+    ----------
+    prices:
+        Historical price sequence used as a baseline.
+
+    Returns
+    -------
+    dict
+        Mapping of scenario name to perturbed price sequence.  Currently two
+        scenarios are generated:
+
+        ``drop``
+            50% decline in prices across the entire series.
+        ``spike``
+            50% upward shock in prices.
+    """
+
+    base = np.asarray(list(prices), dtype=float)
+    return {
+        "drop": base * 0.5,
+        "spike": base * 1.5,
+    }
+
+
+__all__ = ["AdversarialMarketSimulator", "generate_stress_scenarios"]
