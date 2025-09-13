@@ -1,52 +1,43 @@
-import importlib.util
 import json
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location(
-    "indicator_hypernet",
-    Path(__file__).resolve().parents[1] / "models" / "indicator_hypernet.py",
-)
-indicator_hypernet = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(indicator_hypernet)  # type: ignore
-IndicatorHyperNet = indicator_hypernet.IndicatorHyperNet
+import numpy as np
+import pandas as pd
+import sys
 
-spec_ai = importlib.util.spec_from_file_location(
-    "auto_indicators",
-    Path(__file__).resolve().parents[1] / "features" / "auto_indicators.py",
-)
-auto_indicators = importlib.util.module_from_spec(spec_ai)
-spec_ai.loader.exec_module(auto_indicators)  # type: ignore
+repo_root = Path(__file__).resolve().parents[1]
+sys.path.append(str(repo_root))
+
+from models.indicator_hypernet import IndicatorHyperNet
 
 
-def f1_score(y_true, y_pred):
-    tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == yp == 1)
-    fp = sum(1 for yt, yp in zip(y_true, y_pred) if yp == 1 and yt == 0)
-    fn = sum(1 for yt, yp in zip(y_true, y_pred) if yp == 0 and yt == 1)
-    return 0.0 if (tp + fp + fn) == 0 else 2 * tp / (2 * tp + fp + fn)
+def _base_df(n: int = 50) -> pd.DataFrame:
+    rng = np.random.default_rng(0)
+    true = np.linspace(0, 1, n)
+    price = true + rng.normal(0, 0.1, n)
+    df = pd.DataFrame({"price": price, "market_regime": 0})
+    df["target"] = np.append(true[1:], true[-1])
+    return df
 
 
-def test_deterministic_generation(tmp_path):
-    data = {"price": [1.0, 2.0, 3.0, 4.0]}
-    model = IndicatorHyperNet(in_dim=2, seed=0)
-    path = tmp_path / "ind.yaml"
-    _, d1 = auto_indicators.generate(data, model, [0.5], [1.0], registry_path=path)
-    _, d2 = auto_indicators.generate(data, model, [0.5], [1.0], registry_path=path)
-    assert d1 == d2
+def test_hypernet_deterministic(tmp_path: Path) -> None:
+    df = _base_df()
+    hn1 = IndicatorHyperNet(tmp_path)
+    _, gen1 = hn1.apply_or_generate(df.copy())
+    hn2 = IndicatorHyperNet(tmp_path / "other")
+    _, gen2 = hn2.apply_or_generate(df.copy())
+    assert gen1 == gen2
 
 
-def test_hypernet_improves_validation(tmp_path):
-    price = [1, 2, 3, 2, 3, 4]
-    df = {"price": price}
-    target = [0, 1, 1, 0, 1, 1]
-    base_pred = [1] * len(target)
-    base_f1 = f1_score(target, base_pred)
-
-    model = IndicatorHyperNet(in_dim=2, seed=0)
-    out, desc = auto_indicators.generate(df, model, [0.1], [0.0], registry_path=tmp_path / "disc.yaml")
-    lag_col = out[f"price_lag{desc['lag']}"]
-    preds = [1 if (lag is not None and p > lag) else 0 for p, lag in zip(out["price"], lag_col)]
-    f1 = f1_score(target, preds)
-    assert f1 >= base_f1
-    auto_indicators.persist(desc, {"f1": f1}, registry_path=tmp_path / "disc.yaml")
-    stored = json.loads((tmp_path / "disc.yaml").read_text())
-    assert stored and "f1" in stored[-1]["metrics"]
+def test_hypernet_validation_improves(tmp_path: Path) -> None:
+    df = _base_df(100)
+    hn = IndicatorHyperNet(tmp_path)
+    df2, gen = hn.apply_or_generate(df.copy())
+    name = next(iter(gen))
+    baseline = ((df2["target"] - df2["price"]) ** 2).mean()
+    indicator = ((df2["target"] - df2[name]) ** 2).mean()
+    assert indicator < baseline
+    assert hn.log_path.exists() is False  # no log yet
+    hn.log_performance(name, float(baseline - indicator))
+    data = json.loads(hn.log_path.read_text().splitlines()[-1])
+    assert data["name"] == name

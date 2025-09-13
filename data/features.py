@@ -692,19 +692,19 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     evolver = FeatureEvolver()
     df = evolver.apply_stored_features(df)
     feat_opts = cfg.get("features", {}) if isinstance(cfg.get("features"), dict) else {}
-    if feat_opts.get("auto_evolve"):
-        target_col = feat_opts.get("target_col")
-        if not target_col:
-            for cand in ("target", "return", "y"):
-                if cand in df.columns:
-                    target_col = cand
-                    break
-        if target_col:
-            df = evolver.maybe_evolve(
-                df,
-                target_col=target_col,
-                module_path=Path("feature_store") / "evolved_features.py",
-            )
+    target_col = feat_opts.get("target_col")
+    if not target_col:
+        for cand in ("target", "return", "y"):
+            if cand in df.columns:
+                target_col = cand
+                break
+    df = evolver.apply_hypernet(df, target_col=target_col)
+    if feat_opts.get("auto_evolve") and target_col:
+        df = evolver.maybe_evolve(
+            df,
+            target_col=target_col,
+            module_path=Path("feature_store") / "evolved_features.py",
+        )
 
     # Allow runtime plugins to extend the feature set
     adjacency = df.attrs.get("adjacency_matrices")
