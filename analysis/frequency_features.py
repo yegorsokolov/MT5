@@ -177,3 +177,44 @@ def wavelet_energy(
         energy[end - 1] = np.sum(np.square(detail))
 
     return pd.DataFrame({"wavelet_energy": energy}, index=index)
+
+
+def stl_decompose(
+    series: pd.Series | np.ndarray, period: int = 24
+) -> pd.DataFrame:
+    """Approximate STL decomposition into seasonal and trend components.
+
+    This lightweight implementation avoids heavy dependencies by using
+    moving averages to estimate the trend and average residuals within each
+    seasonal cycle to recover the seasonal component.  It is sufficient for
+    synthetic and short financial series where full STL is unnecessary.
+
+    Parameters
+    ----------
+    series : pd.Series or np.ndarray
+        Input time series.
+    period : int, default 24
+        Length of the seasonal cycle.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns ``seasonal`` and ``trend``.
+    """
+
+    if isinstance(series, pd.Series):
+        index = series.index
+        arr = series.to_numpy(dtype=float)
+    else:
+        arr = np.asarray(series, dtype=float)
+        index = None
+
+    n = len(arr)
+    trend = pd.Series(arr).rolling(window=period, center=True, min_periods=1).mean().to_numpy()
+    detrended = arr - trend
+    seasonal_pattern = np.array([
+        np.nanmean(detrended[i::period]) for i in range(period)
+    ])
+    seasonal = np.tile(seasonal_pattern, int(np.ceil(n / period)))[:n]
+
+    return pd.DataFrame({"seasonal": seasonal, "trend": trend}, index=index)

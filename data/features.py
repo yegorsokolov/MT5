@@ -49,7 +49,7 @@ from config_models import ConfigError
 from analysis import feature_gate
 from analysis.data_lineage import log_lineage
 from analysis.fractal_features import rolling_fractal_features
-from analysis.frequency_features import spectral_features, wavelet_energy
+from analysis.frequency_features import spectral_features, wavelet_energy, stl_decompose
 from analysis.garch_vol import garch_volatility
 from features.validators import validate_ge
 from .multitimeframe import aggregate_timeframes
@@ -433,6 +433,45 @@ def add_frequency_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_stl_features(df: pd.DataFrame, period: int = 24) -> pd.DataFrame:
+    """Append STL seasonal and trend components to ``df``.
+
+    The price series (``mid`` if present otherwise ``close``) is decomposed via
+    :func:`analysis.frequency_features.stl_decompose`, producing two columns:
+
+    - ``stl_seasonal``: Extracted seasonal component.
+    - ``stl_trend``: Extracted trend component.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data containing a price column.
+    period : int, default 24
+        Length of the seasonal cycle supplied to STL.
+
+    Returns
+    -------
+    pd.DataFrame
+        Original ``df`` with the new STL features appended. If neither a
+        ``mid`` nor ``close`` column is present the frame is returned
+        unchanged.
+    """
+
+    price_col = None
+    if "mid" in df.columns:
+        price_col = "mid"
+    elif "close" in df.columns:
+        price_col = "close"
+    if price_col is None:
+        return df
+
+    comp = stl_decompose(df[price_col], period=period)
+    df = df.copy()
+    df["stl_seasonal"] = comp["seasonal"]
+    df["stl_trend"] = comp["trend"]
+    return df
+
+
 def add_garch_volatility(df: pd.DataFrame) -> pd.DataFrame:
     """Compute EGARCH volatility on returns and append ``garch_vol`` column.
 
@@ -637,6 +676,9 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     # Frequency-domain energy metrics on the price series
     df = add_frequency_features(df)
+
+    # Seasonal-trend decomposition of the price series
+    df = add_stl_features(df)
 
     # Fractal metrics derived from mid-price after price-based features
     df = add_fractal_features(df)
@@ -949,6 +991,7 @@ __all__ = [
     "add_cross_spectral_features",
     "add_dtw_features",
     "add_frequency_features",
+    "add_stl_features",
     "add_fractal_features",
     "add_garch_volatility",
     "add_factor_exposure_features",
