@@ -4,7 +4,7 @@ import logging
 from log_utils import setup_logging, log_exceptions
 
 from pathlib import Path
-from typing import List
+from typing import Iterable, List
 from types import SimpleNamespace
 
 import os
@@ -104,7 +104,10 @@ except Exception:  # pragma: no cover - analytics optional in tests
 from utils import load_config
 from state_manager import save_checkpoint, load_latest_checkpoint
 from analysis.grad_monitor import GradientMonitor, GradMonitorCallback
-from analysis.market_simulator import AdversarialMarketSimulator
+from analysis.market_simulator import (
+    AdversarialMarketSimulator,
+    generate_stress_scenarios,
+)
 
 try:
     from utils.resource_monitor import monitor  # type: ignore
@@ -241,6 +244,60 @@ TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 
 
 from strategy.self_review import self_review_strategy
+
+
+# ---------------------------------------------------------------------------
+def self_play_step(
+    policy: nn.Module,
+    prices: Iterable[float],
+    optimiser: torch.optim.Optimizer,
+    simulator: AdversarialMarketSimulator | None = None,
+    stress: dict | None = None,
+) -> dict:
+    """Run a single self-play training step.
+
+    The function alternates between an agent update and an adversarial update of
+    the market simulator.  After the updates a set of synthetic stress
+    scenarios is evaluated and robustness metrics are logged.
+
+    Parameters
+    ----------
+    policy:
+        Trading agent exposing a ``loss`` method returning reward.
+    prices:
+        Historical price sequence used for this step.
+    optimiser:
+        Optimiser instance for the agent.
+    simulator:
+        Optional adversarial simulator.  If ``None`` a default simulator is
+        created.
+    stress:
+        Optional mapping of scenario name to price sequence.  If ``None``,
+        :func:`generate_stress_scenarios` is used to create them.
+
+    Returns
+    -------
+    dict
+        Mapping of stress scenario name to agent reward.
+    """
+
+    prices_t = torch.tensor(list(prices), dtype=torch.float32)
+    optimiser.zero_grad()
+    loss = -policy.loss(prices_t)
+    loss.backward()
+    optimiser.step()
+
+    if simulator is None:
+        simulator = AdversarialMarketSimulator(seq_len=len(prices))
+    simulator.perturb(prices, policy)
+
+    metrics: dict = {}
+    scenarios = stress or generate_stress_scenarios(prices)
+    for name, seq in scenarios.items():
+        reward = policy.loss(torch.tensor(seq, dtype=torch.float32)).item()
+        logging.info("robustness_%s=%f", name, reward)
+        metrics[name] = reward
+    return metrics
 
 
 class PositionClosePolicy(ActorCriticPolicy):
