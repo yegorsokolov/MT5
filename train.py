@@ -195,8 +195,39 @@ def _load_donor_booster(symbol: str):
     return None
 
 
+def _maybe_generate_indicators(
+    X: pd.DataFrame,
+    hypernet: "torch.nn.Module | None" = None,
+    asset_features: np.ndarray | None = None,
+    regime: np.ndarray | None = None,
+    registry_path: Path | None = None,
+) -> tuple[pd.DataFrame, dict[str, int] | None]:
+    """Augment ``X`` with features proposed by ``hypernet`` if provided."""
+
+    if hypernet is None:
+        return X, None
+    from features import auto_indicators
+
+    asset = asset_features if asset_features is not None else np.mean(X.values, axis=0, keepdims=True)
+    reg = regime if regime is not None else np.zeros((1, 1))
+    X_new, desc = auto_indicators.generate(
+        X,
+        hypernet,
+        asset,
+        reg,
+        registry_path=registry_path or auto_indicators.REGISTRY_PATH,
+    )
+    return X_new, desc
+
+
 def train_multi_output_model(
-    X: pd.DataFrame, y: pd.DataFrame, cfg: dict | None = None
+    X: pd.DataFrame,
+    y: pd.DataFrame,
+    cfg: dict | None = None,
+    hypernet: "torch.nn.Module | None" = None,
+    asset_features: np.ndarray | None = None,
+    regime_tag: np.ndarray | None = None,
+    registry_path: Path | None = None,
 ) -> tuple[Pipeline, dict[str, object]]:
     """Train a multi-output classifier and report metrics per horizon.
 
@@ -227,6 +258,14 @@ def train_multi_output_model(
     steps: list[tuple[str, object]] = []
     if cfg.get("use_scaler", True):
         steps.append(("scaler", FeatureScaler()))
+
+    X, ind_desc = _maybe_generate_indicators(
+        X,
+        hypernet,
+        asset_features=asset_features,
+        regime=regime_tag,
+        registry_path=registry_path,
+    )
 
     clf_params = {
         "n_estimators": cfg.get("n_estimators", 50),
@@ -315,6 +354,14 @@ def train_multi_output_model(
         except Exception:
             pass
 
+    if ind_desc is not None:
+        from features import auto_indicators
+
+        auto_indicators.persist(
+            ind_desc,
+            {"aggregate_f1": reports.get("aggregate_f1", 0.0)},
+            registry_path=registry_path or auto_indicators.REGISTRY_PATH,
+        )
     return pipe, reports
 
 
