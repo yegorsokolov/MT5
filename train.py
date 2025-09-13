@@ -464,6 +464,11 @@ def main(
         if "Symbol" in df.columns:
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
+    rp = cfg.strategy.risk_profile
+    df["risk_tolerance"] = rp.tolerance
+    df["leverage_cap"] = rp.leverage_cap
+    df["drawdown_limit"] = rp.drawdown_limit
+
     features = [
         "return",
         "ma_5",
@@ -476,6 +481,7 @@ def main(
         "news_sentiment",
         "market_regime",
     ]
+    features.extend(["risk_tolerance", "leverage_cap", "drawdown_limit"])
     features.extend(
         [
             c
@@ -503,6 +509,9 @@ def main(
     )
     y = df["tb_label"]
     features = select_features(df[features], y)
+    for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"]:
+        if col not in features:
+            features.append(col)
     feat_path = root / "selected_features.json"
     feat_path.write_text(json.dumps(features))
     index_path = root / "similar_days_index.pkl"
@@ -877,7 +886,11 @@ def main(
         mlflow.log_metric(f"fold_{fold}_interval_coverage", cov)
         logger.info("Fold %d interval coverage: %.3f", fold, cov)
         conf = np.abs(probs - 0.5) * 2
-        sizer = PositionSizer(capital=cfg.get("eval_capital", 1000.0))
+        rp = cfg.strategy.risk_profile
+        sizer = PositionSizer(
+            capital=cfg.get("eval_capital", 1000.0) * rp.leverage_cap,
+            target_vol=rp.tolerance,
+        )
         for p, c in zip(probs, conf):
             sizer.size(p, confidence=c)
         all_conf.extend(conf)
