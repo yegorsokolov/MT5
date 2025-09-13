@@ -17,8 +17,18 @@ def _to_series(data: Sequence[float] | pd.Series) -> pd.Series:
 def sma(data: Sequence[float] | pd.Series, period: int) -> float | pd.Series:
     """Simple moving average.
 
-    Returns a pandas Series when ``data`` is a Series otherwise the latest
-    value as ``float``.
+    Parameters
+    ----------
+    data : Sequence[float] or pandas.Series
+        Input values for which to compute the average.
+    period : int
+        Number of periods to include in the average.
+
+    Returns
+    -------
+    float or pandas.Series
+        When ``data`` is a Series the full rolling average is returned,
+        otherwise only the most recent value is returned.
     """
     series = _to_series(data)
     result = series.rolling(period).mean()
@@ -28,7 +38,21 @@ def sma(data: Sequence[float] | pd.Series, period: int) -> float | pd.Series:
 
 
 def ema(data: Sequence[float] | pd.Series, period: int) -> float | pd.Series:
-    """Exponential moving average."""
+    """Exponential moving average.
+
+    Parameters
+    ----------
+    data : Sequence[float] or pandas.Series
+        Input values for which to compute the average.
+    period : int
+        Span of the exponential window.
+
+    Returns
+    -------
+    float or pandas.Series
+        The exponential moving average.  A Series is returned when the
+        input is a Series; otherwise the latest value is returned.
+    """
     series = _to_series(data)
     result = series.ewm(span=period, adjust=False).mean()
     if isinstance(data, pd.Series):
@@ -37,7 +61,22 @@ def ema(data: Sequence[float] | pd.Series, period: int) -> float | pd.Series:
 
 
 def rsi(data: Sequence[float] | pd.Series, period: int = 14) -> float | pd.Series:
-    """Relative Strength Index."""
+    """Relative strength index.
+
+    Parameters
+    ----------
+    data : Sequence[float] or pandas.Series
+        Price or value series.
+    period : int, default 14
+        Number of periods for computing average gains and losses.
+
+    Returns
+    -------
+    float or pandas.Series
+        RSI values corresponding to ``data``.  When ``data`` is a Series the
+        entire RSI series is returned, otherwise only the latest value is
+        provided.
+    """
     series = _to_series(data)
     delta = series.diff()
     up = delta.clip(lower=0)
@@ -58,8 +97,20 @@ def bollinger(
 ) -> tuple[float | pd.Series, float | pd.Series, float | pd.Series]:
     """Bollinger Bands.
 
-    Returns ``(ma, upper, lower)``. For Series input the return values are
-    Series objects; otherwise the latest values are returned as floats.
+    Parameters
+    ----------
+    data : Sequence[float] or pandas.Series
+        Input data.
+    period : int, default 20
+        Rolling window size for the moving average.
+    num_std : float, default 2.0
+        Number of standard deviations for the band width.
+
+    Returns
+    -------
+    tuple of float or pandas.Series
+        ``(ma, upper, lower)`` values.  Each element is a Series when
+        ``data`` is a Series, otherwise only the most recent float is returned.
     """
     series = _to_series(data)
     ma = series.rolling(period).mean()
@@ -77,7 +128,21 @@ def atr(
     close: Sequence[float] | pd.Series,
     period: int = 14,
 ) -> float | pd.Series:
-    """Average True Range."""
+    """Average true range.
+
+    Parameters
+    ----------
+    high, low, close : Sequence[float] or pandas.Series
+        High, low and close price data.
+    period : int, default 14
+        Window size for the moving average of the true range.
+
+    Returns
+    -------
+    float or pandas.Series
+        The ATR values.  When any input is a Series the full ATR series is
+        returned; otherwise only the latest value is provided.
+    """
     high_s = _to_series(high)
     low_s = _to_series(low)
     close_s = _to_series(close)
@@ -104,9 +169,22 @@ def macd(
 ) -> tuple[float | pd.Series, float | pd.Series, float | pd.Series]:
     """Moving Average Convergence Divergence (MACD).
 
-    Returns ``(macd_line, signal_line, hist)``. When ``data`` is a Series the
-    return values are Series objects otherwise the latest values are returned as
-    floats.
+    Parameters
+    ----------
+    data : Sequence[float] or pandas.Series
+        Input data for the MACD calculation.
+    fast : int, default 12
+        Period for the fast EMA.
+    slow : int, default 26
+        Period for the slow EMA.
+    signal : int, default 9
+        Period for the signal line EMA.
+
+    Returns
+    -------
+    tuple of float or pandas.Series
+        ``(macd_line, signal_line, hist)``.  Elements are Series when the
+        input is a Series; otherwise the latest float values are returned.
     """
     series = _to_series(data)
     fast_ema = series.ewm(span=fast, adjust=False).mean()
@@ -130,11 +208,23 @@ def stochastic(
     k_period: int = 14,
     d_period: int = 3,
 ) -> tuple[float | pd.Series, float | pd.Series]:
-    """Stochastic Oscillator.
+    """Stochastic oscillator.
 
-    Returns ``(%K, %D)`` where ``%D`` is the moving average of ``%K``.
-    For Series input the return values are Series objects; otherwise the
-    latest values are returned as floats.
+    Parameters
+    ----------
+    high, low, close : Sequence[float] or pandas.Series
+        High, low and close price data.
+    k_period : int, default 14
+        Number of periods for the %K calculation.
+    d_period : int, default 3
+        Window size for the %D moving average.
+
+    Returns
+    -------
+    tuple of float or pandas.Series
+        ``(%K, %D)`` values where ``%D`` is the moving average of ``%K``.  Each
+        element is a Series when any input is a Series; otherwise only the
+        latest floats are returned.
     """
     high_s = _to_series(high)
     low_s = _to_series(low)
