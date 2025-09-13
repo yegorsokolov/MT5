@@ -147,11 +147,19 @@ def meta_train_maml(
     meta_lr: float = 0.01,
     inner_steps: int = 1,
     epochs: int = 5,
+    state_dict: dict | None = None,
 ) -> dict:
-    """Meta-train ``build_model`` using a first-order MAML update."""
+    """Meta-train ``build_model`` using a first-order MAML update.
+
+    ``state_dict`` can be provided to continue training from a previous
+    meta-learned initialisation which is handy for curriculum based
+    strategies where later stages refine earlier weights.
+    """
 
     loss_fn = torch.nn.BCEWithLogitsLoss()
     meta_model = build_model()
+    if state_dict:
+        meta_model.load_state_dict(state_dict)
 
     for _ in range(epochs):
         meta_grads = [torch.zeros_like(p) for p in meta_model.parameters()]
@@ -183,11 +191,14 @@ def meta_train_reptile(
     meta_lr: float = 0.1,
     inner_steps: int = 1,
     epochs: int = 5,
+    state_dict: dict | None = None,
 ) -> dict:
     """Meta-train ``build_model`` using the Reptile algorithm."""
 
     loss_fn = torch.nn.BCEWithLogitsLoss()
     meta_model = build_model()
+    if state_dict:
+        meta_model.load_state_dict(state_dict)
 
     for _ in range(epochs):
         for train_ds, _ in tasks:
