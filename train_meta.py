@@ -19,12 +19,8 @@ import numpy as np
 import torch
 from torch.utils.data import TensorDataset
 
-from models.meta_learner import (
-    _LinearModel,
-    fine_tune_model,
-    meta_train_maml,
-    _steps_to,
-)
+from models.meta_learner import _LinearModel, fine_tune_model, meta_train_maml
+from training.curriculum import build_strategy_curriculum
 
 logger = logging.getLogger(__name__)
 
@@ -51,27 +47,37 @@ def main() -> None:
     np.random.seed(0)
     torch.manual_seed(0)
 
-    # ------------------------------------------------------------------
-    # Create a set of synthetic assets/tasks
-    # ------------------------------------------------------------------
-    weights = [np.array([2.0, -2.0]), np.array([-2.0, 2.0]), np.array([1.5, 1.5])]
-    tasks = [_generate_task(w) for w in weights]
+    def stage_simple() -> float:
+        weights = [np.array([1.0]), np.array([-1.0])]
+        tasks = [_generate_task(w) for w in weights]
+        build = lambda: _LinearModel(1)
+        state = meta_train_maml(tasks, build, epochs=25)
+        _, history = fine_tune_model(state, tasks[0][0], build, steps=5, lr=0.5)
+        logger.info("Simple stage adaptation: %s", [round(h, 3) for h in history])
+        return history[-1]
 
-    build = lambda: _LinearModel(2)
+    def stage_combo() -> float:
+        weights = [np.array([2.0, -2.0]), np.array([-2.0, 2.0])]
+        tasks = [_generate_task(w) for w in weights]
+        build = lambda: _LinearModel(2)
+        state = meta_train_maml(tasks, build, epochs=40)
+        _, history = fine_tune_model(state, tasks[0][0], build, steps=5, lr=0.5)
+        logger.info("Combo stage adaptation: %s", [round(h, 3) for h in history])
+        return history[-1]
 
-    # ------------------------------------------------------------------
-    # Meta-training
-    # ------------------------------------------------------------------
-    meta_state = meta_train_maml(tasks, build, epochs=50)
-    logger.info("Meta-training complete")
+    def stage_graph() -> float:
+        weights = [np.array([1.0, 1.0, -1.0]), np.array([-1.0, 1.0, 1.0])]
+        tasks = [_generate_task(w) for w in weights]
+        build = lambda: _LinearModel(3)
+        state = meta_train_maml(tasks, build, epochs=40)
+        _, history = fine_tune_model(state, tasks[0][0], build, steps=5, lr=0.5)
+        logger.info("Graph stage adaptation: %s", [round(h, 3) for h in history])
+        return history[-1]
 
-    # ------------------------------------------------------------------
-    # Fine-tune per asset and log adaptation speed
-    # ------------------------------------------------------------------
-    for i, (train_ds, _) in enumerate(tasks):
-        _, history = fine_tune_model(meta_state, train_ds, build, steps=5, lr=0.5)
-        logger.info("Asset %d accuracy after each step: %s (reached 90%% in %d steps)",
-                    i, [round(h, 3) for h in history], _steps_to(history))
+    scheduler = build_strategy_curriculum(stage_simple, stage_combo, stage_graph)
+    scheduler.run()
+
+    logger.info("Curriculum finished with metrics: %s", scheduler.metrics)
 
 
 if __name__ == "__main__":  # pragma: no cover - manual execution script
