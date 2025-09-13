@@ -79,6 +79,11 @@ from analysis.regime_thresholds import find_regime_thresholds
 from analysis.concept_drift import ConceptDriftMonitor
 from analysis.pseudo_labeler import generate_pseudo_labels
 from analysis.risk_objectives import cvar, max_drawdown, risk_penalty
+from analysis.multi_objective import (
+    TradeMetrics,
+    compute_metrics as mo_compute_metrics,
+    weighted_sum as mo_weighted_sum,
+)
 from models.meta_label import train_meta_classifier
 from analysis.evaluate import (
     bootstrap_classification_metrics,
@@ -274,7 +279,41 @@ def train_multi_output_model(
             mlflow.log_metric(f"{threshold_metric}_{col}", best_metric)
         except Exception:  # pragma: no cover - mlflow optional
             pass
+
+    # Aggregate metrics across horizons
     reports["aggregate_f1"] = float(np.mean(f1_scores))
+
+    # Compute expected return and drawdown for validation predictions
+    exp_returns: list[float] = []
+    drawdowns: list[float] = []
+    for i, col in enumerate(y.columns):
+        metrics = mo_compute_metrics(y[col], preds[:, i])
+        exp_returns.append(metrics.expected_return)
+        drawdowns.append(metrics.drawdown)
+
+    expected_return = float(np.mean(exp_returns)) if exp_returns else 0.0
+    drawdown = float(np.mean(drawdowns)) if drawdowns else 0.0
+    reports["expected_return"] = expected_return
+    reports["max_drawdown"] = drawdown
+
+    # Optional weighted objective
+    weights = cfg.get("multi_objective_weights") if cfg else None
+    if weights:
+        agg_metrics = TradeMetrics(
+            f1=reports["aggregate_f1"],
+            expected_return=expected_return,
+            drawdown=drawdown,
+        )
+        score = mo_weighted_sum(agg_metrics, weights)
+        reports["multi_objective_score"] = score
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_param("multi_objective_weights", json.dumps(weights))
+            mlflow.log_metric("expected_return", expected_return)
+            mlflow.log_metric("max_drawdown", drawdown)
+            mlflow.log_metric("multi_objective_score", score)
+        except Exception:
+            pass
+
     return pipe, reports
 
 
