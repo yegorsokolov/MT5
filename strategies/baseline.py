@@ -239,8 +239,14 @@ class BaselineStrategy:
         price: float,
         indicators: Optional[IndicatorBundle] = None,
         session: Optional[str] = None,
+        cross_confirm: Optional[Dict[str, float]] = None,
     ) -> int:
-        """Process a new bar and return a trading signal."""
+        """Process a new bar and return a trading signal.
+
+        Trades are only permitted when ``cross_confirm`` is supplied and all
+        provided confirmation values are positive, indicating the traded asset
+        remains sufficiently correlated with its peers.
+        """
 
         if indicators is None:
             indicators = IndicatorBundle()
@@ -252,7 +258,7 @@ class BaselineStrategy:
             price, self._kf_state = smooth_price(price, self._kf_state)
 
         signal = self._compute_signal(price, indicators)
-        signal = self._apply_filters(signal, indicators, price)
+        signal = self._apply_filters(signal, indicators, price, cross_confirm)
         return self._manage_position(
             raw_price, signal, indicators.regime, indicators.vae_regime
         )
@@ -325,9 +331,17 @@ class BaselineStrategy:
         return raw_signal
 
     def _apply_filters(
-        self, raw_signal: int, ind: IndicatorBundle, price: float
+        self,
+        raw_signal: int,
+        ind: IndicatorBundle,
+        price: float,
+        cross_confirm: Optional[Dict[str, float]] = None,
     ) -> int:
         signal = raw_signal
+
+        if signal != 0:
+            if not cross_confirm or any(v <= 0 for v in cross_confirm.values()):
+                return 0
 
         if signal == 1:
             if (ind.htf_ma is not None and price <= ind.htf_ma) or (
