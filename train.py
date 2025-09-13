@@ -78,7 +78,7 @@ from models.conformal import fit_residuals, predict_interval, evaluate_coverage
 from analysis.regime_thresholds import find_regime_thresholds
 from analysis.concept_drift import ConceptDriftMonitor
 from analysis.pseudo_labeler import generate_pseudo_labels
-from analysis.risk_objectives import cvar, max_drawdown, risk_penalty
+from analysis.risk_loss import cvar, max_drawdown, risk_penalty, RiskBudget
 from analysis.multi_objective import (
     TradeMetrics,
     compute_metrics as mo_compute_metrics,
@@ -208,7 +208,11 @@ def _maybe_generate_indicators(
         return X, None
     from features import auto_indicators
 
-    asset = asset_features if asset_features is not None else np.mean(X.values, axis=0, keepdims=True)
+    asset = (
+        asset_features
+        if asset_features is not None
+        else np.mean(X.values, axis=0, keepdims=True)
+    )
     reg = regime if regime is not None else np.zeros((1, 1))
     X_new, desc = auto_indicators.generate(
         X,
@@ -610,6 +614,20 @@ def main(
         index_path=index_path,
     )
     features.extend(["nn_return_mean", "nn_vol"])
+
+    risk_budget = None
+    if risk_target:
+        risk_budget = RiskBudget(
+            max_leverage=float(risk_target.get("max_leverage", 1.0)),
+            max_drawdown=float(risk_target.get("max_drawdown", 0.0)),
+            cvar_limit=risk_target.get("cvar"),
+        )
+        for name, val in risk_budget.as_features().items():
+            df[name] = val
+            if name not in features:
+                features.append(name)
+        if "position" in df.columns:
+            df["position"] = risk_budget.scale_positions(df["position"].to_numpy())
 
     X = df[features]
     # Use symbol identifiers as group labels so cross-validation folds
@@ -1112,32 +1130,27 @@ def main(
     # Evaluate risk metrics on realised returns and apply optional penalties
     base_f1 = float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
     if risk_target and "return" in df.columns:
-        returns = df["return"].to_numpy()
         alpha = float(risk_target.get("cvar_level", 0.05))
-        penalty = 0.0
-        if "cvar" in risk_target:
-            cvar_val = float(-cvar(returns, alpha))
-            logger.info("CVaR@%.2f: %.4f", alpha, cvar_val)
-            try:
-                mlflow.log_metric("cvar", cvar_val)
-            except Exception:  # pragma: no cover - mlflow optional
-                pass
-            penalty += float(
-                risk_penalty(returns, cvar_target=risk_target["cvar"], level=alpha)
+        returns = df["return"].to_numpy()
+        if risk_budget is None:
+            risk_budget = RiskBudget(
+                max_leverage=float(risk_target.get("max_leverage", 1.0)),
+                max_drawdown=float(risk_target.get("max_drawdown", 0.0)),
+                cvar_limit=risk_target.get("cvar"),
             )
-        if "max_drawdown" in risk_target:
-            mdd = float(max_drawdown(returns))
-            logger.info("Max drawdown: %.4f", mdd)
-            try:
-                mlflow.log_metric("max_drawdown", mdd)
-            except Exception:  # pragma: no cover
-                pass
-            penalty += float(
-                risk_penalty(returns, mdd_target=risk_target["max_drawdown"])
-            )
+        cvar_val = float(-cvar(returns, alpha))
+        mdd = float(max_drawdown(returns))
+        logger.info("CVaR@%.2f: %.4f", alpha, cvar_val)
+        logger.info("Max drawdown: %.4f", mdd)
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric("cvar", cvar_val)
+            mlflow.log_metric("max_drawdown", mdd)
+        except Exception:  # pragma: no cover
+            pass
+        penalty = risk_penalty(returns, risk_budget, level=alpha)
         if penalty > 0:
-            logger.warning("Risk constraints violated: penalty %.4f", penalty)
-            base_f1 -= penalty
+            logger.warning("Risk constraints violated: penalty %.4f", float(penalty))
+            return base_f1 - float(penalty)
 
     # Bootstrap confidence intervals for metrics
     boot_metrics = bootstrap_classification_metrics(all_true, all_preds)
@@ -1319,6 +1332,7 @@ def launch(
         cfg = AppConfig(**cfg)
     curriculum_cfg = cfg.get("curriculum") if hasattr(cfg, "get") else None
     if curriculum_cfg:
+
         def _build_fn(stage_cfg: dict) -> callable:
             def _run_stage() -> float:
                 base = cfg.model_dump()
@@ -1332,7 +1346,9 @@ def launch(
                     use_pseudo_labels=use_pseudo_labels,
                     risk_target=risk_target,
                 )
+
             return _run_stage
+
         scheduler = CurriculumScheduler.from_config(curriculum_cfg, _build_fn)
         if scheduler is not None:
             scheduler.run()
