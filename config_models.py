@@ -44,6 +44,20 @@ class StrategyConfig(BaseModel):
     session_position_limits: Dict[str, int] = Field(default_factory=dict)
     default_position_limit: int = 1
     use_kalman_smoothing: bool = False
+    class RiskProfileConfig(BaseModel):
+        """User risk preference profile."""
+
+        tolerance: float = Field(1.0, ge=0.0, description="Risk tolerance multiplier")
+        leverage_cap: float = Field(
+            1.0, ge=0.0, description="Maximum allowed leverage for positions"
+        )
+        drawdown_limit: float = Field(
+            0.0,
+            ge=0.0,
+            description="Fractional drawdown at which positions are force-closed",
+        )
+
+    risk_profile: RiskProfileConfig = RiskProfileConfig()
     model_config = ConfigDict(extra="forbid")
 
 
