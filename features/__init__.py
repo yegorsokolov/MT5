@@ -113,6 +113,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
         baseline_signal,
         divergence,
         evolved_indicators,
+        evolved_symbols,
     )
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,9 @@ if not os.getenv("MT5_DOCS_BUILD"):
     )
     register_feature(
         "evolved_indicators", evolved_indicators.compute, min_cpus=1, min_mem_gb=1.0
+    )
+    register_feature(
+        "evolved_symbols", evolved_symbols.compute, min_cpus=1, min_mem_gb=1.0
     )
 
 # Holds latest status report
