@@ -11,7 +11,9 @@ gradually shifts toward the best-performing algorithm in the current regime.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Tuple, Optional
+from typing import Any, Callable, Dict, Iterable, List, Tuple, Optional
+
+from datetime import datetime
 
 import logging
 import numpy as np
@@ -98,6 +100,9 @@ class StrategyRouter:
     rl_agents: Dict[str, Algorithm] = field(default_factory=dict)
     use_ftrl: bool = field(default=False, init=False)
     ftrl_models: Dict[str, FTRLModel] = field(default_factory=dict, init=False)
+    promotion_thresholds: Dict[str, float] = field(default_factory=dict)
+    demotion_thresholds: Dict[str, float] = field(default_factory=dict)
+    evaluation_path: Path | str = Path("reports/router_evaluations.csv")
 
     def __post_init__(self) -> None:
         self.logger = logging.getLogger(__name__)
@@ -244,6 +249,22 @@ class StrategyRouter:
         except Exception:
             pass
 
+    def demote(self, name: str) -> None:
+        """Remove ``name`` from live trading and bandit rotation."""
+        if name not in self.algorithms:
+            return
+        self.algorithms.pop(name, None)
+        self.A.pop(name, None)
+        self.b.pop(name, None)
+        self.reward_sums.pop(name, None)
+        self.plays.pop(name, None)
+        self.consensus.weights.pop(name, None)
+        try:  # pragma: no cover - metrics aggregation is optional
+            record_metric("strategy_demoted", 1.0, tags={"name": name})
+        except Exception:
+            pass
+        self._save_state()
+
     def _save_state(self) -> None:
         try:
             save_router_state(
@@ -256,6 +277,76 @@ class StrategyRouter:
                 self.total_plays,
             )
         except Exception:  # pragma: no cover - best effort
+            pass
+
+    # Evaluation -------------------------------------------------------
+    def _persist_evaluation(self, rec: Dict[str, Any]) -> None:
+        path = Path(self.evaluation_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = not path.exists()
+        with path.open("a") as f:
+            if header:
+                f.write(
+                    "timestamp,name,pnl,drawdown,slippage,fill_ratio,violations\n"
+                )
+            f.write(
+                f"{rec.get('timestamp')},{rec.get('name')},{rec.get('pnl',0.0):.6f},{rec.get('drawdown',0.0):.6f},{rec.get('slippage',0.0):.6f},{rec.get('fill_ratio',0.0):.6f},{rec.get('violations','')}\n"
+            )
+
+    def evaluate(
+        self,
+        name: str,
+        metrics: Dict[str, float],
+        algorithm: Algorithm | None = None,
+    ) -> None:
+        """Record live metrics and promote/demote strategies if thresholds hit."""
+        rec: Dict[str, Any] = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "name": name,
+            "pnl": float(metrics.get("pnl", 0.0)),
+            "drawdown": float(metrics.get("drawdown", 0.0)),
+            "slippage": float(metrics.get("slippage", 0.0)),
+            "fill_ratio": float(metrics.get("fill_ratio", 0.0)),
+        }
+        violations: List[str] = []
+        if name not in self.algorithms:
+            if algorithm is not None and all(
+                metrics.get(k, float("-inf")) >= v
+                for k, v in self.promotion_thresholds.items()
+            ):
+                self.promote(name, algorithm)
+                try:
+                    record_metric("router_promotion", 1.0, {"name": name})
+                except Exception:
+                    pass
+        else:
+            for k, v in self.demotion_thresholds.items():
+                val = metrics.get(k)
+                if val is None:
+                    continue
+                if k in {"drawdown", "slippage"}:
+                    if val > v:
+                        violations.append(k)
+                else:
+                    if val < v:
+                        violations.append(k)
+            if violations:
+                rec["violations"] = ";".join(violations)
+                self.demote(name)
+                try:
+                    record_metric(
+                        "router_violation", 1.0, {"name": name, "type": ",".join(violations)}
+                    )
+                except Exception:
+                    pass
+        self._persist_evaluation(rec)
+        try:
+            tags = {"name": name}
+            record_metric("router_pnl", rec["pnl"], tags)
+            record_metric("router_drawdown", rec["drawdown"], tags)
+            record_metric("router_slippage", rec["slippage"], tags)
+            record_metric("router_fill_ratio", rec["fill_ratio"], tags)
+        except Exception:
             pass
 
     def _load_state(self) -> None:
