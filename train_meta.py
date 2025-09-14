@@ -19,7 +19,12 @@ import numpy as np
 import torch
 from torch.utils.data import TensorDataset
 
-from models.meta_learner import _LinearModel, fine_tune_model, meta_train_maml
+from models.meta_learner import (
+    _LinearModel,
+    fine_tune_model,
+    meta_train_maml,
+    steps_to,
+)
 from training.curriculum import build_strategy_curriculum
 
 logger = logging.getLogger(__name__)
@@ -53,7 +58,11 @@ def main() -> None:
         build = lambda: _LinearModel(1)
         state = meta_train_maml(tasks, build, epochs=25)
         _, history = fine_tune_model(state, tasks[0][0], build, steps=5, lr=0.5)
-        logger.info("Simple stage adaptation: %s", [round(h, 3) for h in history])
+        logger.info(
+            "Simple stage adaptation: %s steps=%s",
+            [round(h, 3) for h in history],
+            steps_to(history),
+        )
         return history[-1]
 
     def stage_combo() -> float:
@@ -62,7 +71,11 @@ def main() -> None:
         build = lambda: _LinearModel(2)
         state = meta_train_maml(tasks, build, epochs=40)
         _, history = fine_tune_model(state, tasks[0][0], build, steps=5, lr=0.5)
-        logger.info("Combo stage adaptation: %s", [round(h, 3) for h in history])
+        logger.info(
+            "Combo stage adaptation: %s steps=%s",
+            [round(h, 3) for h in history],
+            steps_to(history),
+        )
         return history[-1]
 
     def stage_graph() -> float:
@@ -71,7 +84,11 @@ def main() -> None:
         build = lambda: _LinearModel(3)
         state = meta_train_maml(tasks, build, epochs=40)
         _, history = fine_tune_model(state, tasks[0][0], build, steps=5, lr=0.5)
-        logger.info("Graph stage adaptation: %s", [round(h, 3) for h in history])
+        logger.info(
+            "Graph stage adaptation: %s steps=%s",
+            [round(h, 3) for h in history],
+            steps_to(history),
+        )
         return history[-1]
 
     scheduler = build_strategy_curriculum(stage_simple, stage_combo, stage_graph)

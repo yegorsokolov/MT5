@@ -131,13 +131,23 @@ class _LinearModel(torch.nn.Module):
         return self.fc(x).squeeze(1)
 
 
-def _steps_to(history: Sequence[float], thr: float = 0.9) -> int:
-    """Utility used by tests to determine adaptation speed."""
+def steps_to(history: Sequence[float], thr: float = 0.9) -> int:
+    """Return the number of optimisation steps required to reach ``thr``.
+
+    The helper is primarily used in the training scripts to report the
+    adaptation speed when a model is initialised from meta‑learned weights.
+    It was previously exposed as ``_steps_to`` and is kept backwards
+    compatible via an alias below so existing tests continue to function.
+    """
 
     for i, a in enumerate(history, 1):
         if a >= thr:
             return i
     return len(history) + 1
+
+
+# Backwards compatibility for older imports
+_steps_to = steps_to
 
 
 def meta_train_maml(
@@ -258,6 +268,6 @@ __all__ = [
     "meta_train_maml",
     "meta_train_reptile",
     "fine_tune_model",
-    "_steps_to",
+    "steps_to",
 ]
 
