@@ -195,3 +195,16 @@ async def watchdog(**kwargs) -> None:
     if _manager is None:
         return
     await _manager.watchdog(**kwargs)
+
+
+def place_limit_order(*args, **kwargs):
+    """Route a limit order via the active broker or fall back to market."""
+    broker = get_active_broker()
+    func = getattr(broker, "place_limit_order", None)
+    if callable(func):
+        return func(*args, **kwargs)
+    logger.warning("Broker lacks limit order support, falling back to IOC")
+    fallback = getattr(broker, "place_order", None) or getattr(broker, "order_send", None)
+    if callable(fallback):
+        return fallback(*args, **kwargs)
+    raise NotImplementedError("Active broker does not support limit orders")
