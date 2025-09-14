@@ -118,6 +118,10 @@ try:  # optional torch dependency
     from .ts2vec import initialize_model_with_ts2vec
 except Exception:  # pragma: no cover - torch may be missing
     initialize_model_with_ts2vec = None
+try:  # optional statsmodels dependency
+    from .arima import ARIMAModel
+except Exception:  # pragma: no cover - statsmodels may be missing
+    ARIMAModel = None
 
 __all__ = [
     "EnsembleModel",
@@ -133,6 +137,7 @@ __all__ = [
     "SlimmableNetwork",
     "CrossAssetTransformer",
     "CrossModalTransformer",
+    "ARIMAModel",
     "LazyModel",
     "initialize_model_with_ts_masked_encoder",
     "initialize_model_with_contrastive",
