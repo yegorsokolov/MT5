@@ -5,7 +5,10 @@ import sys
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from analysis.market_simulator import AdversarialMarketSimulator
+from analysis.market_simulator import (
+    AdversarialMarketSimulator,
+    generate_stress_scenarios,
+)
 
 
 class ToyPolicy(torch.nn.Module):
@@ -55,9 +58,9 @@ def test_adversarial_sequences_reduce_overfitting():
     adv_policy = ToyPolicy()
     train_adv(adv_policy, prices)
 
-    stress = np.zeros_like(prices)
+    stress_seq = generate_stress_scenarios(prices)["drop"]
     prices_t = torch.tensor(prices, dtype=torch.float32)
-    stress_t = torch.tensor(stress, dtype=torch.float32)
+    stress_t = torch.tensor(stress_seq, dtype=torch.float32)
     base_gap = abs(base.loss(prices_t).item() - base.loss(stress_t).item())
     adv_gap = abs(adv_policy.loss(prices_t).item() - adv_policy.loss(stress_t).item())
 

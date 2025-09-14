@@ -296,6 +296,7 @@ def self_play_step(
     for name, seq in scenarios.items():
         reward = policy.loss(torch.tensor(seq, dtype=torch.float32)).item()
         logging.info("robustness_%s=%f", name, reward)
+        record_metric(f"robustness_{name}", float(reward), path=TS_PATH)
         metrics[name] = reward
     return metrics
 
@@ -1117,6 +1118,13 @@ def main(
                 try:
                     history = np.array(env.price_history[-adv_sim.seq_len:])  # type: ignore
                     env.price_history[-adv_sim.seq_len:] = adv_sim.perturb(history, model.policy)  # type: ignore
+                    loss_fn = getattr(model.policy, "loss", None)
+                    if callable(loss_fn):
+                        scenarios = generate_stress_scenarios(history)
+                        for name, seq in scenarios.items():
+                            reward = loss_fn(torch.tensor(seq, dtype=torch.float32)).item()
+                            logging.info("robustness_%s=%f", name, reward)
+                            record_metric(f"robustness_{name}", float(reward), path=TS_PATH)
                 except Exception:  # pragma: no cover - environment may not support adversary
                     logger.exception("Adversarial simulator step failed")
             current += learn_steps
