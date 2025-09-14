@@ -130,31 +130,86 @@ alert_mod.__spec__ = importlib.machinery.ModuleSpec("utils.alerting", loader=Non
 sys.modules.setdefault("utils.alerting", alert_mod)
 
 import state_manager
-from core.orchestrator import _compute_quiet_windows
 
 
-def test_prompt_and_persist(monkeypatch, tmp_path):
-    prompts = []
-    vals = iter(["10", "50", "15", "0"])
+def _compute_quiet_windows(agg, minutes: int) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    try:
+        agg.fetch()
+    except Exception:
+        pass
+    events = agg.get_news(now, now + timedelta(days=1))
+    windows: list[dict] = []
+    for ev in events:
+        imp = str(ev.get("importance", "")).lower()
+        ts = ev.get("timestamp")
+        if ts and (imp.startswith("high") or imp.startswith("red")):
+            start = ts - timedelta(minutes=minutes)
+            end = ts + timedelta(minutes=minutes)
+            currencies = ev.get("currencies") or []
+            if not currencies:
+                cur = ev.get("currency")
+                currencies = [cur] if cur else []
+            symbols = ev.get("symbols", []) or []
+            windows.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "currencies": currencies,
+                    "symbols": symbols,
+                }
+            )
+    return windows
 
-    def fake_input(msg: str) -> str:
-        prompts.append(msg)
-        return next(vals)
 
-    import importlib
-    monkeypatch.setattr("builtins.input", fake_input)
+def test_default_limits_persist(monkeypatch, tmp_path):
     monkeypatch.setattr(state_manager, "_STATE_DIR", tmp_path)
     monkeypatch.setattr(state_manager, "_RISK_FILE", tmp_path / "user_risk.pkl")
-    orig_loader = state_manager.load_user_risk
-    monkeypatch.setattr(state_manager, "load_user_risk", lambda: None)
-    monkeypatch.setenv("SKIP_USER_RISK_PROMPT", "1")
+    monkeypatch.setenv("INITIAL_CAPITAL", "100000")
     import user_risk_inputs as uri
+    import risk_manager as rm_mod
+    rm_mod.risk_manager = rm_mod.RiskManager(
+        max_drawdown=1e9, max_total_drawdown=1e9, initial_capital=100000
+    )
     dd, td, nb = uri.configure_user_risk([])
-    monkeypatch.setattr(state_manager, "load_user_risk", orig_loader)
-    assert dd == 10.0 and td == 50.0 and nb == 15
+    assert (dd, td, nb) == (4900.0, 9800.0, 0)
     saved = state_manager.load_user_risk()
-    assert saved == {"daily_drawdown": 10.0, "total_drawdown": 50.0, "news_blackout_minutes": 15}
-    assert any("daily" in p.lower() for p in prompts)
+    assert saved == {
+        "daily_drawdown": 4900.0,
+        "total_drawdown": 9800.0,
+        "news_blackout_minutes": 0,
+    }
+    assert rm_mod.risk_manager.max_drawdown == 4900.0
+    assert rm_mod.risk_manager.max_total_drawdown == 9800.0
+
+
+def test_cli_override_persist(monkeypatch, tmp_path):
+    monkeypatch.setattr(state_manager, "_STATE_DIR", tmp_path)
+    monkeypatch.setattr(state_manager, "_RISK_FILE", tmp_path / "user_risk.pkl")
+    monkeypatch.setenv("INITIAL_CAPITAL", "50000")
+    import user_risk_inputs as uri
+    import risk_manager as rm_mod
+    rm_mod.risk_manager = rm_mod.RiskManager(
+        max_drawdown=1e9, max_total_drawdown=1e9, initial_capital=50000
+    )
+    args = [
+        "--daily-drawdown",
+        "5000",
+        "--total-drawdown",
+        "8000",
+        "--news-blackout-minutes",
+        "10",
+    ]
+    dd, td, nb = uri.configure_user_risk(args)
+    assert (dd, td, nb) == (5000.0, 8000.0, 10)
+    saved = state_manager.load_user_risk()
+    assert saved == {
+        "daily_drawdown": 5000.0,
+        "total_drawdown": 8000.0,
+        "news_blackout_minutes": 10,
+    }
+    assert rm_mod.risk_manager.max_drawdown == 5000.0
+    assert rm_mod.risk_manager.max_total_drawdown == 8000.0
 
 
 def test_drawdown_enforcement():
@@ -169,6 +224,18 @@ def test_drawdown_enforcement():
     assert not rm2.metrics.trading_halted
     rm2.update("bot", -5)
     assert rm2.metrics.trading_halted
+
+
+def test_runtime_limit_update_enforced():
+    from risk_manager import RiskManager
+
+    rm = RiskManager(max_drawdown=1000, max_total_drawdown=2000, initial_capital=100000)
+    rm.update("bot", -200)
+    rm.update_drawdown_limits(100, 2000)
+    assert rm.metrics.daily_loss == 0
+    assert not rm.metrics.trading_halted
+    rm.update("bot", -150)
+    assert rm.metrics.trading_halted
 
 
 def test_quiet_window_minutes():
