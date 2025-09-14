@@ -81,7 +81,11 @@ def generate(
         return data, desc
 
 
-def apply(df: Any, registry_path: Path = REGISTRY_PATH) -> Any:
+def apply(
+    df: Any,
+    registry_path: Path = REGISTRY_PATH,
+    formula_dir: Path | None = None,
+) -> Any:
     """Append all persisted indicator columns to ``df``.
 
     Parameters
@@ -92,11 +96,12 @@ def apply(df: Any, registry_path: Path = REGISTRY_PATH) -> Any:
         :func:`generate`.
     registry_path: Path, optional
         Location of the persisted indicator registry.
+    formula_dir: Path, optional
+        Directory containing evolved indicator formula files.  All files
+        matching ``evolved_indicators_v*.json`` will be applied in order.
     """
 
     entries = _load_registry(registry_path)
-    if not entries:
-        return df
 
     # Support both DataFrame and dictionary inputs similar to ``generate``.
     if pd is not None and isinstance(df, pd.DataFrame):
@@ -108,6 +113,12 @@ def apply(df: Any, registry_path: Path = REGISTRY_PATH) -> Any:
             window = int(item.get("window", 1))
             out[f"{col}_lag{lag}"] = [None] * lag + list(ser.values[:-lag])
             out[f"{col}_mean{window}"] = ser.rolling(window).mean()
+
+        formulas_path = formula_dir or registry_path.parent
+        from . import evolved_indicators
+
+        for file in sorted(formulas_path.glob("evolved_indicators_v*.json")):
+            out = evolved_indicators.compute(out, path=file)
         return out
     else:
         data = {k: list(v) for k, v in df.items()}
@@ -118,6 +129,7 @@ def apply(df: Any, registry_path: Path = REGISTRY_PATH) -> Any:
             computed = _basic_compute_dict(data[key], lag, window)
             data[f"{key}_lag{lag}"] = computed["lag"]
             data[f"{key}_mean{window}"] = computed["mean"]
+        # Dict inputs do not support arbitrary formula evaluation
         return data
 
 

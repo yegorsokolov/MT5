@@ -1,5 +1,4 @@
 import json
-import json
 import ast
 import logging
 from pathlib import Path
@@ -57,11 +56,12 @@ def test_evolution_triggers_on_drop(tmp_path, monkeypatch):
         X=X,
         y=y,
         threshold=0.1,
-        path=tmp_path / "evo.json",
+        path=tmp_path,
     )
     assert out is True
     assert calls
-    data = json.loads((tmp_path / "evo.json").read_text())
+    file = tmp_path / "evolved_indicators_v1.json"
+    data = json.loads(file.read_text())
     assert data[0]["name"] == "evo"
 
 
@@ -83,8 +83,30 @@ def test_no_evolution_when_metric_ok(tmp_path, monkeypatch):
         X=X,
         y=y,
         threshold=0.1,
-        path=tmp_path / "evo.json",
+        path=tmp_path,
     )
     assert out is False
     assert not called
-    assert not (tmp_path / "evo.json").exists()
+    assert not list(tmp_path.glob("evolved_indicators_v*.json"))
+
+
+def test_evolution_discards_when_not_better(tmp_path, monkeypatch):
+    def fake_evolve(X, y, path):
+        path.write_text(json.dumps([{ "name": "evo", "formula": "df.x", "score": 0.1 }]))
+        return [EvolvedIndicator("evo", "df.x", 0.1)]
+
+    monkeypatch.setattr("analysis.indicator_evolution.evolve", fake_evolve)
+
+    X = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+    y = pd.Series([0.0, 1.0, 0.0])
+
+    out = _maybe_evolve_on_degradation(
+        metric=0.4,
+        baseline=0.9,
+        X=X,
+        y=y,
+        threshold=0.1,
+        path=tmp_path,
+    )
+    assert out is False
+    assert not list(tmp_path.glob("evolved_indicators_v*.json"))
