@@ -33,7 +33,7 @@ def test_strategy_promoted_after_threshold(tmp_path):
             regime_perf_path=tmp_path / "regime.parquet",
         )
 
-        def train_fn(df: pd.DataFrame):
+        def train_fn(df: pd.DataFrame, init=None):
             return lambda msg: float(msg["value"])
 
         lab = StrategyLab(

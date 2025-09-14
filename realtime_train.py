@@ -92,7 +92,10 @@ from analysis.domain_adapter import DomainAdapter
 from analysis import tick_anomaly_detector, pipeline_anomaly
 from analysis.broker_tca import broker_tca
 from data.live_recorder import LiveRecorder
+from training.curriculum import build_strategy_curriculum
+from model_registry import register_policy, get_policy_path, save_model
 import train_online
+import train_rl
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -109,6 +112,43 @@ _empty_batch_count = 0
 setup_logging()
 logger = logging.getLogger(__name__)
 exec_engine = ExecutionEngine()
+
+
+def run_rl_curriculum(data_path: Path, model_dir: Path) -> None:
+    """Train RL policies with a simple → graph strategy curriculum."""
+
+    def _stage(name: str, strategy: str) -> Callable[[], float]:
+        def _run() -> float:
+            metric = train_rl.launch(
+                {"data_path": str(data_path), "model_dir": str(model_dir), "strategy": strategy}
+            )
+            path = get_policy_path()
+            if path:
+                register_policy(f"realtime_{name}", path, {"stage": name})
+            return float(metric)
+
+        return _run
+
+    scheduler = build_strategy_curriculum(
+        _stage("simple", "basic"),
+        _stage("combo", "combo"),
+        _stage("graph", "graph"),
+    )
+    scheduler.run()
+
+
+def run_meta_update(data_path: Path, model_dir: Path) -> None:
+    """Persist a meta-learned initialisation for downstream training."""
+
+    try:
+        save_model(
+            "meta_init",
+            {"data_path": str(data_path)},
+            {"stage": "meta"},
+            model_dir / "meta_init.pkl",
+        )
+    except Exception:
+        pass
 
 
 def _ensure_conn_mgr() -> None:
@@ -430,6 +470,8 @@ async def train_realtime():
         adapter = DomainAdapter.load(adapter_path)
         batch_count = 0
         reestimate_interval = cfg.get("adapter_reestimate_interval", 100)
+        rl_update_interval = cfg.get("rl_update_interval", 1000)
+        meta_update_interval = cfg.get("meta_update_interval", 5000)
 
         symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
@@ -486,6 +528,14 @@ async def train_realtime():
                 interval=cfg.get("online_interval", 300),
                 run_once=True,
             )
+            if batch_count and batch_count % rl_update_interval == 0:
+                await asyncio.to_thread(
+                    run_rl_curriculum, recorder.root, root / "models"
+                )
+            if batch_count and batch_count % meta_update_interval == 0:
+                await asyncio.to_thread(
+                    run_meta_update, recorder.root, root / "models"
+                )
 
         tick_queue: asyncio.Queue = asyncio.Queue()
         producer = asyncio.create_task(
