@@ -113,6 +113,13 @@ def load_macro_series(symbols: List[str]) -> pd.DataFrame:
                 fetched = web.DataReader(sym, "fred")
                 fetched = fetched.rename_axis("Date").reset_index()
                 df = fetched
+                # Cache fetched series for offline reuse
+                out_dir = Path("data") / "macro"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                try:  # pragma: no cover - file system edge cases
+                    df.to_csv(out_dir / f"{sym}.csv", index=False)
+                except Exception:
+                    logger.warning("Failed to cache macro series %s", sym)
             except Exception:
                 logger.debug("Unable to fetch macro series %s", sym)
                 continue
