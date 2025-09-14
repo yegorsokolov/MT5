@@ -1,5 +1,5 @@
 import math
-from typing import Iterable, List
+from typing import Iterable, List, Dict
 
 import torch
 
@@ -24,8 +24,29 @@ class PositionalEncoding(torch.nn.Module):
         return x + self.pe[:, : x.size(1)]
 
 
+class MultiTaskHead(torch.nn.Module):
+    """Three-task prediction head.
+
+    The head outputs a dictionary with ``direction`` (classification),
+    ``abs_return`` and ``volatility`` (regression) tensors.
+    """
+
+    def __init__(self, d_model: int) -> None:
+        super().__init__()
+        self.dir = torch.nn.Linear(d_model, 1)
+        self.abs = torch.nn.Linear(d_model, 1)
+        self.vol = torch.nn.Linear(d_model, 1)
+
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        return {
+            "direction": torch.sigmoid(self.dir(x)).squeeze(-1),
+            "abs_return": self.abs(x).squeeze(-1),
+            "volatility": self.vol(x).squeeze(-1),
+        }
+
+
 class MultiHeadTransformer(torch.nn.Module):
-    """Shared backbone with symbol-specific output heads."""
+    """Shared backbone with symbol-specific multi-task heads."""
 
     def __init__(
         self,
@@ -66,7 +87,7 @@ class MultiHeadTransformer(torch.nn.Module):
         )
         self.norm = torch.nn.LayerNorm(d_model) if layer_norm else None
         self.heads = torch.nn.ModuleDict(
-            {str(i): torch.nn.Linear(d_model, 1) for i in range(num_symbols)}
+            {str(i): MultiTaskHead(d_model) for i in range(num_symbols)}
         )
 
     def forward(
@@ -89,8 +110,8 @@ class MultiHeadTransformer(torch.nn.Module):
             x = self.transformer(x)
         if self.norm is not None:
             x = self.norm(x)
-        out = self.heads[str(int(symbol))](x[:, -1])
-        return torch.sigmoid(out).squeeze(1)
+        head = self.heads[str(int(symbol))]
+        return head(x[:, -1])
 
     def prune_heads(self, keep: Iterable[int]) -> None:
         """Remove heads not listed in ``keep`` to save memory."""
@@ -100,4 +121,4 @@ class MultiHeadTransformer(torch.nn.Module):
                 del self.heads[k]
 
 
-__all__: List[str] = ["MultiHeadTransformer"]
+__all__: List[str] = ["MultiHeadTransformer", "MultiTaskHead"]

@@ -64,12 +64,22 @@ def triple_barrier(
 
 
 def multi_horizon_labels(prices: "pd.Series", horizons: list[int]) -> "pd.DataFrame":
-    """Generate binary labels for multiple prediction horizons.
+    """Generate targets for multiple prediction horizons.
 
-    For each horizon ``h`` in ``horizons`` a column ``label_h`` is created
-    indicating whether the price after ``h`` steps is greater than the
-    current price.  The trailing ``h`` rows where the future is unknown are
-    filled with ``0``.
+    For each horizon ``h`` the function creates three columns:
+
+    ``label_{h}``
+        Binary direction label indicating whether the price after ``h``
+        steps is greater than the current price.
+
+    ``abs_return_{h}``
+        Absolute percentage return ``|p(t+h)/p(t) - 1|``.
+
+    ``vol_{h}``
+        Realised volatility calculated as ``sqrt(sum(r_i^2))`` for the
+        ``h`` forward percent returns ``r``.
+
+    The trailing rows where the future is unknown are filled with ``0``.
 
     Parameters
     ----------
@@ -81,13 +91,24 @@ def multi_horizon_labels(prices: "pd.Series", horizons: list[int]) -> "pd.DataFr
     Returns
     -------
     pd.DataFrame
-        DataFrame with one column per horizon named ``label_{h}``.
+        DataFrame with three columns per horizon.
     """
 
     data: dict[str, pd.Series] = {}
+    pct = prices.pct_change()
+    future_pct = pct.shift(-1)
+
     for h in horizons:
         future = prices.shift(-h)
         data[f"label_{h}"] = (future > prices).astype(int).fillna(0).astype(int)
+        abs_ret = (future / prices - 1).abs().fillna(0)
+        data[f"abs_return_{h}"] = abs_ret
+        vol = (
+            future_pct.rolling(window=h)
+            .apply(lambda arr: np.sqrt(np.square(arr).sum()), raw=True)
+            .shift(-h + 1)
+        )
+        data[f"vol_{h}"] = vol.fillna(0)
 
     labels = pd.DataFrame(data, index=prices.index)
 
@@ -95,6 +116,8 @@ def multi_horizon_labels(prices: "pd.Series", horizons: list[int]) -> "pd.DataFr
     raw_file = prices.attrs.get("source", "unknown")
     for h in horizons:
         log_lineage(run_id, raw_file, f"multi_horizon_{h}", "label")
+        log_lineage(run_id, raw_file, f"multi_horizon_{h}", "abs_return")
+        log_lineage(run_id, raw_file, f"multi_horizon_{h}", "realized_vol")
 
     return labels
 
