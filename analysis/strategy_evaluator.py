@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from strategy.router import StrategyRouter, FeatureDict
+from analytics.metrics_aggregator import record_metric
 from .performance_correlation import compute_correlations
 
 
@@ -42,20 +43,46 @@ class StrategyEvaluator:
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _risk_metrics(returns: Iterable[float]) -> dict:
-        """Compute basic risk metrics for a sequence of returns."""
+    def _risk_metrics(
+        returns: Iterable[float], daily_limit: float, total_limit: float
+    ) -> dict:
+        """Compute basic risk metrics and drawdown limit flags."""
         arr = np.asarray(list(returns), dtype=float)
         if arr.size == 0:
-            return {"pnl": 0.0, "sharpe": 0.0, "drawdown": 0.0}
+            return {
+                "pnl": 0.0,
+                "sharpe": 0.0,
+                "drawdown": 0.0,
+                "daily_loss": 0.0,
+                "daily_limit_violation": False,
+                "total_limit_violation": False,
+            }
         mean = float(arr.mean())
         std = float(arr.std(ddof=0))
         sharpe = mean / (std + 1e-9)
         cumulative = (1 + arr).cumprod()
         drawdown = float((np.maximum.accumulate(cumulative) - cumulative).max())
-        return {"pnl": float(arr.sum()), "sharpe": sharpe, "drawdown": drawdown}
+        worst_daily = float(np.minimum.reduce(np.clip(arr, a_max=0, a_min=None)))
+        daily_loss = -worst_daily
+        daily_violation = daily_loss > daily_limit
+        total_violation = drawdown > total_limit
+        return {
+            "pnl": float(arr.sum()),
+            "sharpe": sharpe,
+            "drawdown": drawdown,
+            "daily_loss": daily_loss,
+            "daily_limit_violation": daily_violation,
+            "total_limit_violation": total_violation,
+        }
 
     # ------------------------------------------------------------------
-    def evaluate(self, history: pd.DataFrame, router: StrategyRouter) -> pd.DataFrame:
+    def evaluate(
+        self,
+        history: pd.DataFrame,
+        router: StrategyRouter,
+        daily_limit: float = float("inf"),
+        total_limit: float = float("inf"),
+    ) -> pd.DataFrame:
         """Evaluate ``router`` algorithms on ``history`` and persist scoreboard."""
         if history.empty:
             return pd.DataFrame(
@@ -83,7 +110,7 @@ class StrategyEvaluator:
                     algo({**f, "market_basket": basket, "instrument": inst}) for f in feats
                 ]
                 pnl = np.asarray(actions) * rets
-                metrics = self._risk_metrics(pnl)
+                metrics = self._risk_metrics(pnl, daily_limit, total_limit)
                 records.append(
                     {"instrument": inst, "market_basket": basket, "algorithm": name, **metrics}
                 )
@@ -115,6 +142,25 @@ class StrategyEvaluator:
         except Exception:
             # Optional parquet dependencies may be missing in minimal setups.
             pass
+
+        # Log metrics for dashboard consumption
+        for _, row in scoreboard.reset_index().iterrows():
+            inst = row["instrument"]
+            basket = row["market_basket"]
+            alg = row["algorithm"]
+            try:
+                record_metric(
+                    "strategy_eval_pnl",
+                    float(row["pnl"]),
+                    tags={"algorithm": alg, "instrument": inst, "basket": basket},
+                )
+                record_metric(
+                    "strategy_eval_drawdown",
+                    float(row["drawdown"]),
+                    tags={"algorithm": alg, "instrument": inst, "basket": basket},
+                )
+            except Exception:
+                pass
 
         # Append correlation results
         if corr_records:
