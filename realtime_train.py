@@ -87,7 +87,7 @@ except Exception:  # pragma: no cover - fallback if analytics not installed
         return None
 
 
-from analysis.data_quality import apply_quality_checks
+from analysis.data_quality import apply_quality_checks, check_recency
 from analysis.domain_adapter import DomainAdapter
 from analysis import tick_anomaly_detector, pipeline_anomaly
 from analysis.broker_tca import broker_tca
@@ -267,6 +267,9 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
             df.drop(columns=["Volume"], inplace=True)
             df = sanitize_ticks(df)
             df, report = apply_quality_checks(df)
+            if not check_recency(df, max_age="5s"):
+                logger.warning("Discarding stale tick batch for %s", symbol)
+                return pd.DataFrame()
             if any(report.values()):
                 logger.info("Realtime data quality: %s", report)
                 for k, v in report.items():
