@@ -248,19 +248,48 @@ def _maybe_evolve_on_degradation(
     threshold: float = 0.05,
     path: Path | None = None,
 ) -> bool:
-    """Trigger indicator evolution when performance drops."""
+    """Trigger indicator evolution when performance drops.
+
+    The function writes candidate indicator formulas to the feature store with a
+    monotonically increasing version tag.  Before persisting the formulas it
+    compares their ``score`` against the current validation ``metric``.  Only if
+    the best evolved indicator outperforms the baseline metric will the formulas
+    remain in the store.
+    """
 
     if baseline is None or baseline - metric < threshold:
         return False
 
     from analysis import indicator_evolution as ind_evo
 
-    store_path = (
-        path
-        if path is not None
-        else Path(__file__).resolve().parent / "feature_store" / "evolved_indicators.json"
+    base_dir = (
+        path if path is not None else Path(__file__).resolve().parent / "feature_store"
     )
+    if base_dir.suffix:
+        # Caller provided an explicit file path; keep as-is
+        store_path = base_dir
+        base_dir = base_dir.parent
+    else:
+        base_dir.mkdir(parents=True, exist_ok=True)
+        existing = sorted(base_dir.glob("evolved_indicators_v*.json"))
+        store_path = base_dir / f"evolved_indicators_v{len(existing) + 1}.json"
+
     inds = ind_evo.evolve(X, y, store_path)
+    if not inds:
+        store_path.unlink(missing_ok=True)
+        return False
+
+    best = inds[0]
+    if best.score <= metric:
+        logger.info(
+            "Discarding evolved indicator %s score %.4f <= baseline %.4f",
+            best.name,
+            best.score,
+            metric,
+        )
+        store_path.unlink(missing_ok=True)
+        return False
+
     for ind in inds:
         logger.info("Evolved indicator %s score %.4f", ind.name, ind.score)
     return True
