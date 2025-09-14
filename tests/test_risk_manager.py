@@ -25,7 +25,7 @@ def test_combined_drawdown_triggers_global_stop():
 
 def load_api(tmp_log, monkeypatch):
     monkeypatch.patch('utils.secret_manager.SecretManager.get_secret', return_value='token')
-    logger = types.SimpleNamespace(warning=lambda *a, **k: None)
+    logger = types.SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
     sys.modules["log_utils"] = types.SimpleNamespace(
         LOG_FILE=tmp_log,
         setup_logging=lambda: logger,
@@ -38,6 +38,7 @@ def load_api(tmp_log, monkeypatch):
         Gauge=lambda *a, **k: None,
         generate_latest=lambda: b"",
         CONTENT_TYPE_LATEST="text/plain",
+        REGISTRY=None,
     )
     sys.modules["yaml"] = types.SimpleNamespace(
         safe_load=lambda *a, **k: {},
@@ -47,12 +48,17 @@ def load_api(tmp_log, monkeypatch):
     env_mod.ensure_environment = lambda: None
     sys.modules["utils.environment"] = env_mod
     sys.modules["utils"] = types.SimpleNamespace(update_config=lambda *a, **k: None)
+    sys.modules["utils.graceful_exit"] = types.SimpleNamespace(graceful_exit=lambda *a, **k: None)
     sys.modules["metrics"] = importlib.import_module("metrics")
     sys.modules["mlflow"] = types.SimpleNamespace(
         set_tracking_uri=lambda *a, **k: None,
         set_experiment=lambda *a, **k: None,
         start_run=contextlib.nullcontext,
         log_dict=lambda *a, **k: None,
+    )
+    sys.modules["scheduler"] = types.SimpleNamespace(
+        start_scheduler=lambda *a, **k: None,
+        stop_scheduler=lambda *a, **k: None,
     )
     return importlib.reload(importlib.import_module("remote_api"))
 
@@ -79,3 +85,17 @@ def test_risk_status_endpoint(tmp_path, monkeypatch):
     assert data["trading_halted"] is True
     assert data["daily_loss"] == -110
     rm.reset()
+
+
+def test_check_fills_returns_violations():
+    rm = RiskManager(max_drawdown=100)
+    violations = rm.check_fills(
+        placed=10,
+        filled=4,
+        cancels=6,
+        slippage=0.02,
+        min_ratio=0.5,
+        max_slippage=0.01,
+        max_cancel_rate=0.5,
+    )
+    assert set(violations) == {"fill_ratio", "cancel_rate", "slippage"}
