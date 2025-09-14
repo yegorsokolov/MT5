@@ -206,18 +206,17 @@ def _maybe_generate_indicators(
     """Augment ``X`` with persisted and newly generated indicators."""
 
     from features import auto_indicators
-    from features import evolved_indicators as evolved
 
-    # Always append any previously evolved indicators and persisted auto indicators.
-    X_aug = evolved.compute(
-        X,
-        path=evolved_path
-        if evolved_path is not None
-        else Path(__file__).resolve().parent / "feature_store" / "evolved_indicators.json",
-    )
+    # Always append any previously evolved indicators and persisted auto
+    # indicators.  ``auto_indicators.apply`` loads all versioned formula files
+    # from ``formula_dir``.
+    formula_dir: Path | None = None
+    if evolved_path is not None:
+        formula_dir = evolved_path if evolved_path.is_dir() else evolved_path.parent
     X_aug = auto_indicators.apply(
-        X_aug,
+        X,
         registry_path=registry_path or auto_indicators.REGISTRY_PATH,
+        formula_dir=formula_dir,
     )
 
     if hypernet is None:
@@ -261,6 +260,8 @@ def _maybe_evolve_on_degradation(
         return False
 
     from analysis import indicator_evolution as ind_evo
+    from datetime import datetime
+    import json
 
     base_dir = (
         path if path is not None else Path(__file__).resolve().parent / "feature_store"
@@ -289,6 +290,16 @@ def _maybe_evolve_on_degradation(
         )
         store_path.unlink(missing_ok=True)
         return False
+
+    # Document provenance of the promoted indicators
+    meta_path = store_path.with_name(f"{store_path.stem}.meta.json")
+    meta = {
+        "baseline_metric": baseline,
+        "current_metric": metric,
+        "best_score": best.score,
+        "created": datetime.utcnow().isoformat(),
+    }
+    meta_path.write_text(json.dumps(meta, indent=2))
 
     for ind in inds:
         logger.info("Evolved indicator %s score %.4f", ind.name, ind.score)

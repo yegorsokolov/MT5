@@ -65,6 +65,29 @@ def test_evolution_triggers_on_drop(tmp_path, monkeypatch):
     assert data[0]["name"] == "evo"
 
 
+def test_provenance_recorded(tmp_path, monkeypatch):
+    def fake_evolve(X, y, path):
+        path.write_text(json.dumps([{ "name": "evo", "formula": "df.x", "score": 1.0 }]))
+        return [EvolvedIndicator("evo", "df.x", 1.0)]
+
+    monkeypatch.setattr("analysis.indicator_evolution.evolve", fake_evolve)
+
+    X = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+    y = pd.Series([0.0, 1.0, 0.0])
+
+    out = _maybe_evolve_on_degradation(
+        metric=0.4,
+        baseline=0.9,
+        X=X,
+        y=y,
+        threshold=0.1,
+        path=tmp_path,
+    )
+    assert out is True
+    meta = json.loads((tmp_path / "evolved_indicators_v1.meta.json").read_text())
+    assert meta["baseline_metric"] == 0.9
+
+
 def test_no_evolution_when_metric_ok(tmp_path, monkeypatch):
     called = {}
 
