@@ -1,4 +1,8 @@
-"""Run BaselineStrategy over historical bars as a feature."""
+"""Run BaselineStrategy over historical bars as a feature.
+
+The function precomputes moving averages, RSI and ATR once and stores
+them in the resulting feature matrix so that downstream models can
+reuse these baseline indicators without recomputing them."""
 
 from __future__ import annotations
 
@@ -69,7 +73,7 @@ def _compute_pandas(
     rsi_vals = df.get("rsi")
     if rsi_vals is None:
         rsi_vals = rsi(price, rsi_window)
-    atr_vals = df.get("atr")
+    atr_vals = df.get("atr_val")
     if atr_vals is None:
         atr_vals = atr(high, low, price, atr_window)
 
@@ -79,8 +83,8 @@ def _compute_pandas(
         df["long_ma"] = long_ma
     if "rsi" not in df:
         df["rsi"] = rsi_vals
-    if "atr" not in df:
-        df["atr"] = atr_vals
+    if "atr_val" not in df:
+        df["atr_val"] = atr_vals
     if "boll_upper" not in df:
         df["boll_upper"] = boll_upper
     if "boll_lower" not in df:
@@ -111,7 +115,7 @@ def _compute_pandas(
             short_ma=row.short_ma if not pd.isna(row.short_ma) else None,
             long_ma=row.long_ma if not pd.isna(row.long_ma) else None,
             rsi=row.rsi if not pd.isna(row.rsi) else None,
-            atr=row.atr if not pd.isna(row.atr) else None,
+            atr_val=row.atr_val if not pd.isna(row.atr_val) else None,
             boll_upper=row.boll_upper if not pd.isna(row.boll_upper) else None,
             boll_lower=row.boll_lower if not pd.isna(row.boll_lower) else None,
             obv=(

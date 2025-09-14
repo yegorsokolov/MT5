@@ -28,7 +28,7 @@ def prime_strategy(strat):
         strat.update(
             price,
             indicators=IndicatorBundle(
-                atr=1.0, rsi=50, boll_upper=1e9, boll_lower=-1e9
+                atr_val=1.0, rsi=50, boll_upper=1e9, boll_lower=-1e9
             ),
             cross_confirm={"PEER": 1.0},
         )
@@ -41,7 +41,7 @@ def test_cross_confirm_allows_signal():
     prime_strategy(strat)
     sig = strat.update(
         2.0,
-        indicators=IndicatorBundle(atr=1.0, rsi=50, boll_upper=1e9, boll_lower=-1e9),
+        indicators=IndicatorBundle(atr_val=1.0, rsi=50, boll_upper=1e9, boll_lower=-1e9),
         cross_confirm={"PEER": 0.5},
     )
     assert sig == 1
@@ -54,7 +54,7 @@ def test_cross_confirm_blocks_divergence():
     prime_strategy(strat)
     sig = strat.update(
         2.0,
-        indicators=IndicatorBundle(atr=1.0, rsi=50, boll_upper=1e9, boll_lower=-1e9),
+        indicators=IndicatorBundle(atr_val=1.0, rsi=50, boll_upper=1e9, boll_lower=-1e9),
         cross_confirm={"PEER": -0.5},
     )
     assert sig == 0
