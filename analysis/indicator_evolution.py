@@ -78,8 +78,49 @@ class IndicatorEvolver:
 
     # ------------------------------------------------------------------
     def save(self, inds: List[EvolvedIndicator], path: Path) -> None:
+        """Persist ``inds`` to ``path`` as JSON."""
+
         data = [ind.__dict__ for ind in inds]
         path.write_text(json.dumps(data, indent=2))
 
 
-__all__ = ["IndicatorEvolver", "EvolvedIndicator"]
+def evolve(
+    X: pd.DataFrame,
+    y: pd.Series,
+    path: Path,
+    *,
+    generations: int = 5,
+    population_size: int = 50,
+    n_components: int = 3,
+    random_state: int = 0,
+) -> List[EvolvedIndicator]:
+    """Convenience wrapper that evolves indicators and saves them.
+
+    Parameters
+    ----------
+    X, y:
+        Training data passed to :class:`IndicatorEvolver`.
+    path:
+        Destination within the feature store where formulas will be written.
+    generations, population_size, n_components, random_state:
+        Passed through to :meth:`IndicatorEvolver.evolve`.
+
+    Returns
+    -------
+    list[EvolvedIndicator]
+        The evolved indicator metadata, sorted by score.
+    """
+
+    evolver = IndicatorEvolver(random_state=random_state)
+    inds = evolver.evolve(
+        X,
+        y,
+        generations=generations,
+        population_size=population_size,
+        n_components=n_components,
+    )
+    evolver.save(inds, path)
+    return inds
+
+
+__all__ = ["IndicatorEvolver", "EvolvedIndicator", "evolve"]

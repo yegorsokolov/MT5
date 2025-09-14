@@ -201,27 +201,69 @@ def _maybe_generate_indicators(
     asset_features: np.ndarray | None = None,
     regime: np.ndarray | None = None,
     registry_path: Path | None = None,
+    evolved_path: Path | None = None,
 ) -> tuple[pd.DataFrame, dict[str, int] | None]:
-    """Augment ``X`` with features proposed by ``hypernet`` if provided."""
+    """Augment ``X`` with persisted and newly generated indicators."""
+
+    from features import auto_indicators
+    from features import evolved_indicators as evolved
+
+    # Always append any previously evolved indicators and persisted auto indicators.
+    X_aug = evolved.compute(
+        X,
+        path=evolved_path
+        if evolved_path is not None
+        else Path(__file__).resolve().parent / "feature_store" / "evolved_indicators.json",
+    )
+    X_aug = auto_indicators.apply(
+        X_aug,
+        registry_path=registry_path or auto_indicators.REGISTRY_PATH,
+    )
 
     if hypernet is None:
-        return X, None
-    from features import auto_indicators
+        return X_aug, None
 
     asset = (
         asset_features
         if asset_features is not None
-        else np.mean(X.values, axis=0, keepdims=True)
+        else np.mean(X_aug.values, axis=0, keepdims=True)
     )
     reg = regime if regime is not None else np.zeros((1, 1))
     X_new, desc = auto_indicators.generate(
-        X,
+        X_aug,
         hypernet,
         asset,
         reg,
         registry_path=registry_path or auto_indicators.REGISTRY_PATH,
     )
     return X_new, desc
+
+
+def _maybe_evolve_on_degradation(
+    metric: float,
+    baseline: float | None,
+    X: pd.DataFrame,
+    y: pd.Series,
+    *,
+    threshold: float = 0.05,
+    path: Path | None = None,
+) -> bool:
+    """Trigger indicator evolution when performance drops."""
+
+    if baseline is None or baseline - metric < threshold:
+        return False
+
+    from analysis import indicator_evolution as ind_evo
+
+    store_path = (
+        path
+        if path is not None
+        else Path(__file__).resolve().parent / "feature_store" / "evolved_indicators.json"
+    )
+    inds = ind_evo.evolve(X, y, store_path)
+    for ind in inds:
+        logger.info("Evolved indicator %s score %.4f", ind.name, ind.score)
+    return True
 
 
 def train_multi_output_model(
@@ -232,6 +274,10 @@ def train_multi_output_model(
     asset_features: np.ndarray | None = None,
     regime_tag: np.ndarray | None = None,
     registry_path: Path | None = None,
+    *,
+    baseline_metric: float | None = None,
+    degradation: float = 0.05,
+    evolve_path: Path | None = None,
 ) -> tuple[Pipeline, dict[str, object]]:
     """Train a multi-output classifier and report metrics per horizon.
 
@@ -269,6 +315,7 @@ def train_multi_output_model(
         asset_features=asset_features,
         regime=regime_tag,
         registry_path=registry_path,
+        evolved_path=evolve_path,
     )
 
     clf_params = {
@@ -366,6 +413,15 @@ def train_multi_output_model(
             {"aggregate_f1": reports.get("aggregate_f1", 0.0)},
             registry_path=registry_path or auto_indicators.REGISTRY_PATH,
         )
+
+    _maybe_evolve_on_degradation(
+        reports.get("aggregate_f1", 0.0),
+        baseline_metric,
+        X,
+        y.iloc[:, 0],
+        threshold=degradation,
+        path=evolve_path,
+    )
     return pipe, reports
 
 
