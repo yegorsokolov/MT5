@@ -16,6 +16,7 @@ are persisted to ``history_path`` for auditability.
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict
+from datetime import datetime
 
 import asyncio
 import pandas as pd
@@ -44,6 +45,7 @@ class StrategyLab:
     max_slippage: float = 0.01
     max_cancel_rate: float = 0.5
     risk_managers: Dict[str, RiskManager] = field(default_factory=dict)
+    policy_versions: Dict[str, str] = field(default_factory=dict)
 
     async def train_and_deploy(self, name: str, data: pd.DataFrame) -> None:
         """Train a new strategy and start its shadow runner."""
@@ -60,6 +62,8 @@ class StrategyLab:
             initial_capital=1.0,
         )
         self.risk_managers[name] = rm
+        # Record a simple timestamp based policy version for auditability
+        self.policy_versions[name] = datetime.utcnow().isoformat()
 
     # ------------------------------------------------------------------
     def _persist(self, rec: Dict[str, Any]) -> None:
@@ -67,9 +71,10 @@ class StrategyLab:
         header = not self.history_path.exists()
         with self.history_path.open("a") as f:
             if header:
-                f.write("name,pnl,drawdown,sharpe\n")
+                f.write("name,version,pnl,drawdown,sharpe\n")
+            ver = rec.get("version") or self.policy_versions.get(rec.get("name", ""), "")
             f.write(
-                f"{rec['name']},{rec['pnl']:.6f},{rec['drawdown']:.6f},{rec['sharpe']:.6f}\n"
+                f"{rec['name']},{ver},{rec['pnl']:.6f},{rec['drawdown']:.6f},{rec['sharpe']:.6f}\n"
             )
 
     # ------------------------------------------------------------------
@@ -122,10 +127,15 @@ class StrategyLab:
                 record_metric("shadow_drawdown", rec.get("drawdown", 0.0), {"name": name})
             except Exception:
                 pass
-            if self._meets_thresholds(rec):
+            if self._meets_thresholds(rec) and rec.get("verified", False):
                 algo = self.candidates.get(name)
                 if algo is not None:
                     self.router.promote(name, algo)
                     promoted.add(name)
+                    version = self.policy_versions.get(name)
+                    try:
+                        record_metric("policy_version", 1.0, {"name": name, "version": version})
+                    except Exception:
+                        pass
 
 __all__ = ["StrategyLab"]
