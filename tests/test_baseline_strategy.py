@@ -93,7 +93,7 @@ def test_external_indicators_match_internal():
             short_ma=short_ma,
             long_ma=long_ma,
             rsi=rsi_val,
-            atr=atr_val,
+            atr_val=atr_val,
             boll_upper=upper,
             boll_lower=lower,
         )

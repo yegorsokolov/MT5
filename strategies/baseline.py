@@ -45,7 +45,7 @@ class IndicatorBundle:
     short_ma: Optional[float] = None
     long_ma: Optional[float] = None
     rsi: Optional[float] = None
-    atr: Optional[float] = None
+    atr_val: Optional[float] = None
     boll_upper: Optional[float] = None
     boll_lower: Optional[float] = None
     obv: Optional[float] = None
@@ -288,8 +288,8 @@ class BaselineStrategy:
         self._lows.append(low)
         self._closes.append(price)
 
-        if ind.atr is not None:
-            self.latest_atr = ind.atr
+        if ind.atr_val is not None:
+            self.latest_atr = ind.atr_val
         elif len(self._closes) >= self.atr_window + 1:
             self.latest_atr = calc_atr(
                 self._highs, self._lows, self._closes, self.atr_window
@@ -351,8 +351,8 @@ class BaselineStrategy:
     ) -> int:
         signal = raw_signal
 
-        if signal != 0:
-            if not cross_confirm or any(v <= 0 for v in cross_confirm.values()):
+        if signal != 0 and cross_confirm is not None:
+            if any(v <= 0 for v in cross_confirm.values()):
                 return 0
 
         if signal == 1:
