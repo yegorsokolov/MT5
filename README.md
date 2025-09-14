@@ -741,9 +741,13 @@ dask-worker tcp://<scheduler-ip>:8786
 ## Plugin Architecture
 
 Feature engineering functions, models and risk checks can now be extended via
-plugins under the `plugins/` package. Register new components with the helper
-decorators exposed in `plugins.__init__` and they will automatically be applied
-when `dataset.make_features` or training scripts run.
+plugins under the `plugins/` package or as separate Python packages exposing
+entry points in the `mt5.features` or `mt5.strategies` groups. Register new
+components with the helper decorators exposed in `plugins.__init__` and they
+will automatically be applied when `dataset.make_features` or training scripts
+run.
+See [docs/EXTENDING.md](docs/EXTENDING.md) for details on creating external
+feature and strategy plugins.
 Built-in examples include the `atr`, `donchian` and `keltner` plugins which add
 ATR, Donchian and Keltner channel signals. A regime classification plugin can
 also be enabled to label each row using a hidden Markov model.

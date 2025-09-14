@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from backtest import run_backtest
+from utils import load_config
 
 METADATA_FILE = Path(__file__).resolve().parents[2] / "strategies" / "metadata.json"
 
@@ -53,9 +54,7 @@ def main() -> None:
 
     cfg: Dict[str, Any] = {}
     if args.config:
-        import yaml
-
-        cfg = yaml.safe_load(Path(args.config).read_text())
+        cfg = load_config(args.config).model_dump()
 
     metrics = run_and_update(args.strategy, cfg)
     print(json.dumps(metrics, indent=2))
