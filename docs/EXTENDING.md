@@ -1,6 +1,6 @@
 # Extending MT5 with Plugins
 
-MT5 exposes plugin hooks for adding new indicators and trading strategies without
+MT5 exposes plugin hooks for adding new features and trading strategies without
 modifying the core repository.  Plugins are standard Python packages that
 declare entry points so MT5 can automatically discover and register them at
 runtime.
@@ -8,7 +8,7 @@ runtime.
 ## Creating a Plugin
 
 1. Create a Python package with a `pyproject.toml` file.
-2. Add entry points under the `mt5.indicators` and/or `mt5.strategies` groups.
+2. Add entry points under the `mt5.features` and/or `mt5.strategies` groups.
 3. Each entry point should reference a callable named ``register`` that accepts a
    registration function provided by MT5.
 
@@ -23,14 +23,14 @@ build-backend = "setuptools.build_meta"
 name = "mt5-example-plugin"
 version = "0.1.0"
 
-[project.entry-points."mt5.indicators"]
+[project.entry-points."mt5.features"]
 example = "example_plugin.indicator:register"
 
 [project.entry-points."mt5.strategies"]
 example = "example_plugin.strategy:register"
 ```
 
-## Registering Indicators
+## Registering Features
 
 The entry point ``example_plugin.indicator:register`` might look like:
 

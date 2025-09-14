@@ -7,13 +7,11 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler, SysLogHandler
 from urllib.parse import urlparse
-import os
 import socket
 import io
 import queue
 import threading
 
-import yaml
 import requests
 from functools import wraps
 from pathlib import Path
@@ -319,14 +317,10 @@ def setup_logging() -> logging.Logger:
     sh.setFormatter(fmt)
     logger.addHandler(sh)
 
-    cfg_path = os.getenv("CONFIG_FILE")
-    if cfg_path:
-        cfg_file = Path(cfg_path)
-    else:
-        cfg_file = Path(__file__).resolve().parent / "config.yaml"
     try:
-        with open(cfg_file, "r") as f:
-            cfg = yaml.safe_load(f) or {}
+        from utils import load_config
+
+        cfg = load_config().model_dump()
     except Exception:
         cfg = {}
 
