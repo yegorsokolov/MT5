@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict
 
+import asyncio
 import numpy as np
 
 from services.message_bus import get_message_bus, Topics, MessageBus
@@ -26,6 +27,7 @@ class ShadowRunner:
     window: int = 100
     out_dir: Path = Path("reports/shadow")
     bus: MessageBus | None = None
+    metrics_queue: asyncio.Queue | None = None
     _returns: Deque[float] = field(default_factory=lambda: deque(maxlen=100))
 
     async def run(self) -> None:
@@ -47,6 +49,15 @@ class ShadowRunner:
             with path.open("a") as f:
                 f.write(
                     f"{msg.get('Timestamp')},{pnl:.6f},{equity:.6f},{drawdown:.6f},{sharpe:.6f}\n"
+                )
+            if self.metrics_queue is not None:
+                await self.metrics_queue.put(
+                    {
+                        "name": self.name,
+                        "pnl": pnl,
+                        "drawdown": drawdown,
+                        "sharpe": sharpe,
+                    }
                 )
 
 

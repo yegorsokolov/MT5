@@ -234,6 +234,16 @@ class StrategyRouter:
         except Exception:  # pragma: no cover - best effort
             pass
 
+    def promote(self, name: str, algorithm: Algorithm) -> None:
+        """Expose ``algorithm`` to live trading if not already present."""
+        if name in self.algorithms:
+            return
+        self.register(name, algorithm)
+        try:  # pragma: no cover - metrics aggregation is optional
+            record_metric("strategy_promoted", 1.0, tags={"name": name})
+        except Exception:
+            pass
+
     def _save_state(self) -> None:
         try:
             save_router_state(
