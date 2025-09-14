@@ -48,7 +48,12 @@ class IndicatorNode:
 
     # ---- serialisation -------------------------------------------------
     def to_dict(self) -> dict:
-        return {"type": "IndicatorNode", "lhs": self.lhs, "op": self.op, "rhs": self.rhs}
+        return {
+            "type": "IndicatorNode",
+            "lhs": self.lhs,
+            "op": self.op,
+            "rhs": self.rhs,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> IndicatorNode:
@@ -165,6 +170,44 @@ class StrategyGraph:
         edges = [tuple(edge) for edge in data["edges"]]
         return cls(nodes=nodes, edges=edges, entry=data.get("entry", 0))
 
+    # ---- mutation ------------------------------------------------------
+    def insert_node(
+        self,
+        src: int,
+        dst: Optional[int],
+        node: Node,
+        cond: Optional[bool] = None,
+    ) -> int:
+        """Insert ``node`` between ``src`` and ``dst``.
+
+        ``dst`` may be ``None`` in which case the new node becomes a leaf.  The
+        method returns the new node identifier.
+        """
+
+        new_id = max(self.nodes, default=-1) + 1
+        self.nodes[new_id] = node
+        if dst is not None:
+            self.edges = [
+                e
+                for e in self.edges
+                if not (e[0] == src and e[1] == dst and (cond is None or e[2] == cond))
+            ]
+            self.edges.append((src, new_id, cond))
+            self.edges.append((new_id, dst, None))
+        else:
+            self.edges.append((src, new_id, cond))
+        return new_id
+
+    def remove_node(self, node_id: int) -> None:
+        """Remove ``node_id`` and any connected edges."""
+
+        if node_id not in self.nodes:
+            return
+        self.nodes.pop(node_id)
+        self.edges = [e for e in self.edges if e[0] != node_id and e[1] != node_id]
+        if self.entry == node_id:
+            self.entry = min(self.nodes.keys(), default=0)
+
     # ---- execution -----------------------------------------------------
     def _next(self, current: int, result: Optional[bool]) -> Optional[int]:
         for src, dst, cond in self.edges:
@@ -224,4 +267,3 @@ __all__ = [
     "PositionSizer",
     "ExitRule",
 ]
-
