@@ -122,6 +122,25 @@ class RiskManager:
         self.equity = initial_capital
         self.peak_equity = self.equity
 
+    def update_drawdown_limits(self, daily: float, total: float) -> None:
+        """Update drawdown limits and reset session statistics.
+
+        Parameters
+        ----------
+        daily: float
+            New maximum permissible daily loss expressed as an absolute
+            currency amount.
+        total: float
+            New overall drawdown limit expressed as an absolute currency
+            amount.
+        """
+
+        self.max_drawdown = daily
+        self.max_total_drawdown = total
+        self.metrics.daily_loss = 0.0
+        self.metrics.trading_halted = False
+        self.peak_equity = self.equity
+
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""
         self.tail_hedger = hedger

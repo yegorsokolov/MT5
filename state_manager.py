@@ -308,17 +308,27 @@ def save_user_risk(
     return _RISK_FILE
 
 
-def load_user_risk() -> dict[str, Any] | None:
-    """Load previously saved risk parameters if present."""
+def load_user_risk() -> dict[str, Any]:
+    """Load risk parameters or return defaults.
 
-    if not _RISK_FILE.exists():
-        return None
-    try:
-        with _lock(_RISK_FILE):
-            data: dict[str, Any] = joblib.load(_RISK_FILE)
-    except Exception:
-        return None
-    return data
+    When no prior settings have been persisted the daily and total
+    drawdown limits default to 4.9% and 9.8% of the initial capital
+    respectively and the news blackout window defaults to ``0`` minutes.
+    """
+
+    if _RISK_FILE.exists():
+        try:
+            with _lock(_RISK_FILE):
+                data: dict[str, Any] = joblib.load(_RISK_FILE)
+                return data
+        except Exception:
+            pass
+    ic = float(os.getenv("INITIAL_CAPITAL", "1.0"))
+    return {
+        "daily_drawdown": ic * 0.049,
+        "total_drawdown": ic * 0.098,
+        "news_blackout_minutes": 0,
+    }
 
 
 # ---------------------------------------------------------------------------
