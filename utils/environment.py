@@ -10,9 +10,10 @@ except Exception:  # pragma: no cover - handled later
     psutil = None  # type: ignore
 
 try:
-    import yaml  # type: ignore
+    from . import load_config, save_config
 except Exception:  # pragma: no cover - handled later
-    yaml = None  # type: ignore
+    load_config = None  # type: ignore
+    save_config = None  # type: ignore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQ_FILE = PROJECT_ROOT / "requirements-core.txt"
@@ -41,8 +42,7 @@ def _check_dependencies() -> list[str]:
 def _adjust_config_for_low_spec() -> None:
     if not CONFIG_FILE.exists():
         return
-    with CONFIG_FILE.open("r") as f:
-        cfg = yaml.safe_load(f) or {}
+    cfg = load_config(CONFIG_FILE).model_dump() if load_config else {}
     changed = False
     if cfg.get("batch_size", 64) > 32:
         cfg["batch_size"] = 32
@@ -52,8 +52,8 @@ def _adjust_config_for_low_spec() -> None:
         cfg["n_jobs"] = 1
         changed = True
     if changed:
-        with CONFIG_FILE.open("w") as f:
-            yaml.safe_dump(cfg, f)
+        if save_config:
+            save_config(cfg)
 
 
 def ensure_environment() -> None:
@@ -68,8 +68,6 @@ def ensure_environment() -> None:
     missing = _check_dependencies()
     if psutil is None:
         missing.append("psutil")
-    if yaml is None:
-        missing.append("pyyaml")
 
     if missing:
         raise RuntimeError(

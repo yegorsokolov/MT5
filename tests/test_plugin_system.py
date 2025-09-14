@@ -10,11 +10,11 @@ def test_plugins_register(monkeypatch):
     sys.path.extend([str(root), str(plugin_root)])
 
     def fake_entry_points(group=None):
-        if group == "mt5.indicators":
+        if group == "mt5.features":
             return [EntryPoint(
                 name="plugin_indicator",
                 value="example_plugin.indicator:register",
-                group="mt5.indicators",
+                group="mt5.features",
             )]
         if group == "mt5.strategies":
             return [EntryPoint(

@@ -77,7 +77,7 @@ class AppConfig(BaseModel):
     features: FeaturesConfig = FeaturesConfig()
     strategy: StrategyConfig
     services: ServicesConfig = ServicesConfig()
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     def get(self, key: str, default=None):
         for section in (self.training, self.features, self.strategy, self.services):

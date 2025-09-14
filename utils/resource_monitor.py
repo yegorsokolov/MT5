@@ -13,21 +13,14 @@ except Exception:  # pragma: no cover - torch optional
     torch = None  # type: ignore
 
 from analytics.metrics_store import record_metric
+from . import load_config
 
 
 def _plugin_cache_ttl() -> float:
     """Return plugin cache TTL from configuration."""
 
     try:
-        import os
-        from pathlib import Path
-        import yaml
-
-        cfg_path = os.getenv("CONFIG_FILE")
-        path = Path(cfg_path) if cfg_path else Path(__file__).resolve().parents[1] / "config.yaml"
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        return float(data.get("plugin_cache_ttl", 0) or 0)
+        return float(load_config().get("plugin_cache_ttl", 0) or 0)
     except Exception:
         return 0.0
 
