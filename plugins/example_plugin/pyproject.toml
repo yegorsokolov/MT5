@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "mt5-example-plugin"
 version = "0.1.0"
 
-[project.entry-points."mt5.indicators"]
+[project.entry-points."mt5.features"]
 plugin_indicator = "example_plugin.indicator:register"
 
 [project.entry-points."mt5.strategies"]

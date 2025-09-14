@@ -8,7 +8,7 @@ from typing import Any, Dict
 import pandas as pd
 import requests
 import streamlit as st
-import yaml
+
 
 from analytics.metrics_aggregator import query_metrics
 from analytics.metrics_store import query_metrics as query_local_metrics
@@ -17,6 +17,7 @@ from analytics.issue_client import load_default as issue_client
 from log_utils import read_decisions
 
 from config_schema import ConfigSchema
+from utils import load_config
 import numpy as np
 import state_manager
 import risk_manager as rm_mod
@@ -29,8 +30,7 @@ CERT_PATH = os.getenv("API_CERT", "certs/api.crt")
 def load_current_config() -> Dict[str, Any]:
     cfg_file = Path("config.yaml")
     if cfg_file.exists():
-        with cfg_file.open() as f:
-            return yaml.safe_load(f) or {}
+        return load_config(cfg_file).model_dump()
     return {}
 
 
