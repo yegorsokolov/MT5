@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 import sys
 from pathlib import Path
 
@@ -94,6 +93,15 @@ def test_fill_rate_violation_demotes(tmp_path):
         )
         await asyncio.sleep(0.1)
         assert "cand" not in lab.runners
+        lines = (tmp_path / "history.csv").read_text().strip().splitlines()
+        assert (
+            lines[0]
+            == "name,version,pnl,drawdown,sharpe,fill_ratio,cancel_rate,slippage"
+        )
+        last = lines[-1].split(",")
+        assert abs(float(last[5]) - 0.2) < 1e-6
+        assert abs(float(last[6]) - 0.8) < 1e-6
+        assert abs(float(last[7]) - 0.02) < 1e-6
 
         monitor_task.cancel()
         for task in lab.tasks.values():
@@ -101,3 +109,5 @@ def test_fill_rate_violation_demotes(tmp_path):
         await asyncio.sleep(0)
 
     asyncio.run(_run())
+
+

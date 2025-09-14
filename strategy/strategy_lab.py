@@ -13,6 +13,7 @@ exceed configurable thresholds it is promoted to the
 are persisted to ``history_path`` for auditability.
 """
 
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -44,8 +45,10 @@ class StrategyLab:
     fill_ratio_threshold: float = 0.5
     max_slippage: float = 0.01
     max_cancel_rate: float = 0.5
+    limit_window: int = 100
     risk_managers: Dict[str, RiskManager] = field(default_factory=dict)
     policy_versions: Dict[str, str] = field(default_factory=dict)
+    _limit_stats: Dict[str, Dict[str, deque]] = field(default_factory=dict)
 
     async def train_and_deploy(self, name: str, data: pd.DataFrame) -> None:
         """Train a new strategy and start its shadow runner."""
@@ -64,6 +67,12 @@ class StrategyLab:
         self.risk_managers[name] = rm
         # Record a simple timestamp based policy version for auditability
         self.policy_versions[name] = datetime.utcnow().isoformat()
+        self._limit_stats[name] = {
+            "placed": deque(maxlen=self.limit_window),
+            "filled": deque(maxlen=self.limit_window),
+            "cancels": deque(maxlen=self.limit_window),
+            "slippage": deque(maxlen=self.limit_window),
+        }
 
     # ------------------------------------------------------------------
     def _persist(self, rec: Dict[str, Any]) -> None:
@@ -71,10 +80,12 @@ class StrategyLab:
         header = not self.history_path.exists()
         with self.history_path.open("a") as f:
             if header:
-                f.write("name,version,pnl,drawdown,sharpe\n")
+                f.write(
+                    "name,version,pnl,drawdown,sharpe,fill_ratio,cancel_rate,slippage\n"
+                )
             ver = rec.get("version") or self.policy_versions.get(rec.get("name", ""), "")
             f.write(
-                f"{rec['name']},{ver},{rec['pnl']:.6f},{rec['drawdown']:.6f},{rec['sharpe']:.6f}\n"
+                f"{rec['name']},{ver},{rec.get('pnl',0.0):.6f},{rec.get('drawdown',0.0):.6f},{rec.get('sharpe',0.0):.6f},{rec.get('fill_ratio',0.0):.6f},{rec.get('cancel_rate',0.0):.6f},{rec.get('slippage',0.0):.6f}\n"
             )
 
     # ------------------------------------------------------------------
@@ -92,6 +103,7 @@ class StrategyLab:
             pass
         self.candidates.pop(name, None)
         self.risk_managers.pop(name, None)
+        self._limit_stats.pop(name, None)
         self.router.algorithms.pop(name, None)
 
     # ------------------------------------------------------------------
@@ -101,7 +113,6 @@ class StrategyLab:
         promoted: set[str] = set()
         while True:
             rec = await self.metrics_queue.get()
-            self._persist(rec)
             name = rec.get("name")
             if not name or name in promoted:
                 continue
@@ -110,31 +121,75 @@ class StrategyLab:
                 rm.check_drawdown(rec.get("pnl", 0.0))
                 limit_orders = rec.get("limit_orders")
                 if limit_orders:
-                    rm.check_fills(
-                        placed=int(limit_orders.get("placed", 0)),
-                        filled=int(limit_orders.get("filled", 0)),
-                        cancels=int(limit_orders.get("cancels", 0)),
-                        slippage=float(limit_orders.get("slippage", 0.0)),
-                        min_ratio=self.fill_ratio_threshold,
-                        max_slippage=self.max_slippage,
-                        max_cancel_rate=self.max_cancel_rate,
-                    )
+                    stats = self._limit_stats.get(name)
+                    if stats is not None:
+                        stats["placed"].append(int(limit_orders.get("placed", 0)))
+                        stats["filled"].append(int(limit_orders.get("filled", 0)))
+                        stats["cancels"].append(int(limit_orders.get("cancels", 0)))
+                        stats["slippage"].append(float(limit_orders.get("slippage", 0.0)))
+                        placed_tot = sum(stats["placed"])
+                        filled_tot = sum(stats["filled"])
+                        cancels_tot = sum(stats["cancels"])
+                        avg_slip = (
+                            sum(stats["slippage"]) / len(stats["slippage"])
+                            if stats["slippage"]
+                            else 0.0
+                        )
+                        rm.check_fills(
+                            placed=int(placed_tot),
+                            filled=int(filled_tot),
+                            cancels=int(cancels_tot),
+                            slippage=float(avg_slip),
+                            min_ratio=self.fill_ratio_threshold,
+                            max_slippage=self.max_slippage,
+                            max_cancel_rate=self.max_cancel_rate,
+                        )
+                        rec["fill_ratio"] = rm.metrics.fill_ratio
+                        rec["cancel_rate"] = rm.metrics.cancel_rate
+                        rec["slippage"] = rm.metrics.slippage
+                        try:
+                            record_metric(
+                                "limit_fill_ratio", rm.metrics.fill_ratio, {"name": name}
+                            )
+                            record_metric(
+                                "limit_cancel_rate", rm.metrics.cancel_rate, {"name": name}
+                            )
+                            record_metric(
+                                "limit_slippage", rm.metrics.slippage, {"name": name}
+                            )
+                        except Exception:
+                            pass
+                else:
+                    rec["fill_ratio"] = rm.metrics.fill_ratio
+                    rec["cancel_rate"] = rm.metrics.cancel_rate
+                    rec["slippage"] = rm.metrics.slippage
                 if rm.metrics.trading_halted:
+                    self._persist(rec)
+                    try:
+                        record_metric(
+                            "strategy_demoted", 1.0, {"name": name, "reason": "risk"}
+                        )
+                    except Exception:
+                        pass
                     self._demote(name)
                     continue
+            self._persist(rec)
             try:
                 record_metric("shadow_pnl", rec.get("pnl", 0.0), {"name": name})
                 record_metric("shadow_drawdown", rec.get("drawdown", 0.0), {"name": name})
             except Exception:
                 pass
-            if self._meets_thresholds(rec) and rec.get("verified", False):
+            if self._meets_thresholds(rec) and rec.get("verified", True):
                 algo = self.candidates.get(name)
                 if algo is not None:
                     self.router.promote(name, algo)
                     promoted.add(name)
                     version = self.policy_versions.get(name)
                     try:
-                        record_metric("policy_version", 1.0, {"name": name, "version": version})
+                        record_metric(
+                            "policy_version", 1.0, {"name": name, "version": version}
+                        )
+                        record_metric("strategy_promoted", 1.0, {"name": name})
                     except Exception:
                         pass
 
