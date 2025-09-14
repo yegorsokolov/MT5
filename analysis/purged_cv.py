@@ -54,10 +54,15 @@ class PurgedTimeSeriesSplit:
             Group labels for each sample. Any sample sharing a group with the
             validation fold is excluded from the training indices.
 
-        The returned training indices contain only samples that occur before
-        the validation fold, are at least ``embargo`` steps away from the
-        start of the validation period, and do not share a group with the
-        validation samples.
+        Invariants
+        ----------
+        * Training indices lie strictly before the validation fold and are
+          separated from it by at least ``embargo`` observations.
+        * Samples sharing a group with the validation fold are excluded from
+          the training indices.
+
+        These constraints prevent information leakage when performing
+        time-series cross-validation.
         """
         n_samples = len(X)
         if self.n_splits >= n_samples:
