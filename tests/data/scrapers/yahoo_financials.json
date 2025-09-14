@@ -1,0 +1,17 @@
+{
+  "quoteSummary": {
+    "result": [
+      {
+        "financialData": {
+          "totalRevenue": {"raw": 1000000},
+          "ebitda": {"raw": 200000}
+        },
+        "defaultKeyStatistics": {
+          "forwardEps": {"raw": 3.5},
+          "marketCap": {"raw": 500000000}
+        }
+      }
+    ],
+    "error": null
+  }
+}
