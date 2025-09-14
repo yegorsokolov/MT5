@@ -23,14 +23,19 @@ from analysis.algorithm_rating import load_ratings
 from analysis.rationale_scorer import load_algorithm_win_rates
 from analytics.regime_performance_store import RegimePerformanceStore
 from analytics.metrics_aggregator import record_metric
+from market_condition import MarketConditionAssessor
 from state_manager import load_router_state, save_router_state
 from models.ftrl import FTRLModel
 from utils.resource_monitor import monitor
+
 try:  # optional dependency - statsmodels may be missing
     from .pair_trading import signal_from_features as pair_signal
 except Exception:  # pragma: no cover
+
     def pair_signal(*_, **__):
         return 0.0
+
+
 from .fuzzy_consensus import FuzzyConsensus
 
 try:  # optional dependency - meta controller may not be available
@@ -45,6 +50,7 @@ try:  # pragma: no cover - knowledge graph is optional
         risk_score,
     )
 except Exception:  # pragma: no cover - fall back to no-op implementations
+
     def load_knowledge_graph(*_, **__):  # type: ignore
         return None
 
@@ -53,6 +59,7 @@ except Exception:  # pragma: no cover - fall back to no-op implementations
 
     def opportunity_score(*_, **__):  # type: ignore
         return 0.0
+
 
 FeatureDict = Dict[str, float]
 Algorithm = Callable[[FeatureDict], float]
@@ -103,6 +110,8 @@ class StrategyRouter:
     promotion_thresholds: Dict[str, float] = field(default_factory=dict)
     demotion_thresholds: Dict[str, float] = field(default_factory=dict)
     evaluation_path: Path | str = Path("reports/router_evaluations.csv")
+    condition_assessor: Optional[MarketConditionAssessor] = None
+    regime_perf_store: RegimePerformanceStore = field(init=False)
 
     def __post_init__(self) -> None:
         self.logger = logging.getLogger(__name__)
@@ -140,7 +149,10 @@ class StrategyRouter:
         self.rationale_path = Path(self.rationale_path)
         self.rationale_scores = self._load_rationale_scores()
         self.regime_perf_path = Path(self.regime_perf_path)
+        self.regime_perf_store = RegimePerformanceStore(self.regime_perf_path)
         self.regime_performance = self._load_regime_performance()
+        if self.condition_assessor is None:
+            self.condition_assessor = MarketConditionAssessor()
         self.reward_sums: Dict[str, float] = {name: 0.0 for name in self.algorithms}
         self.plays: Dict[str, int] = {name: 0 for name in self.algorithms}
         self.total_plays: int = 0
@@ -159,9 +171,20 @@ class StrategyRouter:
         if monitor and getattr(monitor, "capability_tier", "") == "lite":
             self.use_ftrl = True
             self.logger.info("Initialising FTRL models for lite capability tier")
-            self.ftrl_models = {name: FTRLModel(dim=self.dim) for name in self.algorithms}
+            self.ftrl_models = {
+                name: FTRLModel(dim=self.dim) for name in self.algorithms
+            }
         else:
             self.use_ftrl = False
+
+    # ------------------------------------------------------------------
+    def _augment_features(self, features: FeatureDict) -> FeatureDict:
+        """Merge features with market condition assessment."""
+        if self.condition_assessor:
+            assessed = self.condition_assessor.assess()
+            assessed.update(features)
+            return assessed
+        return features
 
     # ------------------------------------------------------------------
     def _augment_with_graph(self, features: FeatureDict) -> None:
@@ -184,7 +207,9 @@ class StrategyRouter:
         if not self.meta_controller:
             # Should not happen but return neutral action as fallback
             return 0.0
-        returns = np.array([alg(features) for alg in self.rl_agents.values()], dtype=float)
+        returns = np.array(
+            [alg(features) for alg in self.rl_agents.values()], dtype=float
+        )
         state_vec = _feature_vector(features, self.factor_names).ravel()
         try:
             weights = self.meta_controller.predict(returns, state_vec)
@@ -194,9 +219,14 @@ class StrategyRouter:
 
     def _maybe_upgrade_models(self) -> None:
         """Switch back to full models if resource tier improves."""
-        if self.use_ftrl and monitor and getattr(monitor, "capability_tier", "lite") != "lite":
+        if (
+            self.use_ftrl
+            and monitor
+            and getattr(monitor, "capability_tier", "lite") != "lite"
+        ):
             self.logger.info(
-                "Capability tier upgraded to %s; switching to full models", monitor.capability_tier
+                "Capability tier upgraded to %s; switching to full models",
+                monitor.capability_tier,
             )
             self.use_ftrl = False
             self.ftrl_models.clear()
@@ -286,9 +316,7 @@ class StrategyRouter:
         header = not path.exists()
         with path.open("a") as f:
             if header:
-                f.write(
-                    "timestamp,name,pnl,drawdown,slippage,fill_ratio,violations\n"
-                )
+                f.write("timestamp,name,pnl,drawdown,slippage,fill_ratio,violations\n")
             f.write(
                 f"{rec.get('timestamp')},{rec.get('name')},{rec.get('pnl',0.0):.6f},{rec.get('drawdown',0.0):.6f},{rec.get('slippage',0.0):.6f},{rec.get('fill_ratio',0.0):.6f},{rec.get('violations','')}\n"
             )
@@ -335,7 +363,9 @@ class StrategyRouter:
                 self.demote(name)
                 try:
                     record_metric(
-                        "router_violation", 1.0, {"name": name, "type": ",".join(violations)}
+                        "router_violation",
+                        1.0,
+                        {"name": name, "type": ",".join(violations)},
                     )
                 except Exception:
                     pass
@@ -370,7 +400,7 @@ class StrategyRouter:
         return mean + bonus
 
     # Selection --------------------------------------------------------
-    def select(self, features: FeatureDict) -> str:
+    def _select(self, features: FeatureDict) -> str:
         """Return the algorithm name with the highest score."""
         self._maybe_upgrade_models()
         self._augment_with_graph(features)
@@ -413,11 +443,17 @@ class StrategyRouter:
             self._save_state()
         return best_name
 
+    def select(self, features: FeatureDict) -> str:
+        """Return the best algorithm after assessing market conditions."""
+        features = self._augment_features(features)
+        return self._select(features)
+
     def act(self, features: FeatureDict) -> Tuple[str, float]:
         """Select an algorithm and return its action gated by consensus."""
+        features = self._augment_features(features)
         signals = {n: alg(features) for n, alg in self.algorithms.items()}
         consensus_score, _ = self.consensus.score(signals)
-        name = self.select(features)
+        name = self._select(features)
         action = signals[name] if consensus_score >= self.consensus_threshold else 0.0
         self.logger.info("Consensus score %.3f for %s", consensus_score, name)
         return name, action
@@ -439,6 +475,7 @@ class StrategyRouter:
         latest observation.
         """
 
+        features = self._augment_features(features)
         self._maybe_upgrade_models()
         x = _feature_vector(features, self.factor_names)
         if self.use_ftrl:
@@ -454,6 +491,15 @@ class StrategyRouter:
         self._update_scoreboard(
             features.get("instrument"), features.get("market_basket"), algorithm, smooth
         )
+        regime = features.get("regime")
+        if regime is not None:
+            try:
+                self.regime_perf_store.record_trade(
+                    datetime.utcnow(), algorithm, regime, reward
+                )
+                self.regime_performance = self.regime_perf_store.load()
+            except Exception:
+                self.logger.debug("Failed to record regime performance", exc_info=True)
         self._save_state()
 
     # Convenience ------------------------------------------------------
@@ -473,7 +519,10 @@ class StrategyRouter:
         )
 
     def _scoreboard_weight(
-        self, instrument: float | int | str | None, basket: float | int | None, algorithm: str
+        self,
+        instrument: float | int | str | None,
+        basket: float | int | None,
+        algorithm: str,
     ) -> float:
         if instrument is None or basket is None or self.scoreboard.empty:
             return 0.0
@@ -516,8 +565,7 @@ class StrategyRouter:
     def _load_regime_performance(self) -> pd.DataFrame:
         """Load historical PnL by regime and model."""
         try:
-            store = RegimePerformanceStore(self.regime_perf_path)
-            return store.load()
+            return self.regime_perf_store.load()
         except Exception:
             return pd.DataFrame(
                 columns=["date", "model", "regime", "pnl_daily", "pnl_weekly"]
@@ -568,7 +616,9 @@ class StrategyRouter:
         sharpe = smooth * live_sharpe + (1.0 - smooth) * prev
         cumulative = (1 + arr).cumprod()
         drawdown = float((np.maximum.accumulate(cumulative) - cumulative).max())
-        self.scoreboard.loc[(instrument, basket, algorithm), ["pnl", "sharpe", "drawdown"]] = [
+        self.scoreboard.loc[
+            (instrument, basket, algorithm), ["pnl", "sharpe", "drawdown"]
+        ] = [
             float(arr.sum()),
             sharpe,
             drawdown,
