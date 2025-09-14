@@ -32,20 +32,37 @@ FOREXFACTORY_HTML = """
 </table>
 """
 
+TRADING_JSON = """
+[
+  {
+    "date": "2023-09-01T08:30:00",
+    "event": "Non-Farm Employment Change",
+    "actual": "210K",
+    "forecast": "195K",
+    "importance": "High",
+    "currency": "USD"
+  }
+]
+"""
+
 
 def test_parsers(tmp_path):
     agg = NewsAggregator(cache_dir=tmp_path)
     xml_events = agg.parse_faireconomy_xml(FAIRECONOMY_XML, source="xml")
     html_events = agg.parse_forexfactory_html(FOREXFACTORY_HTML, source="html")
+    te_events = agg.parse_tradingeconomics_json(TRADING_JSON, source="te")
 
     assert len(xml_events) == 1
     assert len(html_events) == 1
+    assert len(te_events) == 1
 
     expected_ts = datetime(2023, 9, 1, 8, 30, tzinfo=timezone.utc)
     assert xml_events[0]["timestamp"] == expected_ts
     assert html_events[0]["timestamp"] == expected_ts
+    assert te_events[0]["timestamp"] == expected_ts
     assert xml_events[0]["event"] == "Non-Farm Employment Change"
     assert html_events[0]["actual"] == "205K"
+    assert te_events[0]["importance"] == "red"
 
 
 def test_dedup_and_cache(tmp_path):
