@@ -13,7 +13,8 @@ pool for further evolution.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, TYPE_CHECKING
+from typing import Any, Callable, Dict, Iterable, TYPE_CHECKING
+import asyncio
 import random
 
 import pandas as pd
@@ -135,6 +136,63 @@ class EvolutionLab:
                 except RuntimeError:  # pragma: no cover - no running loop
                     loop = asyncio.get_event_loop()
                 loop.create_task(runner.run())
+
+    # ------------------------------------------------------------------
+    async def evolve_queue(
+        self,
+        seeds: Iterable[int],
+        messages: Iterable[Dict[str, Any]],
+    ) -> list[Dict[str, float]]:
+        """Run multiple evolution jobs concurrently using a task queue.
+
+        Each ``seed`` spawns a mutated variant which is then evaluated on the
+        provided ``messages`` using :class:`ShadowRunner`.  The final metrics for
+        each variant are returned once all jobs have completed.
+        """
+
+        queue: asyncio.Queue[int] = asyncio.Queue()
+        for s in seeds:
+            queue.put_nowait(int(s))
+
+        results: list[Dict[str, float]] = []
+        msgs = list(messages)
+
+        class _ListBus:
+            def __init__(self, data: list[Dict[str, Any]]):
+                self.data = data
+
+            async def subscribe(self, _topic: str):
+                for m in self.data:
+                    yield m
+
+        async def worker() -> None:
+            while True:
+                try:
+                    seed = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                random.seed(seed)
+                name = f"{getattr(self.base, '__name__', 'strategy')}_{seed}"
+                handler = self._mutate()
+                metrics_q: asyncio.Queue = asyncio.Queue()
+                runner = ShadowRunner(
+                    name=name,
+                    handler=handler,
+                    bus=_ListBus(msgs),
+                    metrics_queue=metrics_q,
+                )
+                await runner.run()
+                last: Dict[str, float] | None = None
+                while not metrics_q.empty():
+                    last = await metrics_q.get()
+                if last is not None:
+                    last["name"] = name
+                    results.append(last)
+                queue.task_done()
+
+        tasks = [asyncio.create_task(worker()) for _ in range(queue.qsize())]
+        await asyncio.gather(*tasks)
+        return results
 
     # ------------------------------------------------------------------
     def _shadow_metrics(self, name: str) -> Dict[str, float] | None:
