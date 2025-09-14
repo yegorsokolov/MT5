@@ -67,6 +67,10 @@ class IndicatorBundle:
     vae_regime: Optional[int] = None
     microprice_delta: Optional[float] = None
     liq_exhaustion: Optional[int] = None
+    # Optional mapping of arbitrary indicator names to values.  This allows
+    # downstream users to supply dynamically evolved indicators without
+    # requiring explicit fields for each one.
+    evolved: Optional[Dict[str, float]] = None
 
 
 @dataclass
@@ -394,7 +398,11 @@ class BaselineStrategy:
             elif signal == -1 and ind.microprice_delta >= 0:
                 signal = 0
 
-        if signal != 0 and ind.liq_exhaustion is not None and ind.liq_exhaustion != signal:
+        if (
+            signal != 0
+            and ind.liq_exhaustion is not None
+            and ind.liq_exhaustion != signal
+        ):
             signal = 0
 
         if signal != 0 and ind.ram is not None:
@@ -628,4 +636,3 @@ def run_backtest(
 
 
 __all__ = ["BaselineStrategy", "IndicatorBundle", "RiskProfile", "run_backtest"]
-

@@ -51,8 +51,12 @@ def test_trailing_take_profit_exit():
 
 
 def test_external_indicators_match_internal():
-    strat_internal = BaselineStrategy(short_window=2, long_window=3, rsi_window=3, atr_window=2)
-    strat_external = BaselineStrategy(short_window=2, long_window=3, rsi_window=3, atr_window=2)
+    strat_internal = BaselineStrategy(
+        short_window=2, long_window=3, rsi_window=3, atr_window=2
+    )
+    strat_external = BaselineStrategy(
+        short_window=2, long_window=3, rsi_window=3, atr_window=2
+    )
 
     closes = [1, 2, 3, 2, 1.5]
     highs = [c + 0.1 for c in closes]
@@ -100,3 +104,11 @@ def test_external_indicators_match_internal():
         signals_external.append(strat_external.update(c, ind))
 
     assert signals_internal == signals_external
+
+
+def test_update_accepts_evolved_indicators():
+    strat = BaselineStrategy(short_window=2, long_window=3, rsi_window=3, atr_window=2)
+    ind = IndicatorBundle(evolved={"custom": 1.23})
+    # Should run without raising and return a numeric signal
+    sig = strat.update(1.0, ind)
+    assert isinstance(sig, float)
