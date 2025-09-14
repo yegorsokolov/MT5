@@ -39,8 +39,10 @@ def _read_local_csv(symbol: str) -> pd.DataFrame:
 def _fetch_yfinance(symbol: str) -> pd.DataFrame:
     """Attempt to fetch fundamental data via ``yfinance``.
 
-    Only a very small subset of metrics is retrieved to keep the dependency
-    lightweight.  Network failures simply return an empty dataframe.
+    A small subset of commonly used metrics such as ``eps`` and ``ebitda`` is
+    retrieved and written to ``data/fundamentals/<symbol>.csv`` so subsequent
+    runs can operate offline.  Network failures simply return an empty
+    dataframe.
     """
 
     try:  # pragma: no cover - network and dependency optional
@@ -56,9 +58,17 @@ def _fetch_yfinance(symbol: str) -> pd.DataFrame:
                 "eps": info.get("forwardEps"),
                 "revenue": info.get("totalRevenue"),
                 "ebitda": info.get("ebitda"),
+                "market_cap": info.get("marketCap"),
             },
             index=[0],
         )
+        # Persist to disk so future runs can operate offline
+        out_dir = Path("data") / "fundamentals"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:  # pragma: no cover - file system edge cases
+            df.to_csv(out_dir / f"{symbol}.csv", index=False)
+        except Exception:
+            logger.warning("Failed to cache fundamentals for %s", symbol)
         return df
     except Exception:
         logger.debug("yfinance unavailable for %s", symbol)
@@ -104,6 +114,7 @@ def load_fundamentals(symbols: Iterable[str]) -> pd.DataFrame:
                 "eps",
                 "revenue",
                 "ebitda",
+                "market_cap",
             ]
         )
 
@@ -121,13 +132,27 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
 
     if "Symbol" not in df.columns:
         # Nothing to merge; return zeros for expected columns
-        for col in ["pe_ratio", "dividend_yield", "eps", "revenue", "ebitda"]:
+        for col in [
+            "pe_ratio",
+            "dividend_yield",
+            "eps",
+            "revenue",
+            "ebitda",
+            "market_cap",
+        ]:
             df[col] = 0.0
         return df
 
     fundamentals = load_fundamentals(sorted(df["Symbol"].unique()))
     if fundamentals.empty:
-        for col in ["pe_ratio", "dividend_yield", "eps", "revenue", "ebitda"]:
+        for col in [
+            "pe_ratio",
+            "dividend_yield",
+            "eps",
+            "revenue",
+            "ebitda",
+            "market_cap",
+        ]:
             df[col] = 0.0
         return df
 
@@ -141,7 +166,14 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
         direction="backward",
     ).drop(columns=["fund_date"])
 
-    for col in ["pe_ratio", "dividend_yield", "eps", "revenue", "ebitda"]:
+    for col in [
+        "pe_ratio",
+        "dividend_yield",
+        "eps",
+        "revenue",
+        "ebitda",
+        "market_cap",
+    ]:
         if col in df.columns:
             df[col] = df[col].ffill().fillna(0.0)
         else:
