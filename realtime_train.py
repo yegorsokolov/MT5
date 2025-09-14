@@ -120,7 +120,11 @@ def run_rl_curriculum(data_path: Path, model_dir: Path) -> None:
     def _stage(name: str, strategy: str) -> Callable[[], float]:
         def _run() -> float:
             metric = train_rl.launch(
-                {"data_path": str(data_path), "model_dir": str(model_dir), "strategy": strategy}
+                {
+                    "data_path": str(data_path),
+                    "model_dir": str(model_dir),
+                    "strategy": strategy,
+                }
             )
             path = get_policy_path()
             if path:
@@ -453,7 +457,11 @@ async def tick_worker(
 async def train_realtime():
     cfg = load_config()
     root = Path(__file__).resolve().parent
-    recorder = LiveRecorder(root / "data" / "live")
+    recorder = LiveRecorder(
+        root / "data" / "live",
+        batch_size=cfg.get("recorder_batch_size", 500),
+        flush_interval=cfg.get("recorder_flush_interval", 1.0),
+    )
     _ensure_data_downloaded(cfg, root)
     input("Please log into your MetaTrader 5 terminal and press Enter to continue...")
     while not mt5_direct.is_terminal_logged_in():
@@ -486,7 +494,6 @@ async def train_realtime():
 
         async def process_batch(batch: pd.DataFrame) -> None:
             nonlocal batch_count
-            await asyncio.to_thread(recorder.record, batch)
             feats = await generate_features(batch)
             if feats.empty:
                 return
@@ -540,11 +547,10 @@ async def train_realtime():
                     run_rl_curriculum, recorder.root, root / "models"
                 )
             if batch_count and batch_count % meta_update_interval == 0:
-                await asyncio.to_thread(
-                    run_meta_update, recorder.root, root / "models"
-                )
+                await asyncio.to_thread(run_meta_update, recorder.root, root / "models")
 
         tick_queue: asyncio.Queue = asyncio.Queue()
+        train_queue: asyncio.Queue = asyncio.Queue()
         producer = asyncio.create_task(
             tick_producer(
                 symbols,
@@ -552,17 +558,18 @@ async def train_realtime():
                 throttle_threshold=cfg.get("backlog_threshold", 1000),
             )
         )
+        recorder_task = asyncio.create_task(recorder.run(tick_queue, train_queue))
         workers = [
             asyncio.create_task(
                 tick_worker(
-                    tick_queue,
+                    train_queue,
                     process_batch,
                     target_latency=cfg.get("target_batch_latency", 1.0),
                 )
             )
             for _ in range(cfg.get("worker_count", 1))
         ]
-        await asyncio.gather(producer, *workers)
+        await asyncio.gather(producer, recorder_task, *workers)
 
 
 if __name__ == "__main__":
