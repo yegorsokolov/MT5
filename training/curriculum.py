@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Tuple, Any, Sequence
+import asyncio
 
 
 @dataclass
@@ -124,4 +125,69 @@ def build_strategy_curriculum(
     return CurriculumScheduler(stages)
 
 
-__all__ = ["CurriculumStage", "CurriculumScheduler", "build_strategy_curriculum"]
+def _evaluate_live(
+    strategy: Callable[[dict], float],
+    messages: Iterable[dict],
+) -> float:
+    """Run ``strategy`` on ``messages`` using :class:`ShadowRunner`.
+
+    This helper is intentionally lightweight and used by
+    :func:`build_live_strategy_curriculum` to gate curriculum progression based
+    on live performance metrics such as Sharpe ratio.
+    """
+
+    from strategy.shadow_runner import ShadowRunner  # Local import to avoid heavy dependency
+
+    class _Bus:
+        def __init__(self, data: Iterable[dict]):
+            self._data = list(data)
+
+        async def subscribe(self, _topic: str):
+            for m in self._data:
+                yield m
+
+    async def _run() -> float:
+        metrics_q: asyncio.Queue = asyncio.Queue()
+        runner = ShadowRunner("curriculum", strategy, bus=_Bus(messages), metrics_queue=metrics_q)
+        await runner.run()
+        last: dict | None = None
+        while not metrics_q.empty():
+            last = await metrics_q.get()
+        return float(last.get("sharpe", 0.0)) if last else 0.0
+
+    return asyncio.run(_run())
+
+
+def build_live_strategy_curriculum(
+    simple_fn: Callable[[], Callable[[dict], float]],
+    combo_fn: Callable[[], Callable[[dict], float]],
+    graph_fn: Callable[[], Callable[[dict], float]],
+    messages: Iterable[dict],
+    thresholds: Sequence[float] | None = None,
+) -> "CurriculumScheduler":
+    """Create a curriculum that evaluates stages on live data.
+
+    ``*_fn`` callables should return a strategy function.  Each stage is
+    evaluated using :class:`ShadowRunner` on ``messages`` and the Sharpe ratio is
+    compared against the corresponding threshold before progressing.
+    """
+
+    thresholds = list(thresholds or (0.6, 0.7, 0.8))
+
+    def _wrap(fn: Callable[[], Callable[[dict], float]], name: str, thr: float) -> CurriculumStage:
+        return CurriculumStage(name, lambda: _evaluate_live(fn(), messages), thr)
+
+    stages = [
+        _wrap(simple_fn, "simple", thresholds[0]),
+        _wrap(combo_fn, "combo", thresholds[1]),
+        _wrap(graph_fn, "graph", thresholds[2]),
+    ]
+    return CurriculumScheduler(stages)
+
+
+__all__ = [
+    "CurriculumStage",
+    "CurriculumScheduler",
+    "build_strategy_curriculum",
+    "build_live_strategy_curriculum",
+]
