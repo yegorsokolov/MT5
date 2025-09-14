@@ -70,3 +70,27 @@ async def vwap_schedule_async(total_qty: float, volumes: Iterable[float]) -> Lis
     await asyncio.sleep(0)
     return vwap_schedule(total_qty, volumes)
 
+
+# ---------------------------------------------------------------------------
+def simple_slicer(total_qty: float, slice_size: float) -> List[float]:
+    """Return ``total_qty`` split into fixed ``slice_size`` chunks.
+
+    Parameters
+    ----------
+    total_qty: float
+        Parent order quantity.
+    slice_size: float
+        Desired size of individual child orders.  When ``slice_size`` is
+        non-positive the entire quantity is returned in a single slice.
+    """
+
+    if slice_size <= 0:
+        return [total_qty]
+    slices: List[float] = []
+    remaining = total_qty
+    while remaining > 0:
+        take = min(remaining, slice_size)
+        slices.append(take)
+        remaining -= take
+    return slices
+
