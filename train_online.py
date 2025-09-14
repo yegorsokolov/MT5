@@ -9,110 +9,107 @@ from river import compose, preprocessing, linear_model
 
 from utils import load_config
 from log_utils import setup_logging, log_exceptions
-from feature_store import load_feature, latest_version
+from data.live_recorder import load_ticks
+from model_registry import save_model
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
 
-def fetch_features(version: str | None = None) -> pd.DataFrame:
-    """Retrieve features for ``version`` from the feature store."""
-    ver = version or latest_version()
-    if ver is None:
-        return pd.DataFrame()
-    return load_feature(ver)
-
-
 @log_exceptions
-def train_online() -> None:
-    """Incrementally update a river model with the latest realtime features."""
+def train_online(
+    data_path: Path | str | None = None,
+    model_dir: Path | str | None = None,
+    *,
+    min_ticks: int = 1000,
+    interval: int = 300,
+    run_once: bool = False,
+) -> None:
+    """Incrementally update a river model using recorded live ticks.
+
+    Parameters
+    ----------
+    data_path: Path, optional
+        Location of the recorded tick dataset. Defaults to ``data/live``.
+    model_dir: Path, optional
+        Directory where models are stored. Defaults to ``models``.
+    min_ticks: int, optional
+        Minimum number of new ticks required to trigger a training step.
+    interval: int, optional
+        Maximum number of seconds between training steps.
+    run_once: bool, optional
+        When ``True`` the function processes a single training step and
+        returns immediately. Useful for tests.
+    """
+
     cfg = load_config()
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
+
     root = Path(__file__).resolve().parent
-    model_dir = root / "models"
-    model_dir.mkdir(exist_ok=True)
-    model_path = model_dir / "online.joblib"
+    data_path = Path(data_path) if data_path is not None else root / "data" / "live"
+    model_dir = Path(model_dir) if model_dir is not None else root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    latest_path = model_dir / "online_latest.joblib"
 
-    version = latest_version()
-    if version is None:
-        logger.warning("No features available in store")
-        return
-
+    model = compose.Pipeline(
+        preprocessing.StandardScaler(), linear_model.LogisticRegression()
+    )
     last_ts = None
-    if model_path.exists():
+    if latest_path.exists():
         try:
-            model, last_ts = joblib.load(model_path)
-            logger.info("Loaded existing online model from %s", model_path)
+            model, last_ts = joblib.load(latest_path)
+            logger.info("Loaded existing model from %s", latest_path)
         except Exception as exc:  # pragma: no cover - just warn
-            logger.warning("Failed to load online model: %s", exc)
-            model = compose.Pipeline(
-                preprocessing.StandardScaler(), linear_model.LogisticRegression()
-            )
+            logger.warning("Failed to load existing model: %s", exc)
             last_ts = None
-    else:
-        model = compose.Pipeline(
-            preprocessing.StandardScaler(), linear_model.LogisticRegression()
-        )
 
+    last_train = time.time()
+    new_ticks = 0
+    start_ts = last_ts
     while True:
-        df = fetch_features(version)
-        if last_ts is not None:
-            df = df[df["Timestamp"] > last_ts]
-
-        if df.empty:
-            time.sleep(60)
-            continue
-
-        if "Symbol" in df.columns:
-            df = df.sort_values(["Symbol", "Timestamp"])
-            df["next_ret"] = df.groupby("Symbol")["return"].shift(-1)
-        else:
+        df = load_ticks(data_path, last_ts)
+        if not df.empty:
+            start_ts = start_ts or df["Timestamp"].min()
             df = df.sort_values("Timestamp")
+            df["mid"] = (df["Bid"] + df["Ask"]) / 2
+            df["return"] = df["mid"].pct_change()
             df["next_ret"] = df["return"].shift(-1)
+            df.dropna(subset=["next_ret"], inplace=True)
+            for _, row in df.iterrows():
+                x = {"return": row["return"]}
+                y = int(row["next_ret"] > 0)
+                model.learn_one(x, y)
+                last_ts = row["Timestamp"]
+            new_ticks += len(df)
 
-        df.dropna(subset=["next_ret"], inplace=True)
-
-        if "Symbol" in df.columns and "SymbolCode" not in df.columns:
-            df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
-
-        features = [
-            "return",
-            "ma_5",
-            "ma_10",
-            "ma_30",
-            "ma_60",
-            "volatility_30",
-            "spread",
-            "rsi_14",
-            "market_regime",
-        ]
-        if "news_sentiment" in df.columns:
-            features.append("news_sentiment")
-        features.extend(
-            [
-                c
-                for c in df.columns
-                if c.startswith("cross_corr_")
-                or c.startswith("factor_")
-                or c.startswith("cross_mom_")
-            ]
-        )
-        if "volume_ratio" in df.columns:
-            features.extend(["volume_ratio", "volume_imbalance"])
-        if "SymbolCode" in df.columns:
-            features.append("SymbolCode")
-
-        for row in df.itertuples(index=False):
-            x = {f: getattr(row, f) for f in features}
-            y = int(getattr(row, "next_ret") > 0)
-            model.learn_one(x, y)
-            last_ts = getattr(row, "Timestamp")
-
-        joblib.dump((model, last_ts), model_path)
-        logger.info("Updated online model with %d rows", len(df))
-        time.sleep(300)
+        now = time.time()
+        if new_ticks >= min_ticks or (now - last_train) >= interval:
+            if new_ticks > 0:
+                joblib.dump((model, last_ts), latest_path)
+                version = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+                metadata = {
+                    "drawdown_limit": cfg.get("drawdown_limit"),
+                    "training_window": [
+                        start_ts.isoformat() if start_ts else None,
+                        last_ts.isoformat() if last_ts else None,
+                    ],
+                }
+                save_model(
+                    f"online_{version}",
+                    model,
+                    metadata,
+                    model_dir / f"online_{version}.pkl",
+                )
+                logger.info("Updated model with %d new ticks", new_ticks)
+                new_ticks = 0
+                last_train = now
+            if run_once:
+                break
+        if run_once:
+            break
+        time.sleep(1)
 
 
 if __name__ == "__main__":
