@@ -60,7 +60,7 @@ def test_drawdown_violation_demotes(tmp_path):
     asyncio.run(_run())
 
 
-def test_fill_rate_violation_demotes(tmp_path):
+def test_fill_rate_violation_blocks_promotion(tmp_path):
     async def _run():
         message_bus._message_bus = message_bus.MessageBus(backend="inmemory")
         router = _setup_router(tmp_path)
@@ -71,7 +71,7 @@ def test_fill_rate_violation_demotes(tmp_path):
         lab = StrategyLab(
             train_fn=train_fn,
             router=router,
-            thresholds={},
+            thresholds={"sharpe": -1.0},
             history_path=tmp_path / "history.csv",
             fill_ratio_threshold=0.8,
             max_cancel_rate=0.2,
@@ -92,16 +92,19 @@ def test_fill_rate_violation_demotes(tmp_path):
             }
         )
         await asyncio.sleep(0.1)
-        assert "cand" not in lab.runners
+        # Strategy continues running but is not promoted
+        assert "cand" in lab.runners
+        assert "cand" not in router.algorithms
         lines = (tmp_path / "history.csv").read_text().strip().splitlines()
         assert (
             lines[0]
-            == "name,version,pnl,drawdown,sharpe,fill_ratio,cancel_rate,slippage"
+            == "name,version,pnl,drawdown,sharpe,fill_ratio,cancel_rate,slippage,violations"
         )
         last = lines[-1].split(",")
         assert abs(float(last[5]) - 0.2) < 1e-6
         assert abs(float(last[6]) - 0.8) < 1e-6
         assert abs(float(last[7]) - 0.02) < 1e-6
+        assert last[8] != ""
 
         monitor_task.cancel()
         for task in lab.tasks.values():
