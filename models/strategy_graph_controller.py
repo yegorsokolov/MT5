@@ -21,7 +21,7 @@ from torch.optim import Adam
 from torch.distributions import Categorical
 
 from models.graph_net import GraphNet
-from strategy_dsl import IndicatorNode, PositionNode, RiskNode, StrategyGraph
+from strategies.graph_dsl import Filter, Indicator, PositionSizer, StrategyGraph
 
 
 class StrategyGraphController(nn.Module):
@@ -54,12 +54,12 @@ class StrategyGraphController(nn.Module):
         """Return a :class:`StrategyGraph` for ``action``."""
 
         if action == 0:
-            indicator = IndicatorNode("price", ">", "ma")
+            indicator = Indicator("price", ">", "ma")
         else:
-            indicator = IndicatorNode("price", "<", "ma")
-        risk = RiskNode(1.0)
-        position = PositionNode(1.0)
-        nodes = {0: indicator, 1: risk, 2: position}
+            indicator = Indicator("price", "<", "ma")
+        filt = Filter()
+        sizer = PositionSizer(1.0)
+        nodes = {0: indicator, 1: filt, 2: sizer}
         edges = [(0, 1, None), (1, 2, True)]
         return StrategyGraph(nodes=nodes, edges=edges)
 

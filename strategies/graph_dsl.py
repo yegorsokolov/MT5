@@ -25,7 +25,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, Type, Union
 
 
 @dataclass
-class IndicatorNode:
+class Indicator:
     """Compare two fields from a market data bar."""
 
     lhs: str
@@ -46,44 +46,33 @@ class IndicatorNode:
         rhs_val = bar[self.rhs] if isinstance(self.rhs, str) else self.rhs
         return self.OPS[self.op](lhs_val, rhs_val)
 
-    # ---- serialisation -------------------------------------------------
     def to_dict(self) -> dict:
-        return {
-            "type": "IndicatorNode",
-            "lhs": self.lhs,
-            "op": self.op,
-            "rhs": self.rhs,
-        }
+        return {"type": "Indicator", "lhs": self.lhs, "op": self.op, "rhs": self.rhs}
 
     @classmethod
-    def from_dict(cls, data: dict) -> IndicatorNode:
+    def from_dict(cls, data: dict) -> "Indicator":
         return cls(lhs=data["lhs"], op=data["op"], rhs=data["rhs"])
 
 
 @dataclass
-class RiskNode:
-    """Adjust position size by a constant scale factor."""
+class Filter:
+    """Simple pass-through filter for boolean signals."""
 
-    scale: float = 1.0
+    allow: bool = True
 
     def apply(self, signal: bool) -> bool:
-        """Pass-through hook for backwards compatibility with ``Filter``."""
-
-        return bool(signal)
-
-    def adjust(self, size: float) -> float:
-        return size * self.scale
+        return bool(signal) and self.allow
 
     def to_dict(self) -> dict:
-        return {"type": "RiskNode", "scale": self.scale}
+        return {"type": "Filter", "allow": self.allow}
 
     @classmethod
-    def from_dict(cls, data: dict) -> RiskNode:
-        return cls(scale=data.get("scale", 1.0))
+    def from_dict(cls, data: dict) -> "Filter":
+        return cls(allow=data.get("allow", True))
 
 
 @dataclass
-class PositionNode:
+class PositionSizer:
     """Open or close positions based on the current signal."""
 
     size: float = 1.0
@@ -94,11 +83,9 @@ class PositionNode:
         bar: dict,
         position: float,
         cash: float,
-        scale: float,
     ) -> Tuple[float, float]:
-        final_size = self.size * scale
         if signal and position == 0.0:
-            position = final_size
+            position = self.size
             cash -= bar["price"] * position
         elif not signal and position > 0.0:
             cash += bar["price"] * position
@@ -106,37 +93,36 @@ class PositionNode:
         return cash, position
 
     def to_dict(self) -> dict:
-        return {"type": "PositionNode", "size": self.size}
+        return {"type": "PositionSizer", "size": self.size}
 
     @classmethod
-    def from_dict(cls, data: dict) -> PositionNode:
+    def from_dict(cls, data: dict) -> "PositionSizer":
         return cls(size=data.get("size", 1.0))
 
 
 @dataclass
-class ExitNode:
-    """Explicit exit node which closes any open position."""
+class ExitRule:
+    """Explicit exit node which closes any open position when signal is false."""
 
     def should_exit(self, signal: bool) -> bool:
         return not signal
 
     def to_dict(self) -> dict:  # pragma: no cover - trivial
-        return {"type": "ExitNode"}
+        return {"type": "ExitRule"}
 
     @classmethod
-    def from_dict(cls, data: dict) -> ExitNode:  # pragma: no cover - trivial
+    def from_dict(cls, data: dict) -> "ExitRule":  # pragma: no cover - trivial
         return cls()
 
 
-Node = Union[IndicatorNode, RiskNode, PositionNode, ExitNode]
+Node = Union[Indicator, Filter, PositionSizer, ExitRule]
 
 
-# Registry for de/serialisation
 _NODE_TYPES: Dict[str, Type[Node]] = {
-    "IndicatorNode": IndicatorNode,
-    "RiskNode": RiskNode,
-    "PositionNode": PositionNode,
-    "ExitNode": ExitNode,
+    "Indicator": Indicator,
+    "Filter": Filter,
+    "PositionSizer": PositionSizer,
+    "ExitRule": ExitRule,
 }
 
 
@@ -222,19 +208,17 @@ class StrategyGraph:
         for bar in data_list:
             node_id: Optional[int] = self.entry
             result: Optional[bool] = None
-            scale = 1.0
             while node_id is not None:
                 node = self.nodes[node_id]
-                if isinstance(node, IndicatorNode):
+                if isinstance(node, Indicator):
                     result = node.evaluate(bar)
-                elif isinstance(node, RiskNode):
-                    scale = node.adjust(scale)
+                elif isinstance(node, Filter):
                     if result is not None:
                         result = node.apply(result)
-                elif isinstance(node, PositionNode):
+                elif isinstance(node, PositionSizer):
                     if result is not None:
-                        cash, position = node.trade(result, bar, position, cash, scale)
-                elif isinstance(node, ExitNode):
+                        cash, position = node.trade(result, bar, position, cash)
+                elif isinstance(node, ExitRule):
                     if node.should_exit(result) and position > 0.0:
                         cash += bar["price"] * position
                         position = 0.0
@@ -244,26 +228,4 @@ class StrategyGraph:
         return float(cash)
 
 
-# ---------------------------------------------------------------------------
-# Backwards compatibility aliases
-
-
-Indicator = IndicatorNode
-Filter = RiskNode
-PositionSizer = PositionNode
-ExitRule = ExitNode
-
-
-__all__ = [
-    "IndicatorNode",
-    "RiskNode",
-    "PositionNode",
-    "ExitNode",
-    "StrategyGraph",
-    "node_from_dict",
-    # aliases
-    "Indicator",
-    "Filter",
-    "PositionSizer",
-    "ExitRule",
-]
+__all__ = ["Indicator", "Filter", "PositionSizer", "ExitRule", "StrategyGraph", "node_from_dict"]

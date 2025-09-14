@@ -3,8 +3,9 @@
 The script exposes a very small command line interface used in the tests.  When
 ``--graph-search`` is supplied a :class:`models.strategy_graph_controller.StrategyGraphController`
 is trained using policy gradients on a toy dataset and the resulting strategy is
-evaluated using the existing execution engine from
-``strategies.graph_dsl.StrategyGraph``.
+evaluated using the execution engine from ``strategies.graph_dsl.StrategyGraph``.
+The controller emits small graphs composed of :class:`strategies.graph_dsl.Indicator`,
+``Filter`` and ``PositionSizer`` nodes which are executed to obtain a PnL reward.
 
 This module is intentionally minimal; the goal is simply to demonstrate how the
 pieces fit together rather than provide an industrial strength training
