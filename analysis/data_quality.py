@@ -212,6 +212,46 @@ def apply_quality_checks(
 
 
 # ---------------------------------------------------------------------------
+# Recency validation
+# ---------------------------------------------------------------------------
+
+def check_recency(
+    df: pd.DataFrame,
+    *,
+    ts_col: str = "Timestamp",
+    max_age: str | int | float | pd.Timedelta = "1min",
+) -> bool:
+    """Return ``True`` if the newest timestamp is within ``max_age`` of now.
+
+    Parameters
+    ----------
+    df:
+        Dataframe containing a timestamp column.
+    ts_col:
+        Name of the timestamp column.
+    max_age:
+        Maximum allowed age for the newest sample.  Values older than this
+        threshold cause the function to return ``False``.
+    """
+
+    if df.empty or ts_col not in df.columns:
+        logger.warning("No %s column to check recency", ts_col)
+        return False
+    threshold = _to_timedelta(max_age)
+    latest = pd.to_datetime(df[ts_col]).max()
+    age = pd.Timestamp.utcnow() - latest
+    if age > threshold:
+        logger.warning(
+            "Stale data detected: latest timestamp %s is %s old (threshold %s)",
+            latest,
+            age,
+            threshold,
+        )
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Sample scoring
 # ---------------------------------------------------------------------------
 
@@ -245,5 +285,6 @@ __all__ = [
     "median_filter",
     "interpolate_gaps",
     "apply_quality_checks",
+    "check_recency",
     "score_samples",
 ]

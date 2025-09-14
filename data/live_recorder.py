@@ -9,6 +9,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from analysis.data_quality import check_recency
+
 
 class LiveRecorder:
     """Append tick data frames to a time partitioned Parquet dataset.
@@ -39,9 +41,16 @@ class LiveRecorder:
         frame = df.copy()
         if not pd.api.types.is_datetime64_any_dtype(frame["Timestamp"]):
             frame["Timestamp"] = pd.to_datetime(frame["Timestamp"], utc=True)
+        # Log if data is excessively stale to avoid backfilling with old ticks
+        check_recency(frame, max_age="365d")
+        frame.sort_values("Timestamp", inplace=True)
         frame["date"] = frame["Timestamp"].dt.strftime("%Y-%m-%d")
-        table = pa.Table.from_pandas(frame)
-        pq.write_to_dataset(table, root_path=self.root, partition_cols=["date"])
+        date_val = frame["date"].iloc[0]
+        ts_val = frame["Timestamp"].iloc[0].strftime("%H%M%S")
+        table = pa.Table.from_pandas(frame.drop(columns=["date"]))
+        out_dir = self.root / f"date={date_val}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        pq.write_table(table, out_dir / f"ticks_{ts_val}.parquet")
 
 
 def load_ticks(root: Path | str, since: Optional[pd.Timestamp] = None) -> pd.DataFrame:
