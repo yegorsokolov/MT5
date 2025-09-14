@@ -16,7 +16,7 @@ are persisted to ``history_path`` for auditability.
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 from datetime import datetime
 
 import asyncio
@@ -32,7 +32,7 @@ from .router import StrategyRouter, Algorithm
 class StrategyLab:
     """Manage training, shadow deployment and promotion of strategies."""
 
-    train_fn: Callable[[pd.DataFrame], Algorithm]
+    train_fn: Callable[[pd.DataFrame, Optional[Any]], Algorithm]
     router: StrategyRouter
     thresholds: Dict[str, float]
     history_path: Path = Path("reports/strategy_lab.csv")
@@ -50,10 +50,23 @@ class StrategyLab:
     policy_versions: Dict[str, str] = field(default_factory=dict)
     _limit_stats: Dict[str, Dict[str, deque]] = field(default_factory=dict)
 
-    async def train_and_deploy(self, name: str, data: pd.DataFrame) -> None:
-        """Train a new strategy and start its shadow runner."""
+    async def train_and_deploy(
+        self, name: str, data: pd.DataFrame, init: Optional[Any] = None
+    ) -> None:
+        """Train a new strategy and start its shadow runner.
 
-        algo = self.train_fn(data)
+        Parameters
+        ----------
+        name:
+            Identifier for the candidate strategy.
+        data:
+            Historical data used for training.
+        init:
+            Optional reinforcement learning or meta-learned initialisation
+            passed to ``train_fn`` for warm starting policies.
+        """
+
+        algo = self.train_fn(data, init)
         self.candidates[name] = algo
         runner = ShadowRunner(name=name, handler=algo, metrics_queue=self.metrics_queue)
         self.runners[name] = runner
