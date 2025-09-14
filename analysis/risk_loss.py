@@ -15,6 +15,8 @@ except Exception:  # pragma: no cover
 
 
 def _to_tensor(x):
+    """Convert ``x`` to a tensor when PyTorch is available."""
+
     arr = np.asarray(x, dtype="float32")
     if _TORCH_AVAILABLE:
         if isinstance(x, torch.Tensor):
@@ -26,24 +28,24 @@ def _to_tensor(x):
 def cvar(returns, level: float = 0.05):
     """Conditional value-at-risk of ``returns`` at ``level``.
 
-    The implementation is fully differentiable when ``returns`` is a
-    :class:`torch.Tensor` by relying solely on PyTorch operations.  For numpy
-    arrays the equivalent computation is carried out with ``np.partition`` which
-    is efficient on large arrays.
+    The function computes the average of the worst ``level`` fraction of
+    returns.  When ``returns`` is a :class:`torch.Tensor` only differentiable
+    operations are used so gradients can propagate through the result.  NumPy is
+    used as a fallback when PyTorch is unavailable.
     """
 
     r = _to_tensor(returns)
     if _TORCH_AVAILABLE and isinstance(r, torch.Tensor):
-        n = r.numel()
-        k = max(int(n * level), 1)
-        values, _ = torch.topk(r, k, largest=False)
-        return values.mean()
-    n = r.size
-    if n == 0:
+        if r.numel() == 0:
+            return torch.tensor(0.0, dtype=r.dtype, device=r.device)
+        var = torch.quantile(r, level)
+        tail = r[r <= var]
+        return tail.mean() if tail.numel() > 0 else var
+    if r.size == 0:
         return 0.0
-    k = max(int(n * level), 1)
-    part = np.partition(r, k - 1)[:k]
-    return float(part.mean())
+    var = np.quantile(r, level)
+    tail = r[r <= var]
+    return float(tail.mean()) if tail.size else float(var)
 
 
 def max_drawdown(returns):
@@ -68,6 +70,8 @@ def max_drawdown(returns):
 
 
 def cvar_penalty(returns, limit: float, level: float = 0.05, scale: float = 1.0):
+    """Penalty for exceeding a CVaR limit."""
+
     cvar_val = -cvar(returns, level)
     if _TORCH_AVAILABLE and isinstance(cvar_val, torch.Tensor):
         return scale * torch.relu(cvar_val - limit)
@@ -75,6 +79,8 @@ def cvar_penalty(returns, limit: float, level: float = 0.05, scale: float = 1.0)
 
 
 def max_drawdown_penalty(returns, limit: float, scale: float = 1.0):
+    """Penalty for exceeding a maximum drawdown limit."""
+
     mdd = max_drawdown(returns)
     if _TORCH_AVAILABLE and isinstance(mdd, torch.Tensor):
         return scale * torch.relu(mdd - limit)
