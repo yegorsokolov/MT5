@@ -68,3 +68,10 @@ def purge_version(version: str) -> None:
     if index.get("latest") == version:
         index.pop("latest", None)
     _save_index(index)
+
+
+def request_indicator(version: str) -> list[str]:
+    """Return available indicator columns for ``version``."""
+
+    df = load_feature(version)
+    return list(df.columns)

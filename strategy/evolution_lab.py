@@ -15,10 +15,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, TYPE_CHECKING
 import asyncio
+import os
 import random
 
 import pandas as pd
 
+from strategies.graph_dsl import IndicatorNode, StrategyGraph
+from feature_store import latest_version, request_indicator
 from .shadow_runner import ShadowRunner
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -37,33 +40,23 @@ Strategy = Callable[[Dict[str, Any]], float]
 class EvolutionLab:
     """Spawn strategy variants and manage a performance tournament."""
 
-    base: Strategy
+    base: Strategy | StrategyGraph
     register: Callable[[str, Strategy], None] | None = None
     out_path: Path = Path("reports/strategy_tournament.parquet")
+    lineage_path: Path = Path("reports/mutation_lineage.parquet")
     significance: float = 2.0
     variants: Dict[str, Strategy] = field(default_factory=dict)
+    lineage: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     registry: ModelRegistry | None = None
 
     # ------------------------------------------------------------------
-    def _mutate(self, scale: float = 0.1) -> Strategy:
-        """Return a perturbed or composite variant of :attr:`base`.
+    def _mutate(
+        self, scale: float = 0.1
+    ) -> tuple[Strategy | StrategyGraph, Dict[str, Any]]:
+        """Return a perturbed variant of :attr:`base` with lineage info."""
 
-        Historically mutation simply injected Gaussian noise into the base
-        strategy's output.  To allow the evolution laboratory to explore more
-        complex behaviours we now support three simple operators:
-
-        ``noise``
-            add Gaussian noise to the base output (original behaviour)
-        ``scale``
-            multiply the base output by a random factor
-        ``mix``
-            blend the base with a previously spawned variant, enabling
-            higher‑order strategy combinations
-
-        Real applications may override this with domain specific logic but the
-        built in operators already yield richer search spaces for tests and
-        lightweight deployments.
-        """
+        if isinstance(self.base, StrategyGraph):
+            return self._mutate_graph(self.base)
 
         op_choices = ["noise", "scale"]
         if self.variants:
@@ -76,26 +69,53 @@ class EvolutionLab:
             def variant(features: Dict[str, Any], *, _factor=factor) -> float:
                 return float(self.base(features)) * _factor
 
-            return variant
+            return variant, {"type": "scale", "factor": factor}
 
         if op == "mix" and self.variants:
             other = random.choice(list(self.variants.values()))
             weight = random.random()
 
-            def variant(
-                features: Dict[str, Any], *, _other=other, _w=weight
-            ) -> float:
+            def variant(features: Dict[str, Any], *, _other=other, _w=weight) -> float:
                 base_val = float(self.base(features))
                 return _w * base_val + (1.0 - _w) * float(_other(features))
 
-            return variant
+            return variant, {"type": "mix", "weight": weight}
 
-        # Default: additive noise mutation
         def variant(features: Dict[str, Any]) -> float:
             base_val = float(self.base(features))
             return base_val + random.gauss(0.0, scale)
 
-        return variant
+        return variant, {"type": "noise"}
+
+    # ------------------------------------------------------------------
+    def _mutate_graph(
+        self, graph: StrategyGraph
+    ) -> tuple[StrategyGraph, Dict[str, Any]]:
+        """Return a mutated copy of ``graph`` and mutation metadata."""
+
+        g = StrategyGraph(
+            nodes=dict(graph.nodes), edges=list(graph.edges), entry=graph.entry
+        )
+        op = random.choice(["insert", "remove"])
+        info: Dict[str, Any] = {"type": op}
+        if op == "insert":
+            version = latest_version()
+            cols = request_indicator(version) if version else []
+            if cols:
+                lhs = random.choice(cols)
+                rhs = random.choice(cols)
+                node = IndicatorNode(
+                    lhs=lhs, op=random.choice(list(IndicatorNode.OPS)), rhs=rhs
+                )
+                new_id = g.insert_node(g.entry, None, node)
+                info["node"] = new_id
+        else:  # remove
+            removable = [n for n in g.nodes if n != g.entry]
+            if removable:
+                node_id = random.choice(removable)
+                g.remove_node(node_id)
+                info["removed"] = node_id
+        return g, info
 
     # ------------------------------------------------------------------
     def spawn(self, n: int = 3) -> None:
@@ -104,8 +124,17 @@ class EvolutionLab:
         start = len(self.variants)
         for i in range(start, start + n):
             name = f"{getattr(self.base, '__name__', 'strategy')}_var{i}"
-            handler = self._mutate()
-            chosen = handler
+            handler, info = self._mutate()
+            chosen: Strategy
+            if isinstance(handler, StrategyGraph):
+
+                def _exec(features: Dict[str, Any], *, _g=handler) -> float:
+                    return _g.run([features])
+
+                chosen = _exec
+            else:
+                chosen = handler
+            self.lineage[name] = info
             if self.registry is not None:
                 caps = self.registry.monitor.capabilities
                 if caps.cpus < 4 or caps.memory_gb < 8:
@@ -113,13 +142,17 @@ class EvolutionLab:
 
                     spec = importlib.util.spec_from_file_location(
                         "remote_client",
-                        Path(__file__).resolve().parents[1] / "models" / "remote_client.py",
+                        Path(__file__).resolve().parents[1]
+                        / "models"
+                        / "remote_client.py",
                     )
                     rc = importlib.util.module_from_spec(spec)
                     assert spec and spec.loader
                     spec.loader.exec_module(rc)  # type: ignore
 
-                    def remote_handler(features: Dict[str, Any], *, _name=name, _rc=rc) -> float:
+                    def remote_handler(
+                        features: Dict[str, Any], *, _name=name, _rc=rc
+                    ) -> float:
                         preds = _rc.predict_remote(_name, [features])
                         return float(preds[0]) if preds else 0.0
 
@@ -142,6 +175,7 @@ class EvolutionLab:
         self,
         seeds: Iterable[int],
         messages: Iterable[Dict[str, Any]],
+        concurrency: int | None = None,
     ) -> list[Dict[str, float]]:
         """Run multiple evolution jobs concurrently using a task queue.
 
@@ -156,6 +190,19 @@ class EvolutionLab:
 
         results: list[Dict[str, float]] = []
         msgs = list(messages)
+
+        if concurrency is None:
+            cpu = os.cpu_count() or 1
+            gpu = 0
+            try:
+                import torch
+
+                gpu = torch.cuda.device_count()
+            except Exception:  # pragma: no cover - optional dependency
+                pass
+            if gpu > 0:
+                cpu = min(cpu, gpu)
+            concurrency = max(1, cpu)
 
         class _ListBus:
             def __init__(self, data: list[Dict[str, Any]]):
@@ -173,11 +220,20 @@ class EvolutionLab:
                     break
                 random.seed(seed)
                 name = f"{getattr(self.base, '__name__', 'strategy')}_{seed}"
-                handler = self._mutate()
+                handler, info = self._mutate()
+                chosen: Strategy
+                if isinstance(handler, StrategyGraph):
+
+                    def _exec(features: Dict[str, Any], *, _g=handler) -> float:
+                        return _g.run([features])
+
+                    chosen = _exec
+                else:
+                    chosen = handler
                 metrics_q: asyncio.Queue = asyncio.Queue()
                 runner = ShadowRunner(
                     name=name,
-                    handler=handler,
+                    handler=chosen,
                     bus=_ListBus(msgs),
                     metrics_queue=metrics_q,
                 )
@@ -187,12 +243,33 @@ class EvolutionLab:
                     last = await metrics_q.get()
                 if last is not None:
                     last["name"] = name
+                    last["seed"] = seed
+                    last.update(info)
                     results.append(last)
                 queue.task_done()
 
-        tasks = [asyncio.create_task(worker()) for _ in range(queue.qsize())]
+        tasks = [
+            asyncio.create_task(worker())
+            for _ in range(min(queue.qsize(), concurrency))
+        ]
         await asyncio.gather(*tasks)
+        self._persist_lineage(results)
         return results
+
+    # ------------------------------------------------------------------
+    def _persist_lineage(self, records: list[Dict[str, Any]]) -> None:
+        """Append mutation lineage and metrics to :attr:`lineage_path`."""
+
+        if not records:
+            return
+        df = pd.DataFrame(records)
+        self.lineage_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            prev = pd.read_parquet(self.lineage_path)
+            df = pd.concat([prev, df], ignore_index=True)
+        except Exception:
+            pass
+        df.to_parquet(self.lineage_path, index=False)
 
     # ------------------------------------------------------------------
     def _shadow_metrics(self, name: str) -> Dict[str, float] | None:
