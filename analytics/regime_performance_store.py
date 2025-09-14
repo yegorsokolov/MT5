@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Persistence of model performance across market regimes.
 
 This module aggregates historical profit and loss for each model within a
@@ -12,6 +13,7 @@ regime.
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 import pandas as pd
 
@@ -76,20 +78,68 @@ class RegimePerformanceStore:
             raise ValueError("trades dataframe missing 'regime'")
 
         df["date"] = pd.to_datetime(df["exit_time"]).dt.normalize()
-        daily = (
-            df.groupby(["date", "model", "regime"], as_index=False)["pnl"].sum()
-        )
+        daily = df.groupby(["date", "model", "regime"], as_index=False)["pnl"].sum()
         daily.rename(columns={"pnl": "pnl_daily"}, inplace=True)
 
         daily["week"] = daily["date"].dt.to_period("W-MON").dt.start_time
-        weekly = (
-            daily.groupby(["week", "model", "regime"], as_index=False)[
-                "pnl_daily"
-            ].sum()
-        )
+        weekly = daily.groupby(["week", "model", "regime"], as_index=False)[
+            "pnl_daily"
+        ].sum()
         weekly.rename(columns={"pnl_daily": "pnl_weekly"}, inplace=True)
 
         result = daily.merge(weekly, on=["week", "model", "regime"], how="left")
+        result.drop(columns=["week"], inplace=True)
+        result.sort_values("date", inplace=True)
+        result.to_parquet(self.path, index=False)
+
+    # ------------------------------------------------------------------
+    def record_trade(
+        self,
+        exit_time: datetime | str,
+        model: str,
+        regime: int | str,
+        pnl: float,
+    ) -> None:
+        """Append a single trade result and update aggregates.
+
+        Parameters
+        ----------
+        exit_time:
+            Timestamp when the trade closed.
+        model:
+            Strategy identifier.
+        regime:
+            Market regime label at trade time.
+        pnl:
+            Profit or loss realised by the trade.
+        """
+
+        date = pd.to_datetime(exit_time).normalize()
+        df = self._load()
+        mask = (df["date"] == date) & (df["model"] == model) & (df["regime"] == regime)
+        if mask.any():
+            df.loc[mask, "pnl_daily"] += pnl
+        else:
+            df = pd.concat(
+                [
+                    df,
+                    pd.DataFrame(
+                        {
+                            "date": [date],
+                            "model": [model],
+                            "regime": [regime],
+                            "pnl_daily": [pnl],
+                        }
+                    ),
+                ],
+                ignore_index=True,
+            )
+        df["week"] = df["date"].dt.to_period("W-MON").dt.start_time
+        weekly = df.groupby(["week", "model", "regime"], as_index=False)[
+            "pnl_daily"
+        ].sum()
+        weekly.rename(columns={"pnl_daily": "pnl_weekly"}, inplace=True)
+        result = df.merge(weekly, on=["week", "model", "regime"], how="left")
         result.drop(columns=["week"], inplace=True)
         result.sort_values("date", inplace=True)
         result.to_parquet(self.path, index=False)
