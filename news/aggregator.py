@@ -110,9 +110,26 @@ class NewsAggregator:
     def fetch(self) -> List[Dict]:
         """Fetch, parse and cache events from all known sources."""
         sources = [
-            ("faireconomy_xml", "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.xml", self.parse_faireconomy_xml),
-            ("faireconomy_csv", "https://nfs.faireconomy.media/ff_calendar_thisweek.csv", self.parse_faireconomy_csv),
-            ("forexfactory_html", "https://www.forexfactory.com/calendar", self.parse_forexfactory_html),
+            (
+                "faireconomy_xml",
+                "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.xml",
+                self.parse_faireconomy_xml,
+            ),
+            (
+                "faireconomy_csv",
+                "https://nfs.faireconomy.media/ff_calendar_thisweek.csv",
+                self.parse_faireconomy_csv,
+            ),
+            (
+                "forexfactory_html",
+                "https://www.forexfactory.com/calendar",
+                self.parse_forexfactory_html,
+            ),
+            (
+                "tradingeconomics_json",
+                "https://api.tradingeconomics.com/calendar?c=guest:guest&format=json",
+                self.parse_tradingeconomics_json,
+            ),
         ]
         events = self._load_cache()
         for name, url, parser in sources:
@@ -234,6 +251,50 @@ class NewsAggregator:
                         "actual": actual_cell.get_text(strip=True) if actual_cell else None,
                         "forecast": forecast_cell.get_text(strip=True) if forecast_cell else None,
                         "importance": _normalise_importance(importance),
+                        "symbols": [],
+                        "sources": [source],
+                    }
+                )
+            except Exception:
+                continue
+        return events
+
+    def parse_tradingeconomics_json(
+        self, text: str, source: str = "tradingeconomics_json"
+    ) -> List[Dict]:
+        """Parse TradingEconomics calendar JSON."""
+
+        events: List[Dict] = []
+        try:
+            items = json.loads(text)
+        except json.JSONDecodeError:
+            return events
+
+        for item in items:
+            try:
+                date_str = item.get("date") or item.get("Date")
+                event_name = item.get("event") or item.get("Event")
+                if not (date_str and event_name):
+                    continue
+                try:
+                    ts = datetime.fromisoformat(date_str.replace("Z", "")).replace(
+                        tzinfo=timezone.utc
+                    )
+                except ValueError:
+                    continue
+                currency = item.get("currency") or item.get("Country")
+                events.append(
+                    {
+                        "id": item.get("id"),
+                        "timestamp": ts,
+                        "currency": currency,
+                        "currencies": [currency] if currency else [],
+                        "event": event_name,
+                        "actual": item.get("actual") or item.get("Actual"),
+                        "forecast": item.get("forecast") or item.get("Forecast"),
+                        "importance": _normalise_importance(
+                            item.get("importance") or item.get("Importance")
+                        ),
                         "symbols": [],
                         "sources": [source],
                     }
