@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Iterable
 
 import pandas as pd
 
@@ -29,7 +29,9 @@ def _read_local_csv(symbol: str) -> pd.DataFrame:
             try:
                 return pd.read_csv(path)
             except Exception:  # pragma: no cover - local read failure
-                logger.warning("Failed to read fundamentals for %s from %s", symbol, path)
+                logger.warning(
+                    "Failed to read fundamentals for %s from %s", symbol, path
+                )
                 return pd.DataFrame()
     return pd.DataFrame()
 
@@ -51,6 +53,9 @@ def _fetch_yfinance(symbol: str) -> pd.DataFrame:
                 "Date": pd.Timestamp.utcnow().normalize(),
                 "pe_ratio": info.get("trailingPE"),
                 "dividend_yield": info.get("dividendYield"),
+                "eps": info.get("forwardEps"),
+                "revenue": info.get("totalRevenue"),
+                "ebitda": info.get("ebitda"),
             },
             index=[0],
         )
@@ -90,7 +95,17 @@ def load_fundamentals(symbols: Iterable[str]) -> pd.DataFrame:
         frames.append(df)
 
     if not frames:
-        return pd.DataFrame(columns=["Date", "Symbol", "pe_ratio", "dividend_yield"])
+        return pd.DataFrame(
+            columns=[
+                "Date",
+                "Symbol",
+                "pe_ratio",
+                "dividend_yield",
+                "eps",
+                "revenue",
+                "ebitda",
+            ]
+        )
 
     out = pd.concat(frames, ignore_index=True)
     return out.sort_values(["Symbol", "Date"])
@@ -106,14 +121,14 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
 
     if "Symbol" not in df.columns:
         # Nothing to merge; return zeros for expected columns
-        df["pe_ratio"] = 0.0
-        df["dividend_yield"] = 0.0
+        for col in ["pe_ratio", "dividend_yield", "eps", "revenue", "ebitda"]:
+            df[col] = 0.0
         return df
 
     fundamentals = load_fundamentals(sorted(df["Symbol"].unique()))
     if fundamentals.empty:
-        df["pe_ratio"] = 0.0
-        df["dividend_yield"] = 0.0
+        for col in ["pe_ratio", "dividend_yield", "eps", "revenue", "ebitda"]:
+            df[col] = 0.0
         return df
 
     fundamentals = fundamentals.rename(columns={"Date": "fund_date"})
@@ -126,7 +141,7 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
         direction="backward",
     ).drop(columns=["fund_date"])
 
-    for col in ["pe_ratio", "dividend_yield"]:
+    for col in ["pe_ratio", "dividend_yield", "eps", "revenue", "ebitda"]:
         if col in df.columns:
             df[col] = df[col].ffill().fillna(0.0)
         else:

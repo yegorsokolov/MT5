@@ -31,6 +31,7 @@ models/*
 !models/mixture_of_experts.py
 !models/build_model.py
 !models/conformal.py
+!models/arima.py
 !models/quantize.py
 !models/hot_reload.py
 !models/tft.py

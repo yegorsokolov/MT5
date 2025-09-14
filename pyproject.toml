@@ -37,6 +37,8 @@ dependencies = [
     "ydata-synthetic",
     "tsfresh",
     "exchange-calendars",
+    "yfinance",
+    "fredapi",
     "grpcio",
     "grpcio-tools",
     "backtrader",
