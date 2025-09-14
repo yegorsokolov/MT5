@@ -37,13 +37,17 @@ def _load_registry(path: Path = REGISTRY_PATH) -> list[Dict[str, Any]]:
     return []
 
 
-def _save_registry(entries: Iterable[Dict[str, Any]], path: Path = REGISTRY_PATH) -> None:
+def _save_registry(
+    entries: Iterable[Dict[str, Any]], path: Path = REGISTRY_PATH
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
         json.dump(list(entries), f, indent=2)
 
 
-def _basic_compute_dict(series: Sequence[float], lag: int, window: int) -> Dict[str, Sequence[float]]:
+def _basic_compute_dict(
+    series: Sequence[float], lag: int, window: int
+) -> Dict[str, Sequence[float]]:
     lagged = [None] * lag + list(series[:-lag]) if len(series) else []
     means: list[float] = []
     for i in range(len(series)):
@@ -58,8 +62,14 @@ def generate(
     asset_features: Sequence[float],
     regime: Sequence[float],
     registry_path: Path = REGISTRY_PATH,
+    formula_dir: Path | None = None,
 ) -> Tuple[Any, Dict[str, int]]:
-    """Return structure with generated indicator columns and descriptor."""
+    """Return structure with generated indicator columns and descriptor.
+
+    Any evolved indicator formulas stored in ``formula_dir`` (or the
+    ``feature_store`` directory by default) are also applied to the returned
+    dataframe.
+    """
 
     x = list(asset_features) + list(regime)
     lag, window = model(x)
@@ -71,6 +81,12 @@ def generate(
         ser = df[col]
         out[f"{col}_lag{lag}"] = [None] * lag + list(ser.values[:-lag])
         out[f"{col}_mean{window}"] = ser.rolling(window).mean()
+
+        formulas_path = formula_dir or registry_path.parent
+        from . import evolved_indicators
+
+        for file in sorted(formulas_path.glob("evolved_indicators_v*.json")):
+            out = evolved_indicators.compute(out, path=file)
         return out, desc
     else:
         data = {k: list(v) for k, v in df.items()}
@@ -144,7 +160,12 @@ def persist(
     entries = _load_registry(registry_path)
     entries.append(entry)
     _save_registry(entries, registry_path)
-    logger.info("Persisted indicator lag=%s window=%s with metrics=%s", indicator.get("lag"), indicator.get("window"), metrics)
+    logger.info(
+        "Persisted indicator lag=%s window=%s with metrics=%s",
+        indicator.get("lag"),
+        indicator.get("window"),
+        metrics,
+    )
 
 
 __all__ = ["generate", "persist", "apply", "REGISTRY_PATH"]
