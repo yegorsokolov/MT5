@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import gym
 from gym import spaces
+import logging
 
 try:  # optional torch dependency
     import torch
@@ -16,6 +17,10 @@ except Exception:  # pragma: no cover - torch may be missing
 
 from analytics.metrics_store import record_metric, TS_PATH
 from rl.multi_objective import weighted_sum
+from analysis.market_simulator import (
+    AdversarialMarketSimulator,
+    generate_stress_scenarios,
+)
 
 
 class TradingEnv(gym.Env):
@@ -40,6 +45,7 @@ class TradingEnv(gym.Env):
         objectives: list[str] | None = None,
         objective_weights: list[float] | None = None,
         exit_penalty: float = 0.001,
+        adversary: AdversarialMarketSimulator | None = None,
     ) -> None:
         super().__init__()
 
@@ -140,6 +146,7 @@ class TradingEnv(gym.Env):
         self.spread_source = spread_source
         self.objectives = objectives or ["pnl", "hold_cost"]
         self.exit_penalty = exit_penalty
+        self.adversary = adversary
         if objective_weights is None:
             objective_weights = [1.0] * len(self.objectives)
         self.objective_weights = np.asarray(objective_weights, dtype=np.float32)
@@ -211,6 +218,29 @@ class TradingEnv(gym.Env):
         if self.orderbook_depth > 0 and self.use_orderbook_gnn:
             base = np.concatenate([base, self._orderbook_embedding(self.i)])
         return base
+
+    # ------------------------------------------------------------------
+    def apply_adversary(self, policy) -> dict[str, float]:
+        """Apply adversarial perturbations and log robustness metrics."""
+
+        if self.adversary is None:
+            return {}
+        metrics: dict[str, float] = {}
+        try:
+            for col in self.price_cols:
+                series = self.df[col].values
+                self.df[col] = self.adversary.perturb(series, policy)
+            loss_fn = getattr(policy, "loss", None)
+            if callable(loss_fn) and len(self.price_cols) > 0:
+                scenarios = generate_stress_scenarios(self.df[self.price_cols[0]].values)
+                for name, seq in scenarios.items():
+                    reward = loss_fn(torch.tensor(seq, dtype=torch.float32)).item() if torch is not None else 0.0
+                    logging.info("robustness_%s=%f", name, reward)
+                    record_metric(f"robustness_{name}", float(reward), path=TS_PATH)
+                    metrics[name] = reward
+        except Exception:  # pragma: no cover - best effort only
+            logging.exception("adversary application failed")
+        return metrics
 
     def _orderbook_embedding(self, idx: int) -> np.ndarray:
         embeds: list[np.ndarray] = []
