@@ -1,5 +1,7 @@
-import sys, os
+import os
+import sys
 import numpy as np
+import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -32,3 +34,35 @@ def test_risk_budget_combined_penalty():
     p_loose = risk_penalty(returns, budget_loose, level=0.5)
     p_tight = risk_penalty(returns, budget_tight, level=0.5)
     assert p_tight > p_loose
+
+
+def test_penalties_support_autograd():
+    torch = pytest.importorskip("torch")
+    returns = torch.tensor([-0.2, 0.1, -0.05, 0.02], requires_grad=True)
+    pen = cvar_penalty(returns, limit=0.05, level=0.5) + max_drawdown_penalty(
+        returns, limit=0.1
+    )
+    pen.backward()
+    assert returns.grad is not None
+    assert float(returns.grad.abs().sum()) > 0.0
+
+
+def test_penalty_triggers_early_stop():
+    torch = pytest.importorskip("torch")
+    returns = torch.tensor([0.1, -0.5, 0.02], requires_grad=True)
+    budget = RiskBudget(max_leverage=1.0, max_drawdown=0.1, cvar_limit=0.05)
+    for epoch in range(5):
+        loss = risk_penalty(returns, budget)
+        if loss > 0:
+            break
+    assert epoch == 0
+
+
+def test_penalty_adds_to_loss():
+    torch = pytest.importorskip("torch")
+    returns = torch.tensor([0.1, -0.5, 0.02], requires_grad=True)
+    budget = RiskBudget(max_leverage=1.0, max_drawdown=0.1, cvar_limit=0.05)
+    raw_loss = (returns ** 2).mean()
+    loss = raw_loss + risk_penalty(returns, budget)
+    assert float(loss) > float(raw_loss)
+
