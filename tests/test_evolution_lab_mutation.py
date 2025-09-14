@@ -11,7 +11,7 @@ proj_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(proj_root))
 
 from feature_store import purge_version, register_feature, request_indicator
-from strategies.graph_dsl import IndicatorNode, StrategyGraph
+from strategies.graph_dsl import Indicator, StrategyGraph
 
 strategy_pkg = types.ModuleType("strategy")
 strategy_pkg.__path__ = [str(proj_root / "strategy")]
@@ -33,9 +33,9 @@ def test_graph_mutation_and_indicator(tmp_path):
     cols = request_indicator("mut_v1")
     assert "price" in cols
     graph = StrategyGraph(
-        nodes={0: IndicatorNode("price", ">", "ma")}, edges=[], entry=0
+        nodes={0: Indicator("price", ">", "ma")}, edges=[], entry=0
     )
-    node = IndicatorNode("price", "<", "ma")
+    node = Indicator("price", "<", "ma")
     nid = graph.insert_node(0, None, node)
     assert nid in graph.nodes
     graph.remove_node(nid)
