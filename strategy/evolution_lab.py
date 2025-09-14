@@ -2,13 +2,15 @@ from __future__ import annotations
 
 """Strategy evolution laboratory and tournament management.
 
-This module generates mutated variants of a base strategy, runs each in
-shadow mode using :class:`strategy.shadow_runner.ShadowRunner` and tracks
-rolling performance metrics.  Results are persisted to
-``reports/strategy_tournament.parquet`` and the best performing strategy is
-promoted to live trading once it exceeds a significance threshold.  Poorly
-performing live strategies are demoted back to shadow mode but remain in the
-pool for further evolution.
+This module generates mutated variants of a base strategy, including graph
+based strategies which can request new indicators from the feature store.  The
+variants are evaluated concurrently in shadow mode using
+:class:`strategy.shadow_runner.ShadowRunner` with an asynchronous task pool
+whose size is capped based on available system resources.  Lineage and
+performance metrics for each variant are recorded so that the most promising
+candidate can be promoted to live trading once it exceeds a significance
+threshold.  Poorly performing live strategies are demoted back to shadow mode
+but remain in the pool for further evolution.
 """
 
 from dataclasses import dataclass, field
@@ -51,12 +53,18 @@ class EvolutionLab:
 
     # ------------------------------------------------------------------
     def _mutate(
-        self, scale: float = 0.1
-    ) -> tuple[Strategy | StrategyGraph, Dict[str, Any]]:
-        """Return a perturbed variant of :attr:`base` with lineage info."""
+        self, scale: float = 0.1, *, with_info: bool = False
+    ) -> Strategy | StrategyGraph | tuple[Strategy | StrategyGraph, Dict[str, Any]]:
+        """Return a perturbed variant of :attr:`base`.
+
+        When ``with_info`` is ``True`` a tuple of ``(variant, info)`` is
+        returned, otherwise only the variant callable/graph is produced for
+        backward compatibility with older callers.
+        """
 
         if isinstance(self.base, StrategyGraph):
-            return self._mutate_graph(self.base)
+            variant, info = self._mutate_graph(self.base)
+            return (variant, info) if with_info else variant
 
         op_choices = ["noise", "scale"]
         if self.variants:
@@ -69,7 +77,8 @@ class EvolutionLab:
             def variant(features: Dict[str, Any], *, _factor=factor) -> float:
                 return float(self.base(features)) * _factor
 
-            return variant, {"type": "scale", "factor": factor}
+            info = {"type": "scale", "factor": factor}
+            return (variant, info) if with_info else variant
 
         if op == "mix" and self.variants:
             other = random.choice(list(self.variants.values()))
@@ -79,13 +88,15 @@ class EvolutionLab:
                 base_val = float(self.base(features))
                 return _w * base_val + (1.0 - _w) * float(_other(features))
 
-            return variant, {"type": "mix", "weight": weight}
+            info = {"type": "mix", "weight": weight}
+            return (variant, info) if with_info else variant
 
         def variant(features: Dict[str, Any]) -> float:
             base_val = float(self.base(features))
             return base_val + random.gauss(0.0, scale)
 
-        return variant, {"type": "noise"}
+        info = {"type": "noise"}
+        return (variant, info) if with_info else variant
 
     # ------------------------------------------------------------------
     def _mutate_graph(
@@ -124,7 +135,7 @@ class EvolutionLab:
         start = len(self.variants)
         for i in range(start, start + n):
             name = f"{getattr(self.base, '__name__', 'strategy')}_var{i}"
-            handler, info = self._mutate()
+            handler, info = self._mutate(with_info=True)
             chosen: Strategy
             if isinstance(handler, StrategyGraph):
 
@@ -167,7 +178,8 @@ class EvolutionLab:
 
                     loop = asyncio.get_running_loop()
                 except RuntimeError:  # pragma: no cover - no running loop
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                 loop.create_task(runner.run())
 
     # ------------------------------------------------------------------
@@ -220,7 +232,7 @@ class EvolutionLab:
                     break
                 random.seed(seed)
                 name = f"{getattr(self.base, '__name__', 'strategy')}_{seed}"
-                handler, info = self._mutate()
+                handler, info = self._mutate(with_info=True)
                 chosen: Strategy
                 if isinstance(handler, StrategyGraph):
 
@@ -242,10 +254,19 @@ class EvolutionLab:
                 while not metrics_q.empty():
                     last = await metrics_q.get()
                 if last is not None:
-                    last["name"] = name
-                    last["seed"] = seed
-                    last.update(info)
-                    results.append(last)
+                    record = {"name": name, "seed": seed, **info, **last}
+                    results.append(record)
+                    # Track lineage and spawn the variant for live testing
+                    self.lineage[name] = record
+                    self.variants[name] = chosen
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:  # pragma: no cover - no running loop
+                        loop = asyncio.get_event_loop()
+                    if self.register is not None:
+                        self.register(name, chosen)
+                    else:  # pragma: no cover - fallback when orchestrator absent
+                        loop.create_task(ShadowRunner(name=name, handler=chosen).run())
                 queue.task_done()
 
         tasks = [
@@ -264,12 +285,34 @@ class EvolutionLab:
             return
         df = pd.DataFrame(records)
         self.lineage_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            prev = pd.read_parquet(self.lineage_path)
-            df = pd.concat([prev, df], ignore_index=True)
-        except Exception:
-            pass
-        df.to_parquet(self.lineage_path, index=False)
+        # When pandas lacks parquet/CSV support (e.g. test stubs), fall back to
+        # the built-in ``csv`` module for persistence.
+        if not (hasattr(df, "to_parquet") or hasattr(df, "to_csv")):
+            import csv
+
+            with self.lineage_path.open("a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(records[0].keys()))
+                if f.tell() == 0:
+                    writer.writeheader()
+                writer.writerows(records)
+            return
+
+        # Load previous lineage if available, falling back to CSV when parquet
+        # support is missing (common in the lightweight test environment).
+        if self.lineage_path.exists():
+            try:  # pragma: no cover - depends on optional parquet deps
+                prev = pd.read_parquet(self.lineage_path)
+                df = pd.concat([prev, df], ignore_index=True)
+            except Exception:
+                try:
+                    prev = pd.read_csv(self.lineage_path)
+                    df = pd.concat([prev, df], ignore_index=True)
+                except Exception:
+                    pass
+        try:  # pragma: no cover - parquet requires optional deps
+            df.to_parquet(self.lineage_path, index=False)
+        except Exception:  # Fall back to CSV if parquet is unavailable
+            df.to_csv(self.lineage_path, index=False)
 
     # ------------------------------------------------------------------
     def _shadow_metrics(self, name: str) -> Dict[str, float] | None:
@@ -309,12 +352,31 @@ class EvolutionLab:
             return pd.DataFrame()
         df = pd.DataFrame(rows)
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            prev = pd.read_parquet(self.out_path)
-            df = pd.concat([prev, df], ignore_index=True)
+        if not (hasattr(df, "to_parquet") or hasattr(df, "to_csv")):
+            import csv
+
+            with self.out_path.open("a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+                if f.tell() == 0:
+                    writer.writeheader()
+                writer.writerows(rows)
+            return pd.DataFrame(rows)
+        # Attempt to append to an existing parquet report, falling back to CSV
+        # when parquet support is unavailable.
+        if self.out_path.exists():
+            try:  # pragma: no cover - optional parquet dependency
+                prev = pd.read_parquet(self.out_path)
+                df = pd.concat([prev, df], ignore_index=True)
+            except Exception:
+                try:
+                    prev = pd.read_csv(self.out_path)
+                    df = pd.concat([prev, df], ignore_index=True)
+                except Exception:
+                    pass
+        try:  # pragma: no cover - parquet requires optional deps
+            df.to_parquet(self.out_path, index=False)
         except Exception:
-            pass
-        df.to_parquet(self.out_path, index=False)
+            df.to_csv(self.out_path, index=False)
         return df
 
     # ------------------------------------------------------------------
