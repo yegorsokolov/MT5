@@ -556,9 +556,13 @@ def main(
             df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
     rp = cfg.strategy.risk_profile
+    user_budget = RiskBudget(
+        max_leverage=rp.leverage_cap, max_drawdown=rp.drawdown_limit
+    )
+    # expose user risk preferences as constant input features
     df["risk_tolerance"] = rp.tolerance
-    df["leverage_cap"] = rp.leverage_cap
-    df["drawdown_limit"] = rp.drawdown_limit
+    for name, val in user_budget.as_features().items():
+        df[name] = val
 
     features = [
         "return",
@@ -572,7 +576,7 @@ def main(
         "news_sentiment",
         "market_regime",
     ]
-    features.extend(["risk_tolerance", "leverage_cap", "drawdown_limit"])
+    features.extend(["risk_tolerance", *user_budget.as_features().keys()])
     features.extend(
         [
             c
@@ -838,6 +842,8 @@ def main(
     all_conf: list[float] = []
     all_lower: list[float] = []
     all_upper: list[float] = []
+    risk_violation = False
+    violation_penalty = 0.0
     all_residuals: dict[int, list[float]] = {}
     final_pipe: Pipeline | None = None
     X_train_final: pd.DataFrame | None = None
@@ -1001,6 +1007,22 @@ def main(
         all_conf.extend(conf)
         report = classification_report(y_val, preds, output_dict=True)
         logger.info("Fold %d\n%s", fold, classification_report(y_val, preds))
+        budget_eval = risk_budget or user_budget
+        if "return" in df.columns and budget_eval is not None:
+            returns_val = df.loc[X_val.index, "return"].to_numpy()
+            alpha = float(risk_target.get("cvar_level", 0.05)) if risk_target else 0.05
+            cvar_val = float(-cvar(returns_val, alpha))
+            mdd_val = float(max_drawdown(returns_val))
+            mlflow.log_metric(f"fold_{fold}_cvar", cvar_val)
+            mlflow.log_metric(f"fold_{fold}_max_drawdown", mdd_val)
+            pen = risk_penalty(returns_val, budget_eval, level=alpha)
+            if pen > 0:
+                violation_penalty = float(pen)
+                logger.warning(
+                    "Risk constraints violated on fold %d: %.4f", fold, violation_penalty
+                )
+                risk_violation = True
+                break
         mlflow.log_metric(
             f"fold_{fold}_f1_weighted", report["weighted avg"]["f1-score"]
         )
@@ -1034,10 +1056,20 @@ def main(
             state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
         save_checkpoint(state, fold, cfg.get("checkpoint_dir"))
 
+        if risk_violation:
+            break
+
         if fold == tscv.n_splits - 1:
             final_pipe = pipe
             X_train_final = X_train
         last_split = (train_idx, val_idx)
+
+    if risk_violation:
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric("risk_penalty", violation_penalty)
+        except Exception:
+            pass
+        logger.warning("Training stopped early due to risk violation")
 
     overall_cov = (
         evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
