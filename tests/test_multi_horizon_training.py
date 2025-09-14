@@ -34,6 +34,8 @@ def test_multi_horizon_labels_and_training():
 
     for h in horizons:
         assert f"label_{h}" in labels.columns
+        assert f"abs_return_{h}" in labels.columns
+        assert f"vol_{h}" in labels.columns
 
     X = pd.DataFrame({"feat": np.zeros(n)})
 

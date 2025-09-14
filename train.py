@@ -358,6 +358,9 @@ def train_multi_output_model(
         evolved_path=evolve_path,
     )
 
+    label_cols = [c for c in y.columns if c.startswith("label_")]
+    reg_cols = [c for c in y.columns if c.startswith("abs_return_") or c.startswith("vol_")]
+
     clf_params = {
         "n_estimators": cfg.get("n_estimators", 50),
         "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
@@ -368,56 +371,76 @@ def train_multi_output_model(
     clf = MultiOutputClassifier(base)
     steps.append(("clf", clf))
     pipe = Pipeline(steps)
-    pipe.fit(X, y)
+    if label_cols:
+        pipe.fit(X, y[label_cols])
+    else:
+        pipe.fit(X, y)
 
-    val_probs = pipe.predict_proba(X)
-    preds = np.zeros_like(y.values)
-    thr_dict: dict[str, float] = {}
     reports: dict[str, object] = {}
     f1_scores: list[float] = []
     threshold_metric = cfg.get("threshold_metric", "f1")
-    for i, col in enumerate(y.columns):
-        probs = val_probs[i][:, 1]
-        if threshold_metric == "f1":
-            precision, recall, thresholds = precision_recall_curve(y[col], probs)
-            f1 = 2 * precision * recall / (precision + recall + 1e-12)
-            if len(thresholds) > 0:
-                best_idx = int(np.argmax(f1[:-1]))
-                best_thr = float(thresholds[best_idx])
-                best_metric = float(f1[best_idx])
+    if label_cols:
+        val_probs = pipe.predict_proba(X)
+        preds = np.zeros((len(y), len(label_cols)))
+        thr_dict: dict[str, float] = {}
+        for i, col in enumerate(label_cols):
+            probs = val_probs[i][:, 1]
+            if threshold_metric == "f1":
+                precision, recall, thresholds = precision_recall_curve(y[col], probs)
+                f1 = 2 * precision * recall / (precision + recall + 1e-12)
+                if len(thresholds) > 0:
+                    best_idx = int(np.argmax(f1[:-1]))
+                    best_thr = float(thresholds[best_idx])
+                    best_metric = float(f1[best_idx])
+                else:
+                    best_thr = 0.5
+                    best_metric = 0.0
             else:
+                unique_thr = np.unique(probs)
                 best_thr = 0.5
-                best_metric = 0.0
-        else:
-            unique_thr = np.unique(probs)
-            best_thr = 0.5
-            best_metric = -np.inf
-            for thr in unique_thr:
-                pred = (probs >= thr).astype(int)
-                metrics = risk_adjusted_metrics(y[col], pred)
-                metric_val = metrics.get(threshold_metric, float("-inf"))
-                if metric_val > best_metric:
-                    best_metric = metric_val
-                    best_thr = float(thr)
-        thr_dict[col] = best_thr
-        preds[:, i] = (probs >= best_thr).astype(int)
-        rep = classification_report(y[col], preds[:, i], output_dict=True)
-        reports[col] = rep
-        f1_scores.append(rep["weighted avg"]["f1-score"])
-        logger.info("Best threshold for %s (%s): %.4f", col, threshold_metric, best_thr)
-        try:
-            mlflow.log_metric(f"thr_{col}", best_thr)
-            mlflow.log_metric(f"{threshold_metric}_{col}", best_metric)
-        except Exception:  # pragma: no cover - mlflow optional
-            pass
+                best_metric = -np.inf
+                for thr in unique_thr:
+                    pred = (probs >= thr).astype(int)
+                    metrics = risk_adjusted_metrics(y[col], pred)
+                    metric_val = metrics.get(threshold_metric, float("-inf"))
+                    if metric_val > best_metric:
+                        best_metric = metric_val
+                        best_thr = float(thr)
+            thr_dict[col] = best_thr
+            preds[:, i] = (probs >= best_thr).astype(int)
+            rep = classification_report(y[col], preds[:, i], output_dict=True)
+            reports[col] = rep
+            f1_scores.append(rep["weighted avg"]["f1-score"])
+            logger.info(
+                "Best threshold for %s (%s): %.4f", col, threshold_metric, best_thr
+            )
+            try:
+                mlflow.log_metric(f"thr_{col}", best_thr)
+                mlflow.log_metric(f"{threshold_metric}_{col}", best_metric)
+            except Exception:  # pragma: no cover - mlflow optional
+                pass
 
-    # Aggregate metrics across horizons
-    reports["aggregate_f1"] = float(np.mean(f1_scores))
+    if label_cols:
+        reports["aggregate_f1"] = float(np.mean(f1_scores))
+
+    rmse_scores: list[float] = []
+    if reg_cols:
+        from sklearn.multioutput import MultiOutputRegressor
+        from sklearn.linear_model import LinearRegression
+
+        reg = MultiOutputRegressor(LinearRegression())
+        reg.fit(X, y[reg_cols])
+        reg_pred = reg.predict(X)
+        for i, col in enumerate(reg_cols):
+            rmse = float(np.sqrt(np.mean((reg_pred[:, i] - y[col].to_numpy()) ** 2)))
+            reports[col] = {"rmse": rmse}
+            rmse_scores.append(rmse)
+        reports["aggregate_rmse"] = float(np.mean(rmse_scores))
 
     # Compute expected return and drawdown for validation predictions
     exp_returns: list[float] = []
     drawdowns: list[float] = []
-    for i, col in enumerate(y.columns):
+    for i, col in enumerate(label_cols):
         metrics = mo_compute_metrics(y[col], preds[:, i])
         exp_returns.append(metrics.expected_return)
         drawdowns.append(metrics.drawdown)
