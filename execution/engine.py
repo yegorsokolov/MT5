@@ -18,6 +18,7 @@ from .algorithms import (
     vwap_schedule,
     twap_schedule_async,
     vwap_schedule_async,
+    simple_slicer,
 )
 from .rl_executor import RLExecutor
 from .execution_optimizer import ExecutionOptimizer
@@ -110,6 +111,8 @@ class ExecutionEngine:
         expected_slippage_bps: float = 0.0,
         depth_cb: Optional[Callable[[], Tuple[float, float]]] = None,
         slippage_model: Optional[Callable[[float, str], float]] = None,
+        limit_price: Optional[float] = None,
+        limit_offset: Optional[float] = None,
     ) -> dict:
         """Execute an order using the requested ``strategy``.
 
@@ -126,12 +129,19 @@ class ExecutionEngine:
         mid: float
             Mid price used for slippage calculations.
         strategy: str, optional
-            ``"ioc"`` (immediate-or-cancel), ``"twap"`` or ``"vwap"``.
+            ``"ioc"`` (immediate-or-cancel), ``"twap"``, ``"vwap``" or ``"limit"``.
         expected_slippage_bps: float, optional
             Configured slippage assumption for logging/metrics.
         slippage_model: Callable, optional
             When provided, called with ``(quantity, side)`` to estimate slippage
             in basis points prior to execution.  Overrides ``expected_slippage_bps``.
+        limit_price: float, optional
+            Absolute price for limit orders.  If omitted, ``limit_offset`` is
+            applied to the current best bid/ask depending on ``side``.
+        limit_offset: float, optional
+            Offset applied to bid/ask when ``limit_price`` is not supplied.
+            Positive values make the order more aggressive for buys and less
+            aggressive for sells.
         """
 
         order_ts = pd.Timestamp.utcnow()
@@ -157,6 +167,8 @@ class ExecutionEngine:
             "strategy": strat,
             "expected_slippage_bps": expected_slippage_bps,
         }
+        if limit_price is not None:
+            order_payload["limit_price"] = limit_price
         try:
             record_event("order", order_payload)
         except Exception:
@@ -167,8 +179,10 @@ class ExecutionEngine:
             if self.optimizer
             else {"limit_offset": 0.0, "slice_size": None}
         )
-        limit_offset = float(params.get("limit_offset", 0.0) or 0.0)
+        opt_limit_offset = float(params.get("limit_offset", 0.0) or 0.0)
         slice_size = params.get("slice_size")
+        if limit_offset is None:
+            limit_offset = opt_limit_offset
 
         use_rl = False
         if strat == "rl":
@@ -209,13 +223,14 @@ class ExecutionEngine:
         elif strat == "twap":
             intervals = max(len(self.recent_volume), 1)
             slices = await twap_schedule_async(quantity, intervals)
+        elif strat == "limit":
+            if slice_size:
+                slices = simple_slicer(quantity, slice_size)
+            else:
+                intervals = max(len(self.recent_volume), 1)
+                slices = await twap_schedule_async(quantity, intervals)
         elif slice_size:
-            slices: List[float] = []
-            remaining = quantity
-            while remaining > 0:
-                take = min(remaining, slice_size)
-                slices.append(take)
-                remaining -= take
+            slices = simple_slicer(quantity, slice_size)
         else:
             slices = [quantity]
 
@@ -229,15 +244,26 @@ class ExecutionEngine:
         filled = 0.0
         price_accum = 0.0
         for qty in slices:
-            fill_qty, price_part = await self._execute_slice(
-                qty,
-                side,
-                bid,
-                ask,
-                expected_slippage_bps,
-                limit_offset,
-                _depth,
-            )
+            if strat == "limit":
+                lp = (
+                    limit_price
+                    if limit_price is not None
+                    else (ask if side.lower() == "buy" else bid)
+                    + (limit_offset or 0.0) * (1 if side.lower() == "buy" else -1)
+                )
+                fill_qty, price_part = await self._execute_limit_slice(
+                    qty, side, bid, ask, lp, _depth
+                )
+            else:
+                fill_qty, price_part = await self._execute_slice(
+                    qty,
+                    side,
+                    bid,
+                    ask,
+                    expected_slippage_bps,
+                    limit_offset or 0.0,
+                    _depth,
+                )
             filled += fill_qty
             price_accum += price_part
             # Yield control to allow callers to modify depth between slices
@@ -325,3 +351,41 @@ class ExecutionEngine:
             }
         )
         return fill_qty, fill_qty * adj_price
+
+    # ------------------------------------------------------------------
+    async def _execute_limit_slice(
+        self,
+        qty: float,
+        side: str,
+        bid: float,
+        ask: float,
+        limit_price: float,
+        depth_fn: Callable[[], Tuple[float, float]],
+    ) -> Tuple[float, float]:
+        """Simulate a limit child order and emit fill/cancel events."""
+
+        await asyncio.sleep(0)
+        bid_vol, ask_vol = depth_fn()
+        if side.lower() == "buy":
+            avail = ask_vol
+            can_fill = limit_price >= ask
+        else:
+            avail = bid_vol
+            can_fill = limit_price <= bid
+
+        if not can_fill or avail <= 0:
+            await self.event_queue.put({"type": "cancel", "qty": qty})
+            return 0.0, 0.0
+
+        fill_qty = min(qty, avail)
+        await self.event_queue.put(
+            {
+                "type": "fill",
+                "qty": fill_qty,
+                "price": limit_price,
+                "partial": fill_qty < qty,
+            }
+        )
+        if fill_qty < qty:
+            await self.event_queue.put({"type": "cancel", "qty": qty - fill_qty})
+        return fill_qty, fill_qty * limit_price
