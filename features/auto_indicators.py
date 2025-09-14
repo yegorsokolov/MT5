@@ -7,6 +7,7 @@ operate on simple ``dict`` inputs mapping column name to a list of values.
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple, Sequence
 
@@ -15,7 +16,13 @@ try:  # optional heavy deps
 except Exception:  # pragma: no cover - pandas may be absent
     pd = None
 
-REGISTRY_PATH = Path(__file__).resolve().parents[1] / "analysis" / "discovered_indicators.yaml"
+# Persist auto-discovered indicator descriptors in the feature store so that
+# subsequent training runs can automatically enrich the feature matrix.
+REGISTRY_PATH = (
+    Path(__file__).resolve().parents[1] / "feature_store" / "auto_indicators.json"
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _load_registry(path: Path = REGISTRY_PATH) -> list[Dict[str, Any]]:
@@ -37,7 +44,7 @@ def _save_registry(entries: Iterable[Dict[str, Any]], path: Path = REGISTRY_PATH
 
 
 def _basic_compute_dict(series: Sequence[float], lag: int, window: int) -> Dict[str, Sequence[float]]:
-    lagged = [None] + list(series[:-1]) if len(series) else []
+    lagged = [None] * lag + list(series[:-lag]) if len(series) else []
     means: list[float] = []
     for i in range(len(series)):
         win = series[max(0, i - window + 1) : i + 1]
@@ -62,7 +69,7 @@ def generate(
         out = df.copy()
         col = df.columns[0]
         ser = df[col]
-        out[f"{col}_lag{lag}"] = [None] + list(ser.values[:-1])
+        out[f"{col}_lag{lag}"] = [None] * lag + list(ser.values[:-lag])
         out[f"{col}_mean{window}"] = ser.rolling(window).mean()
         return out, desc
     else:
@@ -74,15 +81,58 @@ def generate(
         return data, desc
 
 
+def apply(df: Any, registry_path: Path = REGISTRY_PATH) -> Any:
+    """Append all persisted indicator columns to ``df``.
+
+    Parameters
+    ----------
+    df: Any
+        Either a :class:`pandas.DataFrame` or a ``dict`` mapping column name to
+        sequences.  The structure mirrors the accepted inputs for
+        :func:`generate`.
+    registry_path: Path, optional
+        Location of the persisted indicator registry.
+    """
+
+    entries = _load_registry(registry_path)
+    if not entries:
+        return df
+
+    # Support both DataFrame and dictionary inputs similar to ``generate``.
+    if pd is not None and isinstance(df, pd.DataFrame):
+        out = df.copy()
+        col = df.columns[0]
+        ser = df[col]
+        for item in entries:
+            lag = int(item.get("lag", 1))
+            window = int(item.get("window", 1))
+            out[f"{col}_lag{lag}"] = [None] * lag + list(ser.values[:-lag])
+            out[f"{col}_mean{window}"] = ser.rolling(window).mean()
+        return out
+    else:
+        data = {k: list(v) for k, v in df.items()}
+        key = next(iter(data))
+        for item in entries:
+            lag = int(item.get("lag", 1))
+            window = int(item.get("window", 1))
+            computed = _basic_compute_dict(data[key], lag, window)
+            data[f"{key}_lag{lag}"] = computed["lag"]
+            data[f"{key}_mean{window}"] = computed["mean"]
+        return data
+
+
 def persist(
     indicator: Dict[str, int],
     metrics: Dict[str, Any],
     registry_path: Path = REGISTRY_PATH,
 ) -> None:
+    """Persist descriptor and log its improvement metrics."""
+
     entry: Dict[str, Any] = {**indicator, "metrics": metrics}
     entries = _load_registry(registry_path)
     entries.append(entry)
     _save_registry(entries, registry_path)
+    logger.info("Persisted indicator lag=%s window=%s with metrics=%s", indicator.get("lag"), indicator.get("window"), metrics)
 
 
-__all__ = ["generate", "persist", "REGISTRY_PATH"]
+__all__ = ["generate", "persist", "apply", "REGISTRY_PATH"]
