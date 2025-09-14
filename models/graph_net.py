@@ -25,11 +25,26 @@ class GraphSAGELayer(torch.nn.Module):
         super().__init__()
         self.linear = torch.nn.Linear(in_channels * 2, out_channels)
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_weight: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         row, col = edge_index
         agg = torch.zeros_like(x)
-        agg.index_add_(0, row, x[col])
-        deg = torch.bincount(row, minlength=x.size(0)).clamp(min=1).unsqueeze(-1)
+        if edge_weight is None:
+            agg.index_add_(0, row, x[col])
+            deg = torch.bincount(row, minlength=x.size(0)).clamp(min=1).unsqueeze(-1)
+        else:
+            if edge_weight.dim() == 1:
+                ew = edge_weight.unsqueeze(-1)
+            else:
+                ew = edge_weight
+            agg.index_add_(0, row, x[col] * ew)
+            deg = torch.zeros(x.size(0), 1, device=x.device)
+            deg.index_add_(0, row, ew)
+            deg = deg.clamp(min=1)
         agg = agg / deg
         out = torch.cat([x, agg], dim=-1)
         return self.linear(out)
@@ -86,13 +101,14 @@ class GraphNet(torch.nn.Module):
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
+        edge_weight: torch.Tensor | None = None,
         node_type: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.has_type_emb and node_type is not None:
             x = torch.cat([x, self.type_emb(node_type)], dim=-1)
         for conv in self.convs[:-1]:
-            x = F.relu(conv(x, edge_index))
-        return self.convs[-1](x, edge_index)
+            x = F.relu(conv(x, edge_index, edge_weight))
+        return self.convs[-1](x, edge_index, edge_weight)
 
 
 __all__ = ["GraphNet", "GraphSAGELayer"]
