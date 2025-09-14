@@ -528,6 +528,10 @@ async def train_realtime():
                 interval=cfg.get("online_interval", 300),
                 run_once=True,
             )
+            # Schedule periodic RL and meta-learning updates based on the
+            # number of processed batches.  Each update trains on ticks
+            # recorded by ``LiveRecorder`` and persists the resulting policies
+            # through :mod:`model_registry` for later reuse.
             if batch_count and batch_count % rl_update_interval == 0:
                 await asyncio.to_thread(
                     run_rl_curriculum, recorder.root, root / "models"
