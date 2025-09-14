@@ -92,6 +92,7 @@ from analysis.domain_adapter import DomainAdapter
 from analysis import tick_anomaly_detector, pipeline_anomaly
 from analysis.broker_tca import broker_tca
 from data.live_recorder import LiveRecorder
+import train_online
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -477,6 +478,14 @@ async def train_realtime():
                 logger.warning("Pipeline anomaly detected in features; dropping batch")
                 return
             await dispatch_signals(bus, feats)
+            await asyncio.to_thread(
+                train_online.train_online,
+                data_path=recorder.root,
+                model_dir=root / "models",
+                min_ticks=cfg.get("online_min_ticks", 1000),
+                interval=cfg.get("online_interval", 300),
+                run_once=True,
+            )
 
         tick_queue: asyncio.Queue = asyncio.Queue()
         producer = asyncio.create_task(

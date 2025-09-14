@@ -59,6 +59,7 @@ sys.modules.setdefault("model_registry", model_registry_stub)
 
 import pandas as pd
 import joblib
+import time
 
 import train_online
 
@@ -89,9 +90,14 @@ def test_live_recording_triggers_retraining(tmp_path):
     _, last1 = joblib.load(latest)
 
     rec.record(_make_ticks(ts + pd.Timedelta(seconds=3), n=2))
+    time.sleep(1)
     train_online.train_online(
         data_path=data_path, model_dir=models, run_once=True, min_ticks=1, interval=0
     )
     _, last2 = joblib.load(latest)
     assert last2 > last1
     assert len(saved_paths) == 2
+    # Rollback to the previous model
+    train_online.rollback_model(model_dir=models)
+    _, last3 = joblib.load(latest)
+    assert last3 == last1
