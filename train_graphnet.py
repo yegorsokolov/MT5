@@ -24,56 +24,62 @@ from torch.nn import MSELoss
 
 from models.graph_net import GraphNet
 from models.graph_attention import GATNet
+from data.features import make_features
+from utils import load_config
 
 
 logger = logging.getLogger(__name__)
 
 
-def build_node_features(df: pd.DataFrame, symbols: Sequence[str]) -> List[torch.Tensor]:
-    """Return list of node feature tensors from per-symbol returns.
+def build_node_features(
+    df: pd.DataFrame, symbols: Sequence[str], feature_cols: Sequence[str]
+) -> List[torch.Tensor]:
+    """Return list of node feature tensors for each time step.
 
-    Parameters
-    ----------
-    df:
-        DataFrame where each column corresponds to the return series of a
-        symbol.  Each row is a time step.
-    symbols:
-        Ordered sequence of symbols matching the columns in ``df``.
+    ``df`` must be in long format with ``Timestamp`` and ``Symbol`` columns
+    alongside numeric feature columns. ``feature_cols`` selects which columns to
+    include as node features.
     """
 
-    arr = df[symbols].to_numpy(dtype=np.float32)
-    return [torch.from_numpy(row).view(len(symbols), 1) for row in arr]
+    df = df.sort_values("Timestamp")
+    grouped = df.groupby("Timestamp")
+    tensors: List[torch.Tensor] = []
+    for _, group in grouped:
+        group = group.set_index("Symbol")
+        feats = [group.loc[sym, feature_cols].to_list() for sym in symbols]
+        tensors.append(torch.tensor(feats, dtype=torch.float32))
+    return tensors
 
 
 def build_graph_examples(
-    df: pd.DataFrame, symbols: Sequence[str]
-) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    """Create training examples ``(x, edge_index, y)`` for each time step.
-
-    ``y`` consists of the future return for each symbol.  ``edge_index`` is
-    derived from ``df.attrs['adjacency_matrices']`` using the standard COO
-    format.
-    """
-
-    returns = df[symbols]
-    X_df = returns.iloc[:-1]
-    y_df = returns.shift(-1).dropna()
+    df: pd.DataFrame, symbols: Sequence[str], feature_cols: Sequence[str]
+) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor]]:
+    """Create training examples ``(x, edge_index, edge_weight, y)`` per step."""
 
     adj_attr = df.attrs.get("adjacency_matrices")
     if adj_attr is None:
         raise ValueError("df.attrs['adjacency_matrices'] must be provided")
     if isinstance(adj_attr, dict):
-        matrices = [adj_attr[idx] for idx in df.index]
+        matrices = [adj_attr[ts] for ts in sorted(adj_attr.keys())]
     else:
         matrices = list(adj_attr)
-    matrices = matrices[:-1]
 
-    examples: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
-    x_list = build_node_features(X_df, symbols)
-    y_list = build_node_features(y_df, symbols)
-    for x, y, mat in zip(x_list, y_list, matrices):
-        edge_index = torch.tensor(np.array(mat).nonzero(), dtype=torch.long)
-        examples.append((x, edge_index, y))
+    df = df.sort_values("Timestamp")
+    ret_pivot = df.pivot(index="Timestamp", columns="Symbol", values="return").sort_index()
+    X_all = build_node_features(df, symbols, feature_cols)
+
+    start = len(ret_pivot.index) - len(matrices)
+    matrices = matrices[:-1]
+    X_tensors = X_all[start:-1]
+    y_arr = ret_pivot.iloc[start + 1 :].to_numpy(dtype=np.float32)
+
+    examples: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor]] = []
+    for x, y_row, mat in zip(X_tensors, y_arr, matrices):
+        y = torch.tensor(y_row, dtype=torch.float32).view(len(symbols), 1)
+        nz = np.nonzero(mat)
+        edge_index = torch.tensor(np.vstack(nz), dtype=torch.long)
+        edge_weight = torch.tensor(mat[nz], dtype=torch.float32)
+        examples.append((x, edge_index, edge_weight, y))
     return examples
 
 
@@ -102,10 +108,27 @@ def train_graphnet(
         ``losses`` is a list of average epoch losses.
     """
 
+    if "adjacency_matrices" not in df.attrs:
+        try:
+            feat_cfg = load_config()
+            df = make_features(df, validate=feat_cfg.get("validate", False))
+        except Exception:
+            df = make_features(df)
+
+    if not {"Symbol", "Timestamp"}.issubset(df.columns):
+        raise ValueError("df must contain 'Symbol' and 'Timestamp' columns")
+
     symbols = cfg.get("symbols")
     if symbols is None:
-        symbols = list(df.columns)
-    examples = build_graph_examples(df, symbols)
+        symbols = sorted(df["Symbol"].unique())
+
+    feature_cols = [
+        c
+        for c in df.columns
+        if c not in {"Symbol", "Timestamp"}
+        and np.issubdtype(df[c].dtype, np.number)
+    ]
+    examples = build_graph_examples(df, symbols, feature_cols)
 
     use_gat = cfg.get("use_gat", False)
     if use_gat:
@@ -131,10 +154,13 @@ def train_graphnet(
     losses: List[float] = []
     for _ in range(epochs):
         total = 0.0
-        for x, edge_index, y in examples:
-            pred = model(x, edge_index)
-            if use_gat and getattr(model, "last_attention", None) is not None:
-                logger.debug("attention weights: %s", model.last_attention)
+        for x, edge_index, edge_weight, y in examples:
+            if use_gat:
+                pred = model(x, edge_index)
+                if getattr(model, "last_attention", None) is not None:
+                    logger.info("attention weights: %s", model.last_attention)
+            else:
+                pred = model(x, edge_index, edge_weight=edge_weight)
             loss = loss_fn(pred, y)
             optimizer.zero_grad()
             loss.backward()
