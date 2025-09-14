@@ -104,6 +104,14 @@ def train_online(
                     metadata,
                     save_path,
                 )
+                # Persist provenance information for later auditability
+                prov_log = model_dir / "training_provenance.log"
+                try:
+                    with prov_log.open("a", encoding="utf-8") as f:
+                        record = {"version": version, **metadata}
+                        f.write(json.dumps(record) + "\n")
+                except Exception:  # pragma: no cover - best effort
+                    logger.debug("Failed to write provenance to %s", prov_log)
                 logger.info(
                     "Updated model %s with %d new ticks; window %s - %s drawdown_limit=%s",
                     version,
