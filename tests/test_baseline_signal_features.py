@@ -42,7 +42,7 @@ def test_baseline_feature_matches_strategy():
     )
     df["long_ma"] = ma
     df["rsi"] = rsi(df["Close"], params["rsi_window"])
-    df["atr"] = atr(df["High"], df["Low"], df["Close"], params["atr_window"])
+    df["atr_val"] = atr(df["High"], df["Low"], df["Close"], params["atr_window"])
 
     result = baseline_signal.compute(df, **params)
 
@@ -59,7 +59,7 @@ def test_baseline_feature_matches_strategy():
             short_ma=row.short_ma if not np.isnan(row.short_ma) else None,
             long_ma=row.long_ma if not np.isnan(row.long_ma) else None,
             rsi=row.rsi if not np.isnan(row.rsi) else None,
-            atr=row.atr if not np.isnan(row.atr) else None,
+            atr_val=row.atr_val if not np.isnan(row.atr_val) else None,
             boll_upper=row.boll_upper if not np.isnan(row.boll_upper) else None,
             boll_lower=row.boll_lower if not np.isnan(row.boll_lower) else None,
         )
