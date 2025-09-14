@@ -36,6 +36,7 @@ from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
 from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
 from analysis.domain_adapter import DomainAdapter
+from analysis.risk_loss import cvar, max_drawdown, risk_penalty, RiskBudget
 
 try:
     import shap
@@ -365,12 +366,20 @@ def main(
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
-        df["tb_label"] = triple_barrier(
-            df["mid"],
-            cfg.get("pt_mult", 0.01),
-            cfg.get("sl_mult", 0.01),
-            cfg.get("max_horizon", 10),
-        )
+    rp = cfg.strategy.risk_profile
+    user_budget = RiskBudget(
+        max_leverage=rp.leverage_cap, max_drawdown=rp.drawdown_limit
+    )
+    df["risk_tolerance"] = rp.tolerance
+    for name, val in user_budget.as_features().items():
+        df[name] = val
+
+    df["tb_label"] = triple_barrier(
+        df["mid"],
+        cfg.get("pt_mult", 0.01),
+        cfg.get("sl_mult", 0.01),
+        cfg.get("max_horizon", 10),
+    )
 
         train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
 
@@ -408,6 +417,7 @@ def main(
             "news_sentiment",
             "market_regime",
         ]
+        features.extend(["risk_tolerance", *user_budget.as_features().keys()])
         features += [
             c
             for c in df.columns
@@ -852,6 +862,7 @@ def main(
             )
             for step in pbar:
                 losses = []
+                batch_returns: list[torch.Tensor] = []
                 for code, it in iterators.items():
                     try:
                         batch = next(it)
@@ -872,29 +883,39 @@ def main(
                             if isinstance(model, HierarchicalForecaster):
                                 preds = model(xb)
                                 losses.append(loss_fn(preds, yb.float()))
+                                batch_returns.append(preds.squeeze())
                             else:
                                 if use_tft:
                                     preds = model(xb, static=xs, observed=xo)
                                     losses.append(loss_fn(preds, yb.float()))
+                                    batch_returns.append(preds.squeeze())
                                 else:
                                     preds = model(xb, code)
                                     losses.append(loss_fn(preds, yb))
+                                    batch_returns.append(preds.squeeze())
                     else:
                         if isinstance(model, HierarchicalForecaster):
                             preds = model(xb)
                             losses.append(loss_fn(preds, yb.float()))
+                            batch_returns.append(preds.squeeze())
                         else:
                             if use_tft:
                                 preds = model(xb, static=xs, observed=xo)
                                 losses.append(loss_fn(preds, yb.float()))
+                                batch_returns.append(preds.squeeze())
                             else:
                                 preds = model(xb, code)
                                 losses.append(loss_fn(preds, yb))
+                                batch_returns.append(preds.squeeze())
                 raw_loss = sum(losses) / len(losses)
+                # add differentiable risk penalty based on model predictions
+                returns_batch = torch.cat(batch_returns)
+                penalty = risk_penalty(returns_batch, user_budget)
+                loss = raw_loss + penalty
                 if use_amp:
-                    scaler.scale(raw_loss / accumulate_steps).backward()
+                    scaler.scale(loss / accumulate_steps).backward()
                 else:
-                    (raw_loss / accumulate_steps).backward()
+                    (loss / accumulate_steps).backward()
                 trend, _ = grad_monitor.track(model.parameters())
                 if trend == "explode":
                     for group in optim.param_groups:
@@ -943,6 +964,7 @@ def main(
                 val_loss = 0.0
                 correct = 0
                 total = 0
+                val_returns_eval: list[torch.Tensor] = []
                 with torch.no_grad():
                     for code, loader in val_loaders.items():
                         for batch in loader:
@@ -959,21 +981,25 @@ def main(
                                 if isinstance(model, HierarchicalForecaster):
                                     preds = model(xb)
                                     loss = loss_fn(preds, yb.float())
+                                    prob = preds[:, 0]
                                 else:
                                     if use_tft:
                                         preds = model(xb, static=xs, observed=xo)
                                         loss = loss_fn(preds, yb.float())
+                                        prob = preds[:, len(quantiles) // 2]
                                     else:
                                         preds = model(xb, code)
                                         loss = loss_fn(preds, yb)
+                                        prob = preds.squeeze()
                             val_loss += loss.item() * xb.size(0)
+                            val_returns_eval.append(prob.detach())
                             if isinstance(model, HierarchicalForecaster):
-                                pred_labels = (preds[:, 0] > 0.5).int()
+                                pred_labels = (prob > 0.5).int()
                             else:
                                 pred_labels = (
-                                    (preds[:, len(quantiles) // 2] > 0.5).int()
-                                    if use_tft
-                                    else (preds > 0.5).int()
+                                    (prob > 0.5).int()
+                                    if not use_tft
+                                    else (preds[:, len(quantiles) // 2] > 0.5).int()
                                 )
                             correct += (pred_labels == yb.int()).sum().item()
                             total += yb.size(0)
@@ -982,6 +1008,19 @@ def main(
                 mlflow.log_metric("val_loss", val_loss, step=epoch)
                 mlflow.log_metric("val_accuracy", val_acc, step=epoch)
                 mlflow.log_metric("lr", optim.get_lr(), step=epoch)
+                if val_returns_eval:
+                    returns_tensor = torch.cat(val_returns_eval)
+                    alpha = cfg.get("cvar_level", 0.05)
+                    cvar_val = float(-cvar(returns_tensor, alpha))
+                    mdd_val = float(max_drawdown(returns_tensor))
+                    mlflow.log_metric("val_cvar", cvar_val, step=epoch)
+                    mlflow.log_metric("val_max_drawdown", mdd_val, step=epoch)
+                    pen = risk_penalty(returns_tensor, user_budget, level=alpha)
+                    if pen > 0:
+                        logger.warning(
+                            "Risk constraints violated at epoch %d: %.4f", epoch + 1, float(pen)
+                        )
+                        break
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss

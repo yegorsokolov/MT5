@@ -24,27 +24,47 @@ def _to_tensor(x):
 
 
 def cvar(returns, level: float = 0.05):
+    """Conditional value-at-risk of ``returns`` at ``level``.
+
+    The implementation is fully differentiable when ``returns`` is a
+    :class:`torch.Tensor` by relying solely on PyTorch operations.  For numpy
+    arrays the equivalent computation is carried out with ``np.partition`` which
+    is efficient on large arrays.
+    """
+
     r = _to_tensor(returns)
     if _TORCH_AVAILABLE and isinstance(r, torch.Tensor):
-        var = torch.quantile(r, level)
-        tail = r[r <= var]
-        return tail.mean()
-    var = np.quantile(r, level)
-    tail = r[r <= var]
-    return float(tail.mean()) if tail.size else 0.0
+        n = r.numel()
+        k = max(int(n * level), 1)
+        values, _ = torch.topk(r, k, largest=False)
+        return values.mean()
+    n = r.size
+    if n == 0:
+        return 0.0
+    k = max(int(n * level), 1)
+    part = np.partition(r, k - 1)[:k]
+    return float(part.mean())
 
 
 def max_drawdown(returns):
+    """Maximum drawdown of ``returns``.
+
+    Uses cumulative sums/maximums so that the function remains differentiable
+    for tensor inputs.  The numpy branch mirrors the PyTorch logic.
+    """
+
     r = _to_tensor(returns)
     if _TORCH_AVAILABLE and isinstance(r, torch.Tensor):
         cumulative = torch.cumsum(r, dim=0)
         peak = torch.cummax(cumulative, dim=0)[0]
         drawdown = (peak - cumulative) / torch.clamp(peak, min=1e-8)
         return drawdown.max()
+    if len(r) == 0:
+        return 0.0
     cumulative = np.cumsum(r)
     peak = np.maximum.accumulate(cumulative)
     drawdown = (peak - cumulative) / np.clip(peak, 1e-8, None)
-    return float(drawdown.max()) if drawdown.size else 0.0
+    return float(drawdown.max())
 
 
 def cvar_penalty(returns, limit: float, level: float = 0.05, scale: float = 1.0):
