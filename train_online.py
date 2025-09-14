@@ -5,6 +5,7 @@ import logging
 import numpy as np
 import pandas as pd
 import joblib
+import json
 from river import compose, preprocessing, linear_model
 
 from utils import load_config
@@ -96,13 +97,21 @@ def train_online(
                         last_ts.isoformat() if last_ts else None,
                     ],
                 }
+                save_path = model_dir / f"online_{version}.pkl"
                 save_model(
                     f"online_{version}",
                     model,
                     metadata,
-                    model_dir / f"online_{version}.pkl",
+                    save_path,
                 )
-                logger.info("Updated model with %d new ticks", new_ticks)
+                logger.info(
+                    "Updated model %s with %d new ticks; window %s - %s drawdown_limit=%s",
+                    version,
+                    new_ticks,
+                    metadata["training_window"][0],
+                    metadata["training_window"][1],
+                    metadata["drawdown_limit"],
+                )
                 new_ticks = 0
                 last_train = now
             if run_once:
@@ -110,6 +119,48 @@ def train_online(
         if run_once:
             break
         time.sleep(1)
+
+
+def rollback_model(
+    version: str | None = None, model_dir: Path | str | None = None
+) -> Path:
+    """Restore a previously saved model version as the active one.
+
+    Parameters
+    ----------
+    version:
+        Timestamp identifier of the model to restore (e.g. ``20240101000000``).
+        When omitted the function rolls back to the second most recent model.
+    model_dir:
+        Directory where model artifacts are stored. Defaults to ``models``.
+    """
+
+    root = Path(__file__).resolve().parent
+    model_dir = Path(model_dir) if model_dir is not None else root / "models"
+    versions = sorted(model_dir.glob("online_*.pkl"))
+    if version:
+        candidate = model_dir / f"online_{version}.pkl"
+        if not candidate.exists():  # pragma: no cover - user input
+            raise FileNotFoundError(candidate)
+    else:
+        if len(versions) < 2:
+            raise ValueError("No previous model available for rollback")
+        candidate = versions[-2]
+    model = joblib.load(candidate)
+    meta_path = candidate.with_suffix(".json")
+    last_ts = None
+    if meta_path.exists():
+        try:
+            info = json.loads(meta_path.read_text())
+            end = info.get("training_window", [None, None])[1]
+            if end:
+                last_ts = pd.Timestamp(end)
+        except Exception:  # pragma: no cover - best effort
+            pass
+    latest_path = model_dir / "online_latest.joblib"
+    joblib.dump((model, last_ts), latest_path)
+    logger.info("Rolled back to model %s", candidate.stem)
+    return latest_path
 
 
 if __name__ == "__main__":
