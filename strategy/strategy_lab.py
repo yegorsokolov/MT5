@@ -194,6 +194,10 @@ class StrategyLab:
                     continue
             self._persist(rec)
             try:
+                self.router.evaluate(name, rec)
+            except Exception:
+                pass
+            try:
                 record_metric("shadow_pnl", rec.get("pnl", 0.0), {"name": name})
                 record_metric("shadow_drawdown", rec.get("drawdown", 0.0), {"name": name})
             except Exception:
