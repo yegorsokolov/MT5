@@ -245,8 +245,9 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
 def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
     """Merge alternative datasets into ``df``.
 
-    This function loads shipping metrics, retail transactions and
-    weather series (as well as legacy options/on-chain/ESG metrics) using
+    This function loads shipping metrics, retail transactions, macro
+    indicators, news sentiment and weather series (as well as legacy
+    options/on-chain/ESG metrics) using
     :func:`data.alt_data_loader.load_alt_data` and performs a
     ``merge_asof`` on ``Timestamp`` and ``Symbol``.  Missing columns are
     forward filled and remaining gaps replaced with ``0`` so downstream
@@ -277,6 +278,10 @@ def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
         "shipping_metric",
         "retail_sales",
         "temperature",
+        "gdp",
+        "cpi",
+        "interest_rate",
+        "news_sentiment",
     ]:
         if col not in df.columns:
             df[col] = 0.0
