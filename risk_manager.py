@@ -174,24 +174,55 @@ class RiskManager:
         min_ratio: float = 0.5,
         max_slippage: float = 0.01,
         max_cancel_rate: float = 0.5,
-    ) -> bool:
-        """Return ``True`` if limit order fill metrics breach thresholds."""
+    ) -> Dict[str, float]:
+        """Return metrics breaching configured budgets.
+
+        Parameters
+        ----------
+        placed: int
+            Number of limit orders placed.
+        filled: int
+            Number of limit orders filled.
+        cancels: int, optional
+            Number of cancelled orders, by default 0.
+        slippage: float, optional
+            Average slippage observed, by default 0.0.
+        min_ratio: float, optional
+            Minimum acceptable fill ratio, by default 0.5.
+        max_slippage: float, optional
+            Maximum acceptable slippage, by default 0.01.
+        max_cancel_rate: float, optional
+            Maximum acceptable cancel rate, by default 0.5.
+
+        Returns
+        -------
+        Dict[str, float]
+            Mapping of metric name to observed value for each budget
+            violation.
+        """
 
         ratio = filled / placed if placed else 0.0
         cancel_rate = cancels / placed if placed else 0.0
         self.metrics.fill_ratio = ratio
         self.metrics.cancel_rate = cancel_rate
         self.metrics.slippage = slippage
-        breach = ratio < min_ratio or cancel_rate > max_cancel_rate or slippage > max_slippage
-        if breach:
-            self.metrics.trading_halted = True
+
+        violations: Dict[str, float] = {}
+        if ratio < min_ratio:
+            violations["fill_ratio"] = ratio
+        if cancel_rate > max_cancel_rate:
+            violations["cancel_rate"] = cancel_rate
+        if slippage > max_slippage:
+            violations["slippage"] = slippage
+
         try:
             record_metric("limit_fill_ratio", ratio)
             record_metric("limit_cancel_rate", cancel_rate)
             record_metric("limit_slippage", slippage)
         except Exception:
             pass
-        return breach
+
+        return violations
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""

@@ -81,11 +81,11 @@ class StrategyLab:
         with self.history_path.open("a") as f:
             if header:
                 f.write(
-                    "name,version,pnl,drawdown,sharpe,fill_ratio,cancel_rate,slippage\n"
+                    "name,version,pnl,drawdown,sharpe,fill_ratio,cancel_rate,slippage,violations\n"
                 )
             ver = rec.get("version") or self.policy_versions.get(rec.get("name", ""), "")
             f.write(
-                f"{rec['name']},{ver},{rec.get('pnl',0.0):.6f},{rec.get('drawdown',0.0):.6f},{rec.get('sharpe',0.0):.6f},{rec.get('fill_ratio',0.0):.6f},{rec.get('cancel_rate',0.0):.6f},{rec.get('slippage',0.0):.6f}\n"
+                f"{rec['name']},{ver},{rec.get('pnl',0.0):.6f},{rec.get('drawdown',0.0):.6f},{rec.get('sharpe',0.0):.6f},{rec.get('fill_ratio',0.0):.6f},{rec.get('cancel_rate',0.0):.6f},{rec.get('slippage',0.0):.6f},{rec.get('violations','')}\n"
             )
 
     # ------------------------------------------------------------------
@@ -135,7 +135,7 @@ class StrategyLab:
                             if stats["slippage"]
                             else 0.0
                         )
-                        rm.check_fills(
+                        violations = rm.check_fills(
                             placed=int(placed_tot),
                             filled=int(filled_tot),
                             cancels=int(cancels_tot),
@@ -147,6 +147,7 @@ class StrategyLab:
                         rec["fill_ratio"] = rm.metrics.fill_ratio
                         rec["cancel_rate"] = rm.metrics.cancel_rate
                         rec["slippage"] = rm.metrics.slippage
+                        rec["violations"] = ";".join(violations)
                         try:
                             record_metric(
                                 "limit_fill_ratio", rm.metrics.fill_ratio, {"name": name}
@@ -157,12 +158,17 @@ class StrategyLab:
                             record_metric(
                                 "limit_slippage", rm.metrics.slippage, {"name": name}
                             )
+                            for v in violations:
+                                record_metric(
+                                    "limit_violation", 1.0, {"name": name, "type": v}
+                                )
                         except Exception:
                             pass
                 else:
                     rec["fill_ratio"] = rm.metrics.fill_ratio
                     rec["cancel_rate"] = rm.metrics.cancel_rate
                     rec["slippage"] = rm.metrics.slippage
+                    rec.setdefault("violations", "")
                 if rm.metrics.trading_halted:
                     self._persist(rec)
                     try:
@@ -179,7 +185,7 @@ class StrategyLab:
                 record_metric("shadow_drawdown", rec.get("drawdown", 0.0), {"name": name})
             except Exception:
                 pass
-            if self._meets_thresholds(rec) and rec.get("verified", True):
+            if self._meets_thresholds(rec) and rec.get("verified", True) and not rec.get("violations"):
                 algo = self.candidates.get(name)
                 if algo is not None:
                     self.router.promote(name, algo)
