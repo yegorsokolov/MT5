@@ -21,9 +21,11 @@ from datetime import datetime
 
 import asyncio
 import pandas as pd
+import joblib
 
 from analytics.metrics_aggregator import record_metric
 from risk_manager import RiskManager
+from model_registry import get_policy_path
 from .shadow_runner import ShadowRunner
 from .router import StrategyRouter, Algorithm
 
@@ -51,7 +53,11 @@ class StrategyLab:
     _limit_stats: Dict[str, Dict[str, deque]] = field(default_factory=dict)
 
     async def train_and_deploy(
-        self, name: str, data: pd.DataFrame, init: Optional[Any] = None
+        self,
+        name: str,
+        data: pd.DataFrame,
+        init: Optional[Any] = None,
+        policy: str | None = None,
     ) -> None:
         """Train a new strategy and start its shadow runner.
 
@@ -63,8 +69,19 @@ class StrategyLab:
             Historical data used for training.
         init:
             Optional reinforcement learning or meta-learned initialisation
-            passed to ``train_fn`` for warm starting policies.
+            passed directly to ``train_fn`` for warm starting policies.
+        policy:
+            Optional name of a policy persisted via :mod:`model_registry` to
+            load when ``init`` is not supplied.
         """
+
+        if init is None and policy is not None:
+            path = get_policy_path(policy)
+            if path is not None and Path(path).exists():
+                try:
+                    init = joblib.load(path)
+                except Exception:  # pragma: no cover - best effort
+                    init = None
 
         algo = self.train_fn(data, init)
         self.candidates[name] = algo
