@@ -91,6 +91,7 @@ from analysis.data_quality import apply_quality_checks
 from analysis.domain_adapter import DomainAdapter
 from analysis import tick_anomaly_detector, pipeline_anomaly
 from analysis.broker_tca import broker_tca
+from data.live_recorder import LiveRecorder
 
 tracer = get_tracer(__name__)
 meter = get_meter(__name__)
@@ -408,6 +409,7 @@ async def tick_worker(
 async def train_realtime():
     cfg = load_config()
     root = Path(__file__).resolve().parent
+    recorder = LiveRecorder(root / "data" / "live")
     _ensure_data_downloaded(cfg, root)
     input("Please log into your MetaTrader 5 terminal and press Enter to continue...")
     while not mt5_direct.is_terminal_logged_in():
@@ -438,6 +440,7 @@ async def train_realtime():
 
         async def process_batch(batch: pd.DataFrame) -> None:
             nonlocal batch_count
+            await asyncio.to_thread(recorder.record, batch)
             feats = await generate_features(batch)
             if feats.empty:
                 return
