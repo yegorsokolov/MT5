@@ -31,7 +31,7 @@ def test_drawdown_violation_demotes(tmp_path):
         message_bus._message_bus = message_bus.MessageBus(backend="inmemory")
         router = _setup_router(tmp_path)
 
-        def train_fn(df: pd.DataFrame):
+        def train_fn(df: pd.DataFrame, init=None):
             return lambda msg: float(msg.get("value", 0.0))
 
         lab = StrategyLab(
@@ -65,7 +65,7 @@ def test_fill_rate_violation_blocks_promotion(tmp_path):
         message_bus._message_bus = message_bus.MessageBus(backend="inmemory")
         router = _setup_router(tmp_path)
 
-        def train_fn(df: pd.DataFrame):
+        def train_fn(df: pd.DataFrame, init=None):
             return lambda msg: 0.0
 
         lab = StrategyLab(
