@@ -4,14 +4,23 @@ import logging
 from log_utils import setup_logging, log_exceptions
 
 from pathlib import Path
-from typing import Iterable, List
+from typing import Any, Iterable, List
 from types import SimpleNamespace
 
 import os
-import numpy as np
-import pandas as pd
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - optional dependency
+    np = SimpleNamespace()  # type: ignore
+try:
+    import pandas as pd
+except Exception:  # pragma: no cover - optional dependency
+    pd = SimpleNamespace()  # type: ignore
 import random
-import torch
+try:
+    import torch
+except Exception:  # pragma: no cover - optional dependency
+    torch = SimpleNamespace()  # type: ignore
 import pickle
 import json
 
@@ -25,8 +34,12 @@ except Exception:  # pragma: no cover - torch may be stubbed
     from types import SimpleNamespace
 
     nn = SimpleNamespace(Module=object, Linear=lambda *a, **k: None)  # type: ignore
-import gym
-from gym import spaces
+try:
+    import gym
+    from gym import spaces
+except Exception:  # pragma: no cover - optional dependency
+    gym = SimpleNamespace(Env=object)  # type: ignore
+    spaces = SimpleNamespace()  # type: ignore
 from datetime import datetime
 try:  # optional dependency
     from stable_baselines3 import PPO, SAC, A2C
@@ -42,7 +55,11 @@ try:
     from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 except Exception:  # pragma: no cover - optional dependency
     SubprocVecEnv = DummyVecEnv = None  # type: ignore
-from stable_baselines3.common.evaluation import evaluate_policy
+try:
+    from stable_baselines3.common.evaluation import evaluate_policy
+except Exception:  # pragma: no cover - optional dependency
+    def evaluate_policy(*_a, **_k):  # type: ignore
+        return 0.0, 0.0
 try:  # optional dependency
     from sb3_contrib.qrdqn import QRDQN
     from sb3_contrib import TRPO, RecurrentPPO
@@ -59,7 +76,10 @@ try:  # optional dependency - hierarchical options
 except Exception:  # pragma: no cover - algorithm may not be available
     HierarchicalPPO = None  # type: ignore
 
-from plugins.rl_risk import RiskEnv
+try:
+    from plugins.rl_risk import RiskEnv
+except Exception:  # pragma: no cover - optional dependency
+    RiskEnv = object  # type: ignore
 from rl.multi_objective import weighted_sum
 from rl.trading_env import (
     TradingEnv,
@@ -72,6 +92,7 @@ from rl.macro_reward_wrapper import MacroRewardWrapper
 from rl.multi_agent_env import MultiAgentTradingEnv
 from rl.constrained_agent import ConstrainedAgent
 from rl.meta_controller import MetaControllerDataset, train_meta_controller
+from rl.live_stream import LiveTradingEnv, incremental_policy_update
 
 try:
     import gymnasium as gymn
@@ -1813,3 +1834,6 @@ if __name__ == "__main__":
             launch(cfg)
         finally:
             ray_shutdown()
+
+
+__all__ = ["LiveTradingEnv", "incremental_policy_update"]

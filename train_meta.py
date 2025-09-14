@@ -13,7 +13,7 @@ documentation for developers experimenting with meta-learning techniques.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Tuple
 
 import numpy as np
 import torch
@@ -95,6 +95,17 @@ def main() -> None:
     scheduler.run()
 
     logger.info("Curriculum finished with metrics: %s", scheduler.metrics)
+
+
+def initialise_with_meta(state: Dict[str, torch.Tensor], build: Callable[[], _LinearModel]) -> _LinearModel:
+    """Return a new model initialised with ``state``.
+
+    The returned model is ready for rapid adaptation on a new market regime,
+    allowing strategies to start from a meta-learned prior."""
+
+    model = build()
+    model.load_state_dict(state)
+    return model
 
 
 if __name__ == "__main__":  # pragma: no cover - manual execution script
