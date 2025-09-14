@@ -519,6 +519,11 @@ python train_online.py
 ```
 This optional script reads the features produced by `realtime_train.py` and
 incrementally updates a lightweight river model stored under `models/online.joblib`.
+When `realtime_train.py` is running the trainer is triggered after each batch
+to pick up newly recorded ticks.  Each training step produces a timestamped
+artifact registered in the `model_registry` along with provenance metadata.  If
+a retrain performs poorly, `train_online.rollback_model()` restores the previous
+version.
 
 ## Deployment Guide
 
