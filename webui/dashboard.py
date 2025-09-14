@@ -18,6 +18,8 @@ from log_utils import read_decisions
 
 from config_schema import ConfigSchema
 import numpy as np
+import state_manager
+import risk_manager as rm_mod
 
 API_URL = os.getenv("REMOTE_API_URL", "https://localhost:8000")
 CERT_PATH = os.getenv("API_CERT", "certs/api.crt")
@@ -88,6 +90,22 @@ def main() -> None:
     if not api_key:
         st.info("Enter API key to connect")
         return
+
+    risk_cfg = state_manager.load_user_risk()
+    dd = st.sidebar.number_input(
+        "Daily drawdown limit",
+        value=float(risk_cfg["daily_drawdown"]),
+    )
+    td = st.sidebar.number_input(
+        "Total drawdown limit",
+        value=float(risk_cfg["total_drawdown"]),
+    )
+    if st.sidebar.button("Update risk limits"):
+        state_manager.save_user_risk(
+            dd, td, risk_cfg.get("news_blackout_minutes", 0)
+        )
+        rm_mod.risk_manager.update_drawdown_limits(dd, td)
+        st.sidebar.success("Risk limits updated")
 
     if st.sidebar.button("Export state"):
         try:
