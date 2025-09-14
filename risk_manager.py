@@ -62,6 +62,9 @@ class RiskMetrics:
     tail_prob: float = 0.0
     trading_halted: bool = False
     factor_contributions: Dict[str, float] = field(default_factory=dict)
+    fill_ratio: float = 1.0
+    cancel_rate: float = 0.0
+    slippage: float = 0.0
 
 
 class RiskManager:
@@ -140,6 +143,55 @@ class RiskManager:
         self.metrics.daily_loss = 0.0
         self.metrics.trading_halted = False
         self.peak_equity = self.equity
+
+    def check_drawdown(self, pnl: float) -> bool:
+        """Update PnL and return whether drawdown limits are breached.
+
+        Parameters
+        ----------
+        pnl: float
+            Profit and loss for the latest evaluation step.
+
+        Returns
+        -------
+        bool
+            ``True`` if either the daily or total drawdown limit was
+            exceeded and trading has been halted.
+        """
+
+        # ``update`` handles drawdown logic and halting when limits are
+        # breached. We use a placeholder bot_id as these updates are for
+        # shadow evaluation only and do not impact live exposure tracking.
+        self.update("shadow_eval", pnl, check_hedge=False)
+        return self.metrics.trading_halted
+
+    def check_fills(
+        self,
+        placed: int,
+        filled: int,
+        cancels: int = 0,
+        slippage: float = 0.0,
+        min_ratio: float = 0.5,
+        max_slippage: float = 0.01,
+        max_cancel_rate: float = 0.5,
+    ) -> bool:
+        """Return ``True`` if limit order fill metrics breach thresholds."""
+
+        ratio = filled / placed if placed else 0.0
+        cancel_rate = cancels / placed if placed else 0.0
+        self.metrics.fill_ratio = ratio
+        self.metrics.cancel_rate = cancel_rate
+        self.metrics.slippage = slippage
+        breach = ratio < min_ratio or cancel_rate > max_cancel_rate or slippage > max_slippage
+        if breach:
+            self.metrics.trading_halted = True
+        try:
+            record_metric("limit_fill_ratio", ratio)
+            record_metric("limit_cancel_rate", cancel_rate)
+            record_metric("limit_slippage", slippage)
+        except Exception:
+            pass
+        return breach
 
     def attach_tail_hedger(self, hedger: "TailHedger") -> None:
         """Attach a :class:`~risk.tail_hedger.TailHedger` instance."""

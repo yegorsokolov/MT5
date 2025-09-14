@@ -36,6 +36,37 @@ metrics_mod.model_unload = lambda: None
 metrics_mod.__spec__ = importlib.machinery.ModuleSpec("analytics.metrics_store", loader=None)
 sys.modules.setdefault("analytics.metrics_store", metrics_mod)
 
+# Additional stubs for lightweight imports
+scheduler_mod = types.ModuleType("scheduler")
+scheduler_mod.start_scheduler = lambda *a, **k: None
+scheduler_mod.__spec__ = importlib.machinery.ModuleSpec("scheduler", loader=None)
+sys.modules.setdefault("scheduler", scheduler_mod)
+
+crypto_utils_mod = types.ModuleType("crypto_utils")
+crypto_utils_mod._load_key = lambda *a, **k: b""
+crypto_utils_mod.encrypt = lambda *a, **k: b""
+crypto_utils_mod.decrypt = lambda *a, **k: b""
+crypto_utils_mod.__spec__ = importlib.machinery.ModuleSpec("crypto_utils", loader=None)
+sys.modules.setdefault("crypto_utils", crypto_utils_mod)
+
+tail_mod = types.ModuleType("risk.tail_hedger")
+
+class _StubHedger:
+    def __init__(self, *a, **k):
+        self.hedge_ratio = 0.0
+
+    def evaluate(self) -> None:  # pragma: no cover - trivial
+        return
+
+tail_mod.TailHedger = _StubHedger
+tail_mod.__spec__ = importlib.machinery.ModuleSpec("risk.tail_hedger", loader=None)
+sys.modules.setdefault("risk.tail_hedger", tail_mod)
+
+alert_mod = types.ModuleType("utils.alerting")
+alert_mod.send_alert = lambda *a, **k: None
+alert_mod.__spec__ = importlib.machinery.ModuleSpec("utils.alerting", loader=None)
+sys.modules.setdefault("utils.alerting", alert_mod)
+
 class _DF(list):
     def __init__(self, data=None):
         super().__init__(data or [])
