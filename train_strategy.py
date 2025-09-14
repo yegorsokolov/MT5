@@ -14,10 +14,13 @@ pipeline.
 from __future__ import annotations
 
 import argparse
+import asyncio
 
 import torch
 
 from models.strategy_graph_controller import train_strategy_graph_controller
+from strategy.evolution_lab import EvolutionLab
+from training.curriculum import build_live_strategy_curriculum
 
 
 def train_strategy(data, graph_search: bool = False, episodes: int = 100):
@@ -26,6 +29,31 @@ def train_strategy(data, graph_search: bool = False, episodes: int = 100):
     if graph_search:
         return train_strategy_graph_controller(data, episodes=episodes)
     raise ValueError("only graph_search training is implemented in this demo")
+
+
+def evolve_with_curriculum(base_strategy, live_messages, seeds=(0, 1)):
+    """Evolve multiple strategies and evaluate them on live data.
+
+    The helper wires together :class:`strategy.evolution_lab.EvolutionLab` and
+    :func:`training.curriculum.build_live_strategy_curriculum` so that unit
+    tests can verify queue based evolution and curriculum progression.
+    """
+
+    lab = EvolutionLab(base_strategy)
+    asyncio.run(lab.evolve_queue(seeds, live_messages))
+    # Build a curriculum purely as an example – the returned scheduler is not
+    # used further in this demonstration script but ensures the call path is
+    # exercised by tests.
+    def single():
+        return lambda msg: float(msg.get("price", 0))
+
+    def multi():
+        return lambda msg: float(msg.get("price", 0) - msg.get("ma", 0))
+
+    def graph():  # pragma: no cover - placeholder for complex graph strategies
+        return lambda msg: float(msg.get("price", 0))
+
+    build_live_strategy_curriculum(single, multi, graph, live_messages)
 
 
 def main() -> None:  # pragma: no cover - exercised via subprocess in tests
