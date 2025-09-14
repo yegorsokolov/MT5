@@ -731,6 +731,27 @@ def main(
         save_meta_weights(state, "lgbm")
         return 0.0
 
+    if cfg.get("meta_init"):
+        from analysis.meta_learning import (
+            _LinearModel,
+            fine_tune_model,
+            load_meta_weights,
+            save_meta_weights,
+        )
+        from models.meta_learner import steps_to
+        from torch.utils.data import TensorDataset
+
+        X_all = torch.tensor(df[features].values, dtype=torch.float32)
+        y_all = torch.tensor(df["tb_label"].values, dtype=torch.float32)
+        dataset = TensorDataset(X_all, y_all)
+        state = load_meta_weights("lgbm")
+        new_state, history = fine_tune_model(
+            state, dataset, lambda: _LinearModel(len(features)), steps=5
+        )
+        logger.info("Meta-init adaptation steps: %s", steps_to(history))
+        save_meta_weights(new_state, "lgbm", regime=cfg.get("symbol", "asset"))
+        return 0.0
+
     if cfg.get("fine_tune"):
         from analysis.meta_learning import (
             _LinearModel,
@@ -1446,6 +1467,11 @@ if __name__ == "__main__":
         help="Fine-tune from meta weights on the latest regime",
     )
     parser.add_argument(
+        "--meta-init",
+        action="store_true",
+        help="Initialise from meta weights and adapt to the current dataset",
+    )
+    parser.add_argument(
         "--use-pseudo-labels",
         action="store_true",
         help="Include pseudo-labeled samples during training",
@@ -1547,6 +1573,8 @@ if __name__ == "__main__":
             cfg_dict = cfg.model_dump()
             if args.meta_train:
                 cfg_dict["meta_train"] = True
+            if args.meta_init:
+                cfg_dict["meta_init"] = True
             if args.fine_tune:
                 cfg_dict["fine_tune"] = True
             if args.use_pseudo_labels:

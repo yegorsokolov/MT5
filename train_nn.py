@@ -610,6 +610,26 @@ def main(
             )
             meta_learning.save_meta_weights(state, "transformer")
             return 0.0
+        if cfg.get("meta_init"):
+            from models.meta_learner import steps_to
+            from torch.utils.data import TensorDataset
+
+            X_all = torch.tensor(df[features].values, dtype=torch.float32)
+            y_all = torch.tensor(
+                (df["tb_label"].values).astype(float), dtype=torch.float32
+            )
+            dataset = TensorDataset(X_all, y_all)
+            state = meta_learning.load_meta_weights("transformer")
+            new_state, history = meta_learning.fine_tune_model(
+                state,
+                dataset,
+                lambda: meta_learning._LinearModel(len(features)),
+            )
+            logger.info("Meta-init adaptation steps: %s", steps_to(history))
+            meta_learning.save_meta_weights(
+                new_state, "transformer", regime=cfg.get("symbol", "asset")
+            )
+            return 0.0
         if cfg.get("fine_tune"):
             from torch.utils.data import TensorDataset
 
@@ -1428,6 +1448,11 @@ if __name__ == "__main__":
         help="Fine-tune from meta weights on latest regime",
     )
     parser.add_argument(
+        "--meta-init",
+        action="store_true",
+        help="Initialise from meta weights and adapt to current dataset",
+    )
+    parser.add_argument(
         "--use-pseudo-labels",
         action="store_true",
         help="Include pseudo-labeled samples during training",
@@ -1453,6 +1478,8 @@ if __name__ == "__main__":
         cfg["graph_model"] = True
     if args.meta_train:
         cfg["meta_train"] = True
+    if args.meta_init:
+        cfg["meta_init"] = True
     if args.fine_tune:
         cfg["fine_tune"] = True
     if args.use_pseudo_labels:
