@@ -355,8 +355,8 @@ Spread and slippage protections are provided via the `spread` and `slippage`
 plugins. Enable them with the `use_spread_check` and `use_slippage_check`
 flags and configure thresholds through `max_spread` and `max_slippage`.
 The dataset also merges
- high impact events from several economic calendars (ForexFactory, the built-in
- MetaTrader calendar via Tradays and the MQL5 feed) so the bot can avoid trading
+ high impact events from several economic calendars (ForexFactory, TradingEconomics,
+ the built-in MetaTrader calendar via Tradays and the MQL5 feed) so the bot can avoid trading
  immediately around red news releases. These richer features help the model
 capture more market behaviour than simple MAs and RSI alone.
 
