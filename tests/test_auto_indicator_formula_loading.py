@@ -25,9 +25,30 @@ def test_apply_loads_evolved_formulas(tmp_path):
     registry = tmp_path / "auto_indicators.json"
     registry.write_text("[]")
     formula = tmp_path / "evolved_indicators_v1.json"
-    formula.write_text(json.dumps([{ "name": "x_sq", "formula": "df.x ** 2" }]))
+    formula.write_text(json.dumps([{"name": "x_sq", "formula": "df.x ** 2"}]))
 
     out = auto_indicators.apply(df, registry_path=registry, formula_dir=tmp_path)
     assert "x_sq" in out.columns
     assert out["x_sq"].tolist() == [1, 4, 9]
 
+
+def test_generate_loads_evolved_formulas(tmp_path):
+    df = pd.DataFrame({"x": [1, 2, 3]})
+    registry = tmp_path / "auto_indicators.json"
+    registry.write_text("[]")
+    formula = tmp_path / "evolved_indicators_v1.json"
+    formula.write_text(json.dumps([{"name": "x_sq", "formula": "df.x ** 2"}]))
+
+    # simple model returning lag and window parameters
+    model = lambda inputs: (1, 1)
+    out, desc = auto_indicators.generate(
+        df,
+        model,
+        asset_features=[],
+        regime=[],
+        registry_path=registry,
+        formula_dir=tmp_path,
+    )
+    assert "x_sq" in out.columns
+    assert out["x_sq"].tolist() == [1, 4, 9]
+    assert desc == {"lag": 1, "window": 1}

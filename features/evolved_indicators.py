@@ -9,17 +9,21 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 
+# Default location where evolved indicator formulas are stored.  The files are
+# versioned using the ``evolved_indicators_v*.json`` pattern within the feature
+# store.  ``FORMULA_PATH`` points at the first version so that the module works
+# out-of-the-box while still allowing callers to override the path.
 FORMULA_PATH = (
-    Path(__file__).resolve().parents[1] / "analysis" / "evolved_indicators.yaml"
+    Path(__file__).resolve().parents[1] / "feature_store" / "evolved_indicators_v1.json"
 )
 
 
 def _load_formulas(path: Path = FORMULA_PATH) -> List[Dict[str, Any]]:
     """Return stored indicator formulas from ``path``.
 
-    The file is expected to contain JSON data but is named with a ``.yaml``
-    extension for human friendliness.  JSON is a subset of YAML so this keeps
-    dependencies minimal while still allowing manual editing.
+    The files are JSON encoded and typically live in the ``feature_store``
+    directory.  The function is resilient to missing or malformed files,
+    returning an empty list in those cases.
     """
 
     try:
