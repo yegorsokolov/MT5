@@ -324,8 +324,6 @@ def compute(df) -> pd.DataFrame:
     relationships are stored in ``df.attrs['adjacency_matrices']``.
     """
 
-    from data.graph_builder import build_rolling_adjacency
-
     try:  # pragma: no cover - config optional in tests
         from utils import load_config
 
@@ -347,7 +345,20 @@ def compute(df) -> pd.DataFrame:
 
     if {"Symbol", "Timestamp"}.issubset(df.columns):
         try:
-            matrices = build_rolling_adjacency(df)
+            window = int(cfg.get("adjacency_window", 30))
+        except Exception:  # pragma: no cover
+            window = 30
+        try:
+            pivot = (
+                df.pivot(index="Timestamp", columns="Symbol", values="return")
+                .sort_index()
+                .fillna(0.0)
+            )
+            matrices = {}
+            for end in pivot.index[window - 1 :]:
+                window_df = pivot.loc[:end].tail(window)
+                mat = window_df.corr().fillna(0.0).to_numpy()
+                matrices[end] = mat
         except Exception:  # pragma: no cover - fallback to identity
             symbols = sorted(df["Symbol"].unique())
             eye = np.eye(len(symbols))
