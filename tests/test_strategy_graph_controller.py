@@ -7,7 +7,7 @@ import torch
 # Ensure project root on path for direct execution
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from strategy_dsl import IndicatorNode, PositionNode, RiskNode, StrategyGraph
+from strategies.graph_dsl import Filter, Indicator, PositionSizer, StrategyGraph
 from models.strategy_graph_controller import (
     StrategyGraphController,
     train_strategy_graph_controller,
@@ -24,7 +24,7 @@ def build_sample_data():
 
 
 def test_graph_execution_and_serialisation():
-    nodes = {0: IndicatorNode("price", ">", "ma"), 1: RiskNode(0.5), 2: PositionNode(1.0)}
+    nodes = {0: Indicator("price", ">", "ma"), 1: Filter(), 2: PositionSizer(1.0)}
     edges = [(0, 1, None), (1, 2, True)]
     graph = StrategyGraph(nodes=nodes, edges=edges)
     data = build_sample_data()[:2]

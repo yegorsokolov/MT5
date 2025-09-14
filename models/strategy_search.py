@@ -21,7 +21,7 @@ from torch.optim import Adam
 from torch.distributions import Categorical
 
 from models.graph_net import GraphNet
-from strategies.graph_dsl import IndicatorNode, PositionNode, RiskNode, StrategyGraph
+from strategies.graph_dsl import Filter, Indicator, PositionSizer, StrategyGraph
 
 
 class StrategySearchNet(nn.Module):
@@ -54,17 +54,16 @@ class StrategySearchNet(nn.Module):
         """Return a :class:`StrategyGraph` for ``action``.
 
         Action ``0`` corresponds to going long when ``price > ma`` while action
-        ``1`` uses the opposite indicator.  Both use a unit risk and position
-        size.
+        ``1`` uses the opposite indicator.  Both use a unit position size.
         """
 
         if action == 0:
-            indicator = IndicatorNode("price", ">", "ma")
+            indicator = Indicator("price", ">", "ma")
         else:
-            indicator = IndicatorNode("price", "<", "ma")
-        risk = RiskNode(1.0)
-        position = PositionNode(1.0)
-        nodes = {0: indicator, 1: risk, 2: position}
+            indicator = Indicator("price", "<", "ma")
+        filt = Filter()
+        position = PositionSizer(1.0)
+        nodes = {0: indicator, 1: filt, 2: position}
         edges = [(0, 1, None), (1, 2, True)]
         return StrategyGraph(nodes=nodes, edges=edges)
 

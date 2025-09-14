@@ -22,7 +22,7 @@ import random
 
 import pandas as pd
 
-from strategies.graph_dsl import IndicatorNode, StrategyGraph
+from strategies.graph_dsl import Indicator, StrategyGraph
 from feature_store import latest_version, request_indicator
 from .shadow_runner import ShadowRunner
 
@@ -115,8 +115,8 @@ class EvolutionLab:
             if cols:
                 lhs = random.choice(cols)
                 rhs = random.choice(cols)
-                node = IndicatorNode(
-                    lhs=lhs, op=random.choice(list(IndicatorNode.OPS)), rhs=rhs
+                node = Indicator(
+                    lhs=lhs, op=random.choice(list(Indicator.OPS)), rhs=rhs
                 )
                 new_id = g.insert_node(g.entry, None, node)
                 info["node"] = new_id
