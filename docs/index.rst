@@ -2,6 +2,12 @@ Welcome to MT5's documentation
 ==============================
 
 .. toctree::
+   :maxdepth: 1
+   :caption: Overview
+
+   ARCHITECTURE
+
+.. toctree::
    :maxdepth: 2
    :caption: Tutorials
 
@@ -25,3 +31,4 @@ Welcome to MT5's documentation
    api/models
    api/strategies
    api/indicators
+   api/config
