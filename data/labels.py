@@ -100,15 +100,15 @@ def multi_horizon_labels(prices: "pd.Series", horizons: list[int]) -> "pd.DataFr
 
     for h in horizons:
         future = prices.shift(-h)
-        data[f"label_{h}"] = (future > prices).astype(int).fillna(0).astype(int)
-        abs_ret = (future / prices - 1).abs().fillna(0)
+        data[f"label_{h}"] = (future > prices).astype("int8").fillna(0)
+        abs_ret = (future / prices - 1).abs().fillna(0).astype("float32")
         data[f"abs_return_{h}"] = abs_ret
         vol = (
             future_pct.rolling(window=h)
             .apply(lambda arr: np.sqrt(np.square(arr).sum()), raw=True)
             .shift(-h + 1)
         )
-        data[f"vol_{h}"] = vol.fillna(0)
+        data[f"vol_{h}"] = vol.fillna(0).astype("float32")
 
     labels = pd.DataFrame(data, index=prices.index)
 
