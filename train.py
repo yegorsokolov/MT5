@@ -74,7 +74,12 @@ from analysis.prob_calibration import (
 from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
 from analysis.domain_adapter import DomainAdapter
-from models.conformal import fit_residuals, predict_interval, evaluate_coverage
+from models.conformal import (
+    ConformalIntervalParams,
+    calibrate_intervals,
+    evaluate_coverage,
+    fit_residuals,
+)
 from analysis.regime_thresholds import find_regime_thresholds
 from analysis.concept_drift import ConceptDriftMonitor
 from analysis.pseudo_labeler import generate_pseudo_labels
@@ -1040,6 +1045,7 @@ def main(
     last_split: tuple[np.ndarray, np.ndarray] | None = None
     half_life = cfg.get("time_decay_half_life")
     balance = cfg.get("balance_classes")
+    interval_alpha = float(cfg.get("interval_alpha", 0.1))
     for fold, (train_idx, val_idx) in enumerate(tscv.split(X, groups=groups)):
         if fold < start_fold:
             continue
@@ -1156,17 +1162,18 @@ def main(
             probs,
             regimes_val,
         )
-        residuals = y_val.values - probs
-        for reg in np.unique(regimes_val):
-            mask = regimes_val == reg
-            all_residuals.setdefault(int(reg), []).extend(residuals[mask])
-        q = fit_residuals(
-            residuals,
-            alpha=cfg.get("interval_alpha", 0.1),
+        interval_params_fold, residuals, (lower, upper) = calibrate_intervals(
+            y_val.values,
+            probs,
+            alpha=interval_alpha,
             regimes=regimes_val,
         )
-        lower, upper = predict_interval(probs, q, regimes_val)
-        cov = evaluate_coverage(y_val, lower, upper)
+        for reg in np.unique(regimes_val):
+            mask = regimes_val == reg
+            all_residuals.setdefault(int(reg), []).extend(
+                [float(r) for r in residuals[mask]]
+            )
+        cov = float(interval_params_fold.coverage or 0.0)
         mlflow.log_metric(f"fold_{fold}_interval_coverage", cov)
         logger.info("Fold %d interval coverage: %.3f", fold, cov)
         conf = np.abs(probs - 0.5) * 2
@@ -1227,6 +1234,7 @@ def main(
             "metrics": report,
             "regime_thresholds": thr_dict,
         }
+        state["interval_params"] = interval_params_fold.to_dict()
         if "scaler" in pipe.named_steps:
             state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
         save_checkpoint(state, fold, cfg.get("checkpoint_dir"))
@@ -1249,7 +1257,27 @@ def main(
     overall_cov = (
         evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
     )
-    interval_alpha = cfg.get("interval_alpha", 0.1)
+    coverage_by_regime: dict[int, float] = {}
+    if all_lower and all_regimes:
+        y_arr = np.asarray(all_true, dtype=float)
+        lower_arr = np.asarray(all_lower, dtype=float)
+        upper_arr = np.asarray(all_upper, dtype=float)
+        reg_arr = np.asarray(all_regimes)
+        for reg in np.unique(reg_arr):
+            mask = reg_arr == reg
+            if not np.any(mask):
+                continue
+            reg_cov = evaluate_coverage(
+                y_arr[mask],
+                lower_arr[mask],
+                upper_arr[mask],
+            )
+            coverage_by_regime[int(reg)] = reg_cov
+            try:  # pragma: no cover - mlflow optional
+                mlflow.log_metric(f"interval_coverage_regime_{int(reg)}", reg_cov)
+            except Exception:
+                pass
+            logger.info("Regime %s interval coverage: %.3f", reg, reg_cov)
     overall_q = (
         {
             reg: fit_residuals(res, alpha=interval_alpha)
@@ -1258,6 +1286,14 @@ def main(
         if all_residuals
         else {}
     )
+    overall_params: ConformalIntervalParams | None = None
+    if overall_q:
+        overall_params = ConformalIntervalParams(
+            alpha=interval_alpha,
+            quantiles=overall_q,
+            coverage=overall_cov if all_lower else None,
+            coverage_by_regime=coverage_by_regime or None,
+        )
     if cfg.get("use_price_distribution") and last_split is not None:
         from train_price_distribution import train_price_distribution
 
@@ -1447,11 +1483,30 @@ def main(
         "regime_thresholds": regime_thresholds,
         "meta_model_id": meta_version_id,
     }
-    if overall_q:
+    if overall_params is not None:
+        perf["interval"] = overall_params.to_dict()
         perf["interval_q"] = overall_q
         perf["interval_alpha"] = interval_alpha
+        perf["interval_coverage"] = overall_cov
+        if overall_params.coverage_by_regime:
+            perf["interval_coverage_by_regime"] = {
+                int(k): float(v)
+                for k, v in overall_params.coverage_by_regime.items()
+            }
         if final_pipe is not None:
-            setattr(final_pipe, "interval_q", overall_q)
+            setattr(final_pipe, "interval_q", overall_params.quantiles)
+            setattr(final_pipe, "interval_params", overall_params)
+            setattr(final_pipe, "interval_coverage", overall_params.coverage)
+            setattr(final_pipe, "interval_alpha", overall_params.alpha)
+            if overall_params.coverage_by_regime:
+                setattr(
+                    final_pipe,
+                    "interval_coverage_by_regime",
+                    {
+                        int(k): float(v)
+                        for k, v in overall_params.coverage_by_regime.items()
+                    },
+                )
     version_id = model_store.save_model(
         final_pipe,
         cfg,
