@@ -438,9 +438,9 @@ def train_multi_output_model(
     )
 
     label_cols = [c for c in y.columns if c.startswith("label_")]
-    reg_cols = [
-        c for c in y.columns if c.startswith("abs_return_") or c.startswith("vol_")
-    ]
+    abs_cols = [c for c in y.columns if c.startswith("abs_return_")]
+    vol_cols = [c for c in y.columns if c.startswith("vol_")]
+    reg_cols = abs_cols + vol_cols
 
     clf_params = {
         "n_estimators": cfg.get("n_estimators", 50),
@@ -452,6 +452,12 @@ def train_multi_output_model(
     clf = MultiOutputClassifier(base)
     steps.append(("clf", clf))
     pipe = Pipeline(steps)
+    pipe.regression_heads_ = {}
+    pipe.regression_trunk_ = None
+    pipe.regression_feature_columns_ = (
+        list(X.columns) if isinstance(X, pd.DataFrame) else None
+    )
+    pipe.regression_target_columns_ = {}
     if label_cols:
         pipe.fit(X, y[label_cols])
     else:
@@ -459,7 +465,8 @@ def train_multi_output_model(
 
     reports: dict[str, object] = {}
     f1_scores: list[float] = []
-    risk_scores: list[float] = []
+    sharpe_scores: list[float] = []
+    calmar_scores: list[float] = []
     threshold_metric = cfg.get("threshold_metric", "f1")
     if label_cols:
         val_probs = pipe.predict_proba(X)
@@ -493,36 +500,146 @@ def train_multi_output_model(
             rep = classification_report(y[col], preds[:, i], output_dict=True)
             risk = risk_adjusted_metrics(y[col], preds[:, i])
             reports[col] = {**rep, **risk}
-            f1_scores.append(rep["weighted avg"]["f1-score"])
-            risk_scores.append(risk["sharpe"])
+            f1_val = rep["weighted avg"]["f1-score"]
+            precision_val = rep["weighted avg"]["precision"]
+            recall_val = rep["weighted avg"]["recall"]
+            f1_scores.append(f1_val)
+            sharpe_scores.append(risk["sharpe"])
+            calmar_scores.append(risk["calmar"])
             logger.info(
                 "Best threshold for %s (%s): %.4f", col, threshold_metric, best_thr
+            )
+            logger.info(
+                "Validation metrics %s | F1 %.4f | Precision %.4f | Recall %.4f | Sharpe %.4f | Calmar %.4f",
+                col,
+                f1_val,
+                precision_val,
+                recall_val,
+                risk["sharpe"],
+                risk["calmar"],
             )
             try:
                 mlflow.log_metric(f"thr_{col}", best_thr)
                 mlflow.log_metric(f"{threshold_metric}_{col}", best_metric)
                 mlflow.log_metric(f"sharpe_{col}", risk["sharpe"])
+                mlflow.log_metric(f"calmar_{col}", risk["calmar"])
+                mlflow.log_metric(f"f1_{col}", f1_val)
+                mlflow.log_metric(f"precision_{col}", precision_val)
+                mlflow.log_metric(f"recall_{col}", recall_val)
             except Exception:  # pragma: no cover - mlflow optional
                 pass
 
-    if label_cols:
+    if label_cols and f1_scores:
         reports["aggregate_f1"] = float(np.mean(f1_scores))
-    if risk_scores:
-        reports["aggregate_sharpe"] = float(np.mean(risk_scores))
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric("aggregate_f1", reports["aggregate_f1"])
+        except Exception:
+            pass
+    if sharpe_scores:
+        reports["aggregate_sharpe"] = float(np.mean(sharpe_scores))
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric("aggregate_sharpe", reports["aggregate_sharpe"])
+        except Exception:
+            pass
+    if calmar_scores:
+        reports["aggregate_calmar"] = float(np.mean(calmar_scores))
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric("aggregate_calmar", reports["aggregate_calmar"])
+        except Exception:
+            pass
 
     rmse_scores: list[float] = []
+    abs_rmse: list[float] = []
+    vol_rmse: list[float] = []
     if reg_cols:
         from sklearn.multioutput import MultiOutputRegressor
         from sklearn.linear_model import LinearRegression
 
-        reg = MultiOutputRegressor(LinearRegression())
-        reg.fit(X, y[reg_cols])
-        reg_pred = reg.predict(X)
-        for i, col in enumerate(reg_cols):
-            rmse = float(np.sqrt(np.mean((reg_pred[:, i] - y[col].to_numpy()) ** 2)))
-            reports[col] = {"rmse": rmse}
-            rmse_scores.append(rmse)
-        reports["aggregate_rmse"] = float(np.mean(rmse_scores))
+        trunk_steps = pipe.steps[:-1]
+        if trunk_steps:
+            trunk_pipeline = Pipeline(trunk_steps)
+            X_trunk = trunk_pipeline.transform(X)
+            pipe.regression_trunk_ = trunk_pipeline
+        else:
+            pipe.regression_trunk_ = None
+            X_trunk = X
+
+        if isinstance(X_trunk, pd.DataFrame):
+            X_reg = X_trunk.to_numpy(dtype=float)
+        else:
+            X_reg = np.asarray(X_trunk, dtype=float)
+
+        heads: dict[str, dict[str, object]] = {}
+        if abs_cols:
+            abs_reg = MultiOutputRegressor(LinearRegression())
+            abs_reg.fit(X_reg, y[abs_cols])
+            heads["abs_return"] = {"model": abs_reg, "columns": list(abs_cols)}
+            abs_pred = abs_reg.predict(X_reg)
+            if isinstance(abs_pred, list):
+                abs_pred = np.column_stack(abs_pred)
+            if np.ndim(abs_pred) == 1:
+                abs_pred = np.reshape(abs_pred, (-1, 1))
+            for i, col in enumerate(abs_cols):
+                rmse = float(
+                    np.sqrt(np.mean((abs_pred[:, i] - y[col].to_numpy()) ** 2))
+                )
+                reports[col] = {"rmse": rmse}
+                rmse_scores.append(rmse)
+                abs_rmse.append(rmse)
+                logger.info("RMSE for %s: %.4f", col, rmse)
+                try:  # pragma: no cover - mlflow optional
+                    mlflow.log_metric(f"rmse_{col}", rmse)
+                except Exception:
+                    pass
+
+        if vol_cols:
+            vol_reg = MultiOutputRegressor(LinearRegression())
+            vol_reg.fit(X_reg, y[vol_cols])
+            heads["volatility"] = {"model": vol_reg, "columns": list(vol_cols)}
+            vol_pred = vol_reg.predict(X_reg)
+            if isinstance(vol_pred, list):
+                vol_pred = np.column_stack(vol_pred)
+            if np.ndim(vol_pred) == 1:
+                vol_pred = np.reshape(vol_pred, (-1, 1))
+            for i, col in enumerate(vol_cols):
+                rmse = float(
+                    np.sqrt(np.mean((vol_pred[:, i] - y[col].to_numpy()) ** 2))
+                )
+                reports[col] = {"rmse": rmse}
+                rmse_scores.append(rmse)
+                vol_rmse.append(rmse)
+                logger.info("RMSE for %s: %.4f", col, rmse)
+                try:  # pragma: no cover - mlflow optional
+                    mlflow.log_metric(f"rmse_{col}", rmse)
+                except Exception:
+                    pass
+
+        pipe.regression_heads_ = heads
+        pipe.regression_target_columns_ = {
+            name: info["columns"] for name, info in heads.items()
+        }
+        if rmse_scores:
+            reports["aggregate_rmse"] = float(np.mean(rmse_scores))
+            try:  # pragma: no cover - mlflow optional
+                mlflow.log_metric("aggregate_rmse", reports["aggregate_rmse"])
+            except Exception:
+                pass
+        if abs_rmse:
+            reports["aggregate_abs_return_rmse"] = float(np.mean(abs_rmse))
+            try:  # pragma: no cover - mlflow optional
+                mlflow.log_metric(
+                    "aggregate_abs_return_rmse", reports["aggregate_abs_return_rmse"]
+                )
+            except Exception:
+                pass
+        if vol_rmse:
+            reports["aggregate_volatility_rmse"] = float(np.mean(vol_rmse))
+            try:  # pragma: no cover - mlflow optional
+                mlflow.log_metric(
+                    "aggregate_volatility_rmse", reports["aggregate_volatility_rmse"]
+                )
+            except Exception:
+                pass
 
     # Compute expected return and drawdown for validation predictions
     exp_returns: list[float] = []
@@ -536,6 +653,11 @@ def train_multi_output_model(
     drawdown = float(np.mean(drawdowns)) if drawdowns else 0.0
     reports["expected_return"] = expected_return
     reports["max_drawdown"] = drawdown
+    try:  # pragma: no cover - mlflow optional
+        mlflow.log_metric("expected_return", expected_return)
+        mlflow.log_metric("max_drawdown", drawdown)
+    except Exception:
+        pass
 
     # Optional weighted objective
     weights = cfg.get("multi_objective_weights") if cfg else None
