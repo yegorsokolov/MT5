@@ -2,10 +2,12 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import warnings
 import pandas as pd
 import pytest
 import time
 import numpy as np
+from pandas.errors import PerformanceWarning
 
 FEATURES_PATH = Path(__file__).resolve().parents[1] / "features" / "cross_asset.py"
 spec = importlib.util.spec_from_file_location("cross_asset", FEATURES_PATH)
@@ -13,6 +15,7 @@ cross_asset = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(cross_asset)
 add_cross_asset_features = cross_asset.add_cross_asset_features
+DEFAULT_MAX_PAIRS = cross_asset.DEFAULT_MAX_PAIRS
 
 
 def _baseline_add_cross_asset_features(
@@ -108,8 +111,8 @@ def test_cross_asset_whitelist():
     assert "corr_BBB_CCC" not in out.columns
 
 
-def test_cross_asset_large_universe_runtime():
-    symbols = [f"S{i:03d}" for i in range(30)]
+def test_cross_asset_default_limit_bounds_columns_and_runtime():
+    symbols = [f"S{i:03d}" for i in range(32)]
     periods = 40
     idx = pd.date_range("2020-01-01", periods=periods, freq="D")
     rng = np.random.default_rng(0)
@@ -122,15 +125,47 @@ def test_cross_asset_large_universe_runtime():
     )
 
     start = time.perf_counter()
-    vec = add_cross_asset_features(df.copy(), window=5)
-    vec_time = time.perf_counter() - start
+    limited = add_cross_asset_features(df.copy(), window=5)
+    limited_time = time.perf_counter() - start
 
-    start = time.perf_counter()
-    base = _baseline_add_cross_asset_features(df.copy(), window=5).fillna(0.0)
-    base_time = time.perf_counter() - start
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PerformanceWarning)
+        start = time.perf_counter()
+        base = _baseline_add_cross_asset_features(df.copy(), window=5).fillna(0.0)
+        baseline_time = time.perf_counter() - start
 
-    pd.testing.assert_frame_equal(vec.sort_index(axis=1), base.sort_index(axis=1))
-    assert vec_time < base_time
+    pca_cols = [c for c in limited.columns if c.startswith("pair_pca_")]
+    pair_cols_baseline = [
+        c for c in base.columns if c.startswith("corr_") or c.startswith("relret_")
+    ]
+
+    assert len(pca_cols) == DEFAULT_MAX_PAIRS
+    assert not any(
+        c.startswith("corr_") or c.startswith("relret_") for c in limited.columns
+    )
+    assert len(pair_cols_baseline) > len(pca_cols)
+    assert limited_time < baseline_time
+
+
+def test_cross_asset_unlimited_matches_baseline():
+    symbols = [f"S{i:03d}" for i in range(20)]
+    periods = 35
+    idx = pd.date_range("2020-01-01", periods=periods, freq="D")
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame(
+        {
+            "Timestamp": idx.repeat(len(symbols)),
+            "Symbol": symbols * periods,
+            "return": rng.standard_normal(periods * len(symbols)) / 100,
+        }
+    )
+
+    full = add_cross_asset_features(df.copy(), window=5, max_pairs=None).fillna(0.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PerformanceWarning)
+        base = _baseline_add_cross_asset_features(df.copy(), window=5).fillna(0.0)
+
+    pd.testing.assert_frame_equal(full.sort_index(axis=1), base.sort_index(axis=1))
 
 
 def test_cross_asset_top_k_limits_pairs_and_time():
@@ -151,7 +186,7 @@ def test_cross_asset_top_k_limits_pairs_and_time():
     limited_time = time.perf_counter() - start
 
     start = time.perf_counter()
-    full = add_cross_asset_features(df.copy(), window=5)
+    full = add_cross_asset_features(df.copy(), window=5, max_pairs=None)
     full_time = time.perf_counter() - start
 
     pair_cols_limited = [
@@ -178,7 +213,7 @@ def test_cross_asset_default_pca_reduces_columns_large_universe():
         }
     )
 
-    full = add_cross_asset_features(df.copy(), window=5)
+    full = add_cross_asset_features(df.copy(), window=5, max_pairs=None)
     pca_df = add_cross_asset_features(df.copy(), window=5, max_pairs=5)
 
     pca_cols = [c for c in pca_df.columns if c.startswith("pair_pca_")]
@@ -190,3 +225,23 @@ def test_cross_asset_default_pca_reduces_columns_large_universe():
     assert not any(
         c.startswith("corr_") or c.startswith("relret_") for c in pca_df.columns
     )
+
+
+def test_cross_asset_warns_when_limit_exceeded(caplog):
+    symbols = [f"S{i:03d}" for i in range(25)]
+    periods = 20
+    idx = pd.date_range("2020-01-01", periods=periods, freq="D")
+    rng = np.random.default_rng(4)
+    df = pd.DataFrame(
+        {
+            "Timestamp": idx.repeat(len(symbols)),
+            "Symbol": symbols * periods,
+            "return": rng.standard_normal(periods * len(symbols)) / 100,
+        }
+    )
+
+    with caplog.at_level("WARNING", logger=cross_asset.logger.name):
+        limited = add_cross_asset_features(df.copy(), window=5)
+
+    assert any("whitelist" in record.getMessage() for record in caplog.records)
+    assert any(col.startswith("pair_pca_") for col in limited.columns)
