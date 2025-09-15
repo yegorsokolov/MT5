@@ -56,6 +56,7 @@ from .multitimeframe import aggregate_timeframes
 from feature_store import register_feature, load_feature
 from analysis.feature_evolver import FeatureEvolver
 from analysis.anomaly_detector import detect_anomalies
+from risk.funding_costs import fetch_funding_info
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +240,30 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     dow = times.dt.dayofweek
     df["day_of_week_sin"] = np.sin(2 * np.pi * dow / 7)
     df["day_of_week_cos"] = np.cos(2 * np.pi * dow / 7)
+    return df
+
+
+@cache_feature
+def add_cost_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Append spread, swap rate and leverage related features."""
+
+    if "Symbol" not in df.columns:
+        return df
+    df = df.copy()
+    if {"Bid", "Ask"}.issubset(df.columns):
+        df["spread"] = df["Ask"] - df["Bid"]
+    try:
+        infos = {s: fetch_funding_info(s) for s in df["Symbol"].unique()}
+        df["swap_rate"] = df["Symbol"].map(lambda s: infos[s].swap_rate)
+        df["margin_requirement"] = df["Symbol"].map(
+            lambda s: infos[s].margin_requirement
+        )
+        mr = df["margin_requirement"].replace(0, np.inf)
+        df["account_leverage"] = 1.0 / mr
+    except Exception:
+        df["swap_rate"] = 0.0
+        df["margin_requirement"] = 0.0
+        df["account_leverage"] = 0.0
     return df
 
 
@@ -616,6 +641,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         logger.debug("multi-timeframe aggregation failed", exc_info=True)
 
     df = add_time_features(df)
+    df = add_cost_features(df)
 
     pipeline = list(get_feature_pipeline())
     cointegration_enabled = (
@@ -1007,6 +1033,7 @@ __all__ = [
     "add_factor_exposure_features",
     "add_knowledge_graph_features",
     "add_time_features",
+    "add_cost_features",
     "make_features",
     "make_features_memmap",
     "compute_rsi",

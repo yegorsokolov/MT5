@@ -100,11 +100,16 @@ def main() -> None:
         "Total drawdown limit",
         value=float(risk_cfg["total_drawdown"]),
     )
+    hedge = st.sidebar.checkbox(
+        "Enable hedging",
+        value=bool(risk_cfg.get("allow_hedging", False)),
+    )
     if st.sidebar.button("Update risk limits"):
         state_manager.save_user_risk(
-            dd, td, risk_cfg.get("news_blackout_minutes", 0)
+            dd, td, risk_cfg.get("news_blackout_minutes", 0), hedge
         )
         rm_mod.risk_manager.update_drawdown_limits(dd, td)
+        rm_mod.risk_manager.set_allow_hedging(hedge)
         st.sidebar.success("Risk limits updated")
 
     if st.sidebar.button("Export state"):

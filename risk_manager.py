@@ -89,6 +89,7 @@ class RiskManager:
         ewma_alpha: float = 0.06,
         base_currency: str = "USD",
         instrument_currencies: Dict[str, str] | None = None,
+        allow_hedging: bool = False,
     ) -> None:
         self.max_drawdown = max_drawdown
         self.max_total_drawdown = (
@@ -115,8 +116,11 @@ class RiskManager:
         self.tail_threshold = tail_threshold or max_drawdown
         self.tail_prob_limit = tail_prob_limit
         self.quiet_windows: list[dict] = []
+        self.allow_hedging = allow_hedging
         self.net_exposure = NetExposure(
-            max_long=max_long_exposure, max_short=max_short_exposure
+            max_long=max_long_exposure,
+            max_short=max_short_exposure,
+            allow_hedging=allow_hedging,
         )
         self.currency_exposure = CurrencyExposure(
             base_currency, instrument_currencies or {}
@@ -143,6 +147,12 @@ class RiskManager:
         self.metrics.daily_loss = 0.0
         self.metrics.trading_halted = False
         self.peak_equity = self.equity
+
+    def set_allow_hedging(self, allow: bool) -> None:
+        """Toggle ability to hold offsetting long/short positions."""
+
+        self.allow_hedging = allow
+        self.net_exposure.allow_hedging = allow
 
     def check_drawdown(self, pnl: float) -> bool:
         """Update PnL and return whether drawdown limits are breached.
@@ -737,6 +747,13 @@ risk_manager = RiskManager(
 )
 tail_hedger = TailHedger(risk_manager, TAIL_HEDGE_VAR)
 risk_manager.attach_tail_hedger(tail_hedger)
+
+try:
+    from state_manager import load_user_risk
+
+    risk_manager.set_allow_hedging(load_user_risk().get("allow_hedging", False))
+except Exception:
+    pass
 
 
 def subscribe_to_broker_alerts(rm: RiskManager | None = None) -> asyncio.Task | None:

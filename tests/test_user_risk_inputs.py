@@ -178,6 +178,7 @@ def test_default_limits_persist(monkeypatch, tmp_path):
         "daily_drawdown": 4900.0,
         "total_drawdown": 9800.0,
         "news_blackout_minutes": 0,
+        "allow_hedging": False,
     }
     assert rm_mod.risk_manager.max_drawdown == 4900.0
     assert rm_mod.risk_manager.max_total_drawdown == 9800.0
@@ -207,6 +208,7 @@ def test_cli_override_persist(monkeypatch, tmp_path):
         "daily_drawdown": 5000.0,
         "total_drawdown": 8000.0,
         "news_blackout_minutes": 10,
+        "allow_hedging": False,
     }
     assert rm_mod.risk_manager.max_drawdown == 5000.0
     assert rm_mod.risk_manager.max_total_drawdown == 8000.0
