@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Iterable
 
@@ -19,6 +20,10 @@ except Exception:  # pragma: no cover - fallback when imported directly
 
     def validate_module(func):
         return func
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_MAX_PAIRS = 200
 
 
 try:  # pragma: no cover - validators optional when running in isolation
@@ -100,7 +105,7 @@ def add_cross_asset_features(
     df,
     window: int = 30,
     whitelist: Iterable[str] | None = None,
-    max_pairs: int | None = None,
+    max_pairs: int | None = DEFAULT_MAX_PAIRS,
     reduce: str = "pca",
     confirm_peers: Iterable[str] | None = None,
 ) -> pd.DataFrame:
@@ -117,6 +122,11 @@ def add_cross_asset_features(
       matrix and returns ``max_pairs`` principal components labelled
       ``pair_pca_<i>``.
 
+    When the requested symbol universe would generate more than ``max_pairs``
+    unique pairs a warning is emitted and the chosen reduction strategy is
+    applied automatically (``reduce='pca'`` by default). Provide ``max_pairs=None``
+    to opt-out of the limit entirely.
+
     Missing values (for example during the warm up period of the rolling
     correlation) are filled with ``0.0`` to keep downstream models simple.
 
@@ -130,8 +140,9 @@ def add_cross_asset_features(
         Optional iterable restricting pairwise calculations to the provided
         symbols.  If ``None`` all symbols are considered.
     max_pairs:
-        Maximum number of pairwise relationships to keep.  If ``None`` all
-        combinations are generated.
+        Maximum number of pairwise relationships to keep (defaults to
+        :data:`DEFAULT_MAX_PAIRS`).  Set to ``None`` to disable the limit and
+        generate the full feature set.
     reduce:
         Reduction strategy when ``max_pairs`` is set. Options are ``"top_k"``
         or ``"pca"`` (default) for dimensionality compression.
@@ -184,10 +195,28 @@ def add_cross_asset_features(
         raise ValueError("reduce must be one of 'top_k', 'pca'")
 
     pair_symbols = [s for s in symbols if whitelist is None or s in whitelist]
-    if len(pair_symbols) >= 2:
+    pair_symbol_count = len(pair_symbols)
+    unique_pairs = pair_symbol_count * (pair_symbol_count - 1) // 2
+    should_reduce = (
+        max_pairs is not None and max_pairs > 0 and unique_pairs > max_pairs
+    )
+
+    if should_reduce:
+        logger.warning(
+            (
+                "Requested %s symbol pairs for cross-asset features exceeds "
+                "max_pairs=%s. %s reduction will be applied; provide a whitelist "
+                "to target specific symbols."
+            ),
+            unique_pairs,
+            max_pairs,
+            "PCA" if reduce == "pca" else "Top-k",
+        )
+
+    if pair_symbol_count >= 2:
         pair_pivot = pivot[pair_symbols]
 
-        if max_pairs and reduce == "top_k":
+        if reduce == "top_k" and should_reduce and max_pairs:
             # ----------------------------------------------------------
             # Identify top-k correlated symbol pairs
             # ----------------------------------------------------------
@@ -267,7 +296,7 @@ def add_cross_asset_features(
 
             pair_features = pd.concat([corr_features, relret_features], axis=1)
 
-            if max_pairs and reduce == "pca":
+            if reduce == "pca" and should_reduce and max_pairs:
                 X = pair_features.fillna(0.0).to_numpy()
                 n_comp = min(max_pairs, X.shape[1])
                 try:  # pragma: no cover - sklearn optional
@@ -377,4 +406,9 @@ add_cross_asset_features.supports_polars = True  # type: ignore[attr-defined]
 compute.supports_polars = True  # type: ignore[attr-defined]
 
 
-__all__ = ["add_index_features", "add_cross_asset_features", "compute"]
+__all__ = [
+    "DEFAULT_MAX_PAIRS",
+    "add_index_features",
+    "add_cross_asset_features",
+    "compute",
+]
