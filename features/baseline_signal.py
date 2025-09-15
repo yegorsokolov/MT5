@@ -90,6 +90,36 @@ def _compute_pandas(
     if "boll_lower" not in df:
         df["boll_lower"] = boll_lower
 
+    bundle = IndicatorBundle(
+        high=high,
+        low=low,
+        short_ma=df["short_ma"],
+        long_ma=df["long_ma"],
+        rsi=df["rsi"],
+        atr_val=df["atr_val"],
+        boll_upper=df["boll_upper"],
+        boll_lower=df["boll_lower"],
+        obv=df.get("obv"),
+        mfi=df.get("mfi"),
+        cvd=df.get("cvd"),
+        ram=df.get("ram"),
+        hurst=df.get("hurst"),
+        htf_ma=df.get("htf_ma"),
+        htf_rsi=df.get("htf_rsi"),
+        supertrend_break=df.get("supertrend_break"),
+        kama_cross=df.get("kama_cross"),
+        kma_cross=df.get("kma_cross"),
+        vwap_cross=df.get("vwap_cross"),
+        macd_cross=df.get("macd_cross"),
+        squeeze_break=df.get("squeeze_break"),
+        div_rsi=df.get("div_rsi"),
+        div_macd=df.get("div_macd"),
+        regime=df.get("regime"),
+        vae_regime=df.get("vae_regime"),
+        microprice_delta=df.get("microprice_delta"),
+        liq_exhaustion=df.get("liq_exhaustion"),
+    )
+
     strat = BaselineStrategy(
         short_window=short_window,
         long_window=long_window,
@@ -103,110 +133,80 @@ def _compute_pandas(
         default_position_limit=1,
     )
 
-    signals: list[int] = []
+    try:
+        signals, long_stops, short_stops = strat.batch_compute(price, bundle)
+    except NotImplementedError:
+        strat = BaselineStrategy(
+            short_window=short_window,
+            long_window=long_window,
+            rsi_window=rsi_window,
+            atr_window=atr_window,
+            atr_stop_long=atr_stop_long,
+            atr_stop_short=atr_stop_short,
+            trailing_stop_pct=trailing_stop_pct,
+            trailing_take_profit_pct=trailing_take_profit_pct,
+            session_position_limits={},
+            default_position_limit=1,
+        )
+        signals, long_stops, short_stops = _compute_sequential(df, strat)
+
+    df["baseline_signal"] = signals
+    df["long_stop"] = long_stops
+    df["short_stop"] = short_stops
+    return df
+
+
+def _row_value(row, name: str, fallback=np.nan):
+    value = getattr(row, name, fallback)
+    return None if pd.isna(value) else value
+
+
+def _compute_sequential(
+    df: pd.DataFrame, strat: BaselineStrategy
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    signals: list[float] = []
     long_stops: list[float] = []
     short_stops: list[float] = []
 
     for row in df.itertuples():
         price_val = getattr(row, "Close", getattr(row, "mid", np.nan))
-        ind = IndicatorBundle(
-            high=getattr(row, "High", price_val),
-            low=getattr(row, "Low", price_val),
-            short_ma=row.short_ma if not pd.isna(row.short_ma) else None,
-            long_ma=row.long_ma if not pd.isna(row.long_ma) else None,
-            rsi=row.rsi if not pd.isna(row.rsi) else None,
-            atr_val=row.atr_val if not pd.isna(row.atr_val) else None,
-            boll_upper=row.boll_upper if not pd.isna(row.boll_upper) else None,
-            boll_lower=row.boll_lower if not pd.isna(row.boll_lower) else None,
-            obv=(
-                getattr(row, "obv", None)
-                if not pd.isna(getattr(row, "obv", np.nan))
-                else None
-            ),
-            mfi=(
-                getattr(row, "mfi", None)
-                if not pd.isna(getattr(row, "mfi", np.nan))
-                else None
-            ),
-            cvd=(
-                getattr(row, "cvd", None)
-                if not pd.isna(getattr(row, "cvd", np.nan))
-                else None
-            ),
-            ram=(
-                getattr(row, "ram", None)
-                if not pd.isna(getattr(row, "ram", np.nan))
-                else None
-            ),
-            hurst=(
-                getattr(row, "hurst", None)
-                if not pd.isna(getattr(row, "hurst", np.nan))
-                else None
-            ),
-            htf_ma=(
-                getattr(row, "htf_ma", None)
-                if not pd.isna(getattr(row, "htf_ma", np.nan))
-                else None
-            ),
-            htf_rsi=(
-                getattr(row, "htf_rsi", None)
-                if not pd.isna(getattr(row, "htf_rsi", np.nan))
-                else None
-            ),
-            supertrend_break=(
-                getattr(row, "supertrend_break", None)
-                if not pd.isna(getattr(row, "supertrend_break", np.nan))
-                else None
-            ),
-            kama_cross=(
-                getattr(row, "kama_cross", None)
-                if not pd.isna(getattr(row, "kama_cross", np.nan))
-                else None
-            ),
-            kma_cross=(
-                getattr(row, "kma_cross", None)
-                if not pd.isna(getattr(row, "kma_cross", np.nan))
-                else None
-            ),
-            vwap_cross=(
-                getattr(row, "vwap_cross", None)
-                if not pd.isna(getattr(row, "vwap_cross", np.nan))
-                else None
-            ),
-            macd_cross=(
-                getattr(row, "macd_cross", None)
-                if not pd.isna(getattr(row, "macd_cross", np.nan))
-                else None
-            ),
-            squeeze_break=(
-                getattr(row, "squeeze_break", None)
-                if not pd.isna(getattr(row, "squeeze_break", np.nan))
-                else None
-            ),
-            regime=(
-                getattr(row, "regime", None)
-                if not pd.isna(getattr(row, "regime", np.nan))
-                else None
-            ),
-            vae_regime=(
-                getattr(row, "vae_regime", None)
-                if not pd.isna(getattr(row, "vae_regime", np.nan))
-                else None
-            ),
-            microprice_delta=(
-                getattr(row, "microprice_delta", None)
-                if not pd.isna(getattr(row, "microprice_delta", np.nan))
-                else None
-            ),
+        if pd.isna(price_val):
+            price_val = getattr(row, "mid", np.nan)
+
+        indicator_row = IndicatorBundle(
+            high=_row_value(row, "High", price_val),
+            low=_row_value(row, "Low", price_val),
+            short_ma=_row_value(row, "short_ma"),
+            long_ma=_row_value(row, "long_ma"),
+            rsi=_row_value(row, "rsi"),
+            atr_val=_row_value(row, "atr_val"),
+            boll_upper=_row_value(row, "boll_upper"),
+            boll_lower=_row_value(row, "boll_lower"),
+            obv=_row_value(row, "obv"),
+            mfi=_row_value(row, "mfi"),
+            cvd=_row_value(row, "cvd"),
+            ram=_row_value(row, "ram"),
+            hurst=_row_value(row, "hurst"),
+            htf_ma=_row_value(row, "htf_ma"),
+            htf_rsi=_row_value(row, "htf_rsi"),
+            supertrend_break=_row_value(row, "supertrend_break"),
+            kama_cross=_row_value(row, "kama_cross"),
+            kma_cross=_row_value(row, "kma_cross"),
+            vwap_cross=_row_value(row, "vwap_cross"),
+            macd_cross=_row_value(row, "macd_cross"),
+            squeeze_break=_row_value(row, "squeeze_break"),
+            div_rsi=_row_value(row, "div_rsi"),
+            div_macd=_row_value(row, "div_macd"),
+            regime=_row_value(row, "regime"),
+            vae_regime=_row_value(row, "vae_regime"),
+            microprice_delta=_row_value(row, "microprice_delta"),
+            liq_exhaustion=_row_value(row, "liq_exhaustion"),
         )
-        sig = strat.update(price_val, ind)
+
+        sig = strat.update(price_val, indicator_row)
         signals.append(sig)
 
-        if (
-            strat.position == 1
-            and strat.entry_price is not None
-            and strat.entry_atr is not None
-        ):
+        if strat.position == 1 and strat.entry_price is not None and strat.entry_atr is not None:
             peak = strat.peak_price if strat.peak_price is not None else price_val
             long_stop = max(
                 strat.entry_price - strat.entry_atr * strat.atr_stop_long,
@@ -214,11 +214,8 @@ def _compute_pandas(
             )
         else:
             long_stop = np.nan
-        if (
-            strat.position == -1
-            and strat.entry_price is not None
-            and strat.entry_atr is not None
-        ):
+
+        if strat.position == -1 and strat.entry_price is not None and strat.entry_atr is not None:
             trough = strat.trough_price if strat.trough_price is not None else price_val
             short_stop = min(
                 strat.entry_price + strat.entry_atr * strat.atr_stop_short,
@@ -230,10 +227,12 @@ def _compute_pandas(
         long_stops.append(long_stop)
         short_stops.append(short_stop)
 
-    df["baseline_signal"] = signals
-    df["long_stop"] = long_stops
-    df["short_stop"] = short_stops
-    return df
+    index = df.index
+    return (
+        pd.Series(signals, index=index, dtype=float),
+        pd.Series(long_stops, index=index, dtype=float),
+        pd.Series(short_stops, index=index, dtype=float),
+    )
 
 
 def compute(
