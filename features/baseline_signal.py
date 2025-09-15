@@ -6,7 +6,6 @@ reuse these baseline indicators without recomputing them."""
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 try:  # pragma: no cover - polars optional
@@ -133,106 +132,13 @@ def _compute_pandas(
         default_position_limit=1,
     )
 
-    try:
-        signals, long_stops, short_stops = strat.batch_compute(price, bundle)
-    except NotImplementedError:
-        strat = BaselineStrategy(
-            short_window=short_window,
-            long_window=long_window,
-            rsi_window=rsi_window,
-            atr_window=atr_window,
-            atr_stop_long=atr_stop_long,
-            atr_stop_short=atr_stop_short,
-            trailing_stop_pct=trailing_stop_pct,
-            trailing_take_profit_pct=trailing_take_profit_pct,
-            session_position_limits={},
-            default_position_limit=1,
-        )
-        signals, long_stops, short_stops = _compute_sequential(df, strat)
-
-    df["baseline_signal"] = signals
-    df["long_stop"] = long_stops
-    df["short_stop"] = short_stops
-    return df
-
-
-def _row_value(row, name: str, fallback=np.nan):
-    value = getattr(row, name, fallback)
-    return None if pd.isna(value) else value
-
-
-def _compute_sequential(
-    df: pd.DataFrame, strat: BaselineStrategy
-) -> tuple[pd.Series, pd.Series, pd.Series]:
-    signals: list[float] = []
-    long_stops: list[float] = []
-    short_stops: list[float] = []
-
-    for row in df.itertuples():
-        price_val = getattr(row, "Close", getattr(row, "mid", np.nan))
-        if pd.isna(price_val):
-            price_val = getattr(row, "mid", np.nan)
-
-        indicator_row = IndicatorBundle(
-            high=_row_value(row, "High", price_val),
-            low=_row_value(row, "Low", price_val),
-            short_ma=_row_value(row, "short_ma"),
-            long_ma=_row_value(row, "long_ma"),
-            rsi=_row_value(row, "rsi"),
-            atr_val=_row_value(row, "atr_val"),
-            boll_upper=_row_value(row, "boll_upper"),
-            boll_lower=_row_value(row, "boll_lower"),
-            obv=_row_value(row, "obv"),
-            mfi=_row_value(row, "mfi"),
-            cvd=_row_value(row, "cvd"),
-            ram=_row_value(row, "ram"),
-            hurst=_row_value(row, "hurst"),
-            htf_ma=_row_value(row, "htf_ma"),
-            htf_rsi=_row_value(row, "htf_rsi"),
-            supertrend_break=_row_value(row, "supertrend_break"),
-            kama_cross=_row_value(row, "kama_cross"),
-            kma_cross=_row_value(row, "kma_cross"),
-            vwap_cross=_row_value(row, "vwap_cross"),
-            macd_cross=_row_value(row, "macd_cross"),
-            squeeze_break=_row_value(row, "squeeze_break"),
-            div_rsi=_row_value(row, "div_rsi"),
-            div_macd=_row_value(row, "div_macd"),
-            regime=_row_value(row, "regime"),
-            vae_regime=_row_value(row, "vae_regime"),
-            microprice_delta=_row_value(row, "microprice_delta"),
-            liq_exhaustion=_row_value(row, "liq_exhaustion"),
-        )
-
-        sig = strat.update(price_val, indicator_row)
-        signals.append(sig)
-
-        if strat.position == 1 and strat.entry_price is not None and strat.entry_atr is not None:
-            peak = strat.peak_price if strat.peak_price is not None else price_val
-            long_stop = max(
-                strat.entry_price - strat.entry_atr * strat.atr_stop_long,
-                peak * (1 - strat.trailing_stop_pct),
-            )
-        else:
-            long_stop = np.nan
-
-        if strat.position == -1 and strat.entry_price is not None and strat.entry_atr is not None:
-            trough = strat.trough_price if strat.trough_price is not None else price_val
-            short_stop = min(
-                strat.entry_price + strat.entry_atr * strat.atr_stop_short,
-                trough * (1 + strat.trailing_stop_pct),
-            )
-        else:
-            short_stop = np.nan
-
-        long_stops.append(long_stop)
-        short_stops.append(short_stop)
+    signals, long_stops, short_stops = strat.batch_update(price, bundle)
 
     index = df.index
-    return (
-        pd.Series(signals, index=index, dtype=float),
-        pd.Series(long_stops, index=index, dtype=float),
-        pd.Series(short_stops, index=index, dtype=float),
-    )
+    df["baseline_signal"] = pd.Series(signals, index=index, dtype=float)
+    df["long_stop"] = pd.Series(long_stops, index=index, dtype=float)
+    df["short_stop"] = pd.Series(short_stops, index=index, dtype=float)
+    return df
 
 
 def compute(
