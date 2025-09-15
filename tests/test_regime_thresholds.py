@@ -1,7 +1,7 @@
 import numpy as np
 from analysis.regime_thresholds import find_regime_thresholds
 from analysis.prob_calibration import ProbabilityCalibrator
-from sklearn.metrics import brier_score_loss
+from sklearn.metrics import brier_score_loss, precision_recall_curve
 
 
 def f1_score(y_true, y_pred):
@@ -15,6 +15,15 @@ def f1_score(y_true, y_pred):
     return 2 * precision * recall / (precision + recall)
 
 
+def best_threshold_via_pr(y_true, probs):
+    precision, recall, thresholds = precision_recall_curve(y_true, probs)
+    if thresholds.size == 0:
+        return 0.5
+    f1 = 2 * precision[:-1] * recall[:-1] / (precision[:-1] + recall[:-1] + 1e-12)
+    best_idx = int(np.argmax(f1))
+    return float(thresholds[best_idx])
+
+
 def test_regime_thresholds_distinct_and_better_f1():
     y_true = np.array([0, 0, 1, 1, 0, 1, 0, 1])
     probs = np.array([0.2, 0.6, 0.8, 0.9, 0.4, 0.5, 0.6, 0.7])
@@ -23,8 +32,10 @@ def test_regime_thresholds_distinct_and_better_f1():
     thr, preds = find_regime_thresholds(y_true, probs, regimes)
     assert len(thr) == 2
     assert thr[0] != thr[1]
+    assert np.isclose(thr[0], best_threshold_via_pr(y_true[regimes == 0], probs[regimes == 0]))
+    assert np.isclose(thr[1], best_threshold_via_pr(y_true[regimes == 1], probs[regimes == 1]))
 
-    f1_default = f1_score(y_true, (probs > 0.5).astype(int))
+    f1_default = f1_score(y_true, (probs >= 0.5).astype(int))
     f1_regime = f1_score(y_true, preds)
     assert f1_regime > f1_default
 
@@ -51,7 +62,7 @@ def test_calibration_and_thresholds_improve_metrics():
     brier_cal = brier_score_loss(y_true, probs_cal)
     assert brier_cal < brier_raw
 
-    preds_default = (probs_cal > 0.5).astype(int)
+    preds_default = (probs_cal >= 0.5).astype(int)
     preds_regime = cal.predict_classes(probs_uncal, regimes=regimes)
     f1_default = f1_score(y_true, preds_default)
     f1_regime = f1_score(y_true, preds_regime)
