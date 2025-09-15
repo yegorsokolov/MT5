@@ -120,6 +120,13 @@ class ConfigSchema(BaseModel):
     graph_model: bool = Field(
         False, description="Use graph neural network architecture for training"
     )
+    time_encoding: bool = Field(
+        False,
+        description=(
+            "Inject learnable relative time encodings before transformer layers to"
+            " handle irregular timestamps"
+        ),
+    )
 
     use_ts_pretrain: bool = Field(
         False,

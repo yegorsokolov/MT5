@@ -763,6 +763,7 @@ def main(
                 model_cfg.setdefault("price_columns", modal_price_cols)
             if modal_news_cols:
                 model_cfg.setdefault("news_columns", modal_news_cols)
+            model_cfg.setdefault("time_encoding", cfg.get("time_encoding", False))
             model = build_model(
                 model_input_size,
                 cfg,

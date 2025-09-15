@@ -9,6 +9,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from .time_encoding import TimeEncoding
+
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +111,15 @@ class CrossModalTransformer(nn.Module):
         num_layers: int = 2,
         dropout: float = 0.1,
         output_dim: int = 1,
+        time_encoding: bool = False,
     ) -> None:
         super().__init__()
         self.price_proj = nn.Linear(price_dim, d_model)
         self.news_proj = nn.Linear(news_dim, d_model)
         self.price_pos = PositionalEncoding(d_model)
         self.news_pos = PositionalEncoding(d_model)
+        self.price_time_encoder = TimeEncoding(d_model) if time_encoding else None
+        self.news_time_encoder = TimeEncoding(d_model) if time_encoding else None
         ff_dim = 4 * d_model
         self.layers = nn.ModuleList(
             [CrossModalLayer(d_model, nhead, dropout, ff_dim) for _ in range(num_layers)]
@@ -128,14 +133,45 @@ class CrossModalTransformer(nn.Module):
         )
         self.last_attention: Dict[str, torch.Tensor] | None = None
 
-    def forward(self, price: torch.Tensor, news: torch.Tensor) -> torch.Tensor:
-        """Return probabilities for combined price and news inputs."""
+    def forward(
+        self,
+        price: torch.Tensor,
+        news: torch.Tensor,
+        *,
+        price_times: torch.Tensor | None = None,
+        news_times: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return probabilities for combined price and news inputs.
+
+        Parameters
+        ----------
+        price_times:
+            Optional tensor of timestamps for the price branch. Required when
+            ``time_encoding`` was enabled at construction time.
+        news_times:
+            Optional tensor of timestamps for the news branch. If omitted the
+            news stream falls back to standard positional encodings.
+        """
 
         price_emb = self.price_pos(self.price_proj(price))
         news_emb = self.news_pos(self.news_proj(news))
+        price_time_features: torch.Tensor | None = None
+        news_time_features: torch.Tensor | None = None
+        if self.price_time_encoder is not None:
+            if price_times is None:
+                raise ValueError("price_times required when time encoding is enabled")
+            price_time_features = self.price_time_encoder(price_times).type_as(price_emb)
+        if self.news_time_encoder is not None and news_times is not None:
+            news_time_features = self.news_time_encoder(news_times).type_as(news_emb)
         attn: Dict[str, torch.Tensor] = {}
         for layer in self.layers:
-            price_emb, news_emb, w_price, w_news = layer(price_emb, news_emb)
+            price_input = price_emb
+            news_input = news_emb
+            if price_time_features is not None:
+                price_input = price_input + price_time_features
+            if news_time_features is not None:
+                news_input = news_input + news_time_features
+            price_emb, news_emb, w_price, w_news = layer(price_input, news_input)
             attn = {"price_to_news": w_price.detach(), "news_to_price": w_news.detach()}
         self.last_attention = attn
         price_repr = price_emb.mean(dim=1)
