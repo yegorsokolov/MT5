@@ -1,3 +1,5 @@
+import os
+import inspect
 import pandas as pd
 import numpy as np
 import sys
@@ -8,12 +10,23 @@ from pathlib import Path
 def _import_features(monkeypatch):
     stub_utils = types.ModuleType("utils")
     stub_utils.__path__ = []
-    stub_utils.load_config = lambda: {
-        "use_feature_cache": False,
-        "use_atr": False,
-        "use_donchian": False,
-        "use_dask": False,
-    }
+
+    class _StubConfig(dict):
+        def __init__(self):
+            super().__init__(
+                {
+                    "use_feature_cache": False,
+                    "use_atr": False,
+                    "use_donchian": False,
+                    "use_dask": False,
+                    "features": {},
+                }
+            )
+            self.features = types.SimpleNamespace(
+                latency_threshold=0.0, backend="pandas"
+            )
+
+    stub_utils.load_config = lambda: _StubConfig()
 
     class _Mon:
         def start(self):
@@ -44,6 +57,13 @@ def _import_features(monkeypatch):
     sys.modules["utils.resource_monitor"] = stub_utils.resource_monitor
     sys.modules["utils.data_backend"] = stub_utils.data_backend
 
+    stub_config_models = types.ModuleType("config_models")
+    class _ConfigError(Exception):
+        pass
+
+    stub_config_models.ConfigError = _ConfigError
+    sys.modules["config_models"] = stub_config_models
+
     stub_features_pkg = types.ModuleType("features")
     stub_features_pkg.__path__ = []
     stub_features_pkg.get_feature_pipeline = lambda: []
@@ -55,9 +75,21 @@ def _import_features(monkeypatch):
     features_cross.add_cross_asset_features = lambda df: df
     stub_features_pkg.news = features_news
     stub_features_pkg.cross_asset = features_cross
+    features_validators = types.ModuleType("features.validators")
+    features_validators.validate_ge = lambda df, *a, **k: df
     sys.modules["features"] = stub_features_pkg
     sys.modules["features.news"] = features_news
     sys.modules["features.cross_asset"] = features_cross
+    sys.modules["features.validators"] = features_validators
+
+    stub_risk_pkg = types.ModuleType("risk")
+    stub_risk_pkg.__path__ = []
+    sys.modules["risk"] = stub_risk_pkg
+    stub_funding = types.ModuleType("risk.funding_costs")
+    stub_funding.fetch_funding_info = lambda symbol: types.SimpleNamespace(
+        swap_rate=0.0, margin_requirement=1.0
+    )
+    sys.modules["risk.funding_costs"] = stub_funding
 
     # stub alt data loader with call counter
     alt_loader = types.ModuleType("data.alt_data_loader")
@@ -76,15 +108,30 @@ def _import_features(monkeypatch):
     alt_loader.load_alt_data = _load_alt
     sys.modules["data.alt_data_loader"] = alt_loader
 
+    class _StubKMeans:
+        def __init__(self, n_clusters=1, **kwargs):
+            self.n_clusters = n_clusters
+            self.cluster_centers_ = np.zeros((n_clusters, 1))
+
+        def fit_predict(self, X):
+            arr = np.asarray(X)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            n_samples, n_features = arr.shape
+            self.cluster_centers_ = np.zeros((self.n_clusters, n_features))
+            return np.zeros(n_samples, dtype=int)
+
     sklearn_stub = types.SimpleNamespace(
         decomposition=types.SimpleNamespace(PCA=lambda *a, **k: None),
         feature_selection=types.SimpleNamespace(
             mutual_info_classif=lambda *a, **k: np.zeros(a[0].shape[1] if a else 0)
         ),
+        cluster=types.SimpleNamespace(KMeans=_StubKMeans),
     )
     sys.modules["sklearn"] = sklearn_stub
     sys.modules["sklearn.decomposition"] = sklearn_stub.decomposition
     sys.modules["sklearn.feature_selection"] = sklearn_stub.feature_selection
+    sys.modules["sklearn.cluster"] = sklearn_stub.cluster
 
     stub_events = types.ModuleType("data.events")
     stub_events.get_events = lambda *a, **k: pd.DataFrame()
@@ -122,11 +169,16 @@ def _import_features(monkeypatch):
     stub_freq = types.ModuleType("analysis.frequency_features")
     stub_freq.spectral_features = lambda df: df
     stub_freq.wavelet_energy = lambda df: df
+    stub_freq.stl_decompose = lambda df: df
     sys.modules["analysis.frequency_features"] = stub_freq
 
     stub_fractal = types.ModuleType("analysis.fractal_features")
     stub_fractal.rolling_fractal_features = lambda df: df
     sys.modules["analysis.fractal_features"] = stub_fractal
+
+    stub_regime = types.ModuleType("analysis.regime_detection")
+    stub_regime.periodic_reclassification = lambda df, **_: df
+    sys.modules["analysis.regime_detection"] = stub_regime
 
     stub_cross = types.ModuleType("analysis.cross_spectral")
     stub_cross.compute = lambda df, window=None: df
@@ -138,6 +190,24 @@ def _import_features(monkeypatch):
     sys.modules["analysis.garch_vol"] = stub_garch
 
     sys.modules["analysis.data_lineage"] = types.SimpleNamespace(log_lineage=lambda *a, **k: None)
+
+    class _StubFeatureEvolver:
+        def apply_stored_features(self, df):
+            return df
+
+        def apply_hypernet(self, df, target_col=None):
+            return df
+
+        def maybe_evolve(self, df, **kwargs):
+            return df
+
+    stub_feature_evolver = types.ModuleType("analysis.feature_evolver")
+    stub_feature_evolver.FeatureEvolver = _StubFeatureEvolver
+    sys.modules["analysis.feature_evolver"] = stub_feature_evolver
+
+    stub_anomaly = types.ModuleType("analysis.anomaly_detector")
+    stub_anomaly.detect_anomalies = lambda df, **_: (df, df.iloc[0:0])
+    sys.modules["analysis.anomaly_detector"] = stub_anomaly
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     sys.modules.pop("data", None)
@@ -251,5 +321,46 @@ def test_feature_cache_respects_code_hash(monkeypatch, tmp_path):
     assert calls["count"] == 1
 
     monkeypatch.setenv("FEATURE_CACHE_CODE_HASH", "v2")
+    dummy(df)
+    assert calls["count"] == 2
+
+
+def test_feature_cache_refreshes_when_source_changes(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEATURE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("NO_CACHE", raising=False)
+    monkeypatch.delenv("FEATURE_CACHE_CODE_HASH", raising=False)
+    feature_mod = _import_features(monkeypatch)
+
+    code_file = tmp_path / "dummy_module.py"
+    code_file.write_text("initial version")
+    original_stat = code_file.stat()
+
+    calls = {"count": 0}
+
+    @feature_mod.cache_feature
+    def dummy(df):
+        calls["count"] += 1
+        return df.assign(x=calls["count"])
+
+    original_getfile = inspect.getfile
+
+    def fake_getfile(obj):
+        if obj is dummy or obj is getattr(dummy, "__wrapped__", None):
+            return str(code_file)
+        return original_getfile(obj)
+
+    monkeypatch.setattr(inspect, "getfile", fake_getfile)
+
+    df = pd.DataFrame({"a": [1]})
+    sig_before = feature_mod._get_code_signature(dummy)
+    dummy(df)
+    dummy(df)
+    assert calls["count"] == 1
+
+    code_file.write_text("updated version")
+    os.utime(code_file, (original_stat.st_atime, original_stat.st_mtime))
+
+    sig_after = feature_mod._get_code_signature(dummy)
+    assert sig_after != sig_before
     dummy(df)
     assert calls["count"] == 2

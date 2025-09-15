@@ -108,7 +108,11 @@ def _get_code_signature(func) -> str:
         return override
     try:
         file_path = Path(inspect.getfile(func))
-        return str(file_path.stat().st_mtime)
+        hasher = hashlib.sha256()
+        with file_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
     except Exception:
         return "0"
 
@@ -149,7 +153,7 @@ def _enforce_cache_limit():
 def cache_feature(func):
     """Cache feature computation based on raw data, module name and code signature."""
 
-    def _cached(data_hash, module, code_sig, df, *args, **kwargs):
+    def _cached(cache_key, df, *args, **kwargs):
         return func(df, *args, **kwargs)
 
     cached_impl = _memory.cache(_cached, ignore=["df"])
@@ -163,7 +167,10 @@ def cache_feature(func):
         ).hexdigest()
         module = func.__module__
         code_sig = _get_code_signature(func)
-        result = cached_impl(data_hash, module, code_sig, df, *args, **kwargs)
+        cache_key = hashlib.sha256(
+            "|".join((data_hash, module, code_sig)).encode()
+        ).hexdigest()
+        result = cached_impl(cache_key, df, *args, **kwargs)
         _enforce_cache_limit()
         return result
 
