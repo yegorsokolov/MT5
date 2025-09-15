@@ -32,7 +32,7 @@ from collections import deque
 from math import isnan
 from typing import Deque, Dict, Optional, Set
 
-from indicators import atr as calc_atr, bollinger, rsi as calc_rsi, sma
+from indicators.common import atr as calc_atr, bollinger, rsi as calc_rsi, sma
 from utils import load_config
 from config_models import ConfigError
 from analysis.kalman_filter import KalmanState, smooth_price
@@ -298,15 +298,16 @@ class BaselineStrategy:
             self.latest_atr = calc_atr(
                 self._highs, self._lows, self._closes, self.atr_window
             )
+            ind.atr_val = self.latest_atr
 
         if len(self._long) < self.long_window or self.latest_atr is None:
             return 0
 
-        short_ma_val = (
-            ind.short_ma
-            if ind.short_ma is not None
-            else sma(self._short, self.short_window)
-        )
+        if ind.short_ma is not None:
+            short_ma_val = ind.short_ma
+        else:
+            short_ma_val = sma(self._short, self.short_window)
+            ind.short_ma = short_ma_val
         if (
             ind.long_ma is not None
             and ind.boll_upper is not None
@@ -317,13 +318,21 @@ class BaselineStrategy:
             lower_band = ind.boll_lower
         else:
             lm, ub, lb = bollinger(self._long, self.long_window)
-            long_ma_val = ind.long_ma if ind.long_ma is not None else lm
-            upper_band = ind.boll_upper if ind.boll_upper is not None else ub
-            lower_band = ind.boll_lower if ind.boll_lower is not None else lb
+            if ind.long_ma is None:
+                ind.long_ma = lm
+            if ind.boll_upper is None:
+                ind.boll_upper = ub
+            if ind.boll_lower is None:
+                ind.boll_lower = lb
+            long_ma_val = ind.long_ma
+            upper_band = ind.boll_upper
+            lower_band = ind.boll_lower
 
-        rsi_val = (
-            ind.rsi if ind.rsi is not None else calc_rsi(self._long, self.rsi_window)
-        )
+        if ind.rsi is not None:
+            rsi_val = ind.rsi
+        else:
+            rsi_val = calc_rsi(self._long, self.rsi_window)
+            ind.rsi = rsi_val
         if isinstance(rsi_val, float) and isnan(rsi_val):
             rsi_val = 50.0
 
