@@ -61,7 +61,7 @@ from data.history import (
     load_history_iter,
 )
 from data.features import make_features
-from data.labels import triple_barrier
+from data.labels import multi_horizon_labels
 from state_manager import save_checkpoint, load_latest_checkpoint
 from analysis.regime_detection import periodic_reclassification
 from models import model_store
@@ -380,6 +380,7 @@ def train_multi_output_model(
 
     reports: dict[str, object] = {}
     f1_scores: list[float] = []
+    risk_scores: list[float] = []
     threshold_metric = cfg.get("threshold_metric", "f1")
     if label_cols:
         val_probs = pipe.predict_proba(X)
@@ -411,19 +412,24 @@ def train_multi_output_model(
             thr_dict[col] = best_thr
             preds[:, i] = (probs >= best_thr).astype(int)
             rep = classification_report(y[col], preds[:, i], output_dict=True)
-            reports[col] = rep
+            risk = risk_adjusted_metrics(y[col], preds[:, i])
+            reports[col] = {**rep, **risk}
             f1_scores.append(rep["weighted avg"]["f1-score"])
+            risk_scores.append(risk["sharpe"])
             logger.info(
                 "Best threshold for %s (%s): %.4f", col, threshold_metric, best_thr
             )
             try:
                 mlflow.log_metric(f"thr_{col}", best_thr)
                 mlflow.log_metric(f"{threshold_metric}_{col}", best_metric)
+                mlflow.log_metric(f"sharpe_{col}", risk["sharpe"])
             except Exception:  # pragma: no cover - mlflow optional
                 pass
 
     if label_cols:
         reports["aggregate_f1"] = float(np.mean(f1_scores))
+    if risk_scores:
+        reports["aggregate_sharpe"] = float(np.mean(risk_scores))
 
     rmse_scores: list[float] = []
     if reg_cols:
@@ -717,14 +723,13 @@ def main(
     else:
         mlflow.log_param("data_source", "config")
 
-    df["tb_label"] = triple_barrier(
-        df["mid"],
-        cfg.get("pt_mult", 0.01),
-        cfg.get("sl_mult", 0.01),
-        cfg.get("max_horizon", 10),
-    )
-    y = df["tb_label"]
-    features = select_features(df[features], y)
+    horizons = cfg.get("horizons", [cfg.get("max_horizon", 10)])
+    labels = multi_horizon_labels(df["mid"], horizons)
+    df = pd.concat([df, labels], axis=1)
+    y = labels
+    label_cols = [c for c in labels.columns if c.startswith("label_")]
+    sel_target = labels[label_cols[0]] if label_cols else labels.iloc[:, 0]
+    features = select_features(df[features], sel_target)
     for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"]:
         if col not in features:
             features.append(col)
@@ -761,15 +766,15 @@ def main(
 
     al_queue = ActiveLearningQueue()
     new_labels = al_queue.pop_labeled()
-    if not new_labels.empty and "tb_label" in df.columns:
-        df = merge_labels(df, new_labels, "tb_label")
-        y = df["tb_label"]
+    if not new_labels.empty and label_cols:
+        df = merge_labels(df, new_labels, label_cols[0])
+        y = df[label_cols]
         X = df[features]
         save_history_parquet(df, root / "data" / "history.parquet")
     logger.info("Active learning queue size: %d", len(al_queue))
     al_threshold = cfg.get("active_learning", {}).get("threshold", 0.6)
 
-    if use_pseudo_labels:
+    if use_pseudo_labels and label_cols:
         pseudo_dir = root / "data" / "pseudo_labels"
         if pseudo_dir.exists():
             files = list(pseudo_dir.glob("*.parquet")) + list(pseudo_dir.glob("*.csv"))
@@ -781,12 +786,12 @@ def main(
                         df_pseudo = pd.read_csv(p)
                 except Exception:
                     continue
-                if "pseudo_label" not in df_pseudo.columns:
+                if label_cols[0] not in df_pseudo.columns:
                     continue
                 if not set(features).issubset(df_pseudo.columns):
                     continue
                 X = pd.concat([X, df_pseudo[features]], ignore_index=True)
-                y = pd.concat([y, df_pseudo["pseudo_label"]], ignore_index=True)
+                y = pd.concat([y, df_pseudo[label_cols]], ignore_index=True)
 
     if "timestamp" in df.columns and len(df) == len(X):
         timestamps = _index_to_timestamps(df["timestamp"])
@@ -823,8 +828,13 @@ def main(
                     "verbose": False,
                 }
                 dq_w = dq_score_samples(X_tr)
+                y_tr_arr = (
+                    y_tr[label_cols[0]].to_numpy()
+                    if label_cols
+                    else y_tr.iloc[:, 0].to_numpy()
+                )
                 sw = _combined_sample_weight(
-                    y_tr.to_numpy(),
+                    y_tr_arr,
                     timestamps[tr_idx],
                     t_max,
                     balance,
@@ -863,7 +873,7 @@ def main(
         from torch.utils.data import TensorDataset
 
         X_all = torch.tensor(df[features].values, dtype=torch.float32)
-        y_all = torch.tensor(df["tb_label"].values, dtype=torch.float32)
+        y_all = torch.tensor(df[label_cols[0]].values, dtype=torch.float32)
         dataset = TensorDataset(X_all, y_all)
         state = load_meta_weights("lgbm")
         new_state, history = fine_tune_model(
@@ -886,7 +896,7 @@ def main(
         mask = df["market_regime"] == regime
         X_reg = torch.tensor(df.loc[mask, features].values, dtype=torch.float32)
         y_reg = torch.tensor(
-            df.loc[mask, "tb_label"].values,
+            df.loc[mask, label_cols[0]].values,
             dtype=torch.float32,
         )
         dataset = TensorDataset(X_reg, y_reg)
@@ -954,8 +964,13 @@ def main(
             if use_focal:
                 fit_kwargs["fobj"] = fobj
                 fit_kwargs["feval"] = feval
+            yb_arr = (
+                yb[label_cols[0]].to_numpy()
+                if label_cols
+                else yb.iloc[:, 0].to_numpy()
+            )
             sw = _combined_sample_weight(
-                yb.to_numpy(),
+                yb_arr,
                 timestamps[start:end],
                 t_max,
                 cfg.get("balance_classes"),
@@ -1094,8 +1109,13 @@ def main(
         if donor_booster is not None:
             fit_params["clf__init_model"] = donor_booster
         dq_w = dq_score_samples(X_train)
+        y_train_arr = (
+            y_train[label_cols[0]].to_numpy()
+            if label_cols
+            else y_train.iloc[:, 0].to_numpy()
+        )
         sw = _combined_sample_weight(
-            y_train.to_numpy(),
+            y_train_arr,
             timestamps[train_idx],
             t_max,
             balance,
@@ -1434,7 +1454,7 @@ def main(
     for regime in sorted(df["market_regime"].unique()):
         mask = df["market_regime"] == regime
         X_reg = df.loc[mask, base_features]
-        y_reg = df.loc[mask, "tb_label"].astype(int)
+        y_reg = df.loc[mask, label_cols[0]].astype(int)
         steps_reg: list[tuple[str, object]] = []
         if cfg.get("use_scaler", True):
             steps_reg.append(("scaler", FeatureScaler()))
