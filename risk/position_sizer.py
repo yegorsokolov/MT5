@@ -151,3 +151,50 @@ class PositionSizer:
         )
         return size
 
+    # ------------------------------------------------------------------
+    # Position splitting
+    # ------------------------------------------------------------------
+    def split_size(self, symbol: str | None, size: float) -> list[float]:
+        """Split ``size`` into chunks obeying the martingale multiplier cap.
+
+        Parameters
+        ----------
+        symbol:
+            Asset symbol used to track the last trade size.  If ``None`` the
+            ``size`` is returned unchanged in a single chunk.
+        size:
+            Desired position size.
+
+        Returns
+        -------
+        list[float]
+            Sequence of chunk sizes whose sum equals ``size``.  Each chunk is
+            limited so that it does not exceed ``max_martingale_multiplier``
+            times the previous chunk.
+        """
+
+        if symbol is None:
+            return [size]
+
+        chunks: list[float] = []
+        remaining = abs(size)
+        direction = math.copysign(1.0, size)
+        last = self._last_size.get(symbol, 0.0)
+
+        cap = last * self.max_martingale_multiplier
+        if last <= 0 or remaining <= cap:
+            self._last_size[symbol] = remaining
+            self._oversized[symbol] = False
+            return [size]
+
+        while remaining > cap:
+            chunks.append(direction * cap)
+            remaining -= cap
+            last = cap
+            cap = last * self.max_martingale_multiplier
+
+        chunks.append(direction * remaining)
+        self._last_size[symbol] = remaining
+        self._oversized[symbol] = False
+        return chunks
+
