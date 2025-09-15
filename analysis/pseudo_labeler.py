@@ -1,4 +1,5 @@
 """Utilities for generating and evaluating pseudo labels."""
+
 from __future__ import annotations
 
 import argparse
@@ -9,7 +10,6 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import precision_score, recall_score
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +63,12 @@ def generate_pseudo_labels(
 
     if y_true is not None:
         y_true = np.asarray(list(y_true))[mask]
-        precision = precision_score(y_true, preds[mask], zero_division=0)
-        recall = recall_score(y_true, preds[mask], zero_division=0)
+        y_pred = preds[mask]
+        tp = np.sum((y_true == 1) & (y_pred == 1))
+        fp = np.sum((y_true == 0) & (y_pred == 1))
+        fn = np.sum((y_true == 1) & (y_pred == 0))
+        precision = tp / (tp + fp) if tp + fp > 0 else 0.0
+        recall = tp / (tp + fn) if tp + fn > 0 else 0.0
         metrics = {"precision": precision, "recall": recall}
         (report_dir / "metrics.json").write_text(json.dumps(metrics))
         logger.info("Pseudo label precision=%s recall=%s", precision, recall)
