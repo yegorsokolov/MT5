@@ -39,3 +39,23 @@ def test_low_coherence_for_uncorrelated_series() -> None:
     out = cross_spectral.compute(df, window=32)
     coh = out[out["Symbol"] == "A"]["coh_B"].dropna()
     assert coh.mean() < 0.5
+
+
+def test_multi_asset_coherence_ranks_pairs() -> None:
+    n = 128
+    t = np.linspace(0, 10, n)
+    base = np.sin(t)
+    correlated = base + 0.01 * np.random.randn(n)
+    random = np.random.randn(n)
+    t_index = pd.date_range("2020-01-01", periods=n, freq="D")
+    df = pd.DataFrame(
+        {
+            "Timestamp": list(t_index) * 3,
+            "Symbol": ["A"] * n + ["B"] * n + ["C"] * n,
+            "Close": np.concatenate([base, correlated, random]),
+        }
+    )
+    out = cross_spectral.compute(df, window=32)
+    coh_ab = out[out["Symbol"] == "A"]["coh_B"].dropna().mean()
+    coh_ac = out[out["Symbol"] == "A"]["coh_C"].dropna().mean()
+    assert coh_ab > coh_ac

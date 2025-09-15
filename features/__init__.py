@@ -7,7 +7,10 @@ additional features.  The registry allows selective activation of
 feature sets which simplifies unit testing and makes the feature
 pipeline more modular.  The registry now also tracks basic hardware
 requirements so operators can see which features are active or skipped
-due to insufficient resources.
+due to insufficient resources.  Features can expose configuration
+options – for example the ``cross_spectral`` feature accepts a
+``window`` length via ``config.yaml`` – to tune behaviour without code
+changes.
 """
 
 from __future__ import annotations
@@ -115,6 +118,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
         evolved_indicators,
         evolved_symbols,
     )
+    from analysis import cross_spectral
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +156,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
     register_feature("price", price.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("news", news.compute, min_cpus=2, min_mem_gb=4.0)
     register_feature("cross_asset", cross_asset.compute, min_cpus=4, min_mem_gb=8.0)
+    register_feature("cross_spectral", cross_spectral.compute, min_cpus=4, min_mem_gb=8.0)
     register_feature("orderbook", orderbook.compute, min_cpus=2, min_mem_gb=2.0)
     register_feature("order_flow", order_flow.compute, min_cpus=1, min_mem_gb=1.0)
     register_feature("microprice", microprice.compute, min_cpus=1, min_mem_gb=1.0)
