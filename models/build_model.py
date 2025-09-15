@@ -90,6 +90,9 @@ def build_model(
             num_layers=num_layers,
             dropout=cfg.get("dropout", 0.1),
             output_dim=model_cfg.get("output_dim", 1),
+            time_encoding=model_cfg.get(
+                "time_encoding", cfg.get("time_encoding", False)
+            ),
         )
     elif cfg.get("graph_model"):
         model = GraphNet(
