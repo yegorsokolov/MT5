@@ -116,6 +116,7 @@ class GATNet(torch.nn.Module):
             x = F.relu(x)
         x, attn = self.layers[-1](x, edge_index)
         self.last_attention = attn.detach()
+        self.last_edge_index = edge_index.detach()  # type: ignore[attr-defined]
         return x
 
 
