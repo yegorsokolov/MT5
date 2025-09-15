@@ -357,13 +357,18 @@ def compute(df) -> pd.DataFrame:
             matrices = {}
             for end in pivot.index[window - 1 :]:
                 window_df = pivot.loc[:end].tail(window)
-                mat = window_df.corr().fillna(0.0).to_numpy()
+                mat = (
+                    window_df.corr().fillna(0.0).to_numpy(dtype=np.float32)
+                )
+                np.fill_diagonal(mat, 0.0)
                 matrices[end] = mat
         except Exception:  # pragma: no cover - fallback to identity
             symbols = sorted(df["Symbol"].unique())
-            eye = np.eye(len(symbols))
+            eye = np.eye(len(symbols), dtype=np.float32)
             matrices = {ts: eye for ts in pd.to_datetime(df["Timestamp"]).unique()}
-        df.attrs["adjacency_matrices"] = matrices
+        df.attrs["adjacency_matrices"] = [
+            (ts, matrices[ts]) for ts in sorted(matrices.keys())
+        ]
     return df
 
 

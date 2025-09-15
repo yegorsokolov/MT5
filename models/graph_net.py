@@ -108,7 +108,14 @@ class GraphNet(torch.nn.Module):
             x = torch.cat([x, self.type_emb(node_type)], dim=-1)
         for conv in self.convs[:-1]:
             x = F.relu(conv(x, edge_index, edge_weight))
-        return self.convs[-1](x, edge_index, edge_weight)
+        out = self.convs[-1](x, edge_index, edge_weight)
+        # Store the latest edge information for interpretability/logging.
+        self.last_edge_index = edge_index.detach()  # type: ignore[attr-defined]
+        if edge_weight is not None:
+            self.last_edge_weight = edge_weight.detach()  # type: ignore[attr-defined]
+        else:
+            self.last_edge_weight = None  # type: ignore[attr-defined]
+        return out
 
 
 __all__ = ["GraphNet", "GraphSAGELayer"]
