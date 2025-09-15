@@ -57,6 +57,7 @@ from data.features import (
     train_test_split,
     make_sequence_arrays,
 )
+from train_utils import prepare_modal_arrays
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 T = TypeVar("T")
@@ -430,10 +431,24 @@ def main(
         if "SymbolCode" in df.columns:
             features.append("SymbolCode")
 
+        price_window_cols = sorted(
+            c for c in df.columns if c.startswith("price_window_")
+        )
+        news_emb_cols = sorted(c for c in df.columns if c.startswith("news_emb_"))
+        if price_window_cols and news_emb_cols:
+            for col in price_window_cols + news_emb_cols:
+                if col not in features:
+                    features.append(col)
+
         y_full = df["tb_label"]
         features = select_features(df[features], y_full)
         if "SymbolCode" in features:
             features.remove("SymbolCode")
+        use_cross_modal = bool(price_window_cols and news_emb_cols)
+        if use_cross_modal:
+            for col in price_window_cols + news_emb_cols:
+                if col not in features:
+                    features.append(col)
         model_cfg = cfg.get("model", {})
         use_tft = model_cfg.get("type") == "tft" and TIERS.get(tier, 0) >= TIERS["gpu"]
         if use_tft:
@@ -457,9 +472,12 @@ def main(
         workers = cfg.get("num_workers") or monitor.capabilities.cpus
 
         def _preflight(bs: int, _ebs: int) -> None:
-            torch.empty(
-                (bs, seq_len, len(features)), dtype=torch.float32, device=device
-            )
+            if use_cross_modal:
+                torch.empty((bs, 1, 1), dtype=torch.float32, device=device)
+            else:
+                torch.empty(
+                    (bs, seq_len, len(features)), dtype=torch.float32, device=device
+                )
 
         batch_size_backoff(cfg, _preflight)
         batch_size = cfg["batch_size"]
@@ -470,6 +488,10 @@ def main(
         train_samplers: dict[int, DistributedSampler | None] = {}
         X_sample = None
         tasks_list: list[tuple[TensorDataset, TensorDataset]] = []
+        price_dim: int | None = None
+        news_dim: int | None = None
+        modal_price_cols: list[str] = []
+        modal_news_cols: list[str] = []
         for code in symbol_codes:
             train_sym = (
                 train_df[train_df["SymbolCode"] == code]
@@ -481,7 +503,56 @@ def main(
                 if "SymbolCode" in test_df.columns
                 else test_df
             )
-            if use_tft:
+            if use_cross_modal:
+                train_arrays = prepare_modal_arrays(
+                    train_sym, train_sym["tb_label"].to_numpy(dtype=np.float32)
+                )
+                test_arrays = prepare_modal_arrays(
+                    test_sym, test_sym["tb_label"].to_numpy(dtype=np.float32)
+                )
+                if train_arrays is None or test_arrays is None:
+                    continue
+                price_tr_arr, news_tr_arr, y_tr_arr, _, price_cols_used, news_cols_used = train_arrays
+                price_te_arr, news_te_arr, y_te_arr, _, _, _ = test_arrays
+                if y_tr_arr is None or y_te_arr is None:
+                    continue
+                if len(price_tr_arr) <= 1 or len(price_te_arr) == 0:
+                    continue
+                if price_dim is None:
+                    price_dim = price_tr_arr.shape[-1]
+                    modal_price_cols = list(price_cols_used)
+                if news_dim is None:
+                    news_dim = news_tr_arr.shape[-1]
+                    modal_news_cols = list(news_cols_used)
+                val_size = cfg.get("val_size", 0.2)
+                n_splits = max(int(round(1 / val_size)) - 1, 1)
+                n_splits = min(n_splits, len(price_tr_arr) - 1) or 1
+                splitter = PurgedTimeSeriesSplit(
+                    n_splits=n_splits, embargo=cfg.get("max_horizon", 0)
+                )
+                groups = np.full(len(price_tr_arr), code)
+                for tr_idx, va_idx in splitter.split(price_tr_arr, groups=groups):
+                    p_tr_fold, p_va_fold = price_tr_arr[tr_idx], price_tr_arr[va_idx]
+                    n_tr_fold, n_va_fold = news_tr_arr[tr_idx], news_tr_arr[va_idx]
+                    y_tr_fold, y_va_fold = y_tr_arr[tr_idx], y_tr_arr[va_idx]
+                price_tr_arr, news_tr_arr, y_tr_arr = p_tr_fold, n_tr_fold, y_tr_fold
+                price_va_arr, news_va_arr, y_va_arr = p_va_fold, n_va_fold, y_va_fold
+                train_ds = TensorDataset(
+                    torch.tensor(price_tr_arr, dtype=torch.float32),
+                    torch.tensor(news_tr_arr, dtype=torch.float32),
+                    torch.tensor(y_tr_arr, dtype=torch.float32),
+                )
+                val_ds = TensorDataset(
+                    torch.tensor(price_va_arr, dtype=torch.float32),
+                    torch.tensor(news_va_arr, dtype=torch.float32),
+                    torch.tensor(y_va_arr, dtype=torch.float32),
+                )
+                test_ds = TensorDataset(
+                    torch.tensor(price_te_arr, dtype=torch.float32),
+                    torch.tensor(news_te_arr, dtype=torch.float32),
+                    torch.tensor(y_te_arr, dtype=torch.float32),
+                )
+            elif use_tft:
                 Xk_tr, y_tr = make_sequence_arrays(
                     train_sym, known_features, seq_len, label_col="tb_label"
                 )
@@ -600,17 +671,18 @@ def main(
                 test_ds, batch_size=eval_batch_size, shuffle=False, num_workers=workers
             )
             train_samplers[code] = sampler
-            tasks_list.append((train_ds, val_ds))
+            if not use_cross_modal:
+                tasks_list.append((train_ds, val_ds))
 
         from analysis import meta_learning
 
-        if cfg.get("meta_train"):
+        if cfg.get("meta_train") and not use_cross_modal:
             state = meta_learning.meta_train_transformer(
                 tasks_list, lambda: meta_learning._LinearModel(len(features))
             )
             meta_learning.save_meta_weights(state, "transformer")
             return 0.0
-        if cfg.get("meta_init"):
+        if cfg.get("meta_init") and not use_cross_modal:
             from models.meta_learner import steps_to
             from torch.utils.data import TensorDataset
 
@@ -630,7 +702,7 @@ def main(
                 new_state, "transformer", regime=cfg.get("symbol", "asset")
             )
             return 0.0
-        if cfg.get("fine_tune"):
+        if cfg.get("fine_tune") and not use_cross_modal:
             from torch.utils.data import TensorDataset
 
             regime = (
@@ -676,7 +748,29 @@ def main(
         )
         horizons = cfg.get("horizons")
 
-        if horizons and TIERS.get(tier, 0) >= TIERS["standard"]:
+        if use_cross_modal and (price_dim is None or news_dim is None):
+            logger.warning("Cross-modal inputs unavailable; falling back to default model")
+            use_cross_modal = False
+
+        model_input_size = int(price_dim or 1) if use_cross_modal else len(features)
+
+        if use_cross_modal:
+            model_cfg = cfg.setdefault("model", {})
+            model_cfg["type"] = "cross_modal_transformer"
+            model_cfg["price_dim"] = int(price_dim or 1)
+            model_cfg["news_dim"] = int(news_dim or 1)
+            if modal_price_cols:
+                model_cfg.setdefault("price_columns", modal_price_cols)
+            if modal_news_cols:
+                model_cfg.setdefault("news_columns", modal_news_cols)
+            model = build_model(
+                model_input_size,
+                cfg,
+                scale_factor,
+                num_symbols=num_symbols,
+                num_regimes=num_regimes,
+            ).to(device)
+        elif horizons and TIERS.get(tier, 0) >= TIERS["standard"]:
             model = HierarchicalForecaster(len(features), horizons).to(device)
         elif use_cross_asset:
             model = CrossAssetTransformer(
@@ -715,13 +809,13 @@ def main(
             logger.info("Selected width multiplier %s", chosen_width)
         else:
             model = build_model(
-                len(features),
+                model_input_size,
                 cfg,
                 scale_factor,
                 num_symbols=num_symbols,
                 num_regimes=num_regimes,
             ).to(device)
-        if cfg.get("use_contrastive_pretrain"):
+        if cfg.get("use_contrastive_pretrain") and not use_cross_modal:
             model = initialize_model_with_contrastive(model)
 
         def _watch_model() -> None:
@@ -763,7 +857,7 @@ def main(
                     if new_scale != scale_factor:
                         state = model.state_dict()
                         model = build_model(
-                            len(features),
+                            model_input_size,
                             cfg,
                             new_scale,
                             num_symbols=num_symbols,
@@ -894,6 +988,10 @@ def main(
                         xb = xb.to(device)
                         xs = xs.to(device)
                         xo = xo.to(device)
+                    elif use_cross_modal:
+                        xb_price, xb_news, yb = batch
+                        xb_price = xb_price.to(device)
+                        xb_news = xb_news.to(device)
                     else:
                         xb, yb = batch
                         xb = xb.to(device)
@@ -909,6 +1007,10 @@ def main(
                                     preds = model(xb, static=xs, observed=xo)
                                     losses.append(loss_fn(preds, yb.float()))
                                     batch_returns.append(preds.squeeze())
+                                elif use_cross_modal:
+                                    preds = model(xb_price, xb_news)
+                                    losses.append(loss_fn(preds, yb))
+                                    batch_returns.append(preds.squeeze())
                                 else:
                                     preds = model(xb, code)
                                     losses.append(loss_fn(preds, yb))
@@ -922,6 +1024,10 @@ def main(
                             if use_tft:
                                 preds = model(xb, static=xs, observed=xo)
                                 losses.append(loss_fn(preds, yb.float()))
+                                batch_returns.append(preds.squeeze())
+                            elif use_cross_modal:
+                                preds = model(xb_price, xb_news)
+                                losses.append(loss_fn(preds, yb))
                                 batch_returns.append(preds.squeeze())
                             else:
                                 preds = model(xb, code)
@@ -988,29 +1094,37 @@ def main(
                 with torch.no_grad():
                     for code, loader in val_loaders.items():
                         for batch in loader:
-                            if use_tft:
-                                xb, xs, xo, yb = batch
-                                xb = xb.to(device)
-                                xs = xs.to(device)
-                                xo = xo.to(device)
+                        if use_tft:
+                            xb, xs, xo, yb = batch
+                            xb = xb.to(device)
+                            xs = xs.to(device)
+                            xo = xo.to(device)
+                        elif use_cross_modal:
+                            xb_price, xb_news, yb = batch
+                            xb_price = xb_price.to(device)
+                            xb_news = xb_news.to(device)
+                        else:
+                            xb, yb = batch
+                            xb = xb.to(device)
+                        yb = yb.to(device)
+                        with autocast(enabled=use_amp):
+                            if isinstance(model, HierarchicalForecaster):
+                                preds = model(xb)
+                                loss = loss_fn(preds, yb.float())
+                                prob = preds[:, 0]
                             else:
-                                xb, yb = batch
-                                xb = xb.to(device)
-                            yb = yb.to(device)
-                            with autocast(enabled=use_amp):
-                                if isinstance(model, HierarchicalForecaster):
-                                    preds = model(xb)
+                                if use_tft:
+                                    preds = model(xb, static=xs, observed=xo)
                                     loss = loss_fn(preds, yb.float())
-                                    prob = preds[:, 0]
+                                    prob = preds[:, len(quantiles) // 2]
+                                elif use_cross_modal:
+                                    preds = model(xb_price, xb_news)
+                                    loss = loss_fn(preds, yb)
+                                    prob = preds.squeeze()
                                 else:
-                                    if use_tft:
-                                        preds = model(xb, static=xs, observed=xo)
-                                        loss = loss_fn(preds, yb.float())
-                                        prob = preds[:, len(quantiles) // 2]
-                                    else:
-                                        preds = model(xb, code)
-                                        loss = loss_fn(preds, yb)
-                                        prob = preds.squeeze()
+                                    preds = model(xb, code)
+                                    loss = loss_fn(preds, yb)
+                                    prob = preds.squeeze()
                             val_loss += loss.item() * xb.size(0)
                             val_returns_eval.append(prob.detach())
                             if isinstance(model, HierarchicalForecaster):
@@ -1150,6 +1264,10 @@ def main(
                             xb = xb.to(device)
                             xs = xs.to(device)
                             xo = xo.to(device)
+                        elif use_cross_modal:
+                            xb_price, xb_news, yb = batch
+                            xb_price = xb_price.to(device)
+                            xb_news = xb_news.to(device)
                         else:
                             xb, yb = batch
                             xb = xb.to(device)
@@ -1162,6 +1280,9 @@ def main(
                                 if use_tft:
                                     preds = model(xb, static=xs, observed=xo)
                                     prob = preds[:, len(quantiles) // 2]
+                                elif use_cross_modal:
+                                    preds = model(xb_price, xb_news)
+                                    prob = preds.squeeze()
                                 else:
                                     preds = model(xb, code)
                                     prob = preds.squeeze()
@@ -1303,7 +1424,7 @@ def main(
                 features=features,
             )
             logger.info("Distilled student model saved to %s", student_path)
-            if cfg.get("feature_importance", False):
+            if cfg.get("feature_importance", False) and not use_cross_modal:
                 report_dir = root / "reports"
                 X_sample_np = (
                     X_sample[: cfg.get("shap_samples", 100)]
@@ -1330,33 +1451,34 @@ def main(
     # Active learning: queue uncertain samples and merge any returned labels
     try:
         al_queue = ActiveLearningQueue()
-        model.eval()
-        with torch.no_grad():
-            X_tensor = torch.tensor(
-                train_df[features].values, dtype=torch.float32, device=device
-            )
-            preds = model(X_tensor).cpu().numpy()
-        if preds.ndim > 1:
-            np.save(root / "pred_short.npy", preds[:, 0])
-            np.save(root / "pred_long.npy", preds[:, -1])
-            probs = preds[:, 0]
-        else:
-            np.save(root / "pred_short.npy", preds)
-            np.save(root / "pred_long.npy", preds)
-            probs = preds
-        probs = np.column_stack([1 - probs, probs])
-        al_queue.push(train_df.index, probs, k=cfg.get("al_queue_size", 10))
-        new_labels = al_queue.pop_labeled()
-        if not new_labels.empty:
-            train_df = merge_labels(train_df, new_labels, "tb_label")
-            save_history_parquet(train_df, root / "data" / "history.parquet")
+        if not use_cross_modal:
+            model.eval()
+            with torch.no_grad():
+                X_tensor = torch.tensor(
+                    train_df[features].values, dtype=torch.float32, device=device
+                )
+                preds = model(X_tensor).cpu().numpy()
+            if preds.ndim > 1:
+                np.save(root / "pred_short.npy", preds[:, 0])
+                np.save(root / "pred_long.npy", preds[:, -1])
+                probs = preds[:, 0]
+            else:
+                np.save(root / "pred_short.npy", preds)
+                np.save(root / "pred_long.npy", preds)
+                probs = preds
+            probs = np.column_stack([1 - probs, probs])
+            al_queue.push(train_df.index, probs, k=cfg.get("al_queue_size", 10))
+            new_labels = al_queue.pop_labeled()
+            if not new_labels.empty:
+                train_df = merge_labels(train_df, new_labels, "tb_label")
+                save_history_parquet(train_df, root / "data" / "history.parquet")
     except Exception as e:  # pragma: no cover - safety
         logger.warning("Active learning step failed: %s", e)
 
     if cfg.get("export"):
         from models.export import export_pytorch
 
-        if X_sample is not None:
+        if X_sample is not None and not use_cross_modal:
             sample = torch.tensor(X_sample[:1], dtype=torch.float32)
             export_pytorch(model, sample)
 
