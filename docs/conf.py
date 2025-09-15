@@ -12,6 +12,7 @@ extensions = [
     "sphinx.ext.doctest",
     "myst_parser",
 ]
+autosummary_generate = True
 
 autodoc_mock_imports = [
     "torch",
@@ -50,6 +51,7 @@ exclude_patterns = [
     "config.html",
     "EXTENDING.md",
     "api/features.rst",
+    "testing/*",
 ]
 
 source_suffix = {
