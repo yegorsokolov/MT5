@@ -108,6 +108,16 @@ def _register_clf(clf: LGBMClassifier) -> None:
     _ACTIVE_CLFS.append(clf)
 
 
+def _normalise_regime_thresholds(
+    thresholds: dict[int | str, float | int] | None,
+) -> dict[int, float]:
+    """Return thresholds with integer keys and float values."""
+
+    if not thresholds:
+        return {}
+    return {int(k): float(v) for k, v in thresholds.items()}
+
+
 def _lgbm_params(cfg: AppConfig) -> dict:
     """Extract LightGBM hyper-parameters from config."""
     params: dict[str, float | int] = {}
@@ -1137,6 +1147,7 @@ def main(
             drift_monitor.update(feat_row, float(pred))
         regimes_val = X_val["market_regime"].values
         thr_dict, preds = find_regime_thresholds(y_val.values, probs, regimes_val)
+        thr_dict = _normalise_regime_thresholds(thr_dict)
         for reg, thr_val in thr_dict.items():
             mlflow.log_metric(f"fold_{fold}_thr_regime_{reg}", float(thr_val))
         last_val_X, last_val_y, last_val_probs, last_val_regimes = (
@@ -1314,9 +1325,10 @@ def main(
         mlflow.log_metric("calibration_brier_calibrated", brier_cal)
 
     if calibrator is not None and calibrator.regime_thresholds:
-        regime_thresholds = calibrator.regime_thresholds
+        regime_thresholds = _normalise_regime_thresholds(calibrator.regime_thresholds)
     else:
         regime_thresholds, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
+        regime_thresholds = _normalise_regime_thresholds(regime_thresholds)
     for reg, thr_val in regime_thresholds.items():
         mlflow.log_metric(f"thr_regime_{reg}", float(thr_val))
 

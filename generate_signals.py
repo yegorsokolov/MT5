@@ -49,6 +49,43 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def _normalise_thresholds(
+    thresholds: dict[int | str, float | int] | None,
+) -> dict[int, float]:
+    """Cast regime thresholds to ``int -> float`` mapping."""
+
+    if not thresholds:
+        return {}
+    return {int(k): float(v) for k, v in thresholds.items()}
+
+
+def apply_regime_thresholds(
+    probs: np.ndarray,
+    regimes: np.ndarray,
+    thresholds: dict[int | str, float | int] | None,
+    default_threshold: float,
+) -> np.ndarray:
+    """Return binary predictions using per-regime probability thresholds."""
+
+    if len(probs) == 0:
+        return np.zeros(0, dtype=int)
+
+    thr_map = _normalise_thresholds(thresholds)
+    regimes_arr = np.asarray(regimes)
+    if regimes_arr.shape[0] != len(probs):
+        raise ValueError("Regimes and probabilities must have the same length")
+
+    preds = np.zeros(len(probs), dtype=int)
+    unique_regimes = np.unique(regimes_arr)
+    for reg in unique_regimes:
+        mask = regimes_arr == reg
+        if not np.any(mask):
+            continue
+        thr = thr_map.get(int(reg), default_threshold)
+        preds[mask] = (probs[mask] >= thr).astype(int)
+    return preds
+
+
 def _validate_account_id(account_id: str | None) -> str | None:
     """Ensure ``account_id`` contains only digits."""
 
@@ -74,8 +111,8 @@ def load_models(paths, versions=None, return_meta: bool = False):
         try:
             m, meta = model_store.load_model(vid)
             perf = meta.get("performance", {})
-            thr = perf.get("regime_thresholds")
-            if thr is not None:
+            thr = _normalise_thresholds(perf.get("regime_thresholds"))
+            if thr:
                 setattr(m, "regime_thresholds", thr)
             q = perf.get("interval_q")
             if q is not None:
@@ -408,7 +445,11 @@ def main():
     )
     if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
-    regime_thresholds = getattr(models[0], "regime_thresholds", {}) if models else {}
+    regime_thresholds = (
+        _normalise_thresholds(getattr(models[0], "regime_thresholds", {}))
+        if models
+        else {}
+    )
 
     # Replay past trades through any newly enabled model versions
     new_versions = [v for v in model_versions if v not in prev_models]
@@ -607,14 +648,16 @@ def main():
         combined = np.where(keep, combined, 0.0)
 
     regimes = df["market_regime"] if "market_regime" in df.columns else None
+    default_thr = float(cfg.get("threshold", 0.5))
     if regimes is not None and regime_thresholds:
-        preds = np.zeros(len(df), dtype=int)
-        for reg, thr in regime_thresholds.items():
-            mask = regimes == int(reg)
-            preds[mask] = (combined[mask] > thr).astype(int)
+        preds = apply_regime_thresholds(
+            combined,
+            regimes.to_numpy() if hasattr(regimes, "to_numpy") else np.asarray(regimes),
+            regime_thresholds,
+            default_thr,
+        )
     else:
-        default_thr = cfg.get("threshold", 0.5)
-        preds = (combined > default_thr).astype(int)
+        preds = (combined >= default_thr).astype(int)
 
     out = pd.DataFrame(
         {
