@@ -6,11 +6,18 @@ This module provides a :func:`compute` function that derives rolling
 coherence metrics between pairs of symbols.  The current implementation
 uses a simple FFT based magnitude-squared coherence which provides a
 proxy for wavelet coherence but without the heavy dependency footprint.
+The window length for the rolling coherence can be customised via
+``config.yaml`` using the ``cross_spectral.window`` key.
 """
 
 import numpy as np
 import pandas as pd
 from itertools import combinations
+
+try:  # pragma: no cover - configuration optional
+    from utils import load_config
+except Exception:  # pragma: no cover - fallback when utils unavailable
+    load_config = lambda: {}
 
 # ``ResourceCapabilities`` is only needed for gating based on hardware.  The
 # analysis module can fall back to a lightweight local definition when the
@@ -53,7 +60,7 @@ def _rolling_coherence(x: pd.Series, y: pd.Series, window: int) -> pd.Series:
     return pd.Series(values, index=x.index)
 
 
-def compute(df: pd.DataFrame, window: int = 64) -> pd.DataFrame:
+def compute(df: pd.DataFrame, window: int | None = None) -> pd.DataFrame:
     """Compute rolling coherence features between symbol pairs.
 
     Parameters
@@ -62,7 +69,9 @@ def compute(df: pd.DataFrame, window: int = 64) -> pd.DataFrame:
         Input dataframe containing ``Timestamp``, ``Symbol`` and ``Close``
         columns.
     window:
-        Number of observations per rolling coherence window.
+        Number of observations per rolling coherence window. If ``None``,
+        the value is read from ``config.yaml`` under
+        ``cross_spectral.window`` and defaults to ``64``.
 
     Returns
     -------
@@ -70,6 +79,13 @@ def compute(df: pd.DataFrame, window: int = 64) -> pd.DataFrame:
         DataFrame augmented with ``coh_{other}`` columns for each symbol
         pair.
     """
+
+    if window is None:
+        try:  # pragma: no cover - config may be missing
+            cfg = load_config()
+            window = int(cfg.get("cross_spectral", {}).get("window", 64))
+        except Exception:
+            window = 64
 
     required = {"Symbol", "Timestamp", "Close"}
     if not required.issubset(df.columns) or df["Symbol"].nunique() < 2:
