@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from indicators import atr, bollinger, rsi, sma
+from indicators.common import atr, bollinger, rsi, sma
 
 try:  # pragma: no cover - decorator optional when imported standalone
     from . import validate_module

@@ -1,5 +1,20 @@
 import os
 import sys
+import types
+
+# Stub minimal utils module to avoid heavy dependency initialization
+utils_stub = types.ModuleType("utils")
+
+def _dummy_load_config():
+    class _Cfg:
+        strategy = types.SimpleNamespace(
+            session_position_limits={}, default_position_limit=1
+        )
+
+    return _Cfg()
+
+utils_stub.load_config = _dummy_load_config
+sys.modules.setdefault("utils", utils_stub)
 
 # Ensure repo root on path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
