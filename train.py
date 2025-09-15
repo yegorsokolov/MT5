@@ -359,7 +359,9 @@ def train_multi_output_model(
     )
 
     label_cols = [c for c in y.columns if c.startswith("label_")]
-    reg_cols = [c for c in y.columns if c.startswith("abs_return_") or c.startswith("vol_")]
+    reg_cols = [
+        c for c in y.columns if c.startswith("abs_return_") or c.startswith("vol_")
+    ]
 
     clf_params = {
         "n_estimators": cfg.get("n_estimators", 50),
@@ -765,7 +767,7 @@ def main(
         X = df[features]
         save_history_parquet(df, root / "data" / "history.parquet")
     logger.info("Active learning queue size: %d", len(al_queue))
-    al_k = cfg.get("active_learning", {}).get("k", 10)
+    al_threshold = cfg.get("active_learning", {}).get("threshold", 0.6)
 
     if use_pseudo_labels:
         pseudo_dir = root / "data" / "pseudo_labels"
@@ -1108,7 +1110,7 @@ def main(
         pipe.fit(X_train, y_train, **fit_params)
 
         val_probs = pipe.predict_proba(X_val)
-        al_queue.push(X_val.index, val_probs, k=al_k)
+        al_queue.push_low_confidence(X_val.index, val_probs, threshold=al_threshold)
         logger.info("Active learning queue size: %d", len(al_queue))
         probs = val_probs[:, 1]
         for feat_row, pred in zip(X_val[features].to_dict("records"), probs):
@@ -1159,7 +1161,9 @@ def main(
             if pen > 0:
                 violation_penalty = float(pen)
                 logger.warning(
-                    "Risk constraints violated on fold %d: %.4f", fold, violation_penalty
+                    "Risk constraints violated on fold %d: %.4f",
+                    fold,
+                    violation_penalty,
                 )
                 risk_violation = True
                 break
@@ -1370,6 +1374,10 @@ def main(
         y_unlabeled = (
             df_unlabeled["label"].values if "label" in df_unlabeled.columns else None
         )
+        probs_unlabeled = final_pipe.predict_proba(X_unlabeled)
+        al_queue.push_low_confidence(
+            X_unlabeled.index, probs_unlabeled, threshold=al_threshold
+        )
         pseudo_path = generate_pseudo_labels(
             final_pipe,
             X_unlabeled,
@@ -1380,11 +1388,20 @@ def main(
         )
         logger.info("Generated pseudo labels at %s", pseudo_path)
         if y_unlabeled is not None:
-            preds_unlabeled = final_pipe.predict(X_unlabeled)
-            prec = precision_score(y_unlabeled, preds_unlabeled, zero_division=0)
-            rec = recall_score(y_unlabeled, preds_unlabeled, zero_division=0)
-            mlflow.log_metric("pseudo_label_precision", prec)
-            mlflow.log_metric("pseudo_label_recall", rec)
+            preds_unlabeled = probs_unlabeled.argmax(axis=1)
+            mask_high = probs_unlabeled.max(axis=1) >= cfg.get(
+                "pseudo_label_threshold", 0.9
+            )
+            if np.any(mask_high):
+                prec = precision_score(
+                    y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
+                )
+                rec = recall_score(
+                    y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
+                )
+                logger.info("Pseudo label precision=%s recall=%s", prec, rec)
+                mlflow.log_metric("pseudo_label_precision", prec)
+                mlflow.log_metric("pseudo_label_recall", rec)
     meta_features = pd.DataFrame({"prob": all_probs, "confidence": all_conf})
     meta_clf = train_meta_classifier(meta_features, all_true)
     meta_version_id = model_store.save_model(meta_clf, cfg, {"type": "meta"})
