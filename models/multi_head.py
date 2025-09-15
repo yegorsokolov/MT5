@@ -1,5 +1,5 @@
 import math
-from typing import Dict, Iterable, List
+from typing import Callable, Dict, Iterable, List
 
 import torch
 
@@ -24,28 +24,50 @@ class PositionalEncoding(torch.nn.Module):
         return x + self.pe[:, : x.size(1)]
 
 
-class MultiTaskHead(torch.nn.Module):
-    """Horizon-aware multi-task head.
+class TaskHead(torch.nn.Module):
+    """Per-task head applied on top of the shared transformer trunk."""
 
-    A separate linear layer is created for each prediction horizon and task
-    (direction, absolute return and volatility).
-    """
+    def __init__(
+        self,
+        d_model: int,
+        horizons: List[int],
+        prefix: str,
+        activation: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    ) -> None:
+        super().__init__()
+        self.horizons = [int(h) for h in horizons]
+        self.prefix = prefix
+        self.activation = activation
+        self.layers = torch.nn.ModuleDict(
+            {str(h): torch.nn.Linear(d_model, 1) for h in self.horizons}
+        )
+
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        outputs: Dict[str, torch.Tensor] = {}
+        for horizon in self.horizons:
+            key = str(horizon)
+            value = self.layers[key](x).squeeze(-1)
+            if self.activation is not None:
+                value = self.activation(value)
+            outputs[f"{self.prefix}_{horizon}"] = value
+        return outputs
+
+
+class MultiTaskHead(torch.nn.Module):
+    """Horizon-aware multi-task head with dedicated regression branches."""
 
     def __init__(self, d_model: int, horizons: List[int]) -> None:
         super().__init__()
         self.horizons = [int(h) for h in horizons]
-        self.dir = torch.nn.ModuleDict({str(h): torch.nn.Linear(d_model, 1) for h in self.horizons})
-        self.abs = torch.nn.ModuleDict({str(h): torch.nn.Linear(d_model, 1) for h in self.horizons})
-        self.vol = torch.nn.ModuleDict({str(h): torch.nn.Linear(d_model, 1) for h in self.horizons})
+        self.direction_head = TaskHead(d_model, self.horizons, "direction", torch.sigmoid)
+        self.abs_head = TaskHead(d_model, self.horizons, "abs_return")
+        self.vol_head = TaskHead(d_model, self.horizons, "volatility")
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        out: Dict[str, torch.Tensor] = {}
-        for h in self.horizons:
-            key = str(h)
-            out[f"direction_{h}"] = torch.sigmoid(self.dir[key](x)).squeeze(-1)
-            out[f"abs_return_{h}"] = self.abs[key](x).squeeze(-1)
-            out[f"volatility_{h}"] = self.vol[key](x).squeeze(-1)
-        return out
+        outputs = self.direction_head(x)
+        outputs.update(self.abs_head(x))
+        outputs.update(self.vol_head(x))
+        return outputs
 
 
 class MultiHeadTransformer(torch.nn.Module):
@@ -126,4 +148,4 @@ class MultiHeadTransformer(torch.nn.Module):
                 del self.heads[k]
 
 
-__all__: List[str] = ["MultiHeadTransformer", "MultiTaskHead"]
+__all__: List[str] = ["MultiHeadTransformer", "MultiTaskHead", "TaskHead"]
