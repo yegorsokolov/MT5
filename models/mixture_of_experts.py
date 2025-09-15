@@ -7,24 +7,27 @@ available system resources.
 
 from __future__ import annotations
 
-import importlib.util
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Set
 
 import numpy as np
 
-# ``utils.resource_monitor`` pulls in optional heavy deps in its package
-# ``__init__``. Import it directly from the file path to keep tests light.
-_spec = importlib.util.spec_from_file_location(
-    "resource_monitor",
-    Path(__file__).resolve().parents[1] / "utils" / "resource_monitor.py",
-)
-_rm = importlib.util.module_from_spec(_spec)
-assert _spec and _spec.loader
-_spec.loader.exec_module(_rm)  # type: ignore
 
-ResourceCapabilities = _rm.ResourceCapabilities
+@dataclass
+class ResourceCapabilities:
+    """Minimal resource capability specification.
+
+    This mirrors the structure used in :mod:`utils.resource_monitor` but avoids
+    importing heavy optional dependencies. Only the attributes required by the
+    gating network are included.
+    """
+
+    cpus: int
+    memory_gb: float
+    has_gpu: bool
+    gpu_count: int = 0
+    gpu_model: str = ""
+    cpu_flags: Set[str] | None = None
 
 
 class Expert:
@@ -79,8 +82,26 @@ class GatingNetwork:
             and (not req.has_gpu or caps.has_gpu)
         )
 
-    def weights(self, regime: float, caps: ResourceCapabilities) -> np.ndarray:
-        """Return softmax weights over experts."""
+    def weights(
+        self,
+        regime: float,
+        caps: ResourceCapabilities,
+        diversity: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Return softmax weights over experts.
+
+        Parameters
+        ----------
+        regime:
+            Market regime label used by the gating network.
+        caps:
+            Available :class:`~utils.resource_monitor.ResourceCapabilities`.
+        diversity:
+            Optional pre-computed weights favouring experts with low error
+            correlation. If provided, the softmax weights are multiplied by these
+            values and renormalised. This allows upstream training code to
+            down-weight highly correlated experts.
+        """
 
         scores = []
         for idx, spec in enumerate(self.experts):
@@ -96,15 +117,31 @@ class GatingNetwork:
             exp_scores = np.nan_to_num(exp_scores, nan=0.0, posinf=0.0, neginf=0.0)
         total = exp_scores.sum()
         if total == 0.0:
-            return np.zeros(len(self.experts))
-        return exp_scores / total
+            base = np.ones(len(self.experts)) / len(self.experts)
+        else:
+            base = exp_scores / total
+        if diversity is not None:
+            div = np.asarray(diversity, dtype=float)
+            if div.shape != base.shape:
+                raise ValueError("diversity weight size mismatch")
+            base = base * div
+            total = base.sum()
+            if total <= 0 or not np.isfinite(total):
+                base = np.ones(len(self.experts)) / len(self.experts)
+            else:
+                base = base / total
+        return base
 
     def predict(
-        self, history: Sequence[float], regime: float, caps: ResourceCapabilities
+        self,
+        history: Sequence[float],
+        regime: float,
+        caps: ResourceCapabilities,
+        diversity: np.ndarray | None = None,
     ) -> float:
         """Combine expert predictions according to gating weights."""
 
-        w = self.weights(regime, caps)
+        w = self.weights(regime, caps, diversity)
         preds = np.array([spec.model.predict(history) for spec in self.experts])
         return float(np.dot(w, preds))
 

@@ -4,19 +4,18 @@ import sys
 
 import numpy as np
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT))
 _spec = importlib.util.spec_from_file_location(
-    "train_ensemble", Path(__file__).resolve().parents[1] / "train_ensemble.py"
+    "train_ensemble", ROOT / "train_ensemble.py"
 )
 _te = importlib.util.module_from_spec(_spec)
 assert _spec and _spec.loader
 sys.modules["train_ensemble"] = _te
 _spec.loader.exec_module(_te)  # type: ignore
 
-MacroExpert = _te.MacroExpert
-MeanReversionExpert = _te.MeanReversionExpert
 ResourceCapabilities = _te.ResourceCapabilities
-TrendExpert = _te.TrendExpert
-predict_mixture = _te.predict_mixture
+train_moe_ensemble = _te.train_moe_ensemble
 
 
 def test_mixture_beats_individual_experts() -> None:
@@ -27,28 +26,20 @@ def test_mixture_beats_individual_experts() -> None:
     data_macro = np.zeros(10)
     data = np.concatenate([data_trend, data_mean, data_macro])
 
-    trend_model = TrendExpert()
-    mean_model = MeanReversionExpert()
-    macro_model = MacroExpert()
     caps = ResourceCapabilities(4, 16, False, gpu_count=0)
 
-    preds_mix, preds_trend, preds_mean, preds_macro, targets = [], [], [], [], []
+    histories, regimes, targets = [], [], []
     for t in range(2, len(data)):
-        history = data[t - 2 : t]
-        regime = 0 if t < 12 else 1 if t < 22 else 2
-        preds_mix.append(predict_mixture(history, regime, caps))
-        preds_trend.append(trend_model.predict(history))
-        preds_mean.append(mean_model.predict(history))
-        preds_macro.append(macro_model.predict(history))
+        histories.append(data[t - 2 : t])
+        regimes.append(0 if t < 12 else 1 if t < 22 else 2)
         targets.append(data[t])
 
+    mix_pred, expert_preds = train_moe_ensemble(histories, regimes, targets, caps)
     targets_arr = np.array(targets)
 
-    def mse(arr: list[float]) -> float:
-        a = np.array(arr)
-        return float(np.mean((a - targets_arr) ** 2))
+    def mse(arr: np.ndarray) -> float:
+        return float(np.mean((arr - targets_arr) ** 2))
 
-    mix_err = mse(preds_mix)
-    assert mix_err < mse(preds_trend)
-    assert mix_err < mse(preds_mean)
-    assert mix_err < mse(preds_macro)
+    mix_err = mse(mix_pred)
+    for i in range(expert_preds.shape[1]):
+        assert mix_err < mse(expert_preds[:, i])
