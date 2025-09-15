@@ -17,7 +17,7 @@ import numpy as np
 
 from utils import load_config
 from prediction_cache import PredictionCache
-from typing import Any
+from typing import Any, Mapping
 from utils.market_hours import is_market_open
 import argparse
 import backtest
@@ -43,7 +43,11 @@ from signal_queue import publish_dataframe_async, get_signal_backend
 from models.ensemble import EnsembleModel
 from models import model_store
 from analysis.concept_drift import ConceptDriftMonitor
-from models.conformal import predict_interval, evaluate_coverage
+from models.conformal import (
+    ConformalIntervalParams,
+    evaluate_coverage,
+    predict_interval,
+)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -57,6 +61,52 @@ def _normalise_thresholds(
     if not thresholds:
         return {}
     return {int(k): float(v) for k, v in thresholds.items()}
+
+
+def _combine_interval_params(
+    params: list[ConformalIntervalParams],
+) -> tuple[float | dict[int | str, float] | None, float | None]:
+    """Aggregate interval parameters across an ensemble."""
+
+    if not params:
+        return None, None
+    has_mapping = any(isinstance(p.quantiles, Mapping) for p in params)
+    quantiles: float | dict[int | str, float] | None
+    if has_mapping:
+        regimes: set[object] = set()
+        for p in params:
+            q = p.quantiles
+            if isinstance(q, Mapping):
+                regimes.update(q.keys())
+        combined: dict[int | str, float] = {}
+        for reg in regimes:
+            values: list[float] = []
+            for p in params:
+                q = p.quantiles
+                if isinstance(q, Mapping):
+                    if reg in q:
+                        values.append(float(q[reg]))
+                else:
+                    values.append(float(q))
+            if not values:
+                continue
+            key: int | str | object = reg
+            if isinstance(reg, (int, np.integer)):
+                key = int(reg)
+            else:
+                try:
+                    key = int(str(reg))
+                except (TypeError, ValueError):
+                    key = reg
+            combined[int(key) if isinstance(key, int) else key] = float(
+                np.median(values)
+            )
+        quantiles = combined or None
+    else:
+        quantiles = float(np.median([float(p.quantiles) for p in params]))
+    coverage_values = [float(p.coverage) for p in params if p.coverage is not None]
+    coverage = float(np.mean(coverage_values)) if coverage_values else None
+    return quantiles, coverage
 
 
 def apply_regime_thresholds(
@@ -114,9 +164,49 @@ def load_models(paths, versions=None, return_meta: bool = False):
             thr = _normalise_thresholds(perf.get("regime_thresholds"))
             if thr:
                 setattr(m, "regime_thresholds", thr)
-            q = perf.get("interval_q")
-            if q is not None:
-                setattr(m, "interval_q", q)
+            interval_params: ConformalIntervalParams | None = None
+            interval_blob = perf.get("interval")
+            if interval_blob:
+                try:
+                    interval_params = ConformalIntervalParams.from_dict(interval_blob)
+                except Exception:
+                    logger.exception(
+                        "Failed to deserialize interval parameters for %s", vid
+                    )
+            if interval_params is None:
+                q = perf.get("interval_q")
+                if q is not None:
+                    coverage_val = perf.get("interval_coverage")
+                    coverage = float(coverage_val) if coverage_val is not None else None
+                    coverage_by_regime = perf.get("interval_coverage_by_regime")
+                    if isinstance(coverage_by_regime, Mapping):
+                        cbr: dict[int | str, float] = {}
+                        for key, value in coverage_by_regime.items():
+                            try:
+                                norm_key = int(key)
+                            except (TypeError, ValueError):
+                                norm_key = key
+                            cbr[norm_key] = float(value)
+                        coverage_by_regime = cbr
+                    else:
+                        coverage_by_regime = None
+                    interval_params = ConformalIntervalParams(
+                        alpha=float(perf.get("interval_alpha", 0.1)),
+                        quantiles=q,
+                        coverage=coverage,
+                        coverage_by_regime=coverage_by_regime,
+                    )
+            if interval_params is not None:
+                setattr(m, "interval_params", interval_params)
+                setattr(m, "interval_q", interval_params.quantiles)
+                setattr(m, "interval_alpha", interval_params.alpha)
+                setattr(m, "interval_coverage", interval_params.coverage)
+                if interval_params.coverage_by_regime:
+                    setattr(
+                        m,
+                        "interval_coverage_by_regime",
+                        dict(interval_params.coverage_by_regime),
+                    )
             if meta_model is None:
                 meta_id = perf.get("meta_model_id")
                 if meta_id:
@@ -648,11 +738,70 @@ def main():
         combined = np.where(keep, combined, 0.0)
 
     regimes = df["market_regime"] if "market_regime" in df.columns else None
+    interval_params_list = [
+        getattr(m, "interval_params", None)
+        for m in models
+        if getattr(m, "interval_params", None) is not None
+    ]
+    interval_params_list = [
+        p for p in interval_params_list if isinstance(p, ConformalIntervalParams)
+    ]
+    combined_q, avg_cov = _combine_interval_params(interval_params_list)
+    if combined_q is None:
+        legacy_qs = [
+            getattr(m, "interval_q", None)
+            for m in models
+            if getattr(m, "interval_q", None) is not None
+        ]
+        values: list[float] = []
+        for q in legacy_qs:
+            if isinstance(q, Mapping):
+                vals = list(q.values())
+                if vals:
+                    values.append(float(np.median(vals)))
+            elif q is not None:
+                values.append(float(q))
+        if values:
+            combined_q = float(np.median(values))
+    if avg_cov is None:
+        coverage_values = [
+            getattr(m, "interval_coverage", None)
+            for m in models
+            if getattr(m, "interval_coverage", None) is not None
+        ]
+        if coverage_values:
+            avg_cov = float(np.mean([float(c) for c in coverage_values]))
+    coverage_target = cfg.get("interval_coverage_target")
+    if coverage_target is None:
+        coverage_target = cfg.get("interval_min_coverage")
+    coverage_target = float(coverage_target) if coverage_target is not None else None
+    if coverage_target is not None and avg_cov is not None:
+        if avg_cov < coverage_target:
+            logger.warning(
+                "Interval coverage %.3f below target %.3f; suppressing signals",
+                avg_cov,
+                coverage_target,
+            )
+            combined = np.zeros_like(combined)
+        else:
+            logger.info(
+                "Interval coverage %.3f meets target %.3f",
+                avg_cov,
+                coverage_target,
+            )
+    elif avg_cov is not None:
+        logger.info("Interval coverage from calibration: %.3f", avg_cov)
+
+    regimes_arr = None
+    if regimes is not None:
+        regimes_arr = (
+            regimes.to_numpy() if hasattr(regimes, "to_numpy") else np.asarray(regimes)
+        )
     default_thr = float(cfg.get("threshold", 0.5))
-    if regimes is not None and regime_thresholds:
+    if regimes_arr is not None and regime_thresholds:
         preds = apply_regime_thresholds(
             combined,
-            regimes.to_numpy() if hasattr(regimes, "to_numpy") else np.asarray(regimes),
+            regimes_arr,
             regime_thresholds,
             default_thr,
         )
@@ -667,10 +816,24 @@ def main():
             "pred": preds,
         }
     )
-    interval_qs = [getattr(m, "interval_q", None) for m in models if getattr(m, "interval_q", None) is not None]
-    if interval_qs:
-        q = float(np.median(interval_qs))
-        lower, upper = predict_interval(combined, q)
+    if avg_cov is not None:
+        out["interval_avg_coverage"] = avg_cov
+    if coverage_target is not None:
+        out["interval_coverage_target"] = coverage_target
+    quantiles_to_use = combined_q
+    regimes_for_interval = None
+    if isinstance(quantiles_to_use, Mapping):
+        regimes_for_interval = regimes_arr
+        if regimes_for_interval is None:
+            vals = list(quantiles_to_use.values())
+            quantiles_to_use = float(np.median(vals)) if vals else None
+            regimes_for_interval = None
+    if quantiles_to_use is not None:
+        lower, upper = predict_interval(
+            combined,
+            quantiles_to_use,
+            regimes_for_interval,
+        )
         out["ci_lower"] = lower
         out["ci_upper"] = upper
         y_true = None
