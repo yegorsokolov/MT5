@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-"""Simple cross-modal transformer for price and news inputs."""
+"""Cross-modal transformer combining price windows with news embeddings."""
 
 import logging
-from typing import Dict
+from typing import Dict, Tuple
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 
 logger = logging.getLogger(__name__)
@@ -17,11 +18,11 @@ class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model: int, max_len: int = 500) -> None:
         super().__init__()
-        pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(
             torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model)
         )
+        pe = torch.zeros(max_len, d_model)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer("pe", pe.unsqueeze(0))
@@ -30,8 +31,74 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, : x.size(1)]
 
 
+class FeedForward(nn.Module):
+    """Position-wise feed-forward network used inside transformer layers."""
+
+    def __init__(self, d_model: int, hidden_dim: int, dropout: float) -> None:
+        super().__init__()
+        self.lin1 = nn.Linear(d_model, hidden_dim)
+        self.lin2 = nn.Linear(hidden_dim, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.lin2(self.dropout(F.gelu(self.lin1(x))))
+
+
+class TransformerBranch(nn.Module):
+    """Self-attention block applied independently per modality."""
+
+    def __init__(self, d_model: int, nhead: int, dropout: float, ff_dim: int) -> None:
+        super().__init__()
+        self.attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.ff = FeedForward(d_model, ff_dim, dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        attn_out, _ = self.attn(x, x, x, need_weights=False)
+        x = self.norm1(x + self.dropout(attn_out))
+        x = self.norm2(x + self.dropout(self.ff(x)))
+        return x
+
+
+class CrossModalLayer(nn.Module):
+    """Layer containing self-attention per branch and bi-directional cross attention."""
+
+    def __init__(self, d_model: int, nhead: int, dropout: float, ff_dim: int) -> None:
+        super().__init__()
+        self.price_branch = TransformerBranch(d_model, nhead, dropout, ff_dim)
+        self.news_branch = TransformerBranch(d_model, nhead, dropout, ff_dim)
+        self.price_cross = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=True
+        )
+        self.news_cross = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=True
+        )
+        self.price_norm = nn.LayerNorm(d_model)
+        self.news_norm = nn.LayerNorm(d_model)
+        self.price_ff = FeedForward(d_model, ff_dim, dropout)
+        self.news_ff = FeedForward(d_model, ff_dim, dropout)
+        self.price_ff_norm = nn.LayerNorm(d_model)
+        self.news_ff_norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self, price: torch.Tensor, news: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        price = self.price_branch(price)
+        news = self.news_branch(news)
+        price_ctx, price_weights = self.price_cross(price, news, news, need_weights=True)
+        price = self.price_norm(price + self.dropout(price_ctx))
+        price = self.price_ff_norm(price + self.dropout(self.price_ff(price)))
+        news_ctx, news_weights = self.news_cross(news, price, price, need_weights=True)
+        news = self.news_norm(news + self.dropout(news_ctx))
+        news = self.news_ff_norm(news + self.dropout(self.news_ff(news)))
+        return price, news, price_weights, news_weights
+
+
 class CrossModalTransformer(nn.Module):
-    """Tiny transformer using cross-attention between price and news inputs."""
+    """Transformer that fuses price windows with news embeddings via cross-attention."""
 
     def __init__(
         self,
@@ -46,43 +113,39 @@ class CrossModalTransformer(nn.Module):
         super().__init__()
         self.price_proj = nn.Linear(price_dim, d_model)
         self.news_proj = nn.Linear(news_dim, d_model)
-        self.pos_enc = PositionalEncoding(d_model)
-        self.price_norm = nn.LayerNorm(d_model)
-        self.news_norm = nn.LayerNorm(d_model)
-        self.p_to_n = nn.ModuleList(
-            [nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True) for _ in range(num_layers)]
+        self.price_pos = PositionalEncoding(d_model)
+        self.news_pos = PositionalEncoding(d_model)
+        ff_dim = 4 * d_model
+        self.layers = nn.ModuleList(
+            [CrossModalLayer(d_model, nhead, dropout, ff_dim) for _ in range(num_layers)]
         )
-        self.n_to_p = nn.ModuleList(
-            [nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True) for _ in range(num_layers)]
+        self.fusion_norm = nn.LayerNorm(2 * d_model)
+        self.head = nn.Sequential(
+            nn.Linear(2 * d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, output_dim),
         )
-        self.head = nn.Linear(d_model, output_dim)
         self.last_attention: Dict[str, torch.Tensor] | None = None
 
     def forward(self, price: torch.Tensor, news: torch.Tensor) -> torch.Tensor:
-        """Return logits for ``price`` and ``news`` inputs.
+        """Return probabilities for combined price and news inputs."""
 
-        Parameters
-        ----------
-        price: torch.Tensor
-            Tensor of shape ``(batch, seq_len, price_dim)``.
-        news: torch.Tensor
-            Tensor of shape ``(batch, n_news, news_dim)``.
-        """
-
-        p = self.pos_enc(self.price_proj(price))
-        n = self.news_proj(news)
+        price_emb = self.price_pos(self.price_proj(price))
+        news_emb = self.news_pos(self.news_proj(news))
         attn: Dict[str, torch.Tensor] = {}
-        for attn_p, attn_n in zip(self.p_to_n, self.n_to_p):
-            p2, w_pn = attn_p(p, n, n)
-            n2, w_np = attn_n(n, p, p)
-            p = self.price_norm(p + p2)
-            n = self.news_norm(n + n2)
-            attn = {"price_to_news": w_pn.detach(), "news_to_price": w_np.detach()}
+        for layer in self.layers:
+            price_emb, news_emb, w_price, w_news = layer(price_emb, news_emb)
+            attn = {"price_to_news": w_price.detach(), "news_to_price": w_news.detach()}
         self.last_attention = attn
-        logger.debug("price->news attention: %s", attn.get("price_to_news"))
-        logger.debug("news->price attention: %s", attn.get("news_to_price"))
-        out = self.head(p[:, -1, :])
-        return torch.sigmoid(out.squeeze(-1))
+        price_repr = price_emb.mean(dim=1)
+        news_repr = news_emb.mean(dim=1)
+        fused = torch.cat([price_repr, news_repr], dim=-1)
+        fused = self.fusion_norm(fused)
+        logits = self.head(fused).squeeze(-1)
+        probs = torch.sigmoid(logits)
+        return probs
 
 
 __all__ = ["CrossModalTransformer"]
+

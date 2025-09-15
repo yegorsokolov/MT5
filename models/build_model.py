@@ -78,10 +78,13 @@ def build_model(
 
     model_cfg = cfg.get("model", {})
     if model_cfg.get("type") == "cross_modal_transformer":
-        news_dim = model_cfg.get("news_dim", input_size)
+        price_dim = int(model_cfg.get("price_dim", input_size))
+        news_dim = model_cfg.get("news_dim")
+        if news_dim is None:
+            raise ValueError("news_dim must be provided for cross modal transformer")
         model = CrossModalTransformer(
-            input_size,
-            news_dim,
+            price_dim,
+            int(news_dim),
             d_model=d_model,
             nhead=nhead,
             num_layers=num_layers,
