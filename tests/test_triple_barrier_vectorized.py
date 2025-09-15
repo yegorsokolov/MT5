@@ -1,7 +1,7 @@
-import timeit
-from pathlib import Path
 import importlib.util
 import sys
+import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,7 @@ spec.loader.exec_module(labels_mod)
 triple_barrier = labels_mod.triple_barrier
 
 
-def loop_version(prices, pt_mult, sl_mult, max_horizon):
+def legacy_loop(prices, pt_mult, sl_mult, max_horizon):
     labels = pd.Series(0, index=prices.index, dtype=int)
     n = len(prices)
     for i in range(n):
@@ -38,15 +38,34 @@ def loop_version(prices, pt_mult, sl_mult, max_horizon):
     return labels
 
 
-def test_vectorized_matches_loop_and_faster():
+def _timeit(func, *args, repeat: int = 3) -> float:
+    best = float("inf")
+    for _ in range(repeat):
+        start = time.perf_counter()
+        func(*args)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def test_numba_matches_legacy_loop():
     np.random.seed(0)
     prices = pd.Series(np.cumprod(1 + np.random.randn(5000) * 0.001))
     pt, sl, horizon = 0.01, 0.01, 50
 
-    ref = loop_version(prices, pt, sl, horizon)
-    vec = triple_barrier(prices, pt, sl, horizon)
-    pdt.assert_series_equal(vec, ref)
+    expected = legacy_loop(prices, pt, sl, horizon)
+    result = triple_barrier(prices, pt, sl, horizon)
+    pdt.assert_series_equal(result, expected)
 
-    loop_time = timeit.timeit(lambda: loop_version(prices, pt, sl, horizon), number=1)
-    vec_time = timeit.timeit(lambda: triple_barrier(prices, pt, sl, horizon), number=1)
-    assert vec_time < loop_time
+
+def test_numba_speed_advantage_over_loop():
+    np.random.seed(1)
+    prices = pd.Series(np.cumprod(1 + np.random.randn(6000) * 0.001))
+    pt, sl, horizon = 0.01, 0.01, 60
+
+    # warm-up to allow JIT compilation
+    triple_barrier(prices, pt, sl, horizon)
+    legacy_loop(prices, pt, sl, horizon)
+
+    new_time = _timeit(triple_barrier, prices, pt, sl, horizon)
+    legacy_time = _timeit(legacy_loop, prices, pt, sl, horizon)
+    assert new_time < legacy_time
