@@ -13,11 +13,12 @@ torch = pytest.importorskip("torch")
 def _synthetic_df(n: int = 60) -> pd.DataFrame:
     rows = []
     rng = np.random.default_rng(0)
-    for t in range(n):
+    timestamps = pd.date_range("2024-01-01", periods=n, freq="D")
+    for ts in timestamps:
         a = rng.normal(scale=0.1)
         b = a + rng.normal(scale=0.1)
-        rows.append({"Timestamp": t, "Symbol": "A", "return": a})
-        rows.append({"Timestamp": t, "Symbol": "B", "return": b})
+        rows.append({"Timestamp": ts, "Symbol": "A", "return": a})
+        rows.append({"Timestamp": ts, "Symbol": "B", "return": b})
     return pd.DataFrame(rows)
 
 
@@ -49,14 +50,17 @@ def test_cross_asset_gnn_beats_independent():
     df = _synthetic_df()
     feat_df = ca.compute(df)
 
-    cfg = {"symbols": ["A", "B"], "epochs": 80, "lr": 0.1, "hidden_channels": 8}
+    cfg = {
+        "symbols": ["A", "B"],
+        "graph": {"epochs": 80, "lr": 0.1, "hidden_channels": 8},
+    }
     _, losses = train_graphnet(feat_df, cfg, return_losses=True)
 
-    eye = np.eye(2)
+    eye = np.eye(2, dtype=np.float32)
     baseline_df = feat_df[["Timestamp", "Symbol", "return"]].copy()
-    baseline_df.attrs["adjacency_matrices"] = {
-        ts: eye for ts in feat_df.attrs["adjacency_matrices"].keys()
-    }
+    baseline_df.attrs["adjacency_matrices"] = [
+        (ts, eye) for ts, _ in feat_df.attrs["adjacency_matrices"]
+    ]
     _, base_losses = train_graphnet(baseline_df, cfg, return_losses=True)
 
     assert losses[-1] < base_losses[-1]

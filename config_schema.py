@@ -156,6 +156,45 @@ class ConfigSchema(BaseModel):
         description="Batch size for contrastive encoder pretraining",
     )
 
+    class GraphConfig(BaseModel):
+        enabled: bool = Field(
+            False, description="Enable graph neural network based training"
+        )
+        use_gat: bool = Field(
+            False, description="Use graph attention network architecture"
+        )
+        heads: int = Field(1, ge=1, description="Number of attention heads for GAT")
+        dropout: float = Field(
+            0.0,
+            ge=0.0,
+            le=1.0,
+            description="Dropout applied to attention coefficients",
+        )
+        log_top_k_edges: int | None = Field(
+            None,
+            ge=1,
+            description="Log the strongest edges/attention weights for interpretability",
+        )
+        log_attention: bool = Field(
+            False, description="Log aggregated attention statistics each epoch"
+        )
+        epochs: int | None = Field(
+            None,
+            ge=1,
+            description="Override number of epochs for dedicated graph training",
+        )
+        lr: float | None = Field(
+            None,
+            gt=0,
+            description="Override learning rate for the graph model optimiser",
+        )
+        hidden_channels: int | None = Field(
+            None, ge=1, description="Hidden representation size for graph models"
+        )
+        num_layers: int | None = Field(
+            None, ge=2, description="Number of message passing layers"
+        )
+
     class CrossAssetConfig(BaseModel):
         window: int | None = Field(30, ge=1, description="Rolling correlation window")
         whitelist: List[str] | None = Field(
@@ -170,6 +209,10 @@ class ConfigSchema(BaseModel):
 
     cross_asset: CrossAssetConfig | None = Field(
         None, description="Cross-asset feature options"
+    )
+
+    graph: GraphConfig | None = Field(
+        None, description="Graph neural network training options"
     )
 
     model_config = ConfigDict(extra="allow")
