@@ -122,6 +122,10 @@ try:  # optional statsmodels dependency
     from .arima import ARIMAModel
 except Exception:  # pragma: no cover - statsmodels may be missing
     ARIMAModel = None
+try:  # optional gplearn dependency
+    from .symbolic_pattern import SymbolicPatternModel
+except Exception:  # pragma: no cover - gplearn may be missing
+    SymbolicPatternModel = None
 
 __all__ = [
     "EnsembleModel",
@@ -138,6 +142,7 @@ __all__ = [
     "CrossAssetTransformer",
     "CrossModalTransformer",
     "ARIMAModel",
+    "SymbolicPatternModel",
     "LazyModel",
     "initialize_model_with_ts_masked_encoder",
     "initialize_model_with_contrastive",

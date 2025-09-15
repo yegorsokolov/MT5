@@ -54,6 +54,7 @@ models/*
 !models/strategy_controller.py
 !models/strategy_graph_controller.py
 !models/capital_allocator.py
+!models/symbolic_pattern.py
 __pycache__/
 analysis/news_impact.parquet
 analytics/*.parquet
