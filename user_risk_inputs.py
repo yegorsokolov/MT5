@@ -17,13 +17,18 @@ def configure_user_risk(argv: list[str] | None = None) -> tuple[float, float, in
     parser.add_argument("--daily-drawdown", type=float)
     parser.add_argument("--total-drawdown", type=float)
     parser.add_argument("--news-blackout-minutes", type=int)
+    parser.add_argument("--allow-hedging", action="store_true")
     args, _ = parser.parse_known_args(argv)
 
     saved = state_manager.load_user_risk()
     dd = args.daily_drawdown or saved["daily_drawdown"]
     td = args.total_drawdown or saved["total_drawdown"]
     nb = args.news_blackout_minutes or saved["news_blackout_minutes"]
-    state_manager.save_user_risk(dd, td, nb)
+    hedge = saved.get("allow_hedging", False)
+    if args.allow_hedging:
+        hedge = True
+    state_manager.save_user_risk(dd, td, nb, hedge)
     rm_mod.risk_manager.update_drawdown_limits(dd, td)
+    rm_mod.risk_manager.set_allow_hedging(hedge)
     os.environ["NEWS_BLACKOUT_MINUTES"] = str(nb)
     return dd, td, nb

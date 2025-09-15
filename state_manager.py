@@ -349,7 +349,10 @@ _RISK_FILE = _STATE_DIR / "user_risk.pkl"
 
 
 def save_user_risk(
-    daily_drawdown: float, total_drawdown: float, news_blackout_minutes: int
+    daily_drawdown: float,
+    total_drawdown: float,
+    news_blackout_minutes: int,
+    allow_hedging: bool = False,
 ) -> Path:
     """Persist user-provided risk parameters."""
 
@@ -358,6 +361,7 @@ def save_user_risk(
         "daily_drawdown": daily_drawdown,
         "total_drawdown": total_drawdown,
         "news_blackout_minutes": news_blackout_minutes,
+        "allow_hedging": allow_hedging,
     }
     with _lock(_RISK_FILE):
         joblib.dump(data, _RISK_FILE)
@@ -376,6 +380,7 @@ def load_user_risk() -> dict[str, Any]:
         try:
             with _lock(_RISK_FILE):
                 data: dict[str, Any] = joblib.load(_RISK_FILE)
+                data.setdefault("allow_hedging", False)
                 return data
         except Exception:
             pass
@@ -384,6 +389,7 @@ def load_user_risk() -> dict[str, Any]:
         "daily_drawdown": ic * 0.049,
         "total_drawdown": ic * 0.098,
         "news_blackout_minutes": 0,
+        "allow_hedging": False,
     }
 
 
