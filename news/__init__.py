@@ -17,5 +17,9 @@ try:  # optional dependency used in some environments
     from . import sentiment_fusion  # type: ignore
 except Exception:  # pragma: no cover - optional
     sentiment_fusion = None  # type: ignore
+try:  # optional dependency used in some environments
+    from .logic_sentiment import LogicSentimentAnalyzer  # type: ignore
+except Exception:  # pragma: no cover - optional
+    LogicSentimentAnalyzer = None  # type: ignore
 
-__all__ = ["get_impact", "sentiment_fusion"]
+__all__ = ["get_impact", "sentiment_fusion", "LogicSentimentAnalyzer"]
