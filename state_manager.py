@@ -2,13 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
-from typing import Any, Tuple
+from typing import Any, Tuple, Callable
 from datetime import datetime
 import hashlib
 import shutil
+import logging
+import threading
 import joblib
 from filelock import FileLock
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 from crypto_utils import _load_key, encrypt, decrypt
+from utils import load_config
+from config_models import AppConfig, ConfigError
+
+logger = logging.getLogger(__name__)
 
 try:  # optional during tests
     from core import state_sync
@@ -18,6 +26,54 @@ except Exception:  # pragma: no cover - optional dependency
 
 class StateCorruptionError(Exception):
     """Raised when a checkpoint's integrity check fails."""
+
+
+class _ConfigEventHandler(FileSystemEventHandler):
+    """Reload configuration on file modifications."""
+
+    def __init__(
+        self,
+        cfg: AppConfig,
+        path: Path,
+        callbacks: list[Callable[[AppConfig], None]] | None = None,
+    ) -> None:
+        self.cfg = cfg
+        self.path = path.resolve()
+        self.callbacks = callbacks or []
+        self._lock = threading.Lock()
+
+    def on_modified(self, event):  # pragma: no cover - triggered by watchdog
+        if Path(event.src_path).resolve() != self.path:
+            return
+        try:
+            new_cfg = load_config(self.path)
+        except ConfigError as exc:
+            logger.warning("Invalid config update: %s", exc)
+            return
+        with self._lock:
+            self.cfg.update_from(new_cfg)
+            for cb in self.callbacks:
+                try:
+                    cb(self.cfg)
+                except Exception:  # pragma: no cover - user callbacks
+                    logger.exception("Config update callback failed")
+            logger.info("Reloaded configuration from %s", self.path)
+
+
+def watch_config(
+    cfg: AppConfig,
+    path: str | Path = "config.yaml",
+    callbacks: list[Callable[[AppConfig], None]] | None = None,
+) -> Observer:
+    """Start watching ``path`` for changes and mutate ``cfg`` in-place."""
+
+    cfg_path = Path(path).resolve()
+    handler = _ConfigEventHandler(cfg, cfg_path, callbacks)
+    observer = Observer()
+    observer.schedule(handler, str(cfg_path.parent), recursive=False)
+    observer.daemon = True
+    observer.start()
+    return observer
 
 
 def _checkpoint_dir(directory: str | None = None) -> Path:
