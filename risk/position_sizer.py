@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
+import math
 
 from analytics.metrics_store import record_metric
 from risk.funding_costs import fetch_funding_info
@@ -20,7 +21,9 @@ class PositionSizer:
     method: str = "kelly"
     target_vol: float = 0.01
     odds: float = 1.0
+    max_martingale_multiplier: float = 1.5
     weights: dict[str, float] | None = field(default=None, init=False)
+    _last_size: dict[str, float] = field(default_factory=dict, init=False)
 
     def kelly_fraction(self, prob: float) -> float:
         """Return Kelly fraction for win probability ``prob`` and payoff ``odds``."""
@@ -97,6 +100,11 @@ class PositionSizer:
             size *= slip_factor
         if liquidity is not None:
             size = min(size, liquidity)
+        if symbol is not None:
+            last = self._last_size.get(symbol, 0.0)
+            if last > 0 and abs(size) > last * self.max_martingale_multiplier:
+                size = math.copysign(last * self.max_martingale_multiplier, size)
+            self._last_size[symbol] = abs(size)
         fund_cost = 0.0
         margin_required = 0.0
         margin_avail = self.capital

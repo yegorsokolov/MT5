@@ -23,6 +23,7 @@ class NetExposure:
     short: Dict[str, float] = field(default_factory=lambda: defaultdict(float))
     window: int = 20
     corr: pd.DataFrame = field(default_factory=pd.DataFrame)
+    allow_hedging: bool = False
 
     def __post_init__(self) -> None:  # pragma: no cover - simple init
         self._returns: Dict[str, deque[float]] = defaultdict(
@@ -105,10 +106,28 @@ class NetExposure:
         """Record executed trade notional for ``symbol``."""
 
         with self._lock:
-            if notional > 0:
-                self.long[symbol] += notional
-            elif notional < 0:
-                self.short[symbol] += -notional
+            if self.allow_hedging:
+                if notional > 0:
+                    self.long[symbol] += notional
+                elif notional < 0:
+                    self.short[symbol] += -notional
+            else:
+                if notional > 0:
+                    short_pos = self.short.get(symbol, 0.0)
+                    if short_pos > 0:
+                        offset = min(short_pos, notional)
+                        self.short[symbol] -= offset
+                        notional -= offset
+                    if notional > 0:
+                        self.long[symbol] += notional
+                elif notional < 0:
+                    long_pos = self.long.get(symbol, 0.0)
+                    if long_pos > 0:
+                        offset = min(long_pos, -notional)
+                        self.long[symbol] -= offset
+                        notional += offset
+                    if notional < 0:
+                        self.short[symbol] += -notional
             long_tot, short_tot = self._totals()
             try:
                 record_metric("long_exposure", long_tot)
