@@ -84,3 +84,13 @@ class AppConfig(BaseModel):
             if key in section.model_fields:
                 return getattr(section, key)
         return default
+
+    def update_from(self, other: "AppConfig") -> None:
+        """In-place update from another :class:`AppConfig` instance."""
+
+        for field in self.model_fields:
+            setattr(self, field, getattr(other, field))
+        extra = getattr(other, "__dict__", {})
+        for key, value in extra.items():
+            if key not in self.model_fields:
+                setattr(self, key, value)

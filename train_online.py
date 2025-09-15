@@ -12,6 +12,7 @@ from utils import load_config
 from log_utils import setup_logging, log_exceptions
 from data.live_recorder import load_ticks
 from model_registry import save_model
+from state_manager import watch_config
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ def train_online(
     """
 
     cfg = load_config()
+    _observer = watch_config(cfg)
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
