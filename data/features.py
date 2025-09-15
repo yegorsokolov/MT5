@@ -55,6 +55,7 @@ from features.validators import validate_ge
 from .multitimeframe import aggregate_timeframes
 from feature_store import register_feature, load_feature
 from analysis.feature_evolver import FeatureEvolver
+from analysis.anomaly_detector import detect_anomalies
 
 logger = logging.getLogger(__name__)
 
@@ -899,6 +900,10 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
 
     # Append latest factor exposures before scaling
     df = add_factor_exposure_features(df)
+    df, anomalies = detect_anomalies(df, method="isolation_forest")
+    if not anomalies.empty:
+        rate = len(anomalies) / (len(df) + len(anomalies))
+        logger.info("anomaly_rate=%.4f", rate)
 
     df = optimize_dtypes(df)
 
