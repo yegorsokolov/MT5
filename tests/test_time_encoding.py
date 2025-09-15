@@ -1,8 +1,11 @@
-import torch
-from torch import nn
+import pytest
+
+torch = pytest.importorskip("torch")
+nn = torch.nn
 
 from models.multi_head import MultiHeadTransformer
 from models.cross_asset_transformer import CrossAssetTransformer
+from models.cross_modal_transformer import CrossModalTransformer
 
 
 def _make_dataset(n: int = 64, seq_len: int = 5):
@@ -11,6 +14,12 @@ def _make_dataset(n: int = 64, seq_len: int = 5):
     delta_last = times[:, -1] - times[:, -2]
     y = (delta_last > 1.0).float()
     x = torch.zeros(n, seq_len, 1)
+    news = torch.zeros_like(x)
+    news_times = (
+        torch.linspace(0.0, float(seq_len - 1), seq_len)
+        .expand(n, seq_len)
+        .contiguous()
+    )
     x_ca = x.view(n, 1, seq_len, 1)
     times_ca = times.view(n, 1, seq_len)
     train, val = slice(0, n // 2), slice(n // 2, None)
@@ -19,6 +28,12 @@ def _make_dataset(n: int = 64, seq_len: int = 5):
         "t_tr": times[train],
         "x_va": x[val],
         "t_va": times[val],
+        "price_tr": x[train],
+        "price_va": x[val],
+        "news_tr": news[train],
+        "news_va": news[val],
+        "news_t_tr": news_times[train],
+        "news_t_va": news_times[val],
         "x_ca_tr": x_ca[train],
         "t_ca_tr": times_ca[train],
         "x_ca_va": x_ca[val],
@@ -63,6 +78,41 @@ def _train_cross_asset(use_time: bool) -> float:
     return float(val_loss)
 
 
+def _train_cross_modal(use_time: bool) -> float:
+    d = _make_dataset()
+    model = CrossModalTransformer(
+        price_dim=1,
+        news_dim=1,
+        d_model=16,
+        nhead=2,
+        num_layers=2,
+        dropout=0.1,
+        time_encoding=use_time,
+    )
+    opt = torch.optim.Adam(model.parameters(), lr=0.01)
+    loss_fn = nn.BCELoss()
+    for _ in range(80):
+        opt.zero_grad()
+        out = model(
+            d["price_tr"],
+            d["news_tr"],
+            price_times=d["t_tr"] if use_time else None,
+            news_times=d["news_t_tr"] if use_time else None,
+        )
+        loss = loss_fn(out, d["y_tr"])
+        loss.backward()
+        opt.step()
+    with torch.no_grad():
+        val_out = model(
+            d["price_va"],
+            d["news_va"],
+            price_times=d["t_va"] if use_time else None,
+            news_times=d["news_t_va"] if use_time else None,
+        )
+        val_loss = loss_fn(val_out, d["y_va"])
+    return float(val_loss)
+
+
 def test_time_encoding_improves_loss():
     base_loss = _train_multi_head(False)
     enc_loss = _train_multi_head(True)
@@ -71,3 +121,7 @@ def test_time_encoding_improves_loss():
     base_loss_ca = _train_cross_asset(False)
     enc_loss_ca = _train_cross_asset(True)
     assert enc_loss_ca < base_loss_ca
+
+    base_loss_cm = _train_cross_modal(False)
+    enc_loss_cm = _train_cross_modal(True)
+    assert enc_loss_cm < base_loss_cm

@@ -990,6 +990,8 @@ The neural subcommand supports memory-saving options controlled by two flags in
   often improving training throughput.
 * `use_checkpointing` – checkpoints transformer encoder layers, reducing peak
   memory at the cost of extra compute.
+* `time_encoding` – adds learnable relative time features before each
+  transformer block, improving convergence when timestamps are unevenly spaced.
 
 These options allow larger models or batch sizes to fit in memory; while AMP
 can speed up training, checkpointing may slow it slightly due to recomputation.

@@ -29,5 +29,5 @@ class TimeEncoding(nn.Module):
         self.t2v = Time2Vec(d_model)
 
     def forward(self, times: torch.Tensor) -> torch.Tensor:
-        rel = times - times[..., :1]
+        rel = (times - times[..., :1]).to(dtype=self.t2v.w.dtype)
         return self.t2v(rel)
