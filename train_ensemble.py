@@ -35,7 +35,9 @@ GatingNetwork = _moe.GatingNetwork
 ResourceCapabilities = _moe.ResourceCapabilities
 
 
-def build_moe(cfg: dict | None = None) -> tuple[GatingNetwork, np.ndarray]:
+def build_moe(
+    cfg: dict | None = None,
+) -> tuple[GatingNetwork, np.ndarray, np.ndarray | None]:
     """Construct base experts and a gating network.
 
     Parameters
@@ -49,6 +51,10 @@ def build_moe(cfg: dict | None = None) -> tuple[GatingNetwork, np.ndarray]:
     cfg = cfg or {}
     sharpness = float(cfg.get("sharpness", 5.0))
     expert_weights = np.asarray(cfg.get("expert_weights", [1.0, 1.0, 1.0]), dtype=float)
+    diversity = cfg.get("diversity_weights")
+    div_arr = (
+        np.asarray(diversity, dtype=float) if diversity is not None else None
+    )
 
     experts = [
         ExpertSpec(TrendExpert(), ResourceCapabilities(1, 1, False, gpu_count=0)),
@@ -56,7 +62,7 @@ def build_moe(cfg: dict | None = None) -> tuple[GatingNetwork, np.ndarray]:
         ExpertSpec(MacroExpert(), ResourceCapabilities(1, 1, False, gpu_count=0)),
     ]
 
-    return GatingNetwork(experts, sharpness=sharpness), expert_weights
+    return GatingNetwork(experts, sharpness=sharpness), expert_weights, div_arr
 
 
 def predict_mixture(
@@ -72,13 +78,100 @@ def predict_mixture(
     and available resource capabilities.
     """
 
-    gating, expert_weights = build_moe(cfg)
-    weights = gating.weights(market_regime, caps) * expert_weights
+    gating, expert_weights, diversity = build_moe(cfg)
+    weights = gating.weights(market_regime, caps, diversity) * expert_weights
     total = weights.sum()
-    if total > 0:
+    if total <= 0 or not np.isfinite(total):
+        weights = np.ones_like(weights) / len(weights)
+    else:
         weights = weights / total
     preds = np.array([spec.model.predict(history) for spec in gating.experts])
     return float(np.dot(weights, preds))
+
+
+def train_moe_ensemble(
+    histories: Sequence[Sequence[float]],
+    regimes: Sequence[float],
+    targets: Sequence[float],
+    caps: ResourceCapabilities,
+    cfg: dict | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Train mixture-of-experts on validation data and log metrics.
+
+    Parameters
+    ----------
+    histories:
+        Sequence of historical price windows.
+    regimes:
+        Validation regime labels aligned with ``histories``.
+    targets:
+        True next-step values for each history window.
+    caps:
+        Available resource capabilities.
+    cfg:
+        Optional configuration passed to :func:`build_moe`.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        The mixture predictions and a ``(n_samples, n_experts)`` array of expert
+        predictions.
+    """
+
+    try:  # pragma: no cover - optional dependency
+        from analytics import mlflow_client as mlflow
+        if not hasattr(mlflow, "log_dict"):  # provide passthrough if missing
+            import mlflow as _mlf  # type: ignore
+
+            mlflow.log_dict = lambda data, name: _mlf.log_dict(data, name)
+    except Exception:  # noqa: BLE001 - lightweight stub used in tests
+        import contextlib
+        import types
+
+        mlflow = types.SimpleNamespace(
+            start_run=lambda *a, **k: contextlib.nullcontext(),
+            log_dict=lambda *a, **k: None,
+            log_metric=lambda *a, **k: None,
+            end_run=lambda *a, **k: None,
+        )
+
+    gating, expert_weights, _ = build_moe(cfg)
+    preds = np.array(
+        [[spec.model.predict(h) for spec in gating.experts] for h in histories]
+    )
+    truth = np.asarray(targets)
+    val_preds = {f"exp_{i}": preds[:, i] for i in range(preds.shape[1])}
+    corr = error_correlation_matrix(val_preds, truth)
+    corr_abs = corr.abs().values
+    np.fill_diagonal(corr_abs, np.nan)
+    mean_corr = np.nanmean(corr_abs, axis=1)
+    diversity = 1.0 / (1e-6 + mean_corr)
+    diversity = diversity / diversity.sum()
+
+    mlflow.start_run("moe_training", cfg or {})
+    try:
+        if hasattr(mlflow, "log_dict"):
+            mlflow.log_dict({f"w_{i}": float(w) for i, w in enumerate(diversity)}, "gating_weights.json")
+        mix_preds = []
+        for reg, expert_pred in zip(regimes, preds):
+            w = gating.weights(reg, caps, diversity) * expert_weights
+            total = w.sum()
+            if total <= 0 or not np.isfinite(total):
+                w = np.ones_like(w) / len(w)
+            else:
+                w = w / total
+            mix_preds.append(float(np.dot(w, expert_pred)))
+        mix_arr = np.asarray(mix_preds)
+        mse_mix = float(np.mean((mix_arr - truth) ** 2))
+        mse_experts = [float(np.mean((preds[:, i] - truth) ** 2)) for i in range(preds.shape[1])]
+        mlflow.log_metric("mse_mixture", mse_mix)
+        for i, m in enumerate(mse_experts):
+            mlflow.log_metric(f"mse_expert_{i}", m)
+        mlflow.log_metric("mixture_improvement", min(mse_experts) - mse_mix)
+    finally:
+        mlflow.end_run()
+
+    return mix_arr, preds
 
 logger = logging.getLogger(__name__)
 
