@@ -54,10 +54,12 @@ dependencies = [
 mt5-train = "mt5.cli:train_entry"
 mt5-train-nn = "mt5.cli:train_nn_entry"
 mt5-train-rl = "mt5.cli:train_rl_entry"
+mt5-train-strategy = "train_strategy:main"
 
 [project.entry-points."mt5.features"]
 
 [project.entry-points."mt5.strategies"]
+baseline = "strategies:register_builtin_strategies"
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
@@ -100,6 +102,7 @@ py-modules = [
     "train_meta",
     "train_nn",
     "train_online",
+    "train_strategy",
     "train_parallel",
     "train_rl",
     "cli",

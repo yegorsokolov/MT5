@@ -83,7 +83,14 @@ except Exception:  # pragma: no cover - pandas may not be installed
 pd_mod.__spec__ = importlib.machinery.ModuleSpec("pandas", loader=None)
 sys.modules["pandas"] = pd_mod
 
-import joblib as _joblib_real
+try:
+    import joblib as _joblib_real
+except Exception:  # pragma: no cover - joblib may not be installed
+    _joblib_real = types.ModuleType("joblib")
+    _joblib_real.dump = lambda *a, **k: None
+    _joblib_real.load = lambda *a, **k: None
+    _joblib_real.Parallel = lambda *a, **k: None
+    _joblib_real.delayed = lambda func: func
 sys.modules.setdefault("joblib", _joblib_real)
 
 env_mod = types.ModuleType("utils.environment")

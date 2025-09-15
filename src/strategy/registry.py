@@ -3,24 +3,22 @@ from __future__ import annotations
 """Strategy registry providing factory functions for available strategies."""
 
 from typing import Any, Dict, Optional, Type
-from importlib.metadata import entry_points
-import logging
+
+from strategies import create_strategy, register_strategy as _register_strategy
 
 from .baseline_ma import BaselineMovingAverageStrategy
 
-logger = logging.getLogger(__name__)
-
-_STRATEGIES: Dict[str, Type[BaselineMovingAverageStrategy]] = {}
+_register_strategy(
+    "baseline_ma",
+    BaselineMovingAverageStrategy,
+    description="Simple moving-average crossover baseline",
+)
 
 
 def register_strategy(name: str, cls: Type[BaselineMovingAverageStrategy]) -> None:
     """Register a strategy class under ``name``."""
 
-    _STRATEGIES[name] = cls
-
-
-# Register built-in strategies
-register_strategy("baseline_ma", BaselineMovingAverageStrategy)
+    _register_strategy(name, cls)
 
 
 def get_strategy(name: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
@@ -34,42 +32,13 @@ def get_strategy(name: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
         Additional keyword arguments passed to the strategy constructor.
     """
 
-    _load_external_strategies()
-    strat_cls = _STRATEGIES.get(name or "baseline_ma")
-    if strat_cls is None:
-        raise KeyError(f"Unknown strategy: {name}")
-
-    strat = strat_cls(**kwargs)
+    strategy_name = name or "baseline_ma"
+    strat = create_strategy(strategy_name, **kwargs)
     return {
-        "name": name or "baseline_ma",
+        "name": strategy_name,
         "generate_order": strat.generate_order,
-        "update": strat.update,
+        "update": getattr(strat, "update", lambda *args, **kwargs: None),
     }
-
-
-_external_loaded = False
-
-
-def _load_external_strategies() -> None:
-    """Load strategies declared via entry points."""
-
-    global _external_loaded
-    if _external_loaded:
-        return
-    try:
-        eps = entry_points(group="mt5.strategies")
-    except TypeError:  # pragma: no cover - Python<3.10
-        eps = entry_points().get("mt5.strategies", [])
-    except Exception:  # pragma: no cover - missing metadata
-        eps = []
-    for ep in eps:
-        try:
-            hook = ep.load()
-            hook(register_strategy)
-            logger.info("Loaded strategy plugin %s", ep.name)
-        except Exception:  # pragma: no cover - plugin errors shouldn't crash
-            logger.debug("Failed to load strategy plugin %s", ep.name, exc_info=True)
-    _external_loaded = True
 
 
 __all__ = ["get_strategy", "register_strategy"]
