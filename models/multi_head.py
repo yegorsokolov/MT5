@@ -1,5 +1,5 @@
 import math
-from typing import Iterable, List, Dict
+from typing import Dict, Iterable, List
 
 import torch
 
@@ -25,24 +25,27 @@ class PositionalEncoding(torch.nn.Module):
 
 
 class MultiTaskHead(torch.nn.Module):
-    """Three-task prediction head.
+    """Horizon-aware multi-task head.
 
-    The head outputs a dictionary with ``direction`` (classification),
-    ``abs_return`` and ``volatility`` (regression) tensors.
+    A separate linear layer is created for each prediction horizon and task
+    (direction, absolute return and volatility).
     """
 
-    def __init__(self, d_model: int) -> None:
+    def __init__(self, d_model: int, horizons: List[int]) -> None:
         super().__init__()
-        self.dir = torch.nn.Linear(d_model, 1)
-        self.abs = torch.nn.Linear(d_model, 1)
-        self.vol = torch.nn.Linear(d_model, 1)
+        self.horizons = [int(h) for h in horizons]
+        self.dir = torch.nn.ModuleDict({str(h): torch.nn.Linear(d_model, 1) for h in self.horizons})
+        self.abs = torch.nn.ModuleDict({str(h): torch.nn.Linear(d_model, 1) for h in self.horizons})
+        self.vol = torch.nn.ModuleDict({str(h): torch.nn.Linear(d_model, 1) for h in self.horizons})
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        return {
-            "direction": torch.sigmoid(self.dir(x)).squeeze(-1),
-            "abs_return": self.abs(x).squeeze(-1),
-            "volatility": self.vol(x).squeeze(-1),
-        }
+        out: Dict[str, torch.Tensor] = {}
+        for h in self.horizons:
+            key = str(h)
+            out[f"direction_{h}"] = torch.sigmoid(self.dir[key](x)).squeeze(-1)
+            out[f"abs_return_{h}"] = self.abs[key](x).squeeze(-1)
+            out[f"volatility_{h}"] = self.vol[key](x).squeeze(-1)
+        return out
 
 
 class MultiHeadTransformer(torch.nn.Module):
@@ -62,9 +65,11 @@ class MultiHeadTransformer(torch.nn.Module):
         ff_dim: int | None = None,
         layer_norm: bool = False,
         time_encoding: bool = False,
+        horizons: List[int] | None = None,
     ) -> None:
         super().__init__()
         self.use_checkpointing = use_checkpointing
+        self.horizons = horizons or [1]
         self.regime_emb = None
         self.regime_idx = None
         self.time_encoder = TimeEncoding(d_model) if time_encoding else None
@@ -87,7 +92,7 @@ class MultiHeadTransformer(torch.nn.Module):
         )
         self.norm = torch.nn.LayerNorm(d_model) if layer_norm else None
         self.heads = torch.nn.ModuleDict(
-            {str(i): MultiTaskHead(d_model) for i in range(num_symbols)}
+            {str(i): MultiTaskHead(d_model, self.horizons) for i in range(num_symbols)}
         )
 
     def forward(
