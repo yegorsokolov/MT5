@@ -35,6 +35,19 @@ from typing import Deque, Dict, Optional, Sequence, Set, Union
 import numpy as np
 import pandas as pd
 
+try:  # pragma: no cover - optional acceleration
+    from numba import njit
+
+    _NUMBA_AVAILABLE = True
+except Exception:  # pragma: no cover - environments without numba
+    _NUMBA_AVAILABLE = False
+
+    def njit(*args, **kwargs):  # type: ignore[misc]
+        def wrap(func):
+            return func
+
+        return wrap
+
 from indicators.common import atr as calc_atr, bollinger, rsi as calc_rsi, sma
 from utils import load_config
 from config_models import ConfigError
@@ -113,6 +126,155 @@ class RiskProfile:
     tolerance: float = 1.0
     leverage_cap: float = 1.0
     drawdown_limit: float = 0.0
+
+
+@njit(cache=True)
+def _batch_update_numba(
+    price: np.ndarray,
+    atr: np.ndarray,
+    signal: np.ndarray,
+    long_allowed: np.ndarray,
+    short_allowed: np.ndarray,
+    atr_stop_long: float,
+    atr_stop_short: float,
+    trailing_stop_pct: float,
+    trailing_take_profit_pct: float,
+    drawdown_limit: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    n = price.shape[0]
+    result = np.zeros(n, dtype=np.float64)
+    long_stop = np.empty(n, dtype=np.float64)
+    short_stop = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        long_stop[i] = np.nan
+        short_stop[i] = np.nan
+
+    position = 0
+    entry_price = 0.0
+    entry_atr = 0.0
+    peak = 0.0
+    trough = 0.0
+    take_profit_armed = False
+
+    for i in range(n):
+        price_i = price[i]
+        if position == 1:
+            if price_i > peak:
+                peak = price_i
+            stop_loss = entry_price - entry_atr * atr_stop_long
+            if drawdown_limit > 0.0:
+                dd_stop = entry_price * (1.0 - drawdown_limit)
+                if dd_stop > stop_loss:
+                    stop_loss = dd_stop
+            trailing_stop = peak * (1.0 - trailing_stop_pct)
+            if trailing_stop > stop_loss:
+                stop_loss = trailing_stop
+
+            exit_trade = price_i <= stop_loss
+
+            take_profit_level = entry_price + entry_atr * atr_stop_long
+            if (not take_profit_armed) and price_i >= take_profit_level:
+                take_profit_armed = True
+                peak = price_i
+            tp_exit = False
+            if take_profit_armed:
+                if price_i > peak:
+                    peak = price_i
+                tp_trigger = peak * (1.0 - trailing_take_profit_pct)
+                if price_i <= tp_trigger:
+                    tp_exit = True
+
+            if exit_trade or tp_exit:
+                position = 0
+                result[i] = -1.0
+                long_stop[i] = np.nan
+                take_profit_armed = False
+                peak = 0.0
+            else:
+                long_stop[i] = stop_loss
+            continue
+
+        if position == -1:
+            if price_i < trough:
+                trough = price_i
+            stop_loss = entry_price + entry_atr * atr_stop_short
+            if drawdown_limit > 0.0:
+                dd_stop = entry_price * (1.0 + drawdown_limit)
+                if dd_stop < stop_loss:
+                    stop_loss = dd_stop
+            trailing_stop = trough * (1.0 + trailing_stop_pct)
+            if trailing_stop < stop_loss:
+                stop_loss = trailing_stop
+
+            exit_trade = price_i >= stop_loss
+
+            take_profit_level = entry_price - entry_atr * atr_stop_short
+            if (not take_profit_armed) and price_i <= take_profit_level:
+                take_profit_armed = True
+                trough = price_i
+            tp_exit = False
+            if take_profit_armed:
+                if price_i < trough:
+                    trough = price_i
+                tp_trigger = trough * (1.0 + trailing_take_profit_pct)
+                if price_i >= tp_trigger:
+                    tp_exit = True
+
+            if exit_trade or tp_exit:
+                position = 0
+                result[i] = 1.0
+                short_stop[i] = np.nan
+                take_profit_armed = False
+                trough = 0.0
+            else:
+                short_stop[i] = stop_loss
+            continue
+
+        sig = signal[i]
+        if sig == 1 and long_allowed[i]:
+            atr_val = atr[i]
+            if np.isfinite(atr_val):
+                position = 1
+                entry_price = price_i
+                entry_atr = atr_val
+                peak = price_i
+                take_profit_armed = False
+                result[i] = 1.0
+                stop_loss = entry_price - entry_atr * atr_stop_long
+                if drawdown_limit > 0.0:
+                    dd_stop = entry_price * (1.0 - drawdown_limit)
+                    if dd_stop > stop_loss:
+                        stop_loss = dd_stop
+                trailing_stop = peak * (1.0 - trailing_stop_pct)
+                if trailing_stop > stop_loss:
+                    stop_loss = trailing_stop
+                long_stop[i] = stop_loss
+            else:
+                result[i] = 0.0
+        elif sig == -1 and short_allowed[i]:
+            atr_val = atr[i]
+            if np.isfinite(atr_val):
+                position = -1
+                entry_price = price_i
+                entry_atr = atr_val
+                trough = price_i
+                take_profit_armed = False
+                result[i] = -1.0
+                stop_loss = entry_price + entry_atr * atr_stop_short
+                if drawdown_limit > 0.0:
+                    dd_stop = entry_price * (1.0 + drawdown_limit)
+                    if dd_stop < stop_loss:
+                        stop_loss = dd_stop
+                trailing_stop = trough * (1.0 + trailing_stop_pct)
+                if trailing_stop < stop_loss:
+                    stop_loss = trailing_stop
+                short_stop[i] = stop_loss
+            else:
+                result[i] = 0.0
+        else:
+            result[i] = 0.0
+
+    return result, long_stop, short_stop
 
 
 class BaselineStrategy:
@@ -282,15 +444,15 @@ class BaselineStrategy:
     # ------------------------------------------------------------------
     # Batch evaluation helpers
     # ------------------------------------------------------------------
-    def batch_compute(
+    def batch_update(
         self,
         price: Sequence[float] | pd.Series,
         indicators: IndicatorBundle,
         *,
         session: Optional[str] = None,
         cross_confirm: Optional[Dict[str, Sequence[float] | pd.Series]] = None,
-    ) -> tuple[pd.Series, pd.Series, pd.Series]:
-        """Compute signals and stops over a vector of prices.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Vectorised evaluation of the strategy over historical data.
 
         Parameters
         ----------
@@ -308,9 +470,42 @@ class BaselineStrategy:
 
         price_series = self._ensure_price_series(price)
         try:
-            return self._batch_vectorized(price_series, indicators, session=session, cross_confirm=cross_confirm)
+            return self._batch_vectorized(
+                price_series,
+                indicators,
+                session=session,
+                cross_confirm=cross_confirm,
+            )
         except NotImplementedError:
-            return self._batch_sequential(price_series, indicators, session=session, cross_confirm=cross_confirm)
+            return self._batch_sequential(
+                price_series,
+                indicators,
+                session=session,
+                cross_confirm=cross_confirm,
+            )
+
+    def batch_compute(
+        self,
+        price: Sequence[float] | pd.Series,
+        indicators: IndicatorBundle,
+        *,
+        session: Optional[str] = None,
+        cross_confirm: Optional[Dict[str, Sequence[float] | pd.Series]] = None,
+    ) -> tuple[pd.Series, pd.Series, pd.Series]:
+        signals, long_stops, short_stops = self.batch_update(
+            price,
+            indicators,
+            session=session,
+            cross_confirm=cross_confirm,
+        )
+
+        price_series = self._ensure_price_series(price)
+        index = price_series.index
+        return (
+            pd.Series(signals, index=index, dtype=float),
+            pd.Series(long_stops, index=index, dtype=float),
+            pd.Series(short_stops, index=index, dtype=float),
+        )
 
     def _batch_vectorized(
         self,
@@ -319,7 +514,7 @@ class BaselineStrategy:
         *,
         session: Optional[str],
         cross_confirm: Optional[Dict[str, Sequence[float] | pd.Series]],
-    ) -> tuple[pd.Series, pd.Series, pd.Series]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         if session is not None or cross_confirm is not None:
             raise NotImplementedError("Vectorized batch processing does not support sessions or cross confirmations")
         if self.use_kalman_smoothing:
@@ -454,143 +649,66 @@ class BaselineStrategy:
                 mask = (signal != 0) & series.notna() & (series != signal)
                 signal = signal.where(~mask, 0)
 
-        price_arr = price_series.to_numpy()
-        atr_arr = atr_series.to_numpy()
+        if not _NUMBA_AVAILABLE:
+            raise NotImplementedError(
+                "Numba acceleration unavailable for vectorized batch processing"
+            )
+
+        n = len(price_series)
+        price_arr = np.ascontiguousarray(price_series.to_numpy(dtype=np.float64, copy=False))
+        atr_arr = np.ascontiguousarray(atr_series.to_numpy(dtype=np.float64, copy=False))
+
         regime_series = series_map["regime"]
         vae_regime_series = series_map["vae_regime"]
 
-        result_signal = np.zeros(len(price_series), dtype=float)
-        long_stop = np.full(len(price_series), np.nan, dtype=float)
-        short_stop = np.full(len(price_series), np.nan, dtype=float)
+        long_allowed = np.ones(n, dtype=bool)
+        if self.long_regimes is not None:
+            mask = regime_series.notna()
+            if mask.any():
+                allowed = regime_series[mask].astype(int).isin(self.long_regimes)
+                long_allowed[mask.to_numpy()] &= allowed.to_numpy()
+        if self.long_vae_regimes is not None:
+            mask = vae_regime_series.notna()
+            if mask.any():
+                allowed = vae_regime_series[mask].astype(int).isin(self.long_vae_regimes)
+                long_allowed[mask.to_numpy()] &= allowed.to_numpy()
 
-        idx = 0
-        drawdown_limit = float(self.risk_profile.drawdown_limit)
-        while idx < len(price_series):
-            sig_val = int(signal.iat[idx])
-            if sig_val == 1:
-                regime_val = regime_series.iat[idx]
-                if (
-                    self.long_regimes is not None
-                    and pd.notna(regime_val)
-                    and int(regime_val) not in self.long_regimes
-                ):
-                    idx += 1
-                    continue
-                vae_val = vae_regime_series.iat[idx]
-                if (
-                    self.long_vae_regimes is not None
-                    and pd.notna(vae_val)
-                    and int(vae_val) not in self.long_vae_regimes
-                ):
-                    idx += 1
-                    continue
-                entry_atr = atr_arr[idx]
-                if not np.isfinite(entry_atr):
-                    idx += 1
-                    continue
+        short_allowed = np.ones(n, dtype=bool)
+        if self.short_regimes is not None:
+            mask = regime_series.notna()
+            if mask.any():
+                allowed = regime_series[mask].astype(int).isin(self.short_regimes)
+                short_allowed[mask.to_numpy()] &= allowed.to_numpy()
+        if self.short_vae_regimes is not None:
+            mask = vae_regime_series.notna()
+            if mask.any():
+                allowed = vae_regime_series[mask].astype(int).isin(self.short_vae_regimes)
+                short_allowed[mask.to_numpy()] &= allowed.to_numpy()
 
-                entry_idx = idx
-                price_segment = price_arr[entry_idx:]
-                peak = np.maximum.accumulate(price_segment)
-                stop_initial = price_arr[entry_idx] - entry_atr * self.atr_stop_long
-                if drawdown_limit > 0:
-                    stop_initial = max(
-                        stop_initial, price_arr[entry_idx] * (1 - drawdown_limit)
-                    )
-                trailing_component = peak * (1 - self.trailing_stop_pct)
-                stop_series = np.maximum(stop_initial, trailing_component)
-                take_profit_level = price_arr[entry_idx] + entry_atr * self.atr_stop_long
-                tp_armed = peak >= take_profit_level
-                tp_trigger = peak * (1 - self.trailing_take_profit_pct)
-                exit_mask = (price_segment <= stop_series) | (
-                    tp_armed & (price_segment <= tp_trigger)
-                )
-                exit_indices = np.flatnonzero(exit_mask)
-                if exit_indices.size:
-                    exit_rel = int(exit_indices[0])
-                    exit_idx = entry_idx + exit_rel
-                    active_len = exit_rel
-                else:
-                    exit_idx = len(price_arr)
-                    active_len = len(price_segment)
+        signal_arr = np.ascontiguousarray(signal.to_numpy(dtype=np.int8, copy=True))
+        atr_invalid = ~np.isfinite(atr_arr)
+        signal_arr[atr_invalid] = 0
 
-                if active_len > 0:
-                    long_stop[entry_idx : entry_idx + active_len] = stop_series[:active_len]
-                result_signal[entry_idx] = 1.0
-                if exit_idx < len(price_arr):
-                    result_signal[exit_idx] = -1.0
-                    idx = exit_idx + 1
-                else:
-                    idx = len(price_arr)
-            elif sig_val == -1:
-                regime_val = regime_series.iat[idx]
-                if (
-                    self.short_regimes is not None
-                    and pd.notna(regime_val)
-                    and int(regime_val) not in self.short_regimes
-                ):
-                    idx += 1
-                    continue
-                vae_val = vae_regime_series.iat[idx]
-                if (
-                    self.short_vae_regimes is not None
-                    and pd.notna(vae_val)
-                    and int(vae_val) not in self.short_vae_regimes
-                ):
-                    idx += 1
-                    continue
-                entry_atr = atr_arr[idx]
-                if not np.isfinite(entry_atr):
-                    idx += 1
-                    continue
-
-                entry_idx = idx
-                price_segment = price_arr[entry_idx:]
-                trough = np.minimum.accumulate(price_segment)
-                stop_initial = price_arr[entry_idx] + entry_atr * self.atr_stop_short
-                if drawdown_limit > 0:
-                    stop_initial = min(
-                        stop_initial, price_arr[entry_idx] * (1 + drawdown_limit)
-                    )
-                trailing_component = trough * (1 + self.trailing_stop_pct)
-                stop_series = np.minimum(stop_initial, trailing_component)
-                take_profit_level = price_arr[entry_idx] - entry_atr * self.atr_stop_short
-                tp_armed = trough <= take_profit_level
-                tp_trigger = trough * (1 + self.trailing_take_profit_pct)
-                exit_mask = (price_segment >= stop_series) | (
-                    tp_armed & (price_segment >= tp_trigger)
-                )
-                exit_indices = np.flatnonzero(exit_mask)
-                if exit_indices.size:
-                    exit_rel = int(exit_indices[0])
-                    exit_idx = entry_idx + exit_rel
-                    active_len = exit_rel
-                else:
-                    exit_idx = len(price_arr)
-                    active_len = len(price_segment)
-
-                if active_len > 0:
-                    short_stop[entry_idx : entry_idx + active_len] = stop_series[:active_len]
-                result_signal[entry_idx] = -1.0
-                if exit_idx < len(price_arr):
-                    result_signal[exit_idx] = 1.0
-                    idx = exit_idx + 1
-                else:
-                    idx = len(price_arr)
-            else:
-                idx += 1
+        signals, long_stop, short_stop = _batch_update_numba(
+            price_arr,
+            atr_arr,
+            signal_arr,
+            np.ascontiguousarray(long_allowed, dtype=np.bool_),
+            np.ascontiguousarray(short_allowed, dtype=np.bool_),
+            float(self.atr_stop_long),
+            float(self.atr_stop_short),
+            float(self.trailing_stop_pct),
+            float(self.trailing_take_profit_pct),
+            float(self.risk_profile.drawdown_limit),
+        )
 
         rp = self.risk_profile
         if rp.tolerance != 1.0 or rp.leverage_cap != 1.0:
-            result_signal *= rp.tolerance
+            signals = signals * rp.tolerance
             if rp.leverage_cap > 0:
-                np.clip(result_signal, -rp.leverage_cap, rp.leverage_cap, out=result_signal)
+                np.clip(signals, -rp.leverage_cap, rp.leverage_cap, out=signals)
 
-        return (
-            pd.Series(result_signal, index=index, dtype=float),
-            pd.Series(long_stop, index=index, dtype=float),
-            pd.Series(short_stop, index=index, dtype=float),
-        )
+        return signals, long_stop, short_stop
 
     def _batch_sequential(
         self,
@@ -599,7 +717,7 @@ class BaselineStrategy:
         *,
         session: Optional[str],
         cross_confirm: Optional[Dict[str, Sequence[float] | pd.Series]],
-    ) -> tuple[pd.Series, pd.Series, pd.Series]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         strat = self._clone_for_batch()
         if session is not None:
             strat.set_session(session)
@@ -608,41 +726,44 @@ class BaselineStrategy:
                 "Sequential fallback does not support cross confirmation data"
             )
 
-        index = price_series.index
         series_map = self._prepare_indicator_series(price_series, indicators)
         signals: list[float] = []
         long_stops: list[float] = []
         short_stops: list[float] = []
 
+        def _opt(series: pd.Series, idx: int) -> float | None:
+            value = series.iat[idx]
+            return None if pd.isna(value) else float(value)
+
         for i, price_val in enumerate(price_series):
             bundle = IndicatorBundle(
-                high=series_map["high"].iat[i],
-                low=series_map["low"].iat[i],
-                short_ma=series_map["short_ma"].iat[i],
-                long_ma=series_map["long_ma"].iat[i],
-                rsi=series_map["rsi"].iat[i],
-                atr_val=series_map["atr_val"].iat[i],
-                boll_upper=series_map["boll_upper"].iat[i],
-                boll_lower=series_map["boll_lower"].iat[i],
-                obv=series_map["obv"].iat[i],
-                mfi=series_map["mfi"].iat[i],
-                cvd=series_map["cvd"].iat[i],
-                ram=series_map["ram"].iat[i],
-                hurst=series_map["hurst"].iat[i],
-                htf_ma=series_map["htf_ma"].iat[i],
-                htf_rsi=series_map["htf_rsi"].iat[i],
-                supertrend_break=series_map["supertrend_break"].iat[i],
-                kama_cross=series_map["kama_cross"].iat[i],
-                kma_cross=series_map["kma_cross"].iat[i],
-                vwap_cross=series_map["vwap_cross"].iat[i],
-                macd_cross=series_map["macd_cross"].iat[i],
-                squeeze_break=series_map["squeeze_break"].iat[i],
-                div_rsi=series_map["div_rsi"].iat[i],
-                div_macd=series_map["div_macd"].iat[i],
-                regime=series_map["regime"].iat[i],
-                vae_regime=series_map["vae_regime"].iat[i],
-                microprice_delta=series_map["microprice_delta"].iat[i],
-                liq_exhaustion=series_map["liq_exhaustion"].iat[i],
+                high=float(series_map["high"].iat[i]),
+                low=float(series_map["low"].iat[i]),
+                short_ma=_opt(series_map["short_ma"], i),
+                long_ma=_opt(series_map["long_ma"], i),
+                rsi=_opt(series_map["rsi"], i),
+                atr_val=_opt(series_map["atr_val"], i),
+                boll_upper=_opt(series_map["boll_upper"], i),
+                boll_lower=_opt(series_map["boll_lower"], i),
+                obv=_opt(series_map["obv"], i),
+                mfi=_opt(series_map["mfi"], i),
+                cvd=_opt(series_map["cvd"], i),
+                ram=_opt(series_map["ram"], i),
+                hurst=_opt(series_map["hurst"], i),
+                htf_ma=_opt(series_map["htf_ma"], i),
+                htf_rsi=_opt(series_map["htf_rsi"], i),
+                supertrend_break=_opt(series_map["supertrend_break"], i),
+                kama_cross=_opt(series_map["kama_cross"], i),
+                kma_cross=_opt(series_map["kma_cross"], i),
+                vwap_cross=_opt(series_map["vwap_cross"], i),
+                macd_cross=_opt(series_map["macd_cross"], i),
+                squeeze_break=_opt(series_map["squeeze_break"], i),
+                div_rsi=_opt(series_map["div_rsi"], i),
+                div_macd=_opt(series_map["div_macd"], i),
+                regime=_opt(series_map["regime"], i),
+                vae_regime=_opt(series_map["vae_regime"], i),
+                microprice_delta=_opt(series_map["microprice_delta"], i),
+                liq_exhaustion=_opt(series_map["liq_exhaustion"], i),
             )
             sig = strat.update(price_val, bundle)
             signals.append(sig)
@@ -669,9 +790,9 @@ class BaselineStrategy:
             short_stops.append(short_stop)
 
         return (
-            pd.Series(signals, index=index, dtype=float),
-            pd.Series(long_stops, index=index, dtype=float),
-            pd.Series(short_stops, index=index, dtype=float),
+            np.asarray(signals, dtype=float),
+            np.asarray(long_stops, dtype=float),
+            np.asarray(short_stops, dtype=float),
         )
 
     def _clone_for_batch(self) -> "BaselineStrategy":
