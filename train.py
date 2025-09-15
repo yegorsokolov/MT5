@@ -19,6 +19,13 @@ try:
     import torch
 except Exception:  # noqa: E722
     torch = None
+
+if torch is not None:
+    from torch.utils.data import DataLoader, TensorDataset
+    from models.cross_modal_transformer import CrossModalTransformer
+else:  # pragma: no cover - torch may be unavailable in some environments
+    TensorDataset = None  # type: ignore
+    CrossModalTransformer = None  # type: ignore
 from sklearn.metrics import (
     classification_report,
     precision_recall_curve,
@@ -35,6 +42,7 @@ from analytics import mlflow_client as mlflow
 from datetime import datetime
 
 from data.feature_scaler import FeatureScaler
+from train_utils import prepare_modal_arrays
 
 from log_utils import setup_logging, log_exceptions, LOG_DIR
 import numpy as np
@@ -189,6 +197,62 @@ def _combined_sample_weight(
         sw *= 0.5 ** ((t_max - ts) / half_life)
         applied = True
     return sw if applied else None
+
+
+def _train_cross_modal_feature(
+    price: np.ndarray,
+    news: np.ndarray,
+    labels: np.ndarray,
+    *,
+    epochs: int = 5,
+    batch_size: int = 64,
+    d_model: int = 64,
+    nhead: int = 4,
+    num_layers: int = 2,
+    dropout: float = 0.1,
+    lr: float = 1e-3,
+) -> np.ndarray:
+    """Train a small cross-modal transformer and return fused probabilities."""
+
+    if torch is None or CrossModalTransformer is None or TensorDataset is None:
+        raise RuntimeError("PyTorch is required for cross-modal fusion")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dataset = TensorDataset(
+        torch.tensor(price, dtype=torch.float32),
+        torch.tensor(news, dtype=torch.float32),
+        torch.tensor(labels.astype(np.float32), dtype=torch.float32),
+    )
+    batch = max(1, min(batch_size, len(dataset)))
+    loader = DataLoader(dataset, batch_size=batch, shuffle=True)
+    model = CrossModalTransformer(
+        price_dim=price.shape[-1],
+        news_dim=news.shape[-1],
+        d_model=d_model,
+        nhead=nhead,
+        num_layers=num_layers,
+        dropout=dropout,
+        output_dim=1,
+    ).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = torch.nn.BCELoss()
+    for _ in range(max(1, epochs)):
+        model.train()
+        for price_batch, news_batch, target in loader:
+            price_batch = price_batch.to(device)
+            news_batch = news_batch.to(device)
+            target = target.to(device)
+            opt.zero_grad()
+            preds = model(price_batch, news_batch)
+            loss = loss_fn(preds, target)
+            loss.backward()
+            opt.step()
+    model.eval()
+    with torch.no_grad():
+        preds = model(
+            torch.tensor(price, dtype=torch.float32, device=device),
+            torch.tensor(news, dtype=torch.float32, device=device),
+        ).cpu().numpy()
+    return preds
 
 
 def _load_donor_booster(symbol: str):
@@ -748,6 +812,51 @@ def main(
     for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"]:
         if col not in features:
             features.append(col)
+
+    cross_modal_cfg = cfg.get("cross_modal_feature", {})
+    if torch is not None and CrossModalTransformer is not None:
+        try:
+            modal_result = prepare_modal_arrays(
+                df, sel_target.to_numpy(dtype=np.float32)
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            modal_result = None
+            logger.warning("Failed to prepare modal arrays: %s", exc)
+        if modal_result is not None:
+            price_modal, news_modal, labels_modal, mask_modal, price_cols, news_cols = modal_result
+            min_samples = int(cross_modal_cfg.get("min_samples", 50))
+            if (
+                labels_modal is not None
+                and len(price_modal) >= max(10, min_samples)
+            ):
+                try:
+                    preds = _train_cross_modal_feature(
+                        price_modal,
+                        news_modal,
+                        labels_modal,
+                        epochs=int(cross_modal_cfg.get("epochs", 5)),
+                        batch_size=int(cross_modal_cfg.get("batch_size", 128)),
+                        d_model=int(cross_modal_cfg.get("d_model", 64)),
+                        nhead=int(cross_modal_cfg.get("nhead", 4)),
+                        num_layers=int(cross_modal_cfg.get("num_layers", 2)),
+                        dropout=float(cross_modal_cfg.get("dropout", 0.1)),
+                        lr=float(cross_modal_cfg.get("lr", 1e-3)),
+                    )
+                    fused = np.full(len(df), 0.5, dtype=float)
+                    fused[mask_modal] = preds
+                    df["cross_modal_signal"] = fused
+                    if "cross_modal_signal" not in features:
+                        features.append("cross_modal_signal")
+                    cfg.setdefault("model", {}).setdefault(
+                        "cross_modal_features",
+                        {"price": price_cols, "news": news_cols},
+                    )
+                    logger.info(
+                        "Cross-modal feature trained on %d samples", len(price_modal)
+                    )
+                except Exception as exc:  # pragma: no cover - fallback on failure
+                    logger.warning("Cross-modal fusion failed: %s", exc)
+
     feat_path = root / "selected_features.json"
     feat_path.write_text(json.dumps(features))
     index_path = root / "similar_days_index.pkl"

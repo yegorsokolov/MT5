@@ -1,7 +1,9 @@
 import pathlib
 import sys
 
-import torch
+import pytest
+
+torch = pytest.importorskip("torch")
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 from models.cross_modal_transformer import CrossModalTransformer
