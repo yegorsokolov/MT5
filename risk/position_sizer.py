@@ -24,6 +24,7 @@ class PositionSizer:
     max_martingale_multiplier: float = 1.5
     weights: dict[str, float] | None = field(default=None, init=False)
     _last_size: dict[str, float] = field(default_factory=dict, init=False)
+    _oversized: dict[str, bool] = field(default_factory=dict, init=False)
 
     def kelly_fraction(self, prob: float) -> float:
         """Return Kelly fraction for win probability ``prob`` and payoff ``odds``."""
@@ -102,8 +103,14 @@ class PositionSizer:
             size = min(size, liquidity)
         if symbol is not None:
             last = self._last_size.get(symbol, 0.0)
+            oversized = self._oversized.get(symbol, False)
             if last > 0 and abs(size) > last * self.max_martingale_multiplier:
-                size = math.copysign(last * self.max_martingale_multiplier, size)
+                if not oversized:
+                    self._oversized[symbol] = True
+                else:
+                    size = math.copysign(last * self.max_martingale_multiplier, size)
+            else:
+                self._oversized[symbol] = False
             self._last_size[symbol] = abs(size)
         fund_cost = 0.0
         margin_required = 0.0
