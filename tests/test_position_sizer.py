@@ -30,3 +30,16 @@ def test_size_reduced_by_slippage_and_liquidity(monkeypatch):
     assert with_slip < base
     assert with_liq == pytest.approx(base / 2)
     assert any(name == "slip_adj_realized_risk" for name, _ in calls)
+
+
+def test_split_size_breaks_large_positions():
+    sizer = PositionSizer(capital=1000.0, method="kelly")
+    sizer._last_size["EURUSD"] = 1.0
+    parts = sizer.split_size("EURUSD", 5.0)
+    assert sum(parts) == pytest.approx(5.0)
+    assert len(parts) > 1
+    last = 1.0
+    for p in parts:
+        assert abs(p) <= last * sizer.max_martingale_multiplier + 1e-9
+        last = abs(p)
+    assert sizer._last_size["EURUSD"] == pytest.approx(abs(parts[-1]))
