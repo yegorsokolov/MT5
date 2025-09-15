@@ -213,6 +213,9 @@ use_amp: false
 # checkpointing for transformer layers
 use_checkpointing: false
 
+# learnable relative time encoding for irregular samples
+time_encoding: false
+
 
 scheduler:
   resource_reprobe: true

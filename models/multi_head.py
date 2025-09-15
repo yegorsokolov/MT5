@@ -125,16 +125,24 @@ class MultiHeadTransformer(torch.nn.Module):
             base = x[:, :, : self.regime_idx]
             x = torch.cat([base, self.regime_emb(reg)], dim=-1)
         x = self.input_linear(x)
+        time_features: torch.Tensor | None = None
         if self.time_encoder is not None:
             if times is None:
                 raise ValueError("times tensor required when time_encoding is enabled")
-            x = x + self.time_encoder(times)
+            time_features = self.time_encoder(times).type_as(x)
         x = self.pos_encoder(x)
-        if self.use_checkpointing:
-            for layer in self.transformer.layers:
-                x = torch.utils.checkpoint.checkpoint(layer, x)
-        else:
-            x = self.transformer(x)
+        layers = self.transformer.layers
+        for layer in layers:
+            layer_input = x
+            if time_features is not None:
+                layer_input = layer_input + time_features
+            if self.use_checkpointing:
+                x = torch.utils.checkpoint.checkpoint(layer, layer_input)
+            else:
+                x = layer(layer_input)
+        transformer_norm = getattr(self.transformer, "norm", None)
+        if transformer_norm is not None:
+            x = transformer_norm(x)
         if self.norm is not None:
             x = self.norm(x)
         head = self.heads[str(int(symbol))]
