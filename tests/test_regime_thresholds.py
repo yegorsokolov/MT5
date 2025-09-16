@@ -1,4 +1,12 @@
+import sys
+
+for module_name in ("scipy", "scipy.stats", "scipy.sparse"):
+    sys.modules.pop(module_name, None)
+
 import numpy as np
+import scipy  # noqa: F401  # ensure real scipy loaded for sklearn
+import scipy.sparse  # noqa: F401
+import scipy.stats  # noqa: F401
 from analysis.regime_thresholds import find_regime_thresholds
 from analysis.prob_calibration import ProbabilityCalibrator
 from sklearn.metrics import brier_score_loss, precision_recall_curve
@@ -69,3 +77,8 @@ def test_calibration_and_thresholds_improve_metrics():
     assert f1_regime > f1_default
     assert len(cal.regime_thresholds) == 2
     assert cal.regime_thresholds[0] != cal.regime_thresholds[1]
+    for regime in np.unique(regimes):
+        mask = regimes == regime
+        f1_default_reg = f1_score(y_true[mask], preds_default[mask])
+        f1_regime_reg = f1_score(y_true[mask], preds_regime[mask])
+        assert f1_regime_reg >= f1_default_reg
