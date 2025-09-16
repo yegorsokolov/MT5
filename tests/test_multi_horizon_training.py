@@ -1,11 +1,11 @@
-import numpy as np
-import pandas as pd
 import pytest
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 from pathlib import Path
 import importlib.util
 import types
 import sys
-import scipy  # ensure SciPy available
+pytest.importorskip("scipy")  # ensure SciPy available
 
 root = Path(__file__).resolve().parents[1]
 
@@ -33,9 +33,9 @@ def test_multi_horizon_labels_and_training():
     labels = multi_horizon_labels(prices, horizons)
 
     for h in horizons:
-        assert f"label_{h}" in labels.columns
+        assert f"direction_{h}" in labels.columns
         assert f"abs_return_{h}" in labels.columns
-        assert f"vol_{h}" in labels.columns
+        assert f"volatility_{h}" in labels.columns
 
     X = pd.DataFrame({"feat": np.zeros(n)})
 
@@ -49,14 +49,14 @@ def test_multi_horizon_labels_and_training():
     report = {}
     f1_scores = []
     for h in horizons:
-        y = labels[f"label_{h}"]
+        y = labels[f"direction_{h}"]
         majority = int(y.mean() >= 0.5)
         pred = np.full(len(y), majority)
         f1 = f1_score(y, pred)
-        report[f"label_{h}"] = {"f1": f1}
+        report[f"direction_{h}"] = {"f1": f1}
         f1_scores.append(f1)
     report["aggregate_f1"] = float(np.mean(f1_scores))
 
-    assert report["label_24"]["f1"] >= report["label_1"]["f1"]
-    expected = np.mean([report[f"label_{h}"]["f1"] for h in horizons])
+    assert report["direction_24"]["f1"] >= report["direction_1"]["f1"]
+    expected = np.mean([report[f"direction_{h}"]["f1"] for h in horizons])
     assert report["aggregate_f1"] == pytest.approx(expected)
