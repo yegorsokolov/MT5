@@ -57,6 +57,7 @@ mt5-train-rl = "mt5.cli:train_rl_entry"
 mt5-train-strategy = "train_strategy:main"
 
 [project.entry-points."mt5.features"]
+core = "features:register_builtin_features"
 
 [project.entry-points."mt5.strategies"]
 baseline = "strategies:register_builtin_strategies"

@@ -135,6 +135,7 @@ class FeatureSpec:
 
 # Registry of feature specifications
 _REGISTRY: Dict[str, FeatureSpec] = {}
+_DEFAULTS_LOADED = False
 
 
 def register_feature(
@@ -151,46 +152,52 @@ def register_feature(
     )
 
 
-# Register built-in features
-if not os.getenv("MT5_DOCS_BUILD"):
-    register_feature("price", price.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("news", news.compute, min_cpus=2, min_mem_gb=4.0)
-    register_feature("cross_asset", cross_asset.compute, min_cpus=4, min_mem_gb=8.0)
-    register_feature("cross_spectral", cross_spectral.compute, min_cpus=4, min_mem_gb=8.0)
-    register_feature("orderbook", orderbook.compute, min_cpus=2, min_mem_gb=2.0)
-    register_feature("order_flow", order_flow.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("microprice", microprice.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature(
+def register_builtin_features(
+    register: Callable[[
+        str,
+        Callable[["pd.DataFrame"], "pd.DataFrame"],
+        int,
+        float,
+        bool,
+    ], None],
+) -> None:
+    """Register the built-in feature modules via ``register``."""
+
+    global _DEFAULTS_LOADED
+    if _DEFAULTS_LOADED or os.getenv("MT5_DOCS_BUILD"):
+        return
+
+    register("price", price.compute, min_cpus=1, min_mem_gb=1.0)
+    register("news", news.compute, min_cpus=2, min_mem_gb=4.0)
+    register("cross_asset", cross_asset.compute, min_cpus=4, min_mem_gb=8.0)
+    register("cross_spectral", cross_spectral.compute, min_cpus=4, min_mem_gb=8.0)
+    register("orderbook", orderbook.compute, min_cpus=2, min_mem_gb=2.0)
+    register("order_flow", order_flow.compute, min_cpus=1, min_mem_gb=1.0)
+    register("microprice", microprice.compute, min_cpus=1, min_mem_gb=1.0)
+    register(
         "liquidity_exhaustion", liquidity_exhaustion.compute, min_cpus=1, min_mem_gb=1.0
     )
-    register_feature(
-        "auto_indicator", auto_indicator.compute, min_cpus=1, min_mem_gb=1.0
-    )
-    register_feature("volume", volume.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature(
-        "multi_timeframe", multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0
-    )
-    register_feature("supertrend", supertrend.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature(
-        "keltner_squeeze", keltner_squeeze.compute, min_cpus=1, min_mem_gb=1.0
-    )
-    register_feature("adaptive_ma", adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("kalman_ma", kalman_ma.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("regime", regime.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("macd", macd.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("divergence", divergence.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("ram", ram.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("cointegration", cointegration.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature("vwap", vwap.compute, min_cpus=1, min_mem_gb=1.0)
-    register_feature(
-        "baseline_signal", baseline_signal.compute, min_cpus=1, min_mem_gb=1.0
-    )
-    register_feature(
-        "evolved_indicators", evolved_indicators.compute, min_cpus=1, min_mem_gb=1.0
-    )
-    register_feature(
-        "evolved_symbols", evolved_symbols.compute, min_cpus=1, min_mem_gb=1.0
-    )
+    register("auto_indicator", auto_indicator.compute, min_cpus=1, min_mem_gb=1.0)
+    register("volume", volume.compute, min_cpus=1, min_mem_gb=1.0)
+    register("multi_timeframe", multi_timeframe.compute, min_cpus=1, min_mem_gb=1.0)
+    register("supertrend", supertrend.compute, min_cpus=1, min_mem_gb=1.0)
+    register("keltner_squeeze", keltner_squeeze.compute, min_cpus=1, min_mem_gb=1.0)
+    register("adaptive_ma", adaptive_ma.compute, min_cpus=1, min_mem_gb=1.0)
+    register("kalman_ma", kalman_ma.compute, min_cpus=1, min_mem_gb=1.0)
+    register("regime", regime.compute, min_cpus=1, min_mem_gb=1.0)
+    register("macd", macd.compute, min_cpus=1, min_mem_gb=1.0)
+    register("divergence", divergence.compute, min_cpus=1, min_mem_gb=1.0)
+    register("ram", ram.compute, min_cpus=1, min_mem_gb=1.0)
+    register("cointegration", cointegration.compute, min_cpus=1, min_mem_gb=1.0)
+    register("vwap", vwap.compute, min_cpus=1, min_mem_gb=1.0)
+    register("baseline_signal", baseline_signal.compute, min_cpus=1, min_mem_gb=1.0)
+    register("evolved_indicators", evolved_indicators.compute, min_cpus=1, min_mem_gb=1.0)
+    register("evolved_symbols", evolved_symbols.compute, min_cpus=1, min_mem_gb=1.0)
+
+    _DEFAULTS_LOADED = True
+
+
+register_builtin_features(register_feature)
 
 # Holds latest status report
 _STATUS: Dict[str, object] = {}
@@ -334,6 +341,7 @@ __all__ = [
     "get_feature_pipeline",
     "report_status",
     "register_feature",
+    "register_builtin_features",
     "make_features",
     "validate_module",
     "validator",
