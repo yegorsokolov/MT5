@@ -463,6 +463,14 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    python train.py
    # run the transformer-based neural network
    python train_cli.py neural
+   # train the stacking ensemble and optional mixture-of-experts gate
+   python train_cli.py ensemble \
+     --data data/ensemble_features.csv \
+     --target signal \
+     --feature feat_a --feature feat_b \
+     --moe-regime regime \
+     --expert-weight 1.0 --expert-weight 0.8 --expert-weight 1.2 \
+     --gating-sharpness 7.5
    # train symbol-specific adapters
    python train_meta.py
    # train an AutoGluon TabularPredictor
@@ -472,6 +480,13 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    python train_combined.py
    python backtest.py
    ```
+
+   The ensemble CLI starts an MLflow run via `setup_training`, prints the
+   stacked learner scores, and when `--moe-regime` is provided also trains the
+   mixture-of-experts gate using history columns with the configured prefix.
+   Use repeated `--feature` flags to restrict the base learner input set, pass
+   per-expert priors with `--expert-weight`, and adjust the gating softmax via
+   `--gating-sharpness`.
 
    The backtest now reports a bootstrap p-value for the Sharpe ratio:
 
