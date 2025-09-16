@@ -1378,14 +1378,41 @@ def main(
                     torch.save(model.last_attention.cpu(), attn_path)
                     mlflow.log_artifact(str(attn_path))
                     logger.info("TFT attention weights logged to %s", attn_path)
-            elif getattr(model, "last_attention", None) is not None:
-                attn_path = root / "attention.pt"
-                torch.save(model.last_attention, attn_path)
-                try:
-                    mlflow.log_artifact(str(attn_path))
-                except Exception:  # pragma: no cover - mlflow optional
-                    pass
-                logger.info("Attention weights logged to %s", attn_path)
+            else:
+                attn_source = model.module if isinstance(model, DDP) else model
+                last_attn = getattr(attn_source, "last_attention", None)
+                if last_attn is not None:
+                    if isinstance(last_attn, dict):
+                        cpu_attn = {}
+                        for name, tensor in last_attn.items():
+                            if tensor is None:
+                                continue
+                            cpu_tensor = tensor.detach().cpu()
+                            cpu_attn[name] = cpu_tensor
+                            attn_file = root / f"{name}_attention.pt"
+                            torch.save(cpu_tensor, attn_file)
+                            try:
+                                mlflow.log_artifact(str(attn_file))
+                            except Exception:  # pragma: no cover - mlflow optional
+                                pass
+                            logger.info("Attention weights (%s) logged to %s", name, attn_file)
+                        if cpu_attn:
+                            attn_path = root / "attention.pt"
+                            torch.save(cpu_attn, attn_path)
+                            try:
+                                mlflow.log_artifact(str(attn_path))
+                            except Exception:  # pragma: no cover - mlflow optional
+                                pass
+                            logger.info("Combined attention weights logged to %s", attn_path)
+                    else:
+                        attn_path = root / "attention.pt"
+                        tensor = last_attn.detach().cpu()
+                        torch.save(tensor, attn_path)
+                        try:
+                            mlflow.log_artifact(str(attn_path))
+                        except Exception:  # pragma: no cover - mlflow optional
+                            pass
+                        logger.info("Attention weights logged to %s", attn_path)
             if cfg.get("quantize"):
                 qmodel = apply_quantization(
                     model.module if isinstance(model, DDP) else model

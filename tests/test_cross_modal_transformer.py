@@ -63,8 +63,48 @@ def test_cross_modal_beats_single_modal_baselines():
     f1_price = _train_baseline(price_model, price_feat, labels)
     f1_news = _train_baseline(news_model, news_feat, labels)
 
-    cross_model = CrossModalTransformer(price_dim=1, news_dim=1, d_model=16, nhead=2, num_layers=1)
+    cross_model = CrossModalTransformer(
+        price_dim=1, news_dim=1, d_model=16, nhead=2, num_layers=1
+    )
     f1_cross = _train_cross(cross_model, price, news, labels)
 
     assert f1_cross > max(f1_price, f1_news)
     assert cross_model.last_attention is not None
+    assert set(cross_model.last_attention.keys()) == {"price_to_news", "news_to_price"}
+    price_attn = cross_model.last_attention["price_to_news"]
+    news_attn = cross_model.last_attention["news_to_price"]
+    assert price_attn.shape[-2:] == (price.size(1), news.size(1))
+    assert news_attn.shape[-2:] == (news.size(1), price.size(1))
+
+
+def test_attention_maps_are_normalised():
+    torch.manual_seed(0)
+    price = torch.randn(8, 4, 2)
+    news = torch.randn(8, 2, 3)
+    model = CrossModalTransformer(
+        price_dim=2, news_dim=3, d_model=12, nhead=3, num_layers=2, dropout=0.0
+    )
+    model.eval()
+    with torch.no_grad():
+        output = model(price, news)
+    assert output.shape == (price.size(0),)
+    assert model.last_attention is not None
+    attn = model.last_attention
+    price_attn = attn["price_to_news"]
+    news_attn = attn["news_to_price"]
+    assert price_attn.shape == (
+        len(model.layers),
+        price.size(0),
+        price.size(1),
+        news.size(1),
+    )
+    assert news_attn.shape == (
+        len(model.layers),
+        price.size(0),
+        news.size(1),
+        price.size(1),
+    )
+    price_sums = price_attn.sum(-1)
+    news_sums = news_attn.sum(-1)
+    assert torch.allclose(price_sums, torch.ones_like(price_sums), atol=1e-5)
+    assert torch.allclose(news_sums, torch.ones_like(news_sums), atol=1e-5)
