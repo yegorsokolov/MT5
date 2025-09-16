@@ -30,6 +30,8 @@ def _prepare_cli(monkeypatch):
         run_search=lambda *a, **k: {},
     )
     monkeypatch.setitem(sys.modules, "tuning.baseline_opt", baseline_stub)
+    auto_search_stub = types.SimpleNamespace(run_search=lambda *a, **k: ({}, pd.DataFrame()))
+    monkeypatch.setitem(sys.modules, "tuning.auto_search", auto_search_stub)
     train_graphnet_stub = types.SimpleNamespace(train_graphnet=lambda *a, **k: None)
     monkeypatch.setitem(sys.modules, "train_graphnet", train_graphnet_stub)
     tpd_stub = types.SimpleNamespace(
