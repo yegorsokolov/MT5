@@ -60,6 +60,10 @@ class ConfigSchema(BaseModel):
     pred_cache_policy: str = Field(
         "lru", description="Eviction policy for prediction cache (lru or fifo)"
     )
+    model_type: str = Field(
+        "lgbm",
+        description="Primary model architecture (lgbm, neural, cross_modal)",
+    )
     plugin_cache_ttl: float = Field(
         0,
         ge=0,
@@ -198,6 +202,17 @@ class ConfigSchema(BaseModel):
         hidden_channels: int | None = Field(
             None, ge=1, description="Hidden representation size for graph models"
         )
+
+    @field_validator("model_type")
+    @classmethod
+    def _validate_model_type(cls, value: str) -> str:
+        mt = str(value).lower()
+        allowed = {"lgbm", "neural", "cross_modal"}
+        if mt not in allowed:
+            raise ValueError(
+                f"model_type must be one of {sorted(allowed)}, received '{value}'"
+            )
+        return mt
         num_layers: int | None = Field(
             None, ge=2, description="Number of message passing layers"
         )
