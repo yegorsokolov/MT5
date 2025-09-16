@@ -142,60 +142,89 @@ def triple_barrier(
 
 
 def multi_horizon_labels(prices: "pd.Series", horizons: list[int]) -> "pd.DataFrame":
-    """Generate targets for multiple prediction horizons.
+    """Generate direction, return and volatility targets for multiple horizons.
 
-    For each horizon ``h`` the function creates three columns:
+    For each horizon ``h`` three targets are produced:
 
-    ``label_{h}``
-        Binary direction label indicating whether the price after ``h``
-        steps is greater than the current price.
+    ``direction_{h}``
+        Binary direction label indicating whether ``p(t+h) > p(t)``.
 
     ``abs_return_{h}``
-        Absolute percentage return ``|p(t+h)/p(t) - 1|``.
+        Absolute percentage return ``|p(t+h) / p(t) - 1|``.
 
-    ``vol_{h}``
-        Realised volatility calculated as ``sqrt(sum(r_i^2))`` for the
-        ``h`` forward percent returns ``r``.
+    ``volatility_{h}``
+        Realised volatility over the next ``h`` forward returns computed as
+        ``sqrt(sum(r_i^2))`` where ``r_i`` are percentage changes.
 
-    The trailing rows where the future is unknown are filled with ``0``.
-
-    Parameters
-    ----------
-    prices : pd.Series
-        Series of prices indexed by time.
-    horizons : list[int]
-        List of prediction horizons in steps.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with three columns per horizon.
+    The final ``h`` rows—where future information is unavailable—are filled
+    with zeros so that the targets align with the original ``prices`` index.
     """
 
-    data: dict[str, pd.Series] = {}
-    pct = prices.pct_change()
-    future_pct = pct.shift(-1)
+    if prices.empty:
+        return pd.DataFrame(index=prices.index)
 
+    seen: set[int] = set()
+    valid_horizons: list[int] = []
     for h in horizons:
-        future = prices.shift(-h)
-        data[f"label_{h}"] = (future > prices).astype("int8").fillna(0)
-        abs_ret = (future / prices - 1).abs().fillna(0).astype("float32")
-        data[f"abs_return_{h}"] = abs_ret
-        vol = (
-            future_pct.rolling(window=h)
-            .apply(lambda arr: np.sqrt(np.square(arr).sum()), raw=True)
-            .shift(-h + 1)
+        step = int(h)
+        if step <= 0 or step in seen:
+            continue
+        seen.add(step)
+        valid_horizons.append(step)
+
+    if not valid_horizons:
+        return pd.DataFrame(index=prices.index)
+
+    arr = prices.to_numpy(dtype=np.float64)
+    n = len(arr)
+    forward_ret = np.zeros(max(n - 1, 0), dtype=np.float64)
+    if n > 1:
+        base = arr[:-1]
+        next_vals = arr[1:]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            forward = next_vals / base - 1.0
+        forward[~np.isfinite(forward)] = 0.0
+        forward_ret[: len(forward)] = forward
+    sq_forward = forward_ret**2
+
+    data: dict[str, pd.Series] = {}
+    for horizon in valid_horizons:
+        direction = np.zeros(n, dtype=np.int8)
+        abs_return = np.zeros(n, dtype=np.float32)
+        volatility = np.zeros(n, dtype=np.float32)
+
+        if horizon < n:
+            current = arr[:-horizon]
+            future = arr[horizon:]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rel = future / current - 1.0
+            rel[~np.isfinite(rel)] = 0.0
+            direction[:-horizon] = (rel > 0).astype(np.int8)
+            abs_return[:-horizon] = np.abs(rel).astype(np.float32)
+
+        if horizon <= len(sq_forward) and len(sq_forward) > 0:
+            windows = sliding_window_view(sq_forward, horizon)
+            summed = windows.sum(axis=1, dtype=np.float64)
+            volatility[:-horizon] = np.sqrt(summed).astype(np.float32)
+
+        data[f"direction_{horizon}"] = pd.Series(
+            direction, index=prices.index, dtype="int8"
         )
-        data[f"vol_{h}"] = vol.fillna(0).astype("float32")
+        data[f"abs_return_{horizon}"] = pd.Series(
+            abs_return, index=prices.index, dtype="float32"
+        )
+        data[f"volatility_{horizon}"] = pd.Series(
+            volatility, index=prices.index, dtype="float32"
+        )
 
     labels = pd.DataFrame(data, index=prices.index)
 
     run_id = prices.attrs.get("run_id", "unknown")
     raw_file = prices.attrs.get("source", "unknown")
-    for h in horizons:
-        log_lineage(run_id, raw_file, f"multi_horizon_{h}", "label")
-        log_lineage(run_id, raw_file, f"multi_horizon_{h}", "abs_return")
-        log_lineage(run_id, raw_file, f"multi_horizon_{h}", "realized_vol")
+    for horizon in valid_horizons:
+        log_lineage(run_id, raw_file, f"direction_{horizon}", "direction")
+        log_lineage(run_id, raw_file, f"abs_return_{horizon}", "abs_return")
+        log_lineage(run_id, raw_file, f"volatility_{horizon}", "realized_vol")
 
     return labels
 

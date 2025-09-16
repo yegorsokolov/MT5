@@ -1,5 +1,6 @@
-import numpy as np
-import torch
+import pytest
+np = pytest.importorskip("numpy")
+torch = pytest.importorskip("torch")
 from pathlib import Path
 import sys
 
@@ -28,9 +29,11 @@ def _train_single_task(X, target, task: str):
         opt.zero_grad()
         out = model(x_tensor, 0)
         if task == "direction":
-            loss = torch.nn.functional.binary_cross_entropy(out['direction_1'], y_t)
+            output_key = 'direction_1'
+            loss = torch.nn.functional.binary_cross_entropy(out[output_key], y_t)
         else:
-            loss = torch.nn.functional.mse_loss(out['abs_return_1'], y_t)
+            output_key = f'{task}_1'
+            loss = torch.nn.functional.mse_loss(out[output_key], y_t)
         loss.backward()
         opt.step()
     with torch.no_grad():
@@ -52,8 +55,10 @@ def test_joint_training_improves_metrics():
     # Baseline models trained separately
     dir_out = _train_single_task(X, direction, "direction")
     f1_baseline = _f1_score(direction, (dir_out['direction_1'] > 0.5).int().numpy())
-    abs_out = _train_single_task(X, abs_return, "abs")
+    abs_out = _train_single_task(X, abs_return, "abs_return")
     rmse_baseline = _rmse(abs_return, abs_out['abs_return_1'].numpy())
+    vol_out = _train_single_task(X, vol, "volatility")
+    vol_rmse_baseline = _rmse(vol, vol_out['volatility_1'].numpy())
 
     # Joint training across all tasks
     model = MultiHeadTransformer(2, num_symbols=1, d_model=16, nhead=2, num_layers=1, dropout=0.0, horizons=[1])
@@ -76,6 +81,8 @@ def test_joint_training_improves_metrics():
         out = model(x_tensor, 0)
     f1_joint = _f1_score(direction, (out['direction_1'] > 0.5).int().numpy())
     rmse_joint = _rmse(abs_return, out['abs_return_1'].numpy())
+    vol_rmse_joint = _rmse(vol, out['volatility_1'].numpy())
 
     assert f1_joint > f1_baseline
     assert rmse_joint < rmse_baseline
+    assert vol_rmse_joint < vol_rmse_baseline
