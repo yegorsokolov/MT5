@@ -173,5 +173,22 @@ def calibrate_intervals(
         return params, residuals, (preds, preds)
     lower, upper = predict_interval(preds, quantiles, regimes)
     coverage = evaluate_coverage(y_arr, lower, upper)
-    params = ConformalIntervalParams(alpha=alpha, quantiles=quantiles, coverage=coverage)
+    coverage_by_regime: dict[object, float] | None = None
+    if regimes is not None:
+        reg_arr = np.asarray(list(regimes))
+        if reg_arr.size == preds.size:
+            coverage_by_regime = {}
+            for reg in np.unique(reg_arr):
+                mask = reg_arr == reg
+                if not np.any(mask):
+                    continue
+                coverage_by_regime[reg] = evaluate_coverage(
+                    y_arr[mask], lower[mask], upper[mask]
+                )
+    params = ConformalIntervalParams(
+        alpha=alpha,
+        quantiles=quantiles,
+        coverage=coverage,
+        coverage_by_regime=coverage_by_regime,
+    )
     return params, residuals, (lower, upper)
