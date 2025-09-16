@@ -57,9 +57,30 @@ def compute(df: pd.DataFrame, path: Path = FORMULA_PATH) -> pd.DataFrame:
         if not name or not expr:
             continue
         try:
-            out[name] = eval(expr, ns)
+            result = eval(expr, ns)
         except Exception:
             continue
+        if isinstance(result, pd.Series):
+            series = result.reindex(out.index)
+        elif isinstance(result, np.ndarray):
+            arr = np.asarray(result)
+            if arr.ndim == 0:
+                out[name] = arr.item()
+                ns[name] = out[name]
+                continue
+            if len(arr) != len(out):
+                continue
+            series = pd.Series(arr, index=out.index)
+        elif isinstance(result, (list, tuple)):
+            if len(result) != len(out):
+                continue
+            series = pd.Series(result, index=out.index)
+        else:
+            out[name] = result
+            ns[name] = out[name]
+            continue
+        out[name] = series
+        ns[name] = out[name]
     return out
 
 
