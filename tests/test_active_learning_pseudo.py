@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -19,8 +20,10 @@ class SimpleClf:
         return (X >= self.threshold).astype(int)
 
     def predict_proba(self, X):
-        preds = self.predict(X)
-        return np.vstack([1 - preds, preds]).T
+        X = np.asarray(X).ravel()
+        logits = X - self.threshold
+        probs = 1 / (1 + np.exp(-logits))
+        return np.vstack([1 - probs, probs]).T
 
 
 def f1(y_true, y_pred):
@@ -59,7 +62,12 @@ def test_queue_and_pseudo_labels_improve_f1(tmp_path):
     )
     unlabeled_ids = train_idx[~mask]
     probs_unlabeled = model.predict_proba(X_train[~mask])
-    queue.push_low_confidence(unlabeled_ids, probs_unlabeled, threshold=0.8)
+    queued = queue.push_low_confidence(unlabeled_ids, probs_unlabeled, threshold=0.9)
+    assert queued > 0
+    stats = queue.stats()
+    assert stats["queued"] == queued
+    assert stats["ready_for_merge"] == 0
+    high_conf_expected = int(np.sum(probs_unlabeled.max(axis=1) >= 0.8))
 
     df_unlabeled = pd.DataFrame(X_train[~mask], columns=["x"])
     y_unlabeled = y_train[~mask]
@@ -71,14 +79,21 @@ def test_queue_and_pseudo_labels_improve_f1(tmp_path):
         output_dir=tmp_path,
         report_dir=tmp_path / "report",
     )
+    metrics_path = tmp_path / "report" / "metrics.json"
+    assert metrics_path.exists()
+    metrics = json.loads(metrics_path.read_text())
+    assert "precision" in metrics
+    assert metrics["precision"] >= 0
 
     # simulate labeler confirming low-confidence sample
     pd.DataFrame(
         {"id": [int(unlabeled_ids[1])], "label": [int(y_unlabeled[1])]}
     ).to_json(tmp_path / "labels.json", orient="records")
     labeled = queue.pop_labeled()
+    assert queue.stats()["queued"] == 0
 
-    train_df = pd.DataFrame(X_train, columns=["x"], index=train_idx)
+    train_df = pd.DataFrame({"x": X_train.ravel(), "id": train_idx})
+    train_df = train_df.set_index("id", drop=False)
     train_df["label"] = y_masked
     train_df = merge_labels(train_df, labeled, "label")
 
@@ -86,6 +101,7 @@ def test_queue_and_pseudo_labels_improve_f1(tmp_path):
     if pseudo_path.exists():
         df_pseudo = pd.read_csv(pseudo_path)
         df_pseudo = df_pseudo.rename(columns={"pseudo_label": "label"})
+        assert len(df_pseudo) == high_conf_expected
         train_df = pd.concat([train_df, df_pseudo], ignore_index=True)
 
     model2 = SimpleClf().fit(train_df[["x"]].values, train_df["label"].values)

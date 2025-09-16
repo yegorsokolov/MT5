@@ -1017,7 +1017,17 @@ def main(
         y = df[label_cols]
         X = df[features]
         save_history_parquet(df, root / "data" / "history.parquet")
-    logger.info("Active learning queue size: %d", len(al_queue))
+    queue_stats = al_queue.stats()
+    logger.info(
+        "Active learning queue stats: pending=%s ready_for_merge=%s",
+        queue_stats["awaiting_label"],
+        queue_stats["ready_for_merge"],
+    )
+    try:  # pragma: no cover - mlflow optional
+        mlflow.log_metric("al_queue_pending", queue_stats["awaiting_label"])
+        mlflow.log_metric("al_queue_ready_for_merge", queue_stats["ready_for_merge"])
+    except Exception:  # pragma: no cover - optional logging
+        pass
     al_threshold = cfg.get("active_learning", {}).get("threshold", 0.6)
 
     if use_pseudo_labels and label_cols:
@@ -1674,33 +1684,68 @@ def main(
             df_unlabeled["label"].values if "label" in df_unlabeled.columns else None
         )
         probs_unlabeled = final_pipe.predict_proba(X_unlabeled)
-        al_queue.push_low_confidence(
+        queued_count = al_queue.push_low_confidence(
             X_unlabeled.index, probs_unlabeled, threshold=al_threshold
         )
+        if queued_count:
+            logger.info(
+                "Queued %s low-confidence samples for review (threshold=%.2f)",
+                queued_count,
+                al_threshold,
+            )
+        queue_stats = al_queue.stats()
+        logger.info(
+            "Active learning queue stats: pending=%s ready_for_merge=%s",
+            queue_stats["awaiting_label"],
+            queue_stats["ready_for_merge"],
+        )
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric("al_queue_pending", queue_stats["awaiting_label"])
+            mlflow.log_metric(
+                "al_queue_ready_for_merge", queue_stats["ready_for_merge"]
+            )
+        except Exception:  # pragma: no cover - optional logging
+            pass
+        pseudo_threshold = cfg.get("pseudo_label_threshold", 0.9)
+        preds_unlabeled = probs_unlabeled.argmax(axis=1)
+        max_probs = probs_unlabeled.max(axis=1)
+        mask_high = max_probs >= pseudo_threshold
         pseudo_path = generate_pseudo_labels(
             final_pipe,
             X_unlabeled,
             y_true=y_unlabeled,
-            threshold=cfg.get("pseudo_label_threshold", 0.9),
+            threshold=pseudo_threshold,
             output_dir=root / "data" / "pseudo_labels",
             report_dir=root / "reports" / "pseudo_label",
         )
-        logger.info("Generated pseudo labels at %s", pseudo_path)
-        if y_unlabeled is not None:
-            preds_unlabeled = probs_unlabeled.argmax(axis=1)
-            mask_high = probs_unlabeled.max(axis=1) >= cfg.get(
-                "pseudo_label_threshold", 0.9
+        high_conf_count = int(np.sum(mask_high))
+        logger.info(
+            "Generated pseudo labels at %s for %s high-confidence samples (thr=%.2f)",
+            pseudo_path,
+            high_conf_count,
+            pseudo_threshold,
+        )
+        if high_conf_count:
+            precision_est = float(max_probs[mask_high].mean())
+            logger.info(
+                "Pseudo label precision estimate=%.3f on %s samples",
+                precision_est,
+                high_conf_count,
             )
-            if np.any(mask_high):
-                prec = precision_score(
-                    y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
-                )
-                rec = recall_score(
-                    y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
-                )
-                logger.info("Pseudo label precision=%s recall=%s", prec, rec)
-                mlflow.log_metric("pseudo_label_precision", prec)
-                mlflow.log_metric("pseudo_label_recall", rec)
+            try:  # pragma: no cover - mlflow optional
+                mlflow.log_metric("pseudo_label_precision_estimate", precision_est)
+            except Exception:
+                pass
+        if y_unlabeled is not None and high_conf_count:
+            prec = precision_score(
+                y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
+            )
+            rec = recall_score(
+                y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
+            )
+            logger.info("Pseudo label precision=%s recall=%s", prec, rec)
+            mlflow.log_metric("pseudo_label_precision", prec)
+            mlflow.log_metric("pseudo_label_recall", rec)
     meta_features = pd.DataFrame({"prob": all_probs, "confidence": all_conf})
     meta_clf = train_meta_classifier(meta_features, all_true)
     meta_version_id = model_store.save_model(meta_clf, cfg, {"type": "meta"})
