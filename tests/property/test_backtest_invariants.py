@@ -37,12 +37,21 @@ def run_backtest(prices: list[float], signals: list[float], *, initial_cash: flo
     st.integers(min_value=2, max_value=50).flatmap(
         lambda n: st.tuples(
             st.lists(st.floats(min_value=1, max_value=100), min_size=n, max_size=n),
-            st.lists(st.floats(min_value=-2, max_value=2), min_size=n - 1, max_size=n - 1),
+            st.lists(
+                st.floats(min_value=-2, max_value=2), min_size=n - 1, max_size=n - 1
+            ),
+            st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False),
         )
     )
 )
 def test_backtest_invariants(data) -> None:
-    prices, signals = data
-    cash, pos = run_backtest(prices, signals)
-    assert all(c >= 0 for c in cash)
-    assert all(abs(p) <= 1.0 + 1e-6 for p in pos)
+    prices, signals, max_pos = data
+    cash, pos = run_backtest(prices, signals, max_position=max_pos)
+    assert len(cash) == len(prices)
+    assert len(pos) == len(prices)
+    assert all(abs(p) <= max_pos + 1e-6 for p in pos)
+    max_price = max(prices)
+    assert all(
+        c + p * price >= -max_pos * max_price - 1e-6
+        for price, c, p in zip(prices, cash, pos)
+    )

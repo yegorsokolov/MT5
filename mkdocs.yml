@@ -1,0 +1,14 @@
+site_name: MT5 Docs
+site_description: Lightweight reference for MT5 configuration, indicators and validation utilities.
+docs_dir: mkdocs_docs
+site_dir: site
+theme:
+  name: mkdocs
+nav:
+  - Home: index.md
+  - Tutorials:
+      - Property-Based Testing: tutorials/property-tests.md
+  - Reference:
+      - Configuration Models: reference/configuration.md
+      - Indicators: reference/indicators.md
+      - Purged Time-Series CV: reference/purged-cv.md

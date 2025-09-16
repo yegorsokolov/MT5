@@ -21,6 +21,7 @@ Welcome to MT5's documentation
 
    how-to/training
    how-to/feature-development
+   how-to/feature_benchmarks
    how-to/deployment
    how-to/strategy-benchmark
 
@@ -31,4 +32,5 @@ Welcome to MT5's documentation
    api/models
    api/strategies
    api/indicators
+   api/cross_validation
    api/config
