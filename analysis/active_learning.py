@@ -46,17 +46,54 @@ class ActiveLearningQueue:
         self.labeled_path = labeled_path
         self.queue_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _load_queue(self) -> list[dict]:
+        if not self.queue_path.exists():
+            return []
+        try:
+            data = json.loads(self.queue_path.read_text())
+        except Exception:  # pragma: no cover - corrupted file
+            logger.warning("Failed to read active learning queue, resetting it")
+            return []
+        if not isinstance(data, list):  # pragma: no cover - defensive guard
+            return []
+        return data
+
+    def _write_queue(self, entries: list[dict]) -> None:
+        self.queue_path.write_text(json.dumps(entries))
+
+    def _load_labeled(self) -> pd.DataFrame:
+        if not self.labeled_path.exists():
+            return pd.DataFrame(columns=["id", "label"])
+        try:
+            return pd.read_json(self.labeled_path)
+        except ValueError:  # pragma: no cover - corrupted file
+            logger.warning("Failed to read labeled data file; discarding contents")
+            return pd.DataFrame(columns=["id", "label"])
+
     def __len__(self) -> int:
-        if self.queue_path.exists():
-            try:
-                return len(json.loads(self.queue_path.read_text()))
-            except Exception:  # pragma: no cover - corrupted file
-                return 0
-        return 0
+        return len(self._load_queue())
 
     def size(self) -> int:
         """Return number of samples currently queued."""
         return len(self)
+
+    # ------------------------------------------------------------------
+    # Queue operations
+    # ------------------------------------------------------------------
+    def stats(self) -> dict[str, int]:
+        """Return a dictionary describing queue and label availability."""
+
+        queued = len(self._load_queue())
+        labeled = len(self._load_labeled())
+        stats = {
+            "queued": int(queued),
+            "awaiting_label": int(queued),
+            "ready_for_merge": int(labeled),
+        }
+        return stats
 
     def push(self, ids: Sequence[int], probs: np.ndarray, k: int = 10) -> None:
         """Push ``k`` most uncertain samples to the queue."""
@@ -66,19 +103,20 @@ class ActiveLearningQueue:
             {"id": int(ids[i]), "uncertainty": float(unc[i]), "timestamp": time.time()}
             for i in top
         ]
-        existing: list[dict] = []
-        if self.queue_path.exists():
-            try:
-                existing = json.loads(self.queue_path.read_text())
-            except Exception:  # pragma: no cover - corrupted file
-                existing = []
-        existing.extend(entries)
-        self.queue_path.write_text(json.dumps(existing))
-        logger.info("Queued %s samples for labeling", len(entries))
+        existing = self._load_queue()
+        existing_ids = {int(item.get("id")) for item in existing}
+        new_entries = [e for e in entries if e["id"] not in existing_ids]
+        if not new_entries:
+            logger.info("No new high-uncertainty samples to queue")
+            return
+        existing.extend(new_entries)
+        self._write_queue(existing)
+        logger.info("Queued %s samples for labeling", len(new_entries))
+        logger.info("Queue stats after push: %s", self.stats())
 
     def push_low_confidence(
         self, ids: Sequence[int], probs: np.ndarray, threshold: float = 0.6
-    ) -> None:
+    ) -> int:
         """Queue samples whose max predicted probability is below ``threshold``.
 
         Parameters
@@ -97,7 +135,7 @@ class ActiveLearningQueue:
         max_conf = probs.max(axis=1)
         mask = max_conf < threshold
         if not np.any(mask):
-            return
+            return 0
         entries = [
             {
                 "id": int(ids[i]),
@@ -106,27 +144,30 @@ class ActiveLearningQueue:
             }
             for i in np.where(mask)[0]
         ]
-        existing: list[dict] = []
-        if self.queue_path.exists():
-            try:
-                existing = json.loads(self.queue_path.read_text())
-            except Exception:  # pragma: no cover - corrupted file
-                existing = []
-        existing.extend(entries)
-        self.queue_path.write_text(json.dumps(existing))
-        logger.info("Queued %s low-confidence samples", len(entries))
+        existing = self._load_queue()
+        existing_ids = {int(item.get("id")) for item in existing}
+        new_entries = [e for e in entries if e["id"] not in existing_ids]
+        if not new_entries:
+            logger.info("No new low-confidence samples met the threshold")
+            return 0
+        existing.extend(new_entries)
+        self._write_queue(existing)
+        logger.info("Queued %s low-confidence samples", len(new_entries))
+        logger.info("Queue stats after push: %s", self.stats())
+        return len(new_entries)
 
     def pop_labeled(self) -> pd.DataFrame:
         """Return any newly labeled samples and log turnaround time."""
         if not self.labeled_path.exists():
             return pd.DataFrame()
-        labeled = pd.read_json(self.labeled_path)
-        self.labeled_path.unlink()
-        queue = (
-            pd.read_json(self.queue_path, convert_dates=False)
-            if self.queue_path.exists()
-            else pd.DataFrame(columns=["id", "timestamp"])
-        )
+        labeled = self._load_labeled()
+        try:
+            self.labeled_path.unlink()
+        except FileNotFoundError:  # pragma: no cover - race condition guard
+            pass
+        queue = pd.DataFrame(self._load_queue())
+        if queue.empty:
+            queue = pd.DataFrame(columns=["id", "timestamp"])
         merged = labeled.merge(queue, on="id", how="left")
         if not merged.empty:
             turnaround = time.time() - merged["timestamp"]
@@ -136,8 +177,9 @@ class ActiveLearningQueue:
                 float(turnaround.mean()),
             )
         if not queue.empty:
-            remaining = queue[~queue["id"].isin(labeled["id"])]
-            self.queue_path.write_text(remaining.to_json(orient="records"))
+            remaining = queue[~queue["id"].isin(labeled["id"])].copy()
+            self._write_queue(remaining.to_dict(orient="records"))
+            logger.info("Queue stats after label ingestion: %s", self.stats())
         return merged[["id", "label"]]
 
 
@@ -147,5 +189,35 @@ def merge_labels(
     """Merge ``labeled`` samples into ``df`` under ``label_col``."""
     if labeled.empty:
         return df
-    df.loc[labeled["id"], label_col] = labeled["label"].values
+
+    df = df.copy()
+    labeled_unique = labeled.drop_duplicates("id")
+    updated = 0
+
+    if "id" in df.columns:
+        id_to_index = pd.Series(df.index, index=df["id"])
+        target_indices = labeled_unique["id"].map(id_to_index)
+        mask = target_indices.notna()
+        if mask.any():
+            df.loc[target_indices.loc[mask], label_col] = labeled_unique.loc[
+                mask, "label"
+            ].values
+            updated = int(mask.sum())
+    else:
+        idx = labeled_unique["id"]
+        try:
+            idx = idx.astype(df.index.dtype, copy=False)
+        except Exception:  # pragma: no cover - dtype coercion best effort
+            pass
+        mask = idx.isin(df.index)
+        if mask.any():
+            df.loc[idx[mask], label_col] = labeled_unique.loc[mask, "label"].values
+            updated = int(mask.sum())
+
+    if updated:
+        logger.info("Merged %s verified labels into training set", updated)
+    else:
+        logger.warning(
+            "Received %s labels but none matched training indices", len(labeled_unique)
+        )
     return df
