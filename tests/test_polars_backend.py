@@ -56,7 +56,7 @@ def test_baseline_signal_parity():
     )
     pd_res = baseline_signal.compute(data.copy())
     pl_res = baseline_signal.compute(pl.from_pandas(data))
-    cols = ["baseline_signal", "long_stop", "short_stop"]
+    cols = ["baseline_signal", "long_stop", "short_stop", "baseline_confidence"]
     pdt.assert_frame_equal(pl_res.to_pandas()[cols], pd_res[cols])
 
 
