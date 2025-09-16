@@ -107,6 +107,10 @@ try:  # optional torch dependency
 except Exception:  # pragma: no cover - torch may be missing
     CrossModalTransformer = None
 try:  # optional torch dependency
+    from .cross_modal_classifier import CrossModalClassifier
+except Exception:  # pragma: no cover - torch may be missing
+    CrossModalClassifier = None
+try:  # optional torch dependency
     from .ts_masked_encoder import initialize_model_with_ts_masked_encoder
 except Exception:  # pragma: no cover - torch may be missing
     initialize_model_with_ts_masked_encoder = None
