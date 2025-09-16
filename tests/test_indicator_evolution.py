@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -40,3 +41,26 @@ def test_indicator_improves_sharpe():
     sharpe_ind = (signal_ind * ret).mean() / (signal_ind * ret).std()
     sharpe_base = (signal_base * ret).mean() / (signal_base * ret).std()
     assert sharpe_ind > sharpe_base
+
+
+def test_compute_handles_series_and_arrays(tmp_path):
+    df = pd.DataFrame({"price": np.linspace(1.0, 2.0, 6)})
+    path = tmp_path / "evolved.json"
+    path.write_text(
+        json.dumps(
+            [
+                {"name": "array_feature", "formula": "np.linspace(0, 1, len(df))"},
+                {
+                    "name": "series_feature",
+                    "formula": "pd.Series(df['price']).rolling(3).mean().fillna(0.0)",
+                },
+            ]
+        )
+    )
+
+    out = evolved_indicators.compute(df.copy(), path=path)
+    assert "array_feature" in out.columns
+    assert "series_feature" in out.columns
+    expected_array = np.linspace(0, 1, len(df))
+    np.testing.assert_allclose(out["array_feature"].to_numpy(), expected_array)
+    assert out["series_feature"].index.equals(df.index)
