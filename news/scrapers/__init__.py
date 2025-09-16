@@ -1,4 +1,4 @@
-from . import forexfactory_news, cbc, cnn, reuters, yahoo
+from . import forexfactory_news, cbc, cnn, reuters, yahoo, global_feed
 
 __all__ = [
     "forexfactory_news",
@@ -6,4 +6,5 @@ __all__ = [
     "cnn",
     "reuters",
     "yahoo",
+    "global_feed",
 ]
