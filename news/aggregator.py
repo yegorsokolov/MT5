@@ -2,13 +2,24 @@ import csv
 import json
 import asyncio
 from datetime import datetime, timezone, timedelta
+from importlib import import_module
 from pathlib import Path
-from typing import List, Dict, Optional, Callable, Awaitable
+from types import ModuleType
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-import requests
+try:  # pragma: no cover - optional dependency in lightweight environments
+    import requests
+except Exception:  # pragma: no cover
+    requests = None  # type: ignore
+
 from bs4 import BeautifulSoup
 
-from .scrapers import forexfactory_news, cbc, cnn, reuters, yahoo
+try:  # pragma: no cover - pandas is optional at runtime
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    pd = None  # type: ignore
+
+from .scrapers import cbc, cnn, forexfactory_news, global_feed, reuters, yahoo
 
 
 DEFAULT_SCRAPERS = [
@@ -17,6 +28,7 @@ DEFAULT_SCRAPERS = [
     cnn.fetch,
     reuters.fetch,
     yahoo.fetch,
+    global_feed.fetch,
 ]
 
 
@@ -32,6 +44,96 @@ def _normalise_importance(value: Optional[str]) -> Optional[str]:
         "low": "yellow",
     }
     return mapping.get(val, val)
+
+
+_POSITIVE_TERMS = {
+    "beat",
+    "beats",
+    "surge",
+    "surges",
+    "rally",
+    "gain",
+    "gains",
+    "up",
+    "record",
+    "growth",
+    "strong",
+    "optimism",
+    "soar",
+    "soars",
+    "improve",
+    "improves",
+    "bullish",
+    "expand",
+    "expands",
+}
+
+_NEGATIVE_TERMS = {
+    "fall",
+    "falls",
+    "drop",
+    "drops",
+    "down",
+    "slump",
+    "loss",
+    "losses",
+    "warning",
+    "weak",
+    "decline",
+    "declines",
+    "plunge",
+    "plunges",
+    "miss",
+    "misses",
+    "bearish",
+    "shrink",
+    "shrinks",
+}
+
+
+def _headline_sentiment(text: str) -> float:
+    """Return a heuristic sentiment score in the ``[-1, 1]`` range."""
+
+    if not text:
+        return 0.0
+    words = [w.strip(".,!?;:""'()[]{}<>\n\r").lower() for w in text.split()]
+    pos = sum(1 for w in words if w in _POSITIVE_TERMS)
+    neg = sum(1 for w in words if w in _NEGATIVE_TERMS)
+    if pos == 0 and neg == 0:
+        return 0.0
+    score = (pos - neg) / max(pos + neg, 1)
+    return max(-1.0, min(1.0, float(score)))
+
+
+def _ensure_datetime(value: Any) -> Optional[datetime]:
+    """Coerce ``value`` into an aware :class:`datetime` when possible."""
+
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            return None
+    return None
+
+
+_IMPACT_MODEL: ModuleType | None = None
+
+
+def _load_impact_model() -> Optional[ModuleType]:
+    """Lazily import :mod:`news.impact_model` returning ``None`` on failure."""
+
+    global _IMPACT_MODEL
+    if _IMPACT_MODEL is None:
+        try:
+            _IMPACT_MODEL = import_module("news.impact_model")
+        except Exception:
+            _IMPACT_MODEL = None
+    return _IMPACT_MODEL
 
 
 class NewsAggregator:
@@ -79,6 +181,135 @@ class NewsAggregator:
         cutoff = datetime.now(timezone.utc) - self.ttl
         return [ev for ev in events if ev.get("timestamp") and ev["timestamp"] >= cutoff]
 
+    def _analyse_headlines(self, events: List[Dict]) -> List[Dict]:
+        """Attach heuristic sentiment and impact estimates to ``events``."""
+
+        if not events:
+            return []
+
+        analysed: List[Dict] = []
+        rows: List[Dict[str, Any]] = []
+        for idx, event in enumerate(events):
+            ev = dict(event)
+            ts = _ensure_datetime(ev.get("timestamp"))
+            if ts:
+                ev["timestamp"] = ts
+
+            text = " ".join(
+                part.strip() for part in [ev.get("title", ""), ev.get("summary", "")] if part
+            )
+            sentiment = ev.get("sentiment")
+            if sentiment is None:
+                sentiment = _headline_sentiment(text)
+            else:
+                try:
+                    sentiment = float(sentiment)
+                except (TypeError, ValueError):
+                    sentiment = _headline_sentiment(text)
+            sentiment = float(sentiment)
+            ev["sentiment"] = sentiment
+
+            analysis = dict(ev.get("analysis") or {})
+            analysis["sentiment"] = sentiment
+
+            impact = ev.get("impact")
+            if impact is not None:
+                try:
+                    analysis["impact"] = float(impact)
+                    ev["impact"] = float(impact)
+                except (TypeError, ValueError):
+                    ev.pop("impact", None)
+            uncertainty = ev.get("impact_uncertainty")
+            if uncertainty is not None:
+                try:
+                    analysis["uncertainty"] = float(uncertainty)
+                    ev["impact_uncertainty"] = float(uncertainty)
+                except (TypeError, ValueError):
+                    ev.pop("impact_uncertainty", None)
+
+            symbols = ev.get("symbols") or []
+            if not isinstance(symbols, list):
+                symbols = list(symbols) if symbols else []
+            cleaned_symbols: List[str] = []
+            for sym in symbols:
+                if not sym:
+                    continue
+                cleaned = str(sym).strip().upper()
+                if cleaned:
+                    cleaned_symbols.append(cleaned)
+            ev["symbols"] = cleaned_symbols
+            analysed.append(ev)
+
+            if cleaned_symbols and isinstance(ev.get("timestamp"), datetime):
+                for sym in cleaned_symbols:
+                    rows.append(
+                        {
+                            "event_idx": idx,
+                            "symbol": sym,
+                            "timestamp": ev["timestamp"],
+                            "sentiment": sentiment,
+                            "surprise": 0.0,
+                            "historical_response": 0.0,
+                            "text": text or ev.get("title", ""),
+                        }
+                    )
+
+            ev["analysis"] = analysis
+
+        model = _load_impact_model()
+        if rows and pd is not None and model is not None and hasattr(model, "score"):
+            df = pd.DataFrame(rows)
+            try:
+                score_df = model.score(
+                    df[[
+                        "symbol",
+                        "timestamp",
+                        "surprise",
+                        "sentiment",
+                        "historical_response",
+                        "text",
+                    ]]
+                )
+            except Exception:
+                score_df = None
+
+            if score_df is not None and not score_df.empty:
+                df = df.reset_index(drop=True)
+                score_df = score_df.reset_index(drop=True)
+                df["impact"] = score_df["impact"].astype(float)
+                if "uncertainty" in score_df.columns:
+                    df["uncertainty"] = score_df["uncertainty"].astype(float)
+                else:
+                    df["uncertainty"] = 0.0
+                for event_idx, grp in df.groupby("event_idx"):
+                    impact_val = float(grp["impact"].mean())
+                    uncert_val = float(grp["uncertainty"].mean())
+                    analysed[event_idx]["impact"] = impact_val
+                    analysed[event_idx]["impact_uncertainty"] = uncert_val
+                    analysis = dict(analysed[event_idx].get("analysis") or {})
+                    analysis["impact"] = impact_val
+                    analysis["uncertainty"] = uncert_val
+                    analysed[event_idx]["analysis"] = analysis
+
+        event_sentiments: Dict[int, List[float]] = {}
+        for row in rows:
+            event_sentiments.setdefault(row["event_idx"], []).append(float(row["sentiment"]))
+        for idx, sentiments in event_sentiments.items():
+            if analysed[idx].get("impact") is not None:
+                continue
+            if sentiments:
+                impact_val = float(sum(sentiments) / len(sentiments))
+                analysed[idx]["impact"] = impact_val
+                analysed[idx]["impact_uncertainty"] = analysed[idx].get(
+                    "impact_uncertainty", 1.0
+                )
+                analysis = dict(analysed[idx].get("analysis") or {})
+                analysis.setdefault("impact", impact_val)
+                analysis.setdefault("uncertainty", analysed[idx]["impact_uncertainty"])
+                analysed[idx]["analysis"] = analysis
+
+        return analysed
+
     # ------------------------------------------------------------------
     def get_news(self, start: datetime, end: datetime) -> List[Dict]:
         """Return cached news events within the inclusive [start, end] range."""
@@ -99,6 +330,8 @@ class NewsAggregator:
     # ------------------------------------------------------------------
     # Fetching logic
     def _fetch(self, url: str) -> Optional[str]:
+        if requests is None:  # pragma: no cover - exercised when requests missing
+            return None
         try:
             headers = {"User-Agent": "Mozilla/5.0"}
             resp = requests.get(url, timeout=10, headers=headers)
@@ -148,13 +381,14 @@ class NewsAggregator:
     async def refresh(self, scrapers: Optional[List[Callable[[], Awaitable[List[Dict]]]]] = None) -> List[Dict]:
         """Fetch headline news from scrapers asynchronously and update cache."""
         scrapers = scrapers or DEFAULT_SCRAPERS
-        existing = self._load_cache()
+        existing = self._analyse_headlines(self._load_cache())
         results = await asyncio.gather(*[scraper() for scraper in scrapers], return_exceptions=True)
         new_events: List[Dict] = []
         for res in results:
             if isinstance(res, list):
                 new_events.extend(res)
-        combined = self._dedupe_news(existing + new_events)
+        analysed_new = self._analyse_headlines(new_events)
+        combined = self._dedupe_news(existing + analysed_new)
         combined = self._apply_ttl(combined)
         self._save_cache(combined)
         return combined
@@ -335,9 +569,15 @@ class NewsAggregator:
     def _dedupe_news(self, events: List[Dict]) -> List[Dict]:
         """Deduplicate headline news by (symbol, title, timestamp)."""
         deduped: Dict[tuple, Dict] = {}
+        unique: List[Dict] = []
         for ev in events:
-            symbols = ev.get("symbols", []) or []
-            for sym in symbols:
+            symbols = ev.get("symbols") or []
+            if not isinstance(symbols, list):
+                symbols = list(symbols)
+            keys = symbols if symbols else [None]
+            added = False
+            created_key = False
+            for sym in keys:
                 key = (sym, ev.get("title"), ev.get("timestamp"))
                 existing = deduped.get(key)
                 if existing:
@@ -345,7 +585,14 @@ class NewsAggregator:
                     existing["symbols"] = list(merged)
                 else:
                     deduped[key] = ev
-        return list(deduped.values())
+                    created_key = True
+                    if not added:
+                        unique.append(ev)
+                        added = True
+            if not created_key and not added:
+                # Event fully merged into existing entries; no need to add duplicate
+                continue
+        return unique
 
 
 __all__ = ["NewsAggregator"]
