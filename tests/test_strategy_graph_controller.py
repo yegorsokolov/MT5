@@ -1,3 +1,4 @@
+import subprocess
 import sys
 from pathlib import Path
 
@@ -7,11 +8,14 @@ import torch
 # Ensure project root on path for direct execution
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from strategies.graph_dsl import Filter, Indicator, PositionSizer, StrategyGraph
-from models.strategy_graph_controller import (
-    StrategyGraphController,
-    train_strategy_graph_controller,
+from strategies.graph_dsl import (
+    ExitRule,
+    Filter,
+    Indicator,
+    PositionSizer,
+    StrategyGraph,
 )
+from models.strategy_graph_controller import train_strategy_graph_controller
 
 
 def build_sample_data():
@@ -19,15 +23,20 @@ def build_sample_data():
         {"price": 1.0, "ma": 0.9},
         {"price": 1.1, "ma": 1.0},
         {"price": 1.2, "ma": 1.1},
-        {"price": 1.3, "ma": 1.2},
+        {"price": 1.4, "ma": 1.5},
     ]
 
 
 def test_graph_execution_and_serialisation():
-    nodes = {0: Indicator("price", ">", "ma"), 1: Filter(), 2: PositionSizer(1.0)}
-    edges = [(0, 1, None), (1, 2, True)]
+    nodes = {
+        0: Indicator("price", ">", "ma"),
+        1: Filter(),
+        2: PositionSizer(1.0),
+        3: ExitRule(),
+    }
+    edges = [(0, 1, None), (1, 2, True), (1, 3, False)]
     graph = StrategyGraph(nodes=nodes, edges=edges)
-    data = build_sample_data()[:2]
+    data = build_sample_data()
     pnl = graph.run(data)
     assert pnl > 0
     payload = graph.to_dict()
@@ -47,4 +56,20 @@ def test_policy_gradient_training():
     graph = model.build_graph(action)
     pnl = graph.run(data)
     assert pnl > 0
+
+
+def test_graph_search_cli_executes():
+    root = Path(__file__).resolve().parents[1]
+    cmd = [
+        sys.executable,
+        str(root / "train_strategy.py"),
+        "--graph-search",
+        "--episodes",
+        "200",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    lines = [line for line in result.stdout.splitlines() if "Trained strategy PnL" in line]
+    assert lines, f"Unexpected CLI output: {result.stdout!r}"
+    value = float(lines[0].split(":", 1)[1])
+    assert value > 0.0
 
