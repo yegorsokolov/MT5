@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Tuple
+from typing import Iterable, List, Tuple
 
 import hashlib
 import json
@@ -15,6 +15,7 @@ from functools import wraps
 
 import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 from joblib import Memory
 
 try:  # pragma: no cover - optional dependency
@@ -667,6 +668,41 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     merge_lock = threading.Lock()
     feature_timings: dict[str, dict[str, float]] = {}
 
+    def _record_duration(name: str, start: float, end: float) -> None:
+        duration = end - start
+        entry = feature_timings.setdefault(name, {})
+        entry.update({"start": start, "end": end, "duration": duration})
+        try:
+            record_metric("feature_runtime_seconds", duration, {"feature": name})
+        except Exception:
+            pass
+
+    def _record_columns(name: str, cols: Iterable[str]) -> None:
+        entry = feature_timings.setdefault(name, {})
+        entry["columns"] = len(cols)
+        try:
+            record_metric(
+                "feature_columns_added", float(len(cols)), {"feature": name}
+            )
+        except Exception:
+            pass
+
+    def _apply_with_metrics(func, data: pd.DataFrame, *args, **kwargs) -> pd.DataFrame:
+        start = time.perf_counter()
+        prev_cols = set(data.columns)
+        result = func(data, *args, **kwargs)
+        end = time.perf_counter()
+        name = getattr(func, "__name__", "unknown") or "unknown"
+        logger.info("feature %s executed in %.3fs", name, end - start)
+        _record_duration(name, start, end)
+        new_cols = [c for c in result.columns if c not in prev_cols]
+        _record_columns(name, new_cols)
+        run_id = result.attrs.get("run_id", "unknown")
+        raw_file = result.attrs.get("source", "unknown")
+        for col in new_cols:
+            log_lineage(run_id, raw_file, name, col)
+        return result
+
     def _run_compute(compute):
         start = time.perf_counter()
         result = compute(df.copy())
@@ -682,11 +718,7 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             logger.info("feature %s executed in %.3fs", name, duration)
             with merge_lock:
                 results[name] = res
-                feature_timings[name] = {
-                    "start": start,
-                    "end": end,
-                    "duration": duration,
-                }
+                _record_duration(name, start, end)
 
     for compute in pipeline:
         res = results[compute.__name__]
@@ -698,38 +730,43 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
         raw_file = df.attrs.get("source", "unknown")
         for col in new_cols:
             log_lineage(run_id, raw_file, compute.__name__, col)
-
-    df.attrs["feature_timings"] = feature_timings
+        _record_columns(compute.__name__, new_cols)
 
     # GARCH volatility derived from returns
-    df = add_garch_volatility(df)
+    df = _apply_with_metrics(add_garch_volatility, df)
 
     # Cross-spectral coherence metrics between symbols
-    df = add_cross_spectral_features(df)
+    df = _apply_with_metrics(add_cross_spectral_features, df)
 
     # Dynamic time warping distances between select symbol pairs
-    df = add_dtw_features(df)
+    df = _apply_with_metrics(add_dtw_features, df)
 
     # Knowledge graph-based risk and opportunity scores
-    df = add_knowledge_graph_features(df)
+    df = _apply_with_metrics(add_knowledge_graph_features, df)
 
     # Frequency-domain energy metrics on the price series
-    df = add_frequency_features(df)
+    df = _apply_with_metrics(add_frequency_features, df)
 
     # Seasonal-trend decomposition of the price series
-    df = add_stl_features(df)
+    df = _apply_with_metrics(add_stl_features, df)
 
     # Fractal metrics derived from mid-price after price-based features
-    df = add_fractal_features(df)
+    df = _apply_with_metrics(add_fractal_features, df)
 
     # Estimate market and VAE regimes for gating features
     try:
-        df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
+        step_val = cfg.get("regime_reclass_period", 500)
+
+        def _reclass(frame: pd.DataFrame) -> pd.DataFrame:
+            return periodic_reclassification(frame, step=step_val)
+
+        _reclass.__name__ = "periodic_reclassification"  # type: ignore[attr-defined]
+        df = _apply_with_metrics(_reclass, df)
     except Exception:
         logger.debug("regime classification failed", exc_info=True)
 
     evolver = FeatureEvolver()
-    df = evolver.apply_stored_features(df)
+    df = _apply_with_metrics(evolver.apply_stored_features, df)
     feat_opts = cfg.get("features", {}) if isinstance(cfg.get("features"), dict) else {}
     target_col = feat_opts.get("target_col")
     if not target_col:
@@ -737,13 +774,24 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
             if cand in df.columns:
                 target_col = cand
                 break
-    df = evolver.apply_hypernet(df, target_col=target_col)
+    if target_col:
+        def _hyper(frame: pd.DataFrame) -> pd.DataFrame:
+            return evolver.apply_hypernet(frame, target_col=target_col)
+
+        _hyper.__name__ = "apply_hypernet"  # type: ignore[attr-defined]
+        df = _apply_with_metrics(_hyper, df)
     if feat_opts.get("auto_evolve") and target_col:
-        df = evolver.maybe_evolve(
-            df,
-            target_col=target_col,
-            module_path=Path("feature_store") / "evolved_features.py",
-        )
+        module_path = Path("feature_store") / "evolved_features.py"
+
+        def _maybe(frame: pd.DataFrame) -> pd.DataFrame:
+            return evolver.maybe_evolve(
+                frame,
+                target_col=target_col,
+                module_path=module_path,
+            )
+
+        _maybe.__name__ = "maybe_evolve"  # type: ignore[attr-defined]
+        df = _apply_with_metrics(_maybe, df)
 
     # Allow runtime plugins to extend the feature set
     adjacency = df.attrs.get("adjacency_matrices")
@@ -754,7 +802,12 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     except Exception:
         plugins = []
     for plugin in plugins:
-        df = plugin(df, adjacency_matrices=adjacency)
+        def _plugin_wrapper(frame: pd.DataFrame, _plugin=plugin) -> pd.DataFrame:
+            return _plugin(frame, adjacency_matrices=adjacency)
+
+        name = getattr(plugin, "__name__", "feature_plugin")
+        _plugin_wrapper.__name__ = name  # type: ignore[attr-defined]
+        df = _apply_with_metrics(_plugin_wrapper, df)
 
     # Merge options implied volatility and skew where resources allow
     try:
@@ -932,13 +985,20 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
     df, _ = feature_gate.select(df, tier, regime_id, persist=False)
 
     # Append latest factor exposures before scaling
-    df = add_factor_exposure_features(df)
+    df = _apply_with_metrics(add_factor_exposure_features, df)
+    start = time.perf_counter()
+    prev_cols = set(df.columns)
     df, anomalies = detect_anomalies(df, method="isolation_forest")
+    end = time.perf_counter()
+    _record_duration("detect_anomalies", start, end)
+    new_cols = [c for c in df.columns if c not in prev_cols]
+    _record_columns("detect_anomalies", new_cols)
     if not anomalies.empty:
         rate = len(anomalies) / (len(df) + len(anomalies))
         logger.info("anomaly_rate=%.4f", rate)
 
     df = optimize_dtypes(df)
+    df.attrs["feature_timings"] = feature_timings
 
     if validate:
         validate_ge(df, "engineered_features")
@@ -980,12 +1040,10 @@ def train_test_split(
     df: pd.DataFrame, n_train: int
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     if "Symbol" in df.columns:
-        trains: List[pd.DataFrame] = []
-        tests: List[pd.DataFrame] = []
-        for _, g in df.groupby("Symbol"):
-            trains.append(g.iloc[:n_train].copy())
-            tests.append(g.iloc[n_train:].copy())
-        return pd.concat(trains, ignore_index=True), pd.concat(tests, ignore_index=True)
+        order = df.groupby("Symbol").cumcount()
+        train = df[order < n_train].copy()
+        test = df[order >= n_train].copy()
+        return train, test
     train = df.iloc[:n_train].copy()
     test = df.iloc[n_train:].copy()
     return train, test
@@ -994,24 +1052,46 @@ def train_test_split(
 def make_sequence_arrays(
     df: pd.DataFrame, features: List[str], seq_len: int, label_col: str = "return"
 ) -> Tuple[np.ndarray, np.ndarray]:
+    if label_col != "return" and label_col not in df.columns:
+        raise KeyError(label_col)
+
+    feature_count = len(features)
     X_list: List[np.ndarray] = []
-    y_list: List[int] = []
+    y_list: List[np.ndarray] = []
     groups = [df]
     if "Symbol" in df.columns:
         groups = [g for _, g in df.groupby("Symbol")]
+
     for g in groups:
-        values = g[features].values
+        values = g[features].to_numpy()
+        if values.shape[0] <= seq_len:
+            continue
+
         if label_col == "return":
-            targets = (g["return"].shift(-1) > 0).astype(int).values
-            limit = len(g) - 1
+            target_series = (g["return"].shift(-1) > 0).astype(np.int64).to_numpy()
+            end = len(g) - 1
         else:
-            targets = g[label_col].values
-            limit = len(g)
-        for i in range(seq_len, limit):
-            X_list.append(values[i - seq_len : i])
-            y_list.append(targets[i])
-    X = np.stack(X_list)
-    y = np.array(y_list)
+            target_series = g[label_col].to_numpy()
+            end = len(g)
+
+        window_count = end - seq_len
+        if window_count <= 0:
+            continue
+
+        windows = sliding_window_view(values, window_shape=seq_len, axis=0)
+        X_list.append(np.asarray(windows[:window_count]))
+        y_list.append(np.asarray(target_series[seq_len:end]))
+
+    if X_list:
+        X = np.concatenate(X_list, axis=0)
+    else:
+        X = np.empty((0, seq_len, feature_count), dtype=float)
+
+    if y_list:
+        y = np.concatenate(y_list, axis=0)
+    else:
+        y_dtype = np.int64 if label_col == "return" else df[label_col].dtype
+        y = np.empty((0,), dtype=y_dtype)
     return X, y
 
 
