@@ -16,6 +16,7 @@ dependencies = [
     "scikit-learn",
     "numpy",
     "pyyaml",
+    "pydantic>=2,<3",
     "GitPython",
     "gdown",
     "filelock",

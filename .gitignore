@@ -61,3 +61,4 @@ analytics/*.parquet
 reports/**/*.csv
 # Documentation build artifacts
 docs/_build/
+site/

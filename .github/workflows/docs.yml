@@ -22,10 +22,14 @@ jobs:
         run: sphinx-build -b html -W docs docs/_build/html
       - name: Run doctest
         run: sphinx-build -b doctest -W docs docs/_build/doctest
+      - name: Build MkDocs site
+        run: mkdocs build --strict --site-dir docs/_build/mkdocs
       - name: Smoke test tutorials
         run: pytest -q tests/test_tutorials.py
       - name: Upload docs artifact
         uses: actions/upload-artifact@v3
         with:
-          name: docs-html
-          path: docs/_build/html
+          name: docs-packages
+          path: |
+            docs/_build/html
+            docs/_build/mkdocs
