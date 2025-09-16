@@ -34,6 +34,20 @@ def test_group_exclusion() -> None:
         assert train_groups.isdisjoint(val_groups)
 
 
+def test_group_gap_exclusion() -> None:
+    data = list(range(20))
+    groups = [0, 0, 1, 1, 2] * 4
+    splitter = PurgedTimeSeriesSplit(n_splits=4, embargo=0, group_gap=2)
+    n = len(data)
+    for train_idx, val_idx in splitter.split(data, groups=groups):
+        start, end = val_idx[0], val_idx[-1] + 1
+        gap_groups = {
+            groups[i]
+            for i in range(max(0, start - 2), min(n, end + 2))
+        }
+        assert all(groups[i] not in gap_groups for i in train_idx)
+
+
 def test_no_time_or_group_overlap() -> None:
     data = list(range(24))
     groups = [0] * 6 + [1] * 6 + [0] * 6 + [1] * 6

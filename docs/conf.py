@@ -62,3 +62,13 @@ source_suffix = {
 html_theme = "sphinx_rtd_theme"
 
 suppress_warnings = ["autodoc.mocked_object"]
+
+
+def autodoc_skip_member(app, what, name, obj, skip, options):
+    if name == "check_symbols":
+        return True
+    return None
+
+
+def setup(app):
+    app.connect("autodoc-skip-member", autodoc_skip_member)
