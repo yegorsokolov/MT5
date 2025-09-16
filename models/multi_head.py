@@ -2,6 +2,7 @@ import math
 from typing import Callable, Dict, Iterable, List
 
 import torch
+import torch.nn.functional as F
 
 from .time_encoding import TimeEncoding
 
@@ -59,9 +60,15 @@ class MultiTaskHead(torch.nn.Module):
     def __init__(self, d_model: int, horizons: List[int]) -> None:
         super().__init__()
         self.horizons = [int(h) for h in horizons]
-        self.direction_head = TaskHead(d_model, self.horizons, "direction", torch.sigmoid)
-        self.abs_head = TaskHead(d_model, self.horizons, "abs_return")
-        self.vol_head = TaskHead(d_model, self.horizons, "volatility")
+        self.direction_head = TaskHead(
+            d_model, self.horizons, "direction", torch.sigmoid
+        )
+        self.abs_head = TaskHead(
+            d_model, self.horizons, "abs_return", activation=F.softplus
+        )
+        self.vol_head = TaskHead(
+            d_model, self.horizons, "volatility", activation=F.softplus
+        )
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         outputs = self.direction_head(x)
@@ -109,13 +116,16 @@ class MultiHeadTransformer(torch.nn.Module):
             batch_first=True,
             dim_feedforward=ff_dim or 4 * d_model,
         )
-        self.transformer = torch.nn.TransformerEncoder(
+        self.shared_encoder = torch.nn.TransformerEncoder(
             encoder_layer, num_layers=num_layers
         )
+        # Backwards compatibility with older checkpoints expecting ``transformer``
+        self.transformer = self.shared_encoder
         self.norm = torch.nn.LayerNorm(d_model) if layer_norm else None
-        self.heads = torch.nn.ModuleDict(
+        self.task_heads = torch.nn.ModuleDict(
             {str(i): MultiTaskHead(d_model, self.horizons) for i in range(num_symbols)}
         )
+        self.heads = self.task_heads
 
     def forward(
         self, x: torch.Tensor, symbol: int, times: torch.Tensor | None = None
@@ -131,7 +141,7 @@ class MultiHeadTransformer(torch.nn.Module):
                 raise ValueError("times tensor required when time_encoding is enabled")
             time_features = self.time_encoder(times).type_as(x)
         x = self.pos_encoder(x)
-        layers = self.transformer.layers
+        layers = self.shared_encoder.layers
         for layer in layers:
             layer_input = x
             if time_features is not None:
@@ -140,12 +150,12 @@ class MultiHeadTransformer(torch.nn.Module):
                 x = torch.utils.checkpoint.checkpoint(layer, layer_input)
             else:
                 x = layer(layer_input)
-        transformer_norm = getattr(self.transformer, "norm", None)
+        transformer_norm = getattr(self.shared_encoder, "norm", None)
         if transformer_norm is not None:
             x = transformer_norm(x)
         if self.norm is not None:
             x = self.norm(x)
-        head = self.heads[str(int(symbol))]
+        head = self.task_heads[str(int(symbol))]
         return head(x[:, -1])
 
     def prune_heads(self, keep: Iterable[int]) -> None:

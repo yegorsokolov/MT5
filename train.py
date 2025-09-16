@@ -437,9 +437,9 @@ def train_multi_output_model(
         evolved_path=evolve_path,
     )
 
-    label_cols = [c for c in y.columns if c.startswith("label_")]
+    label_cols = [c for c in y.columns if c.startswith("direction_")]
     abs_cols = [c for c in y.columns if c.startswith("abs_return_")]
-    vol_cols = [c for c in y.columns if c.startswith("vol_")]
+    vol_cols = [c for c in y.columns if c.startswith("volatility_")]
     reg_cols = abs_cols + vol_cols
 
     clf_params = {
@@ -928,7 +928,7 @@ def main(
     labels = multi_horizon_labels(df["mid"], horizons)
     df = pd.concat([df, labels], axis=1)
     y = labels
-    label_cols = [c for c in labels.columns if c.startswith("label_")]
+    label_cols = [c for c in labels.columns if c.startswith("direction_")]
     sel_target = labels[label_cols[0]] if label_cols else labels.iloc[:, 0]
     features = select_features(df[features], sel_target)
     for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"]:
