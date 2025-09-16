@@ -33,7 +33,6 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.pipeline import Pipeline
-from sklearn.multioutput import MultiOutputClassifier
 from sklearn.utils.class_weight import compute_sample_weight
 from analysis.purged_cv import PurgedTimeSeriesSplit
 from analysis.data_quality import score_samples as dq_score_samples
@@ -105,6 +104,7 @@ from analysis.evaluate import (
 from analysis.interpret_model import generate_shap_report
 from analysis.similar_days import add_similar_day_features
 from training.curriculum import CurriculumScheduler
+from models.multi_task_heads import MultiTaskHeadEstimator
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -398,30 +398,7 @@ def train_multi_output_model(
     degradation: float = 0.05,
     evolve_path: Path | None = None,
 ) -> tuple[Pipeline, dict[str, object]]:
-    """Train a multi-output classifier and report metrics per horizon.
-
-    The function builds a small pipeline consisting of an optional
-    :class:`FeatureScaler` followed by a ``MultiOutputClassifier`` wrapping
-    ``LGBMClassifier``.  It returns both the fitted pipeline and a dictionary
-    containing a ``classification_report`` for each horizon as well as an
-    aggregated F1 score across horizons.
-
-    Parameters
-    ----------
-    X : pd.DataFrame
-        Feature matrix.
-    y : pd.DataFrame
-        DataFrame of target columns, one per horizon.
-    cfg : dict, optional
-        Optional configuration with LightGBM parameters.
-
-    Returns
-    -------
-    Pipeline
-        The fitted pipeline.
-    dict
-        Dictionary with per-horizon reports and ``aggregate_f1``.
-    """
+    """Train a shared-trunk multi-task model and return per-task metrics."""
 
     cfg = cfg or {}
     steps: list[tuple[str, object]] = []
@@ -440,46 +417,73 @@ def train_multi_output_model(
     label_cols = [c for c in y.columns if c.startswith("direction_")]
     abs_cols = [c for c in y.columns if c.startswith("abs_return_")]
     vol_cols = [c for c in y.columns if c.startswith("volatility_")]
-    reg_cols = abs_cols + vol_cols
 
-    clf_params = {
-        "n_estimators": cfg.get("n_estimators", 50),
-        "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
-        "random_state": cfg.get("seed", 0),
-        **_lgbm_params(cfg),
+    hidden_default = 32
+    if isinstance(X, pd.DataFrame):
+        hidden_default = max(16, len(X.columns) // 2 or 16)
+
+    head_params = {
+        "classification_targets": label_cols,
+        "abs_targets": abs_cols,
+        "volatility_targets": vol_cols,
+        "hidden_dim": int(cfg.get("head_hidden_dim", hidden_default)),
+        "learning_rate": float(cfg.get("head_learning_rate", 0.01)),
+        "epochs": int(cfg.get("head_epochs", 200)),
+        "classification_weight": float(cfg.get("head_classification_weight", 1.0)),
+        "abs_weight": float(cfg.get("head_abs_weight", 1.0)),
+        "volatility_weight": float(cfg.get("head_volatility_weight", 1.0)),
+        "l2": float(cfg.get("head_l2", 0.0)),
+        "random_state": cfg.get("seed"),
     }
-    base = LGBMClassifier(**clf_params)
-    clf = MultiOutputClassifier(base)
-    steps.append(("clf", clf))
+
+    head = MultiTaskHeadEstimator(**head_params)
+    steps.append(("multi_task", head))
     pipe = Pipeline(steps)
-    pipe.regression_heads_ = {}
-    pipe.regression_trunk_ = None
+    pipe.classification_targets_ = list(label_cols)
+    pipe.abs_return_targets_ = list(abs_cols)
+    pipe.volatility_targets_ = list(vol_cols)
     pipe.regression_feature_columns_ = (
         list(X.columns) if isinstance(X, pd.DataFrame) else None
     )
-    pipe.regression_target_columns_ = {}
-    if label_cols:
-        pipe.fit(X, y[label_cols])
-    else:
-        pipe.fit(X, y)
+    pipe.head_config_ = {}
+    pipe.classification_thresholds_ = {}
+
+    pipe.fit(X, y)
 
     reports: dict[str, object] = {}
     f1_scores: list[float] = []
     sharpe_scores: list[float] = []
     calmar_scores: list[float] = []
     threshold_metric = cfg.get("threshold_metric", "f1")
+    est: MultiTaskHeadEstimator = pipe.named_steps["multi_task"]
+    head_config = dict(est.head_config_)
+    pipe.head_config_ = head_config
+    pipe.primary_label_ = est.primary_label_
+
+    if len(pipe.steps) > 1:
+        X_shared = pipe[:-1].transform(X)
+    else:
+        X_shared = X
+
+    preds = (
+        np.zeros((len(y), len(label_cols)), dtype=int)
+        if label_cols
+        else np.zeros((len(y), 0), dtype=int)
+    )
+    thresholds: dict[str, float] = {}
     if label_cols:
-        val_probs = pipe.predict_proba(X)
-        preds = np.zeros((len(y), len(label_cols)))
-        thr_dict: dict[str, float] = {}
+        class_probs = est.predict_classification_proba(X_shared)
+        class_probs = np.asarray(class_probs, dtype=float)
+        if class_probs.ndim == 1:
+            class_probs = class_probs.reshape(-1, 1)
         for i, col in enumerate(label_cols):
-            probs = val_probs[i][:, 1]
+            probs = class_probs[:, i]
             if threshold_metric == "f1":
-                precision, recall, thresholds = precision_recall_curve(y[col], probs)
+                precision, recall, thresholds_arr = precision_recall_curve(y[col], probs)
                 f1 = 2 * precision * recall / (precision + recall + 1e-12)
-                if len(thresholds) > 0:
+                if len(thresholds_arr) > 0:
                     best_idx = int(np.argmax(f1[:-1]))
-                    best_thr = float(thresholds[best_idx])
+                    best_thr = float(thresholds_arr[best_idx])
                     best_metric = float(f1[best_idx])
                 else:
                     best_thr = 0.5
@@ -495,7 +499,7 @@ def train_multi_output_model(
                     if metric_val > best_metric:
                         best_metric = metric_val
                         best_thr = float(thr)
-            thr_dict[col] = best_thr
+            thresholds[col] = best_thr
             preds[:, i] = (probs >= best_thr).astype(int)
             rep = classification_report(y[col], preds[:, i], output_dict=True)
             risk = risk_adjusted_metrics(y[col], preds[:, i])
@@ -528,6 +532,11 @@ def train_multi_output_model(
                 mlflow.log_metric(f"recall_{col}", recall_val)
             except Exception:  # pragma: no cover - mlflow optional
                 pass
+        est.thresholds_ = thresholds
+        if label_cols:
+            est.classes_ = np.array([0, 1], dtype=int)
+        pipe.classification_thresholds_ = thresholds
+        head_config["thresholds"] = thresholds
 
     if label_cols and f1_scores:
         reports["aggregate_f1"] = float(np.mean(f1_scores))
@@ -551,150 +560,70 @@ def train_multi_output_model(
     rmse_scores: list[float] = []
     abs_rmse: list[float] = []
     vol_rmse: list[float] = []
-    if reg_cols:
-        from sklearn.multioutput import MultiOutputRegressor
-        from sklearn.linear_model import LinearRegression
-
-        trunk_steps = pipe.steps[:-1]
-        if trunk_steps:
-            trunk_pipeline = Pipeline(trunk_steps)
-            X_trunk = trunk_pipeline.transform(X)
-            pipe.regression_trunk_ = trunk_pipeline
-        else:
-            pipe.regression_trunk_ = None
-            X_trunk = X
-
-        if isinstance(X_trunk, pd.DataFrame):
-            X_reg = X_trunk.to_numpy(dtype=float)
-        else:
-            X_reg = np.asarray(X_trunk, dtype=float)
-
-        heads: dict[str, dict[str, object]] = {}
-        if abs_cols:
-            abs_reg = MultiOutputRegressor(LinearRegression())
-            abs_reg.fit(X_reg, y[abs_cols])
-            heads["abs_return"] = {"model": abs_reg, "columns": list(abs_cols)}
-            abs_pred = abs_reg.predict(X_reg)
-            if isinstance(abs_pred, list):
-                abs_pred = np.column_stack(abs_pred)
-            if np.ndim(abs_pred) == 1:
-                abs_pred = np.reshape(abs_pred, (-1, 1))
-            for i, col in enumerate(abs_cols):
-                rmse = float(
-                    np.sqrt(np.mean((abs_pred[:, i] - y[col].to_numpy()) ** 2))
-                )
-                reports[col] = {"rmse": rmse}
-                rmse_scores.append(rmse)
-                abs_rmse.append(rmse)
-                logger.info("RMSE for %s: %.4f", col, rmse)
-                try:  # pragma: no cover - mlflow optional
-                    mlflow.log_metric(f"rmse_{col}", rmse)
-                except Exception:
-                    pass
-
-        if vol_cols:
-            vol_reg = MultiOutputRegressor(LinearRegression())
-            vol_reg.fit(X_reg, y[vol_cols])
-            heads["volatility"] = {"model": vol_reg, "columns": list(vol_cols)}
-            vol_pred = vol_reg.predict(X_reg)
-            if isinstance(vol_pred, list):
-                vol_pred = np.column_stack(vol_pred)
-            if np.ndim(vol_pred) == 1:
-                vol_pred = np.reshape(vol_pred, (-1, 1))
-            for i, col in enumerate(vol_cols):
-                rmse = float(
-                    np.sqrt(np.mean((vol_pred[:, i] - y[col].to_numpy()) ** 2))
-                )
-                reports[col] = {"rmse": rmse}
-                rmse_scores.append(rmse)
-                vol_rmse.append(rmse)
-                logger.info("RMSE for %s: %.4f", col, rmse)
-                try:  # pragma: no cover - mlflow optional
-                    mlflow.log_metric(f"rmse_{col}", rmse)
-                except Exception:
-                    pass
-
-        pipe.regression_heads_ = heads
-        pipe.regression_target_columns_ = {
-            name: info["columns"] for name, info in heads.items()
-        }
-        if rmse_scores:
-            reports["aggregate_rmse"] = float(np.mean(rmse_scores))
+    regression_heads: dict[str, dict[str, object]] = {}
+    if abs_cols:
+        abs_pred = est.predict_regression(X_shared, "abs_return")
+        abs_pred = np.asarray(abs_pred, dtype=float)
+        if abs_pred.ndim == 1:
+            abs_pred = abs_pred.reshape(-1, 1)
+        for i, col in enumerate(abs_cols):
+            target = y[col].to_numpy(dtype=float)
+            rmse = float(np.sqrt(np.mean((abs_pred[:, i] - target) ** 2)))
+            reports[col] = {"rmse": rmse}
+            rmse_scores.append(rmse)
+            abs_rmse.append(rmse)
+            logger.info("RMSE for %s: %.4f", col, rmse)
             try:  # pragma: no cover - mlflow optional
-                mlflow.log_metric("aggregate_rmse", reports["aggregate_rmse"])
+                mlflow.log_metric(f"rmse_{col}", rmse)
             except Exception:
                 pass
-        if abs_rmse:
-            reports["aggregate_abs_return_rmse"] = float(np.mean(abs_rmse))
+        regression_heads["abs_return"] = {"type": "multi_task", "columns": list(abs_cols)}
+    if vol_cols:
+        vol_pred = est.predict_regression(X_shared, "volatility")
+        vol_pred = np.asarray(vol_pred, dtype=float)
+        if vol_pred.ndim == 1:
+            vol_pred = vol_pred.reshape(-1, 1)
+        for i, col in enumerate(vol_cols):
+            target = y[col].to_numpy(dtype=float)
+            rmse = float(np.sqrt(np.mean((vol_pred[:, i] - target) ** 2)))
+            reports[col] = {"rmse": rmse}
+            rmse_scores.append(rmse)
+            vol_rmse.append(rmse)
+            logger.info("RMSE for %s: %.4f", col, rmse)
             try:  # pragma: no cover - mlflow optional
-                mlflow.log_metric(
-                    "aggregate_abs_return_rmse", reports["aggregate_abs_return_rmse"]
-                )
+                mlflow.log_metric(f"rmse_{col}", rmse)
             except Exception:
                 pass
-        if vol_rmse:
-            reports["aggregate_volatility_rmse"] = float(np.mean(vol_rmse))
-            try:  # pragma: no cover - mlflow optional
-                mlflow.log_metric(
-                    "aggregate_volatility_rmse", reports["aggregate_volatility_rmse"]
-                )
-            except Exception:
-                pass
+        regression_heads["volatility"] = {"type": "multi_task", "columns": list(vol_cols)}
 
-    # Compute expected return and drawdown for validation predictions
-    exp_returns: list[float] = []
-    drawdowns: list[float] = []
-    for i, col in enumerate(label_cols):
-        metrics = mo_compute_metrics(y[col], preds[:, i])
-        exp_returns.append(metrics.expected_return)
-        drawdowns.append(metrics.drawdown)
+    pipe.regression_heads_ = regression_heads
+    pipe.regression_target_columns_ = {
+        name: info["columns"] for name, info in regression_heads.items()
+    }
 
-    expected_return = float(np.mean(exp_returns)) if exp_returns else 0.0
-    drawdown = float(np.mean(drawdowns)) if drawdowns else 0.0
-    reports["expected_return"] = expected_return
-    reports["max_drawdown"] = drawdown
-    try:  # pragma: no cover - mlflow optional
-        mlflow.log_metric("expected_return", expected_return)
-        mlflow.log_metric("max_drawdown", drawdown)
-    except Exception:
-        pass
-
-    # Optional weighted objective
-    weights = cfg.get("multi_objective_weights") if cfg else None
-    if weights:
-        agg_metrics = TradeMetrics(
-            f1=reports["aggregate_f1"],
-            expected_return=expected_return,
-            drawdown=drawdown,
-        )
-        score = mo_weighted_sum(agg_metrics, weights)
-        reports["multi_objective_score"] = score
+    if rmse_scores:
+        reports["aggregate_rmse"] = float(np.mean(rmse_scores))
         try:  # pragma: no cover - mlflow optional
-            mlflow.log_param("multi_objective_weights", json.dumps(weights))
-            mlflow.log_metric("expected_return", expected_return)
-            mlflow.log_metric("max_drawdown", drawdown)
-            mlflow.log_metric("multi_objective_score", score)
+            mlflow.log_metric("aggregate_rmse", reports["aggregate_rmse"])
+        except Exception:
+            pass
+    if abs_rmse:
+        reports["aggregate_abs_return_rmse"] = float(np.mean(abs_rmse))
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric(
+                "aggregate_abs_return_rmse", reports["aggregate_abs_return_rmse"]
+            )
+        except Exception:
+            pass
+    if vol_rmse:
+        reports["aggregate_volatility_rmse"] = float(np.mean(vol_rmse))
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric(
+                "aggregate_volatility_rmse", reports["aggregate_volatility_rmse"]
+            )
         except Exception:
             pass
 
-    if ind_desc is not None:
-        from features import auto_indicators
-
-        auto_indicators.persist(
-            ind_desc,
-            {"aggregate_f1": reports.get("aggregate_f1", 0.0)},
-            registry_path=registry_path or auto_indicators.REGISTRY_PATH,
-        )
-
-    _maybe_evolve_on_degradation(
-        reports.get("aggregate_f1", 0.0),
-        baseline_metric,
-        X,
-        y.iloc[:, 0],
-        threshold=degradation,
-        path=evolve_path,
-    )
-    return pipe, reports
 
 
 def make_focal_loss(alpha: float = 0.25, gamma: float = 2.0):
@@ -929,6 +858,11 @@ def main(
     df = pd.concat([df, labels], axis=1)
     y = labels
     label_cols = [c for c in labels.columns if c.startswith("direction_")]
+    abs_label_cols = [c for c in labels.columns if c.startswith("abs_return_")]
+    vol_label_cols = [c for c in labels.columns if c.startswith("volatility_")]
+    use_multi_task_heads = bool(cfg.get("use_multi_task_heads", True))
+    if not abs_label_cols and not vol_label_cols:
+        use_multi_task_heads = bool(cfg.get("use_multi_task_heads", False))
     sel_target = labels[label_cols[0]] if label_cols else labels.iloc[:, 0]
     features = select_features(df[features], sel_target)
     for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"]:
@@ -1344,52 +1278,113 @@ def main(
                     ignore_index=True,
                 )
 
-        steps: list[tuple[str, object]] = []
-        if cfg.get("use_scaler", True):
-            steps.append(("scaler", FeatureScaler()))
-        clf_params = {
-            "n_estimators": 200,
-            "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
-            "random_state": seed,
-            **_lgbm_params(cfg),
-        }
-        if use_focal:
-            clf_params["objective"] = "None"
-        steps.append(("clf", LGBMClassifier(**clf_params)))
-        pipe = Pipeline(steps)
-        _register_clf(pipe.named_steps["clf"])
-
-        fit_params: dict[str, object] = {"clf__eval_set": [(X_val, y_val)]}
-        esr = cfg.get("early_stopping_rounds", 50)
-        if esr:
-            fit_params["clf__early_stopping_rounds"] = esr
-        if donor_booster is not None:
-            fit_params["clf__init_model"] = donor_booster
-        dq_w = dq_score_samples(X_train)
-        y_train_arr = (
-            y_train[label_cols[0]].to_numpy()
-            if label_cols
-            else y_train.iloc[:, 0].to_numpy()
+        if use_multi_task_heads:
+            steps = []
+            if cfg.get("use_scaler", True):
+                steps.append(("scaler", FeatureScaler()))
+            hidden_default = 32
+            if isinstance(X_train, pd.DataFrame):
+                hidden_default = max(16, len(X_train.columns) // 2 or 16)
+            head_cfg = {
+                "classification_targets": label_cols,
+                "abs_targets": abs_label_cols,
+                "volatility_targets": vol_label_cols,
+                "hidden_dim": int(cfg.get("head_hidden_dim", hidden_default)),
+                "learning_rate": float(cfg.get("head_learning_rate", 0.01)),
+                "epochs": int(cfg.get("head_epochs", 200)),
+                "classification_weight": float(cfg.get("head_classification_weight", 1.0)),
+                "abs_weight": float(cfg.get("head_abs_weight", 1.0)),
+                "volatility_weight": float(cfg.get("head_volatility_weight", 1.0)),
+                "l2": float(cfg.get("head_l2", 0.0)),
+                "random_state": seed,
+            }
+            head = MultiTaskHeadEstimator(**head_cfg)
+            steps.append(("multi_task", head))
+            pipe = Pipeline(steps)
+            fit_params = {}
+            if sw is not None:
+                fit_params["multi_task__sample_weight"] = sw
+            pipe.fit(X_train, y_train, **fit_params)
+            if len(pipe.steps) > 1:
+                X_val_shared = pipe[:-1].transform(X_val)
+            else:
+                X_val_shared = X_val
+            if label_cols:
+                class_probs = pipe.named_steps["multi_task"].predict_classification_proba(
+                    X_val_shared
+                )
+                class_probs = np.asarray(class_probs, dtype=float)
+                if class_probs.ndim == 1:
+                    class_probs = class_probs.reshape(-1, 1)
+                probs = class_probs[:, 0]
+                val_probs = np.column_stack([1 - probs, probs])
+            else:
+                probs = np.zeros(len(X_val), dtype=float)
+                val_probs = np.column_stack([1 - probs, probs])
+            pipe.classification_targets_ = list(label_cols)
+            pipe.abs_return_targets_ = list(abs_label_cols)
+            pipe.volatility_targets_ = list(vol_label_cols)
+            pipe.regression_feature_columns_ = (
+                list(X_train.columns) if isinstance(X_train, pd.DataFrame) else None
+            )
+            pipe.head_config_ = dict(pipe.named_steps["multi_task"].head_config_)
+            pipe.primary_label_ = pipe.named_steps["multi_task"].primary_label_
+            pipe.classification_thresholds_ = dict(getattr(pipe.named_steps["multi_task"], "thresholds_", {}))
+            heads = {}
+            if abs_label_cols:
+                heads["abs_return"] = {"type": "multi_task", "columns": list(abs_label_cols)}
+            if vol_label_cols:
+                heads["volatility"] = {"type": "multi_task", "columns": list(vol_label_cols)}
+            pipe.regression_heads_ = heads
+            pipe.regression_target_columns_ = {k: v["columns"] for k, v in heads.items()}
+        else:
+            steps = []
+            if cfg.get("use_scaler", True):
+                steps.append(("scaler", FeatureScaler()))
+            clf_params = {
+                "n_estimators": 200,
+                "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+                "random_state": seed,
+                **_lgbm_params(cfg),
+            }
+            if use_focal:
+                clf_params["objective"] = "None"
+            steps.append(("clf", LGBMClassifier(**clf_params)))
+            pipe = Pipeline(steps)
+            if "clf" in pipe.named_steps:
+                _register_clf(pipe.named_steps["clf"])
+            fit_params = {"clf__eval_set": [(X_val, y_val)]}
+            esr = cfg.get("early_stopping_rounds", 50)
+            if esr:
+                fit_params["clf__early_stopping_rounds"] = esr
+            if donor_booster is not None:
+                fit_params["clf__init_model"] = donor_booster
+            if sw is not None:
+                fit_params["clf__sample_weight"] = sw
+            if use_focal:
+                fit_params["clf__fobj"] = fobj
+                fit_params["clf__feval"] = feval
+            pipe.fit(X_train, y_train, **fit_params)
+            val_probs = pipe.predict_proba(X_val)
+            probs = val_probs[:, 1]
+        pipe.head_config_ = getattr(pipe, "head_config_", {})
+        pipe.classification_thresholds_ = getattr(
+            pipe, "classification_thresholds_", {}
         )
-        sw = _combined_sample_weight(
-            y_train_arr,
-            timestamps[train_idx],
-            t_max,
-            balance,
-            half_life,
-            dq_w,
+        pipe.regression_heads_ = getattr(pipe, "regression_heads_", {})
+        pipe.regression_target_columns_ = getattr(
+            pipe, "regression_target_columns_", {}
         )
-        if sw is not None:
-            fit_params["clf__sample_weight"] = sw
-        if use_focal:
-            fit_params["clf__fobj"] = fobj
-            fit_params["clf__feval"] = feval
-        pipe.fit(X_train, y_train, **fit_params)
-
-        val_probs = pipe.predict_proba(X_val)
+        if not hasattr(pipe, "regression_feature_columns_"):
+            pipe.regression_feature_columns_ = (
+                list(X_train.columns) if isinstance(X_train, pd.DataFrame) else None
+            )
+        if not hasattr(pipe, "classification_targets_"):
+            pipe.classification_targets_ = list(label_cols)
+        if not hasattr(pipe, "primary_label_"):
+            pipe.primary_label_ = label_cols[0] if label_cols else None
         al_queue.push_low_confidence(X_val.index, val_probs, threshold=al_threshold)
         logger.info("Active learning queue size: %d", len(al_queue))
-        probs = val_probs[:, 1]
         for feat_row, pred in zip(X_val[features].to_dict("records"), probs):
             drift_monitor.update(feat_row, float(pred))
         regimes_val = X_val["market_regime"].values
