@@ -242,6 +242,58 @@ def stochastic(
     return float(k.iloc[-1]), float(d.iloc[-1])
 
 
+def vwap(
+    price: Sequence[float] | pd.Series,
+    volume: Sequence[float] | pd.Series,
+    group: Sequence[object] | pd.Series | None = None,
+) -> float | pd.Series:
+    """Volume weighted average price.
+
+    Parameters
+    ----------
+    price, volume:
+        Price and volume data.  When Series are provided, the indices are
+        aligned prior to computation.
+    group:
+        Optional grouping labels used to compute grouped cumulative VWAP,
+        e.g. session or day buckets.  When omitted, the cumulative VWAP over
+        the entire series is returned.
+
+    Returns
+    -------
+    float or pandas.Series
+        VWAP values aligned to ``price``.  A scalar is returned when plain
+        sequences are supplied for all inputs, otherwise a Series is
+        produced.
+    """
+
+    price_s = _to_series(price)
+    volume_s = _to_series(volume)
+    if len(price_s) != len(volume_s):
+        raise ValueError("price and volume must share the same length")
+
+    if group is None:
+        pv = (price_s * volume_s).cumsum()
+        vv = volume_s.cumsum()
+    else:
+        if isinstance(group, pd.Series):
+            group_s = group
+            if not group_s.index.equals(price_s.index):
+                group_s = group_s.reindex(price_s.index)
+        else:
+            labels = list(group)
+            if len(labels) != len(price_s):
+                raise ValueError("group labels must match price length")
+            group_s = pd.Series(labels, index=price_s.index)
+        pv = (price_s * volume_s).groupby(group_s).cumsum()
+        vv = volume_s.groupby(group_s).cumsum()
+
+    result = pv / vv.replace(0, np.nan)
+    if isinstance(price, pd.Series) or isinstance(volume, pd.Series) or isinstance(group, pd.Series):
+        return result
+    return float(result.iloc[-1])
+
+
 __all__ = [
     "rsi",
     "atr",
@@ -250,4 +302,5 @@ __all__ = [
     "ema",
     "macd",
     "stochastic",
+    "vwap",
 ]
