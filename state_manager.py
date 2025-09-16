@@ -2,16 +2,65 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import copy
+import json
 from typing import Any, Tuple, Callable
 from datetime import datetime
 import hashlib
 import shutil
 import logging
 import threading
+from collections.abc import Sequence
 import joblib
-from filelock import FileLock
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+try:
+    from filelock import FileLock
+except ImportError:  # pragma: no cover - lightweight fallback for tests
+    class FileLock:  # type: ignore[misc]
+        """Minimal file lock compatible with ``filelock.FileLock``."""
+
+        def __init__(self, filename: str) -> None:
+            self.filename = filename
+            self._lock = threading.Lock()
+
+        def acquire(self, *_: Any, **__: Any) -> None:
+            self._lock.acquire()
+
+        def release(self, *_: Any, **__: Any) -> None:
+            self._lock.release()
+
+        def __enter__(self) -> "FileLock":
+            self.acquire()
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            self.release()
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+except ImportError:  # pragma: no cover - watchdog is optional in tests
+    class FileSystemEventHandler:  # type: ignore[misc]
+        """Fallback handler used when watchdog is unavailable."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
+            pass
+
+    class Observer:  # type: ignore[misc]
+        """No-op observer used in environments without watchdog."""
+
+        def __init__(self) -> None:
+            self.daemon = False
+
+        def schedule(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def join(self, *_: Any) -> None:
+            pass
 from crypto_utils import _load_key, encrypt, decrypt
 from utils import load_config
 from config_models import AppConfig, ConfigError
@@ -304,17 +353,181 @@ def legacy_runtime_state_exists() -> bool:
     return _STATE_FILE.exists()
 
 
+def _parse_timestamp(ts: Any) -> datetime | None:
+    """Return a ``datetime`` parsed from ``ts`` if possible."""
+
+    if ts in (None, ""):
+        return None
+    try:
+        text = str(ts)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _select_timestamp(primary: Any, secondary: Any) -> str:
+    """Return the most recent timestamp between ``primary`` and ``secondary``."""
+
+    primary_dt = _parse_timestamp(primary)
+    secondary_dt = _parse_timestamp(secondary)
+    if primary_dt and secondary_dt:
+        return str(primary if primary_dt >= secondary_dt else secondary)
+    if primary_dt:
+        return str(primary)
+    if secondary_dt:
+        return str(secondary)
+    for candidate in (primary, secondary):
+        if candidate not in (None, ""):
+            return str(candidate)
+    return ""
+
+
+def _json_default(obj: Any) -> str:
+    """Fallback serialiser used when deduplicating complex objects."""
+
+    return repr(obj)
+
+
+def _sequence_marker(item: Any) -> str:
+    """Return a stable marker for ``item`` used during deduplication."""
+
+    if isinstance(item, (str, int, float, bool)) or item is None:
+        return f"scalar:{item!r}"
+    try:
+        return "json:" + json.dumps(item, sort_keys=True, default=_json_default)
+    except TypeError:  # pragma: no cover - fallback when json fails
+        return f"repr:{repr(item)}"
+
+
+def _iter_sequence(value: Any) -> list[Any]:
+    """Normalise ``value`` to a list for merging sequences."""
+
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return list(value)
+    return [value]
+
+
+def _merge_sequences(primary: Any, secondary: Any) -> list[Any]:
+    """Merge two sequences while preserving order and removing duplicates."""
+
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for source in (_iter_sequence(primary), _iter_sequence(secondary)):
+        for item in source:
+            marker = _sequence_marker(item)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            merged.append(copy.deepcopy(item))
+    return merged
+
+
+def _merge_mappings(primary: Any, secondary: Any) -> dict[Any, Any]:
+    """Merge mapping-like objects with ``primary`` taking precedence."""
+
+    merged: dict[Any, Any] = {}
+    if isinstance(secondary, dict):
+        for key, value in secondary.items():
+            merged[key] = copy.deepcopy(value)
+    if isinstance(primary, dict):
+        for key, value in primary.items():
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_runtime_states(
+    new_state: dict[str, Any], legacy_state: dict[str, Any]
+) -> dict[str, Any]:
+    """Combine existing and legacy runtime states into a unified mapping."""
+
+    if not isinstance(legacy_state, dict):
+        raise ValueError("Legacy runtime state must be a mapping")
+    if not isinstance(new_state, dict):
+        new_state = {}
+    merged: dict[str, Any] = {}
+    for source in (legacy_state, new_state):
+        for key, value in source.items():
+            merged[key] = copy.deepcopy(value)
+    merged["last_timestamp"] = _select_timestamp(
+        new_state.get("last_timestamp"), legacy_state.get("last_timestamp")
+    )
+    merged["open_positions"] = _merge_sequences(
+        new_state.get("open_positions"), legacy_state.get("open_positions")
+    )
+    merged["model_versions"] = _merge_sequences(
+        new_state.get("model_versions"), legacy_state.get("model_versions")
+    )
+    merged["model_weights"] = _merge_mappings(
+        new_state.get("model_weights"), legacy_state.get("model_weights")
+    )
+    merged["feature_scalers"] = _merge_mappings(
+        new_state.get("feature_scalers"), legacy_state.get("feature_scalers")
+    )
+    merged.setdefault("last_timestamp", "")
+    merged.setdefault("open_positions", [])
+    merged.setdefault("model_versions", [])
+    merged.setdefault("model_weights", {})
+    merged.setdefault("feature_scalers", {})
+    return merged
+
+
 def migrate_runtime_state(account_id: str) -> Path:
-    """Move legacy runtime state to the account-specific file."""
+    """Move or merge legacy runtime state into the account-specific file."""
 
     new_path = _runtime_state_file(account_id)
-    if new_path.exists():
-        return new_path
-    if not _STATE_FILE.exists():
+    legacy_path = _STATE_FILE
+    if not legacy_path.exists():
+        if new_path.exists():
+            return new_path
         raise FileNotFoundError("Legacy runtime state not found")
     _ensure_state_dir()
-    with _lock(_STATE_FILE), _lock(new_path):
-        shutil.move(_STATE_FILE, new_path)
+    with _lock(legacy_path), _lock(new_path):
+        if new_path.exists():
+            try:
+                legacy_state: dict[str, Any] = joblib.load(legacy_path)
+            except Exception as exc:  # pragma: no cover - corrupted legacy state
+                raise RuntimeError("Failed to load legacy runtime state") from exc
+            try:
+                new_state_raw = joblib.load(new_path)
+                if not isinstance(new_state_raw, dict):
+                    logger.warning(
+                        "Existing runtime state %s is not a mapping; ignoring its contents",
+                        new_path,
+                    )
+                    new_state: dict[str, Any] = {}
+                else:
+                    new_state = new_state_raw
+            except Exception:
+                logger.exception(
+                    "Existing runtime state %s could not be loaded; replacing with legacy data",
+                    new_path,
+                )
+                new_state = {}
+            merged_state = _merge_runtime_states(new_state, legacy_state)
+            tmp_path = new_path.with_name(new_path.name + ".tmp")
+            try:
+                joblib.dump(merged_state, tmp_path)
+                os.replace(tmp_path, new_path)
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)
+            try:
+                legacy_path.unlink()
+            except FileNotFoundError:  # pragma: no cover - already moved
+                pass
+            logger.info("Merged legacy runtime state into %s", new_path)
+        else:
+            shutil.move(legacy_path, new_path)
+            logger.info("Migrated legacy runtime state to %s", new_path)
     return new_path
 
 
