@@ -216,6 +216,28 @@ def load_models(paths, versions=None, return_meta: bool = False):
                     except FileNotFoundError:
                         meta_model = None
             models.append(m)
+            training_cfg = meta.get("training_config", {})
+            if hasattr(training_cfg, "model_dump"):
+                training_data = training_cfg.model_dump()
+            elif isinstance(training_cfg, Mapping):
+                training_data = dict(training_cfg)
+            else:
+                training_data = training_cfg or {}
+            model_type_meta = None
+            if isinstance(training_data, Mapping):
+                training_section = training_data.get("training")
+                if isinstance(training_section, Mapping):
+                    model_type_meta = training_section.get("model_type")
+                if model_type_meta is None:
+                    model_type_meta = training_data.get("model_type")
+                if model_type_meta is None:
+                    model_section = training_data.get("model")
+                    if isinstance(model_section, Mapping):
+                        raw_type = model_section.get("type")
+                        if raw_type == "cross_modal_transformer":
+                            model_type_meta = "cross_modal"
+            if model_type_meta:
+                setattr(m, "model_type_", str(model_type_meta).lower())
             if feature_list is None:
                 feature_list = meta.get("features") or meta.get(
                     "training_config", {}
@@ -643,13 +665,56 @@ def main():
     else:
         base_models: dict[str, Any] = {}
         if models:
+            cross_modal_models = [
+                mdl
+                for mdl in models
+                if getattr(mdl, "model_type_", "").lower() == "cross_modal"
+            ]
+            gbm_models = [
+                mdl
+                for mdl in models
+                if getattr(mdl, "model_type_", "").lower() != "cross_modal"
+            ]
 
-            def _gbm_predict(data: pd.DataFrame) -> np.ndarray:
-                return np.mean(
-                    [m.predict_proba(data[features])[:, 1] for m in models], axis=0
-                )
+            if gbm_models:
 
-            base_models["lightgbm"] = _gbm_predict
+                def _gbm_predict(data: pd.DataFrame) -> np.ndarray:
+                    preds: list[np.ndarray] = []
+                    for mdl in gbm_models:
+                        try:
+                            out = mdl.predict_proba(data[features])
+                        except Exception:  # pragma: no cover - best effort logging
+                            logger.exception("Gradient boosting prediction failed")
+                            continue
+                        arr = np.asarray(out)
+                        if arr.ndim == 2:
+                            arr = arr[:, -1]
+                        preds.append(arr)
+                    if not preds:
+                        return np.zeros(len(data))
+                    return np.mean(preds, axis=0)
+
+                base_models["lightgbm"] = _gbm_predict
+
+            if cross_modal_models:
+
+                def _cross_modal_predict(data: pd.DataFrame) -> np.ndarray:
+                    preds: list[np.ndarray] = []
+                    for mdl in cross_modal_models:
+                        try:
+                            out = mdl.predict_proba(data[features])
+                        except Exception:  # pragma: no cover - best effort logging
+                            logger.exception("Cross-modal prediction failed")
+                            continue
+                        arr = np.asarray(out)
+                        if arr.ndim == 2:
+                            arr = arr[:, -1]
+                        preds.append(arr)
+                    if not preds:
+                        return np.zeros(len(data))
+                    return np.mean(preds, axis=0)
+
+                base_models["cross_modal"] = _cross_modal_predict
 
         if cfg.get("use_meta_model", False):
             base_models["transformer"] = lambda d: meta_transformer_signals(

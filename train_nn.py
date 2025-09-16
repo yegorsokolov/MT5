@@ -32,7 +32,12 @@ from models.slimmable_network import SlimmableNetwork, select_width_multiplier
 from analysis.feature_selector import select_features
 from models.tft import QuantileLoss
 from models.cross_asset_transformer import CrossAssetTransformer
-from analysis.prob_calibration import ProbabilityCalibrator, log_reliability
+from models.cross_modal_classifier import CrossModalClassifier
+from analysis.prob_calibration import (
+    ProbabilityCalibrator,
+    log_reliability,
+    CalibratedModel,
+)
 from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
 from analysis.domain_adapter import DomainAdapter
@@ -449,6 +454,11 @@ def main(
             for col in price_window_cols + news_emb_cols:
                 if col not in features:
                     features.append(col)
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_param("model_type", "cross_modal" if use_cross_modal else "neural")
+        except Exception:
+            pass
+        cfg["model_type"] = "cross_modal" if use_cross_modal else "neural"
         model_cfg = cfg.get("model", {})
         use_tft = model_cfg.get("type") == "tft" and TIERS.get(tier, 0) >= TIERS["gpu"]
         if use_tft:
@@ -1213,6 +1223,10 @@ def main(
                                 xb = xb.to(device)
                                 xs = xs.to(device)
                                 xo = xo.to(device)
+                            elif use_cross_modal:
+                                xb, xn, yb = batch
+                                xb = xb.to(device)
+                                xn = xn.to(device)
                             else:
                                 xb, yb = batch
                                 xb = xb.to(device)
@@ -1223,17 +1237,18 @@ def main(
                                 else:
                                     if use_tft:
                                         preds = model(xb, static=xs, observed=xo)
+                                    elif use_cross_modal:
+                                        preds = model(xb, xn)
                                     else:
                                         preds = model(xb, code)
                             if isinstance(model, HierarchicalForecaster):
                                 prob = preds[:, 0]
                                 val_true.append(yb[:, 0].cpu().numpy())
                             else:
-                                prob = (
-                                    preds[:, len(quantiles) // 2]
-                                    if use_tft
-                                    else preds.squeeze()
-                                )
+                                if use_tft:
+                                    prob = preds[:, len(quantiles) // 2]
+                                else:
+                                    prob = preds.squeeze()
                                 val_true.append(yb.cpu().numpy())
                             val_probs.append(prob.cpu().numpy())
                 if val_probs:
@@ -1322,7 +1337,47 @@ def main(
             mlflow.log_artifact(str(model_path))
             saved_state = joblib.load(model_path)
             base_model = model.module if isinstance(model, DDP) else model
-            if isinstance(base_model, SlimmableNetwork):
+            if use_cross_modal:
+                classifier = CrossModalClassifier(
+                    d_model=int(cfg.get("d_model", 64)),
+                    nhead=int(cfg.get("nhead", 4)),
+                    num_layers=int(cfg.get("num_layers", 2)),
+                    dropout=float(cfg.get("dropout", 0.1)),
+                    time_encoding=bool(cfg.get("time_encoding", False)),
+                )
+                price_cols_meta = cfg.get("model", {}).get("price_columns", [])
+                news_cols_meta = cfg.get("model", {}).get("news_columns", [])
+                classifier.price_columns_ = list(
+                    modal_price_cols or price_cols_meta
+                )
+                classifier.news_columns_ = list(modal_news_cols or news_cols_meta)
+                classifier.price_dim_ = int(cfg.get("model", {}).get("price_dim", price_dim or 1))
+                classifier.news_dim_ = int(cfg.get("model", {}).get("news_dim", news_dim or 1))
+                classifier.feature_names_in_ = np.asarray(features)
+                classifier.constant_prob_ = 0.5
+                classifier.load_state_dict(saved_state)
+                model_obj: Any = classifier
+                if calibrator is not None:
+                    model_obj = CalibratedModel(classifier, calibrator)
+                perf: dict[str, Any] = {
+                    "val_loss": best_val_loss,
+                    "test_accuracy": acc,
+                }
+                regime_thr = getattr(calibrator, "regime_thresholds", None)
+                if regime_thr:
+                    perf["regime_thresholds"] = {
+                        int(k): float(v) for k, v in regime_thr.items()
+                    }
+                training_cfg = dict(cfg)
+                training_cfg["model_type"] = "cross_modal"
+                version_id = model_store.save_model(
+                    model_obj,
+                    training_cfg,
+                    perf,
+                    architecture_history=architecture_history,
+                    features=features,
+                )
+            elif isinstance(base_model, SlimmableNetwork):
                 version_id = model_store.save_model(
                     saved_state,
                     {**cfg, "width_mult": base_model.active_multiplier},
@@ -1343,7 +1398,7 @@ def main(
                         architecture_history=architecture_history,
                         features=features,
                     )
-            else:
+            elif not use_cross_modal:
                 version_id = model_store.save_model(
                     saved_state,
                     cfg,

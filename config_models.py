@@ -101,6 +101,10 @@ class TrainingConfig(BaseModel):
     """Training-related configuration."""
 
     seed: int = 42
+    model_type: str = Field(
+        "lgbm",
+        description="Primary model architecture to train (lgbm, neural, cross_modal)",
+    )
     use_pseudo_labels: bool = False
     use_focal_loss: bool = False
     focal_alpha: float = Field(0.25, ge=0.0)
@@ -129,6 +133,19 @@ class TrainingConfig(BaseModel):
         if drift_fields and "drift" not in data:
             data["drift"] = drift_fields
         return data
+
+    @field_validator("model_type", mode="before")
+    @classmethod
+    def _validate_model_type(cls, value: Any) -> str:
+        if value is None:
+            return "lgbm"
+        mt = str(value).lower()
+        allowed = {"lgbm", "neural", "cross_modal"}
+        if mt not in allowed:
+            raise ValueError(
+                f"model_type must be one of {sorted(allowed)}, received '{value}'"
+            )
+        return mt
 
 
 class FeaturesConfig(BaseModel):
@@ -263,6 +280,12 @@ class AppConfig(BaseModel):
         _move_section("features", FeaturesConfig)
         _move_section("strategy", StrategyConfig)
         _move_section("services", ServicesConfig)
+        if "model_type" in data:
+            training_section = data.setdefault("training", {})
+            if isinstance(training_section, Mapping):
+                training_section = dict(training_section)
+            training_section.setdefault("model_type", data.pop("model_type"))
+            data["training"] = training_section
         return data
 
     def get(self, key: str, default: Any | None = None) -> Any:
