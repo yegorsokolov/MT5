@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from analysis.session_features import classify_session
+from indicators.common import vwap as calc_vwap
 
 
 def compute(df: pd.DataFrame, anchors=("session", "day")) -> pd.DataFrame:
@@ -43,16 +44,12 @@ def compute(df: pd.DataFrame, anchors=("session", "day")) -> pd.DataFrame:
 
     if "session" in anchors:
         sessions = times.map(classify_session).fillna("other")
-        group = [times.dt.date, sessions]
-        pv = (price * volume).groupby(group).cumsum()
-        vv = volume.groupby(group).cumsum()
-        df["vwap_session"] = pv / vv
+        group = list(zip(times.dt.date, sessions))
+        df["vwap_session"] = calc_vwap(price, volume, group)
 
     if "day" in anchors:
         day_group = times.dt.date
-        pv = (price * volume).groupby(day_group).cumsum()
-        vv = volume.groupby(day_group).cumsum()
-        df["vwap_day"] = pv / vv
+        df["vwap_day"] = calc_vwap(price, volume, day_group)
 
     if {"session", "day"}.issubset(anchors):
         df["vwap_cross"] = np.sign(df["vwap_session"] - df["vwap_day"]).fillna(0).astype(int)
