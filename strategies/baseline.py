@@ -96,26 +96,41 @@ class IndicatorBundle:
     def vector_length(self) -> Optional[int]:
         """Return the vector length when any field contains array data."""
 
-        length: Optional[int] = None
-        for field in fields(self):
-            if field.name == "evolved":
-                value = getattr(self, field.name)
-                if value:
-                    raise NotImplementedError("Vectorized evolved indicators are not supported")
-                continue
-            value = getattr(self, field.name)
+        def _value_length(value: IndicatorValue) -> Optional[int]:
             if isinstance(value, pd.Series):
-                curr_len = len(value)
-            elif isinstance(value, np.ndarray):
-                curr_len = int(value.size)
-            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-                curr_len = len(value)
-            else:
-                continue
+                return len(value)
+            if isinstance(value, np.ndarray):
+                if value.ndim == 0:
+                    return None
+                return len(value)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                return len(value)
+            return None
+
+        def _update_length(value: IndicatorValue) -> None:
+            nonlocal length
+            curr_len = _value_length(value)
+            if curr_len is None:
+                return
             if length is None:
                 length = curr_len
             elif curr_len != length:
                 raise ValueError("Indicator arrays must share the same length")
+
+        length: Optional[int] = None
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if field.name == "evolved":
+                if not value:
+                    continue
+                for evolved_value in value.values():
+                    if evolved_value is None:
+                        continue
+                    _update_length(evolved_value)
+                continue
+            if value is None:
+                continue
+            _update_length(value)
         return length
 
 
@@ -469,6 +484,9 @@ class BaselineStrategy:
         """
 
         price_series = self._ensure_price_series(price)
+        vector_length = indicators.vector_length()
+        if vector_length is not None and vector_length != len(price_series):
+            raise ValueError("Price series length must match indicator arrays")
         try:
             return self._batch_vectorized(
                 price_series,
@@ -525,11 +543,8 @@ class BaselineStrategy:
             raise NotImplementedError("Session-specific position limits are not supported in vectorized mode")
         if self.default_position_limit != 1:
             raise NotImplementedError("Vectorized mode currently assumes a unit position limit")
-        if indicators.evolved:
-            raise NotImplementedError("Vectorized mode does not yet support evolved indicators")
-
         index = price_series.index
-        series_map = self._prepare_indicator_series(price_series, indicators)
+        series_map, _ = self._prepare_indicator_series(price_series, indicators)
 
         short_ma = series_map["short_ma"]
         long_ma = series_map["long_ma"]
@@ -726,7 +741,7 @@ class BaselineStrategy:
                 "Sequential fallback does not support cross confirmation data"
             )
 
-        series_map = self._prepare_indicator_series(price_series, indicators)
+        series_map, evolved_series = self._prepare_indicator_series(price_series, indicators)
         signals: list[float] = []
         long_stops: list[float] = []
         short_stops: list[float] = []
@@ -736,6 +751,16 @@ class BaselineStrategy:
             return None if pd.isna(value) else float(value)
 
         for i, price_val in enumerate(price_series):
+            evolved_values: Optional[Dict[str, IndicatorValue]] = None
+            if evolved_series:
+                temp: Dict[str, IndicatorValue] = {}
+                for name, series in evolved_series.items():
+                    value = series.iat[i]
+                    if pd.isna(value):
+                        continue
+                    temp[name] = float(value)
+                if temp:
+                    evolved_values = temp
             bundle = IndicatorBundle(
                 high=float(series_map["high"].iat[i]),
                 low=float(series_map["low"].iat[i]),
@@ -764,6 +789,7 @@ class BaselineStrategy:
                 vae_regime=_opt(series_map["vae_regime"], i),
                 microprice_delta=_opt(series_map["microprice_delta"], i),
                 liq_exhaustion=_opt(series_map["liq_exhaustion"], i),
+                evolved=evolved_values,
             )
             sig = strat.update(price_val, bundle)
             signals.append(sig)
@@ -836,7 +862,7 @@ class BaselineStrategy:
         self,
         price_series: pd.Series,
         indicators: IndicatorBundle,
-    ) -> Dict[str, pd.Series]:
+    ) -> tuple[Dict[str, pd.Series], Dict[str, pd.Series]]:
         index = price_series.index
         nan_series = pd.Series(np.nan, index=index, dtype=float)
 
@@ -919,7 +945,14 @@ class BaselineStrategy:
             "liq_exhaustion": optional_series(indicators.liq_exhaustion, "liq_exhaustion"),
         }
 
-        return series_map
+        evolved_series: Dict[str, pd.Series] = {}
+        if indicators.evolved:
+            for name, value in indicators.evolved.items():
+                if value is None:
+                    continue
+                evolved_series[name] = ensure_series(value, name)
+
+        return series_map, evolved_series
 
     # ------------------------------------------------------------------
     # Main update routine
