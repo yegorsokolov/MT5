@@ -399,6 +399,8 @@ class BaselineStrategy:
         self._prev_long = 0.0
         self._prev_obv: Optional[float] = None
         self._prev_cvd: Optional[float] = None
+        self.last_confidence = 0.0
+        self._raw_confidence = 0.0
 
         # ATR state
         self._highs: Deque[float] = deque(maxlen=atr_window + 1)
@@ -466,7 +468,7 @@ class BaselineStrategy:
         *,
         session: Optional[str] = None,
         cross_confirm: Optional[Dict[str, Sequence[float] | pd.Series]] = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Vectorised evaluation of the strategy over historical data.
 
         Parameters
@@ -509,8 +511,8 @@ class BaselineStrategy:
         *,
         session: Optional[str] = None,
         cross_confirm: Optional[Dict[str, Sequence[float] | pd.Series]] = None,
-    ) -> tuple[pd.Series, pd.Series, pd.Series]:
-        signals, long_stops, short_stops = self.batch_update(
+    ) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+        signals, long_stops, short_stops, confidences = self.batch_update(
             price,
             indicators,
             session=session,
@@ -523,6 +525,7 @@ class BaselineStrategy:
             pd.Series(signals, index=index, dtype=float),
             pd.Series(long_stops, index=index, dtype=float),
             pd.Series(short_stops, index=index, dtype=float),
+            pd.Series(confidences, index=index, dtype=float),
         )
 
     def _batch_vectorized(
@@ -580,6 +583,11 @@ class BaselineStrategy:
         )
         valid = (~short_ma.isna()) & (~long_ma.isna()) & (~atr_series.isna())
         signal = raw_signal.where(valid, 0)
+        atr_safe = atr_series.replace(0.0, np.nan)
+        ma_spread = short_ma - long_ma
+        confidence_series = ma_spread.divide(atr_safe)
+        confidence_series = confidence_series.replace([np.inf, -np.inf], np.nan)
+        confidence_series = confidence_series.where(valid, 0.0)
 
         # High timeframe filters
         htf_ma = series_map["htf_ma"]
@@ -664,6 +672,8 @@ class BaselineStrategy:
                 mask = (signal != 0) & series.notna() & (series != signal)
                 signal = signal.where(~mask, 0)
 
+        confidence_series = confidence_series.where(signal != 0, 0.0).fillna(0.0)
+
         if not _NUMBA_AVAILABLE:
             raise NotImplementedError(
                 "Numba acceleration unavailable for vectorized batch processing"
@@ -717,13 +727,21 @@ class BaselineStrategy:
             float(self.risk_profile.drawdown_limit),
         )
 
+        confidence_arr = np.ascontiguousarray(
+            confidence_series.to_numpy(dtype=np.float64, copy=False)
+        )
+        confidence_arr[signal_arr == 0] = 0.0
+        confidence_arr[~np.isfinite(confidence_arr)] = 0.0
+        confidence_arr[signals == 0.0] = 0.0
+
         rp = self.risk_profile
         if rp.tolerance != 1.0 or rp.leverage_cap != 1.0:
             signals = signals * rp.tolerance
             if rp.leverage_cap > 0:
                 np.clip(signals, -rp.leverage_cap, rp.leverage_cap, out=signals)
+        confidence_arr[signals == 0.0] = 0.0
 
-        return signals, long_stop, short_stop
+        return signals, long_stop, short_stop, confidence_arr
 
     def _batch_sequential(
         self,
@@ -732,7 +750,7 @@ class BaselineStrategy:
         *,
         session: Optional[str],
         cross_confirm: Optional[Dict[str, Sequence[float] | pd.Series]],
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         strat = self._clone_for_batch()
         if session is not None:
             strat.set_session(session)
@@ -745,6 +763,7 @@ class BaselineStrategy:
         signals: list[float] = []
         long_stops: list[float] = []
         short_stops: list[float] = []
+        confidences: list[float] = []
 
         def _opt(series: pd.Series, idx: int) -> float | None:
             value = series.iat[idx]
@@ -814,11 +833,13 @@ class BaselineStrategy:
 
             long_stops.append(long_stop)
             short_stops.append(short_stop)
+            confidences.append(strat.last_confidence)
 
         return (
             np.asarray(signals, dtype=float),
             np.asarray(long_stops, dtype=float),
             np.asarray(short_stops, dtype=float),
+            np.asarray(confidences, dtype=float),
         )
 
     def _clone_for_batch(self) -> "BaselineStrategy":
@@ -980,12 +1001,19 @@ class BaselineStrategy:
         if self.use_kalman_smoothing:
             price, self._kf_state = smooth_price(price, self._kf_state)
 
-        signal = self._compute_signal(price, indicators)
-        signal = self._apply_filters(signal, indicators, price, cross_confirm)
-        sig = self._manage_position(
-            raw_price, signal, indicators.regime, indicators.vae_regime
+        raw_signal = self._compute_signal(price, indicators)
+        filtered_signal = self._apply_filters(
+            raw_signal, indicators, price, cross_confirm
         )
-        return self._apply_risk(sig)
+        managed_signal = self._manage_position(
+            raw_price, filtered_signal, indicators.regime, indicators.vae_regime
+        )
+        final_signal = self._apply_risk(managed_signal)
+        if raw_signal != 0 and final_signal != 0:
+            self.last_confidence = float(self._raw_confidence)
+        else:
+            self.last_confidence = 0.0
+        return final_signal
 
     # ------------------------------------------------------------------
     # Signal computation helpers
@@ -994,6 +1022,7 @@ class BaselineStrategy:
         high = ind.high if ind.high is not None else price
         low = ind.low if ind.low is not None else price
 
+        self._raw_confidence = 0.0
         self._short.append(price)
         self._long.append(price)
         self._highs.append(high)
@@ -1035,6 +1064,13 @@ class BaselineStrategy:
             long_ma_val = ind.long_ma
             upper_band = ind.boll_upper
             lower_band = ind.boll_lower
+
+        atr_val = self.latest_atr
+        if atr_val is None or not np.isfinite(atr_val) or atr_val == 0:
+            confidence = 0.0
+        else:
+            confidence = (float(short_ma_val) - float(long_ma_val)) / float(atr_val)
+        self._raw_confidence = float(confidence)
 
         if ind.rsi is not None:
             rsi_val = ind.rsi
