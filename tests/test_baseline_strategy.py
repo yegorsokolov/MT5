@@ -243,7 +243,7 @@ def test_batch_update_vectorized_evolved_features_end_to_end(tmp_path):
         trailing_take_profit_pct=0.03,
     )
     strat_vectorized = BaselineStrategy(**params)
-    vec_signal, vec_long, vec_short = strat_vectorized.batch_update(
+    vec_signal, vec_long, vec_short, vec_conf = strat_vectorized.batch_update(
         df_evolved["Close"], bundle
     )
 
@@ -251,6 +251,7 @@ def test_batch_update_vectorized_evolved_features_end_to_end(tmp_path):
     seq_signal: list[float] = []
     seq_long: list[float] = []
     seq_short: list[float] = []
+    seq_conf: list[float] = []
     for row in df_evolved.itertuples():
         ind = IndicatorBundle(
             high=row.High,
@@ -301,10 +302,12 @@ def test_batch_update_vectorized_evolved_features_end_to_end(tmp_path):
 
         seq_long.append(long_stop)
         seq_short.append(short_stop)
+        seq_conf.append(strat_sequential.last_confidence)
 
     np.testing.assert_allclose(vec_signal, np.asarray(seq_signal), equal_nan=True)
     np.testing.assert_allclose(vec_long, np.asarray(seq_long), equal_nan=True)
     np.testing.assert_allclose(vec_short, np.asarray(seq_short), equal_nan=True)
+    np.testing.assert_allclose(vec_conf, np.asarray(seq_conf), equal_nan=True)
 
     gating = df_evolved["gate"].astype(float)
     price_returns = df_evolved["Close"].pct_change().fillna(0.0)
