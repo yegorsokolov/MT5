@@ -9,6 +9,7 @@ import joblib
 import pandas as pd
 from state_manager import (
     load_runtime_state,
+    migrate_runtime_state,
     save_runtime_state,
     legacy_runtime_state_exists,
 )
@@ -507,13 +508,17 @@ def main():
     # Reload previous runtime state if available
     state = load_runtime_state(account_id=account_id)
     if account_id and state is None and legacy_runtime_state_exists():
-        logger.warning(
-            "Legacy runtime state detected but no state for account %s. "
-            "Run `python -c \"from state_manager import migrate_runtime_state; "
-            "migrate_runtime_state('%s')\"` to migrate.",
-            account_id,
-            account_id,
-        )
+        try:
+            migrated_path = migrate_runtime_state(account_id)
+        except FileNotFoundError:
+            logger.warning(
+                "Legacy runtime state was detected but the file disappeared before migration"
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Automatic runtime state migration failed")
+        else:
+            logger.info("Migrated runtime state to %s", migrated_path)
+            state = load_runtime_state(account_id=account_id)
     last_ts = None
     prev_models: list[str] = []
     if state:
