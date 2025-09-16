@@ -23,9 +23,11 @@ except Exception:  # noqa: E722
 if torch is not None:
     from torch.utils.data import DataLoader, TensorDataset
     from models.cross_modal_transformer import CrossModalTransformer
+    from models.cross_modal_classifier import CrossModalClassifier
 else:  # pragma: no cover - torch may be unavailable in some environments
     TensorDataset = None  # type: ignore
     CrossModalTransformer = None  # type: ignore
+    CrossModalClassifier = None  # type: ignore
 from sklearn.metrics import (
     classification_report,
     precision_recall_curve,
@@ -742,6 +744,8 @@ def main(
         cfg = load_config()
     elif isinstance(cfg, dict):
         cfg = AppConfig(**cfg)
+    model_type = str(cfg.training.model_type or "lgbm").lower()
+    cfg.training.model_type = model_type
     if cfg.training.use_pseudo_labels:
         use_pseudo_labels = True
     _subscribe_cpu_updates(cfg)
@@ -767,6 +771,10 @@ def main(
     feval = make_focal_loss_metric(focal_alpha, focal_gamma) if use_focal else None
 
     mlflow.start_run("training", cfg.model_dump())
+    try:  # pragma: no cover - mlflow optional
+        mlflow.log_param("model_type", model_type)
+    except Exception:
+        pass
     if df_override is not None:
         df = df_override
     else:
@@ -848,6 +856,17 @@ def main(
     if "SymbolCode" in df.columns:
         features.append("SymbolCode")
 
+    price_window_cols = sorted(c for c in df.columns if c.startswith("price_window_"))
+    news_emb_cols = sorted(c for c in df.columns if c.startswith("news_emb_"))
+    if model_type == "cross_modal":
+        if not price_window_cols or not news_emb_cols:
+            raise ValueError(
+                "model_type='cross_modal' requires price_window_ and news_emb_ columns"
+            )
+        for col in price_window_cols + news_emb_cols:
+            if col not in features:
+                features.append(col)
+
     if df_override is not None:
         mlflow.log_param("data_source", "override")
     else:
@@ -861,15 +880,23 @@ def main(
     abs_label_cols = [c for c in labels.columns if c.startswith("abs_return_")]
     vol_label_cols = [c for c in labels.columns if c.startswith("volatility_")]
     use_multi_task_heads = bool(cfg.get("use_multi_task_heads", True))
-    if not abs_label_cols and not vol_label_cols:
+    if model_type == "neural":
+        use_multi_task_heads = True
+    if model_type == "cross_modal":
+        use_multi_task_heads = False
+    elif not abs_label_cols and not vol_label_cols:
         use_multi_task_heads = bool(cfg.get("use_multi_task_heads", False))
     sel_target = labels[label_cols[0]] if label_cols else labels.iloc[:, 0]
-    features = select_features(df[features], sel_target)
+    if model_type != "cross_modal":
+        features = select_features(df[features], sel_target)
+    else:
+        features = list(dict.fromkeys(features))
     for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"]:
         if col not in features:
             features.append(col)
 
     cross_modal_cfg = cfg.get("cross_modal_feature", {})
+    modal_result = None
     if torch is not None and CrossModalTransformer is not None:
         try:
             modal_result = prepare_modal_arrays(
@@ -878,8 +905,13 @@ def main(
         except Exception as exc:  # pragma: no cover - defensive logging
             modal_result = None
             logger.warning("Failed to prepare modal arrays: %s", exc)
-        if modal_result is not None:
-            price_modal, news_modal, labels_modal, mask_modal, price_cols, news_cols = modal_result
+    if modal_result is not None:
+        price_modal, news_modal, labels_modal, mask_modal, price_cols, news_cols = modal_result
+        cfg.setdefault("model", {}).setdefault(
+            "cross_modal_features",
+            {"price": price_cols, "news": news_cols},
+        )
+        if model_type != "cross_modal" and torch is not None and CrossModalTransformer is not None:
             min_samples = int(cross_modal_cfg.get("min_samples", 50))
             if (
                 labels_modal is not None
@@ -903,10 +935,6 @@ def main(
                     df["cross_modal_signal"] = fused
                     if "cross_modal_signal" not in features:
                         features.append("cross_modal_signal")
-                    cfg.setdefault("model", {}).setdefault(
-                        "cross_modal_features",
-                        {"price": price_cols, "news": news_cols},
-                    )
                     logger.info(
                         "Cross-modal feature trained on %d samples", len(price_modal)
                     )
@@ -1339,34 +1367,61 @@ def main(
             pipe.regression_target_columns_ = {k: v["columns"] for k, v in heads.items()}
         else:
             steps = []
-            if cfg.get("use_scaler", True):
+            if model_type != "cross_modal" and cfg.get("use_scaler", True):
                 steps.append(("scaler", FeatureScaler()))
-            clf_params = {
-                "n_estimators": 200,
-                "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
-                "random_state": seed,
-                **_lgbm_params(cfg),
-            }
-            if use_focal:
-                clf_params["objective"] = "None"
-            steps.append(("clf", LGBMClassifier(**clf_params)))
-            pipe = Pipeline(steps)
-            if "clf" in pipe.named_steps:
-                _register_clf(pipe.named_steps["clf"])
-            fit_params = {"clf__eval_set": [(X_val, y_val)]}
-            esr = cfg.get("early_stopping_rounds", 50)
-            if esr:
-                fit_params["clf__early_stopping_rounds"] = esr
-            if donor_booster is not None:
-                fit_params["clf__init_model"] = donor_booster
-            if sw is not None:
-                fit_params["clf__sample_weight"] = sw
-            if use_focal:
-                fit_params["clf__fobj"] = fobj
-                fit_params["clf__feval"] = feval
-            pipe.fit(X_train, y_train, **fit_params)
-            val_probs = pipe.predict_proba(X_val)
-            probs = val_probs[:, 1]
+            if model_type == "cross_modal":
+                if CrossModalClassifier is None:
+                    raise RuntimeError("CrossModalClassifier requires PyTorch")
+                cm_cfg = cfg.get("cross_modal_model", {})
+                estimator = CrossModalClassifier(
+                    d_model=int(cm_cfg.get("d_model", cfg.get("d_model", 64))),
+                    nhead=int(cm_cfg.get("nhead", cfg.get("nhead", 4))),
+                    num_layers=int(cm_cfg.get("num_layers", cfg.get("num_layers", 2))),
+                    dropout=float(cm_cfg.get("dropout", cfg.get("dropout", 0.1))),
+                    lr=float(cm_cfg.get("lr", cm_cfg.get("learning_rate", 1e-3))),
+                    epochs=int(cm_cfg.get("epochs", cm_cfg.get("num_epochs", 5))),
+                    batch_size=int(cm_cfg.get("batch_size", 128)),
+                    weight_decay=float(cm_cfg.get("weight_decay", 0.0)),
+                    time_encoding=bool(
+                        cm_cfg.get("time_encoding", cfg.get("time_encoding", False))
+                    ),
+                    average_attn_weights=bool(cm_cfg.get("average_attn_weights", True)),
+                )
+                steps.append(("clf", estimator))
+                pipe = Pipeline(steps)
+                fit_params: dict[str, object] = {}
+                if sw is not None:
+                    fit_params["clf__sample_weight"] = sw
+                pipe.fit(X_train, y_train, **fit_params)
+                val_probs = pipe.predict_proba(X_val)
+                probs = val_probs[:, 1]
+            else:
+                clf_params = {
+                    "n_estimators": 200,
+                    "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+                    "random_state": seed,
+                    **_lgbm_params(cfg),
+                }
+                if use_focal:
+                    clf_params["objective"] = "None"
+                steps.append(("clf", LGBMClassifier(**clf_params)))
+                pipe = Pipeline(steps)
+                if "clf" in pipe.named_steps:
+                    _register_clf(pipe.named_steps["clf"])
+                fit_params = {"clf__eval_set": [(X_val, y_val)]}
+                esr = cfg.get("early_stopping_rounds", 50)
+                if esr:
+                    fit_params["clf__early_stopping_rounds"] = esr
+                if donor_booster is not None:
+                    fit_params["clf__init_model"] = donor_booster
+                if sw is not None:
+                    fit_params["clf__sample_weight"] = sw
+                if use_focal:
+                    fit_params["clf__fobj"] = fobj
+                    fit_params["clf__feval"] = feval
+                pipe.fit(X_train, y_train, **fit_params)
+                val_probs = pipe.predict_proba(X_val)
+                probs = val_probs[:, 1]
         pipe.head_config_ = getattr(pipe, "head_config_", {})
         pipe.classification_thresholds_ = getattr(
             pipe, "classification_thresholds_", {}
