@@ -13,7 +13,10 @@ import numpy as np
 import pandas as pd
 
 from analysis.ensemble_diversity import error_correlation_matrix
-from analysis.information_coefficient import information_coefficient
+from analysis.information_coefficient import (
+    information_coefficient,
+    information_coefficient_series,
+)
 
 
 # Lightweight import of mixture-of-experts utilities without requiring the full
@@ -37,23 +40,24 @@ ResourceCapabilities = _moe.ResourceCapabilities
 
 def build_moe(
     cfg: dict | None = None,
-) -> tuple[GatingNetwork, np.ndarray, np.ndarray | None]:
+) -> tuple[GatingNetwork, np.ndarray, np.ndarray | None, np.ndarray | None]:
     """Construct base experts and a gating network.
 
     Parameters
     ----------
     cfg:
-        Optional configuration providing ``expert_weights`` (list of floats)
-        and ``sharpness`` for the gating network's softmax. Defaults are equal
-        weights and a sharpness of ``5.0``.
+        Optional configuration providing ``expert_weights`` (list of floats),
+        ``diversity_weights`` and ``risk_budgets``. Sharpness controls the
+        softness of the gating network's selection function and defaults to
+        ``5.0`` when unspecified.
     """
 
     cfg = cfg or {}
     sharpness = float(cfg.get("sharpness", 5.0))
     expert_weights = np.asarray(cfg.get("expert_weights", [1.0, 1.0, 1.0]), dtype=float)
-    diversity = cfg.get("diversity_weights")
+    diversity_cfg = cfg.get("diversity_weights")
     div_arr = (
-        np.asarray(diversity, dtype=float) if diversity is not None else None
+        np.asarray(diversity_cfg, dtype=float) if diversity_cfg is not None else None
     )
 
     experts = [
@@ -62,7 +66,113 @@ def build_moe(
         ExpertSpec(MacroExpert(), ResourceCapabilities(1, 1, False, gpu_count=0)),
     ]
 
-    return GatingNetwork(experts, sharpness=sharpness), expert_weights, div_arr
+    risk_cfg = cfg.get("risk_budgets")
+    risk_arr: np.ndarray | None
+    if risk_cfg is None:
+        risk_arr = None
+    else:
+        n_exp = len(experts)
+        if isinstance(risk_cfg, dict):
+            lowered = {str(k).lower(): float(v) for k, v in risk_cfg.items()}
+            vals = []
+            for spec in experts:
+                cls_name = spec.model.__class__.__name__
+                candidates = [
+                    cls_name,
+                    cls_name.lower(),
+                    cls_name.replace("Expert", ""),
+                    cls_name.replace("Expert", "").lower(),
+                ]
+                value = None
+                for key in candidates:
+                    val = lowered.get(str(key).lower())
+                    if val is not None:
+                        value = val
+                        break
+                if value is None:
+                    raise ValueError(
+                        f"Missing risk budget for expert '{cls_name}'."
+                    )
+                vals.append(float(value))
+            risk_arr = np.asarray(vals, dtype=float)
+        else:
+            risk_arr = np.asarray(risk_cfg, dtype=float)
+            if risk_arr.shape != (len(experts),):
+                raise ValueError(
+                    "risk_budgets must provide one entry per expert"
+                )
+        risk_arr = np.nan_to_num(risk_arr, nan=0.0, posinf=0.0, neginf=0.0)
+        risk_arr = np.clip(risk_arr, 0.0, None)
+        total_budget = risk_arr.sum()
+        if total_budget <= 0.0 or not np.isfinite(total_budget):
+            risk_arr = None
+        else:
+            risk_arr = risk_arr / total_budget
+
+    return GatingNetwork(experts, sharpness=sharpness), expert_weights, div_arr, risk_arr
+
+
+def _normalise_weights(arr: np.ndarray) -> np.ndarray:
+    arr = np.asarray(arr, dtype=float)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    arr = np.clip(arr, 0.0, None)
+    total = arr.sum()
+    if total <= 0.0 or not np.isfinite(total):
+        return np.ones_like(arr) / len(arr)
+    return arr / total
+
+
+def _combine_preferences(
+    base: np.ndarray,
+    preference: np.ndarray | None,
+    risk_budgets: np.ndarray | None,
+) -> np.ndarray:
+    weights = np.asarray(base, dtype=float)
+    if preference is not None:
+        pref = np.asarray(preference, dtype=float)
+        if pref.shape != weights.shape:
+            raise ValueError("expert weight size mismatch")
+        pref = np.nan_to_num(pref, nan=0.0, posinf=0.0, neginf=0.0)
+        pref = np.clip(pref, 0.0, None)
+        weights = weights * pref
+    if risk_budgets is not None:
+        return GatingNetwork._apply_budgets(weights, risk_budgets)
+    return _normalise_weights(weights)
+
+
+def _inverse_correlation_weights(corr: pd.DataFrame) -> np.ndarray:
+    if corr.empty:
+        return np.array([])
+    corr_abs = corr.abs().to_numpy()
+    np.fill_diagonal(corr_abs, np.nan)
+    with np.errstate(invalid="ignore"):
+        sums = np.nansum(corr_abs, axis=1)
+    counts = np.sum(np.isfinite(corr_abs), axis=1)
+    mean_corr = np.zeros_like(sums, dtype=float)
+    mask = counts > 0
+    mean_corr[mask] = sums[mask] / counts[mask]
+    mean_corr = np.nan_to_num(mean_corr, nan=0.0, posinf=0.0, neginf=0.0)
+    inv = 1.0 / (1e-6 + mean_corr)
+    inv = np.nan_to_num(inv, nan=0.0, posinf=0.0, neginf=0.0)
+    inv = np.clip(inv, 0.0, None)
+    if inv.sum() <= 0.0 or not np.isfinite(inv.sum()):
+        inv = np.ones_like(inv)
+    return _normalise_weights(inv)
+
+
+def _combine_diversity(
+    primary: np.ndarray | None,
+    secondary: np.ndarray | None,
+) -> np.ndarray | None:
+    if primary is None and secondary is None:
+        return None
+    if primary is None:
+        arr = np.asarray(secondary, dtype=float)
+    elif secondary is None:
+        arr = np.asarray(primary, dtype=float)
+    else:
+        arr = np.asarray(primary, dtype=float) * np.asarray(secondary, dtype=float)
+    return _normalise_weights(arr)
 
 
 def predict_mixture(
@@ -78,13 +188,9 @@ def predict_mixture(
     and available resource capabilities.
     """
 
-    gating, expert_weights, diversity = build_moe(cfg)
-    weights = gating.weights(market_regime, caps, diversity) * expert_weights
-    total = weights.sum()
-    if total <= 0 or not np.isfinite(total):
-        weights = np.ones_like(weights) / len(weights)
-    else:
-        weights = weights / total
+    gating, expert_weights, diversity, risk_budgets = build_moe(cfg)
+    base = gating.weights(market_regime, caps, diversity, risk_budgets=risk_budgets)
+    weights = _combine_preferences(base, expert_weights, risk_budgets)
     preds = np.array([spec.model.predict(history) for spec in gating.experts])
     return float(np.dot(weights, preds))
 
@@ -95,7 +201,8 @@ def train_moe_ensemble(
     targets: Sequence[float],
     caps: ResourceCapabilities,
     cfg: dict | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+    return_weights: bool = False,
+) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Train mixture-of-experts on validation data and log metrics.
 
     Parameters
@@ -110,12 +217,16 @@ def train_moe_ensemble(
         Available resource capabilities.
     cfg:
         Optional configuration passed to :func:`build_moe`.
+    return_weights:
+        When ``True`` an additional array containing the per-sample mixture
+        weights is returned.
 
     Returns
     -------
     tuple[np.ndarray, np.ndarray]
         The mixture predictions and a ``(n_samples, n_experts)`` array of expert
-        predictions.
+        predictions. When ``return_weights`` is ``True`` a third array containing
+        the normalised mixture weights for each sample is returned.
     """
 
     try:  # pragma: no cover - optional dependency
@@ -135,42 +246,108 @@ def train_moe_ensemble(
             end_run=lambda *a, **k: None,
         )
 
-    gating, expert_weights, _ = build_moe(cfg)
+    gating, expert_weights, div_cfg, risk_budgets = build_moe(cfg)
     preds = np.array(
         [[spec.model.predict(h) for spec in gating.experts] for h in histories]
     )
-    truth = np.asarray(targets)
+    truth = np.asarray(targets, dtype=float)
+    regimes_arr = np.asarray(regimes)
     val_preds = {f"exp_{i}": preds[:, i] for i in range(preds.shape[1])}
     corr = error_correlation_matrix(val_preds, truth)
-    corr_abs = corr.abs().values
-    np.fill_diagonal(corr_abs, np.nan)
-    mean_corr = np.nanmean(corr_abs, axis=1)
-    diversity = 1.0 / (1e-6 + mean_corr)
-    diversity = diversity / diversity.sum()
+    global_div = _inverse_correlation_weights(corr) if not corr.empty else None
+    base_diversity = _combine_diversity(global_div, div_cfg)
+
+    regime_diversity: dict[float | int | str, np.ndarray] = {}
+    unique_regimes = np.unique(regimes_arr)
+    for reg in unique_regimes:
+        if pd.isna(reg):
+            continue
+        mask = regimes_arr == reg
+        if np.count_nonzero(mask) < 2:
+            continue
+        reg_preds = {f"exp_{i}": preds[mask, i] for i in range(preds.shape[1])}
+        reg_corr = error_correlation_matrix(reg_preds, truth[mask])
+        reg_div = _inverse_correlation_weights(reg_corr)
+        combined = _combine_diversity(reg_div, div_cfg)
+        if combined is not None:
+            regime_diversity[reg] = combined
+    if base_diversity is not None:
+        regime_diversity.setdefault("default", base_diversity)
+    diversity_input: dict[float | int | str, np.ndarray] | np.ndarray | None
+    if regime_diversity:
+        diversity_input = regime_diversity
+    else:
+        diversity_input = base_diversity
+
+    ic_series = information_coefficient_series(val_preds, truth)
 
     mlflow.start_run("moe_training", cfg or {})
     try:
         if hasattr(mlflow, "log_dict"):
-            mlflow.log_dict({f"w_{i}": float(w) for i, w in enumerate(diversity)}, "gating_weights.json")
-        mix_preds = []
-        for reg, expert_pred in zip(regimes, preds):
-            w = gating.weights(reg, caps, diversity) * expert_weights
-            total = w.sum()
-            if total <= 0 or not np.isfinite(total):
-                w = np.ones_like(w) / len(w)
-            else:
-                w = w / total
-            mix_preds.append(float(np.dot(w, expert_pred)))
+            mlflow.log_dict(corr.to_dict(), "error_correlation.json")
+            mlflow.log_dict(
+                {f"expert_{i}": float(ic_series.iloc[i]) for i in range(len(ic_series))},
+                "moe_information_coefficients.json",
+            )
+            if isinstance(diversity_input, dict):
+                mlflow.log_dict(
+                    {
+                        str(key): [float(x) for x in arr]
+                        for key, arr in diversity_input.items()
+                    },
+                    "regime_diversity_weights.json",
+                )
+            elif diversity_input is not None:
+                mlflow.log_dict(
+                    {f"w_{i}": float(w) for i, w in enumerate(diversity_input)},
+                    "gating_weights.json",
+                )
+            if risk_budgets is not None:
+                mlflow.log_dict(
+                    {f"budget_{i}": float(b) for i, b in enumerate(risk_budgets)},
+                    "risk_budgets.json",
+                )
+
+        mix_preds: list[float] = []
+        weight_history: list[np.ndarray] = [] if return_weights else []
+        for reg, expert_pred in zip(regimes_arr, preds):
+            base = gating.weights(
+                float(reg),
+                caps,
+                diversity_input,
+                risk_budgets=risk_budgets,
+            )
+            combined = _combine_preferences(base, expert_weights, risk_budgets)
+            mix_preds.append(float(np.dot(combined, expert_pred)))
+            if return_weights:
+                weight_history.append(combined)
         mix_arr = np.asarray(mix_preds)
         mse_mix = float(np.mean((mix_arr - truth) ** 2))
-        mse_experts = [float(np.mean((preds[:, i] - truth) ** 2)) for i in range(preds.shape[1])]
+        mse_experts = [
+            float(np.mean((preds[:, i] - truth) ** 2))
+            for i in range(preds.shape[1])
+        ]
+        corr_abs = corr.abs().values
+        if corr_abs.size:
+            np.fill_diagonal(corr_abs, np.nan)
+            with np.errstate(all="ignore"):
+                mean_corr_val = np.nanmean(corr_abs)
+            mlflow.log_metric(
+                "mean_error_correlation",
+                float(np.nan_to_num(mean_corr_val, nan=0.0)),
+            )
         mlflow.log_metric("mse_mixture", mse_mix)
         for i, m in enumerate(mse_experts):
             mlflow.log_metric(f"mse_expert_{i}", m)
+        for i, ic in enumerate(ic_series):
+            if np.isfinite(ic):
+                mlflow.log_metric(f"ic_expert_{i}", float(ic))
         mlflow.log_metric("mixture_improvement", min(mse_experts) - mse_mix)
     finally:
         mlflow.end_run()
 
+    if return_weights:
+        return mix_arr, preds, np.asarray(weight_history)
     return mix_arr, preds
 
 logger = logging.getLogger(__name__)
@@ -363,11 +540,15 @@ def main(
                 mlflow.log_dict(corr.to_dict(), "error_correlation.json")
             corr_abs = corr.abs()
             np.fill_diagonal(corr_abs.values, np.nan)
+            with np.errstate(all="ignore"):
+                mean_corr_val = np.nanmean(corr_abs.values)
             mlflow.log_metric(
-                "mean_error_correlation", float(np.nanmean(corr_abs.values))
+                "mean_error_correlation",
+                float(np.nan_to_num(mean_corr_val, nan=0.0)),
             )
             if ens_cfg.get("diversity_weighting"):
-                mean_corr = np.nanmean(corr_abs.values, axis=1)
+                with np.errstate(all="ignore"):
+                    mean_corr = np.nanmean(corr_abs.values, axis=1)
                 diversity = np.clip(1.0 - mean_corr, 0.0, None)
                 if not np.allclose(diversity.sum(), 0.0):
                     div_w = diversity / diversity.sum()
