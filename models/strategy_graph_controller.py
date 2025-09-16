@@ -21,7 +21,13 @@ from torch.optim import Adam
 from torch.distributions import Categorical
 
 from models.graph_net import GraphNet
-from strategies.graph_dsl import Filter, Indicator, PositionSizer, StrategyGraph
+from strategies.graph_dsl import (
+    ExitRule,
+    Filter,
+    Indicator,
+    PositionSizer,
+    StrategyGraph,
+)
 
 
 class StrategyGraphController(nn.Module):
@@ -59,15 +65,16 @@ class StrategyGraphController(nn.Module):
             indicator = Indicator("price", "<", "ma")
         filt = Filter()
         sizer = PositionSizer(1.0)
-        nodes = {0: indicator, 1: filt, 2: sizer}
-        edges = [(0, 1, None), (1, 2, True)]
+        exit_rule = ExitRule()
+        nodes = {0: indicator, 1: filt, 2: sizer, 3: exit_rule}
+        edges = [(0, 1, None), (1, 2, True), (1, 3, False)]
         return StrategyGraph(nodes=nodes, edges=edges)
 
 
 def train_strategy_graph_controller(
     data: List[dict],
     episodes: int = 100,
-    lr: float = 0.01,
+    lr: float = 0.1,
     seed: int = 0,
 ) -> StrategyGraphController:
     """Train :class:`StrategyGraphController` using policy gradients."""
