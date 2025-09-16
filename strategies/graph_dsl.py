@@ -2,9 +2,10 @@
 
 This module defines a minimal directed acyclic graph (DAG) based DSL used for
 describing trading strategies.  Strategies consist of **indicator** nodes that
-produce boolean signals, optional **risk** nodes which can adjust position
-size, and **position** nodes that open/close positions based on the signal.  A
-small :class:`StrategyGraph` container executes the graph over market data.
+produce boolean signals, optional **filter** nodes which can gate the signal,
+**position sizer** nodes that open/close positions and **exit rules** that can
+force an immediate liquidation.  A small :class:`StrategyGraph` container
+executes the graph over market data.
 
 Each node type supports ``to_dict``/``from_dict`` helpers allowing strategies to
 be serialised and stored or transmitted easily.
@@ -104,8 +105,10 @@ class PositionSizer:
 class ExitRule:
     """Explicit exit node which closes any open position when signal is false."""
 
-    def should_exit(self, signal: bool) -> bool:
-        return not signal
+    def should_exit(self, signal: Optional[bool]) -> bool:
+        """Return ``True`` when the upstream signal is explicitly ``False``."""
+
+        return signal is False
 
     def to_dict(self) -> dict:  # pragma: no cover - trivial
         return {"type": "ExitRule"}
@@ -222,6 +225,7 @@ class StrategyGraph:
                     if node.should_exit(result) and position > 0.0:
                         cash += bar["price"] * position
                         position = 0.0
+                    result = None
                 node_id = self._next(node_id, result)
         if data_list and position > 0.0:
             cash += data_list[-1]["price"] * position

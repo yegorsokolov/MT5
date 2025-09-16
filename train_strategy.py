@@ -9,9 +9,10 @@ The script exposes two small command line utilities used in tests:
   same synthetic dataset, demonstrating the dynamic registry and plugin system.
 
 The controller emits small graphs composed of
-:class:`strategies.graph_dsl.Indicator`, ``Filter`` and ``PositionSizer`` nodes
-which are executed to obtain a PnL reward.  Strategies retrieved from the
-registry simply implement ``generate_order`` and optional ``update`` methods.
+:class:`strategies.graph_dsl.Indicator`, ``Filter``, ``PositionSizer`` and
+``ExitRule`` nodes which are executed to obtain a PnL reward.  Strategies
+retrieved from the registry simply implement ``generate_order`` and optional
+``update`` methods.
 """
 
 from __future__ import annotations
@@ -118,7 +119,7 @@ def main() -> None:  # pragma: no cover - exercised via subprocess in tests
         {"price": 1.0, "ma": 0.9},
         {"price": 1.1, "ma": 1.0},
         {"price": 1.2, "ma": 1.1},
-        {"price": 1.3, "ma": 1.2},
+        {"price": 1.4, "ma": 1.5},
     ]
 
     if args.strategy:
