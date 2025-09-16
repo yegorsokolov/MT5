@@ -6,6 +6,7 @@ reuse these baseline indicators without recomputing them."""
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 try:  # pragma: no cover - polars optional
@@ -134,12 +135,16 @@ def _compute_pandas(
 
     signals, long_stops, short_stops, confidence = strat.batch_update(price, bundle)
 
-    index = df.index
-    df["baseline_signal"] = pd.Series(signals, index=index, dtype=float)
-    df["long_stop"] = pd.Series(long_stops, index=index, dtype=float)
-    df["short_stop"] = pd.Series(short_stops, index=index, dtype=float)
-    df["baseline_confidence"] = pd.Series(confidence, index=index, dtype=float)
-    return df
+    output = pd.DataFrame(
+        {
+            "baseline_signal": np.asarray(signals, dtype=float),
+            "long_stop": np.asarray(long_stops, dtype=float),
+            "short_stop": np.asarray(short_stops, dtype=float),
+            "baseline_confidence": np.asarray(confidence, dtype=float),
+        },
+        index=df.index,
+    )
+    return df.join(output)
 
 
 def compute(
