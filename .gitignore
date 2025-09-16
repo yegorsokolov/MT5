@@ -24,6 +24,7 @@ models/*
 !models/graph_net.py
 !models/graph_attention.py
 !models/distillation.py
+!models/multi_task_heads.py
 !models/meta_label.py
 !models/remote_client.py
 !models/remote_server.py
