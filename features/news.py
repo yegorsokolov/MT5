@@ -130,9 +130,17 @@ def add_news_sentiment_features(df: pd.DataFrame) -> pd.DataFrame:
         df["news_emb_0"] = 0.0
         return df
 
+    emb_matrix = np.zeros((len(embeddings), emb_dim), dtype=np.float32)
+    for row, vec in enumerate(embeddings):
+        if len(vec) == 0:
+            continue
+        length = min(len(vec), emb_dim)
+        emb_matrix[row, :length] = np.asarray(vec[:length], dtype=np.float32)
+
     for i in range(emb_dim):
-        df[f"news_emb_{i}"] = [vec[i] if len(vec) > i else 0.0 for vec in embeddings]
-    df["news_sentiment"] = sentiments
+        df[f"news_emb_{i}"] = emb_matrix[:, i]
+    df["news_sentiment"] = np.asarray(sentiments, dtype=np.float32)
+    df.attrs["news_embedding_dim"] = emb_dim
     return df
 
 
