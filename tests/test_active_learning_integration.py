@@ -19,8 +19,10 @@ class SimpleClf:
         return (X >= self.threshold).astype(int)
 
     def predict_proba(self, X):
-        preds = self.predict(X)
-        return np.vstack([1 - preds, preds]).T
+        X = np.asarray(X).ravel()
+        logits = X - self.threshold
+        probs = 1 / (1 + np.exp(-logits))
+        return np.vstack([1 - probs, probs]).T
 
 
 def accuracy(y_true, y_pred):
@@ -43,7 +45,11 @@ def test_queue_and_label_ingestion(tmp_path):
         queue_path=tmp_path / "queue.json", labeled_path=tmp_path / "labels.json"
     )
     val_probs = np.array([[0.6, 0.4], [0.9, 0.1]])
-    queue.push_low_confidence(val_idx, val_probs, threshold=0.8)
+    queued = queue.push_low_confidence(val_idx, val_probs, threshold=0.8)
+    assert queued == 1
+    stats = queue.stats()
+    assert stats["queued"] == 1
+    assert stats["ready_for_merge"] == 0
     qdata = json.loads((tmp_path / "queue.json").read_text())
     assert len(qdata) == 1
     queued_id = qdata[0]["id"]
@@ -51,9 +57,13 @@ def test_queue_and_label_ingestion(tmp_path):
     pd.DataFrame({"id": [queued_id], "label": [int(y[queued_id])]}).to_json(
         tmp_path / "labels.json", orient="records"
     )
+    stats_ready = queue.stats()
+    assert stats_ready["ready_for_merge"] == 1
     labeled = queue.pop_labeled()
+    assert queue.stats()["queued"] == 0
 
-    df = pd.DataFrame(X, columns=["x"])
+    df = pd.DataFrame({"x": X.ravel(), "id": np.arange(len(X))})
+    df = df.set_index("id", drop=False)
     df["label"] = y
     df.loc[queued_id, "label"] = -1
     df = merge_labels(df, labeled, "label")

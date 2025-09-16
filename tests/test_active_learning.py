@@ -18,8 +18,11 @@ class SimpleClf:
         return (X >= self.threshold).astype(int)
 
     def predict_proba(self, X):
-        preds = self.predict(X)
-        return np.vstack([1 - preds, preds]).T
+        X = np.asarray(X).ravel()
+        # smooth probabilities based on distance to the learned threshold
+        logits = X - self.threshold
+        probs = 1 / (1 + np.exp(-logits))
+        return np.vstack([1 - probs, probs]).T
 
 
 def accuracy(y_true, y_pred):
@@ -45,15 +48,25 @@ def test_active_learning_improves_validation(tmp_path):
         queue_path=tmp_path / "queue.json", labeled_path=tmp_path / "labels.json"
     )
     probs = np.array([[0.6, 0.4]])
-    queue.push_low_confidence(unlabeled_idx, probs, threshold=0.8)
+    queued = queue.push_low_confidence(unlabeled_idx, probs, threshold=0.8)
+    assert queued == 1
+    stats = queue.stats()
+    assert stats["queued"] == 1
+    assert stats["ready_for_merge"] == 0
 
     # Simulate human returning correct label
     pd.DataFrame({"id": unlabeled_idx, "label": y_train[unlabeled_idx]}).to_json(
         tmp_path / "labels.json", orient="records"
     )
+    stats_with_label = queue.stats()
+    assert stats_with_label["ready_for_merge"] == 1
     labeled = queue.pop_labeled()
+    post_stats = queue.stats()
+    assert post_stats["queued"] == 0
+    assert post_stats["ready_for_merge"] == 0
 
-    train_df = pd.DataFrame(X_train, columns=["x"])
+    train_df = pd.DataFrame({"x": X_train.ravel(), "id": np.arange(len(X_train))})
+    train_df = train_df.set_index("id", drop=False)
     train_df["label"] = y_missing
     train_df = merge_labels(train_df, labeled, "label")
 
