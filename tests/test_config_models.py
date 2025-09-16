@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 import importlib
 
+import pytest
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 sys.modules.pop("yaml", None)
@@ -60,3 +62,48 @@ def test_invalid_service_cmd(tmp_path):
     with pytest.raises(ConfigError) as exc:
         utils.load_config(cfg_file)
     assert "service_cmds" in str(exc.value)
+
+
+def test_top_level_strategy_keys(tmp_path):
+    cfg_file = write_cfg(
+        tmp_path,
+        {
+            "symbols": ["EURUSD"],
+            "risk_per_trade": 0.05,
+        },
+    )
+    cfg = utils.load_config(cfg_file)
+    assert cfg.strategy.symbols == ["EURUSD"]
+    assert cfg.strategy.risk_per_trade == 0.05
+
+
+def test_feature_deduplication(tmp_path):
+    cfg_file = write_cfg(
+        tmp_path,
+        {
+            "strategy": {"symbols": ["EURUSD"], "risk_per_trade": 0.1},
+            "features": {"features": ["price", "price", "news"]},
+        },
+    )
+    cfg = utils.load_config(cfg_file)
+    assert cfg.features.features == ["price", "news"]
+
+
+def test_alerting_recipient_string(tmp_path):
+    cfg_file = write_cfg(
+        tmp_path,
+        {
+            "strategy": {"symbols": ["EURUSD"], "risk_per_trade": 0.1},
+            "alerting": {
+                "smtp": {
+                    "host": "smtp.test",
+                    "to": "ops@example.com,alerts@example.com",
+                }
+            },
+        },
+    )
+    cfg = utils.load_config(cfg_file)
+    assert cfg.alerting.smtp.recipients == [
+        "ops@example.com",
+        "alerts@example.com",
+    ]
