@@ -1565,12 +1565,12 @@ def main(
         }
     )
     pred_path = root / "val_predictions.csv"
-    pred_df.to_csv(pred_path, index=False)
-    mlflow.log_artifact(str(pred_path))
 
     calibrator = None
     calib_method = cfg.get("calibration")
     calib_cv = cfg.get("calibration_cv")
+    calibrated_probs: np.ndarray | None = None
+    calibrated_probs_all: np.ndarray | None = None
     if calib_method and final_pipe is not None and last_val_y is not None:
         calibrator = ProbabilityCalibrator(method=calib_method, cv=calib_cv)
         if calib_cv:
@@ -1590,6 +1590,8 @@ def main(
             )
             calibrated_probs = calibrator.predict(last_val_probs)
             final_pipe = CalibratedModel(final_pipe, calibrator)
+            if all_probs:
+                calibrated_probs_all = calibrator.predict(np.asarray(all_probs, dtype=float))
         brier_raw, brier_cal = log_reliability(
             last_val_y,
             last_val_probs,
@@ -1601,13 +1603,44 @@ def main(
         mlflow.log_metric("calibration_brier_raw", brier_raw)
         mlflow.log_metric("calibration_brier_calibrated", brier_cal)
 
-    if calibrator is not None and calibrator.regime_thresholds:
-        regime_thresholds = _normalise_regime_thresholds(calibrator.regime_thresholds)
+    regime_thresholds: dict[int, float]
+    if calibrator is not None:
+        if calibrator.cv:
+            labels_thr = (
+                np.asarray(last_val_y).ravel() if last_val_y is not None else None
+            )
+            probs_thr = calibrated_probs
+            regimes_thr = (
+                np.asarray(last_val_regimes) if last_val_regimes is not None else None
+            )
+        else:
+            labels_thr = np.asarray(all_true).ravel() if all_true else None
+            probs_thr = calibrated_probs_all
+            regimes_thr = np.asarray(all_regimes) if all_regimes else None
+        if (
+            probs_thr is not None
+            and labels_thr is not None
+            and regimes_thr is not None
+            and len(probs_thr) == len(labels_thr) == len(regimes_thr)
+        ):
+            thr_dict, _ = find_regime_thresholds(labels_thr, probs_thr, regimes_thr)
+            calibrator.set_regime_thresholds(thr_dict)
+        regime_thresholds = _normalise_regime_thresholds(
+            calibrator.regime_thresholds or {}
+        )
+        if not regime_thresholds:
+            fallback_thr, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
+            regime_thresholds = _normalise_regime_thresholds(fallback_thr)
     else:
-        regime_thresholds, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
-        regime_thresholds = _normalise_regime_thresholds(regime_thresholds)
+        regime_thresholds_raw, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
+        regime_thresholds = _normalise_regime_thresholds(regime_thresholds_raw)
     for reg, thr_val in regime_thresholds.items():
         mlflow.log_metric(f"thr_regime_{reg}", float(thr_val))
+
+    if calibrator is not None and calibrator.cv is None and calibrated_probs_all is not None:
+        pred_df["prob_calibrated"] = calibrated_probs_all
+    pred_df.to_csv(pred_path, index=False)
+    mlflow.log_artifact(str(pred_path))
 
     aggregate_report = classification_report(all_true, all_preds, output_dict=True)
     logger.info("\n%s", classification_report(all_true, all_preds))
@@ -1661,7 +1694,23 @@ def main(
         f1_ci[1],
     )
 
+    model_metadata: dict[str, object] = {"regime_thresholds": regime_thresholds}
+    if overall_params is not None:
+        model_metadata["interval_params"] = overall_params.to_dict()
+        model_metadata["interval_alpha"] = overall_params.alpha
+        if overall_params.coverage is not None:
+            model_metadata["interval_coverage"] = float(overall_params.coverage)
+        if overall_params.coverage_by_regime:
+            model_metadata["interval_coverage_by_regime"] = {
+                int(k): float(v)
+                for k, v in overall_params.coverage_by_regime.items()
+            }
+    if overall_q:
+        model_metadata["interval_quantiles"] = {
+            int(k): float(v) for k, v in overall_q.items()
+        }
     if final_pipe is not None:
+        setattr(final_pipe, "model_metadata", model_metadata)
         setattr(final_pipe, "regime_thresholds", regime_thresholds)
     joblib.dump(final_pipe, root / "model.joblib")
     if final_pipe and "scaler" in final_pipe.named_steps:

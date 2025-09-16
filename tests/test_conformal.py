@@ -92,3 +92,26 @@ def test_interval_params_regime_serialisation():
     assert isinstance(restored.quantiles, dict)
     for key, value in params.quantiles.items():
         assert restored.quantiles[key] == pytest.approx(value)
+
+
+def test_calibrate_intervals_tracks_regime_coverage():
+    rng = np.random.default_rng(4)
+    n = 400
+    regimes = np.array([0] * (n // 2) + [1] * (n // 2))
+    x_val = rng.normal(size=n)
+    signal_shift = np.where(regimes == 0, -0.1, 0.2)
+    preds_val = x_val + signal_shift
+    noise = rng.normal(scale=0.3, size=n)
+    y_val = preds_val + noise
+
+    params, residuals, (lower, upper) = conformal.calibrate_intervals(
+        y_val, preds_val, alpha=0.15, regimes=regimes
+    )
+    assert residuals.shape[0] == n
+    assert isinstance(params.quantiles, dict)
+    assert isinstance(params.coverage_by_regime, dict)
+    for reg in np.unique(regimes):
+        assert reg in params.quantiles
+        mask = regimes == reg
+        expected_cov = conformal.evaluate_coverage(y_val[mask], lower[mask], upper[mask])
+        assert params.coverage_by_regime[reg] == pytest.approx(expected_cov)

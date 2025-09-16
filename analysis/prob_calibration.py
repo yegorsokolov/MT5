@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,6 +27,19 @@ class ProbabilityCalibrator:
     model: Any | None = None
     cv: int | None = None
     regime_thresholds: dict[int, float] | None = None
+
+    def set_regime_thresholds(
+        self, thresholds: Mapping[int | str, float] | None
+    ) -> None:
+        """Normalise and store regime-specific decision thresholds."""
+
+        if thresholds:
+            norm = {int(k): float(v) for k, v in thresholds.items()}
+        else:
+            norm = {}
+        self.regime_thresholds = norm or None
+        if self.model is not None:
+            setattr(self.model, "regime_thresholds", norm)
 
     def fit(
         self,
@@ -48,8 +61,7 @@ class ProbabilityCalibrator:
             if regimes is not None:
                 cal_probs = ccv.predict_proba(X)[:, 1]
                 thr, _ = find_regime_thresholds(y_arr, cal_probs, regimes)
-                setattr(ccv, "regime_thresholds", thr)
-                self.regime_thresholds = thr
+                self.set_regime_thresholds(thr)
 
                 def _predict(
                     X_new: Any,
@@ -58,11 +70,14 @@ class ProbabilityCalibrator:
                     default_threshold: float = 0.5,
                 ) -> np.ndarray:
                     probs = ccv.predict_proba(X_new)[:, 1]
-                    if regimes is not None and thr:
+                    thresholds = self.regime_thresholds or {}
+                    if regimes is not None and thresholds:
                         preds = np.zeros(len(probs), dtype=int)
-                        for reg, t in thr.items():
-                            mask = np.asarray(regimes) == int(reg)
-                            preds[mask] = (probs[mask] > t).astype(int)
+                        reg_arr = np.asarray(regimes)
+                        for reg, t in thresholds.items():
+                            mask = reg_arr == int(reg)
+                            if np.any(mask):
+                                preds[mask] = (probs[mask] > t).astype(int)
                         return preds
                     return (probs > default_threshold).astype(int)
 
@@ -86,8 +101,7 @@ class ProbabilityCalibrator:
         if regimes is not None:
             calibrated = self.predict(p_arr)
             thr, _ = find_regime_thresholds(y_arr, calibrated, regimes)
-            setattr(self.model, "regime_thresholds", thr)
-            self.regime_thresholds = thr
+            self.set_regime_thresholds(thr)
         return self
 
     def predict(self, data: np.ndarray) -> np.ndarray:
@@ -126,7 +140,15 @@ class CalibratedModel:
     def __init__(self, model: Any, calibrator: ProbabilityCalibrator) -> None:
         self.model = model
         self.calibrator = calibrator
-        self.regime_thresholds = calibrator.regime_thresholds or {}
+
+    @property
+    def regime_thresholds(self) -> dict[int, float]:
+        thresholds = getattr(self.calibrator, "regime_thresholds", None) or {}
+        return {int(k): float(v) for k, v in thresholds.items()}
+
+    @regime_thresholds.setter
+    def regime_thresholds(self, value: Mapping[int | str, float] | None) -> None:
+        self.calibrator.set_regime_thresholds(value or {})
 
     def __getattr__(self, item: str) -> Any:  # pragma: no cover - delegation
         return getattr(self.model, item)
