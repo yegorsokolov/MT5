@@ -14,7 +14,7 @@ except Exception:  # pragma: no cover
     pl = None  # type: ignore
 
 from strategies.baseline import BaselineStrategy, IndicatorBundle
-from indicators import sma, rsi, atr, bollinger
+from indicators.common import atr, bollinger, rsi, sma
 
 
 def _compute_pandas(

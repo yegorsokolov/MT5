@@ -15,6 +15,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from indicators.common import macd as calc_macd
+
 
 def compute(
     df: pd.DataFrame,
@@ -44,11 +46,10 @@ def compute(
     if price is None:
         raise KeyError("DataFrame must contain 'Close' or 'mid' column")
 
-    fast_ema = price.ewm(span=fast, adjust=False).mean()
-    slow_ema = price.ewm(span=slow, adjust=False).mean()
-    df["macd"] = fast_ema - slow_ema
-    df["macd_signal"] = df["macd"].ewm(span=signal, adjust=False).mean()
-    df["macd_cross"] = np.sign(df["macd"] - df["macd_signal"]).fillna(0).astype(int)
+    macd_line, signal_line, hist = calc_macd(price, fast=fast, slow=slow, signal=signal)
+    df["macd"] = macd_line
+    df["macd_signal"] = signal_line
+    df["macd_cross"] = np.sign(hist).fillna(0).astype(int)
     return df
 
 
