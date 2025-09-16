@@ -132,12 +132,13 @@ def _compute_pandas(
         default_position_limit=1,
     )
 
-    signals, long_stops, short_stops = strat.batch_update(price, bundle)
+    signals, long_stops, short_stops, confidence = strat.batch_update(price, bundle)
 
     index = df.index
     df["baseline_signal"] = pd.Series(signals, index=index, dtype=float)
     df["long_stop"] = pd.Series(long_stops, index=index, dtype=float)
     df["short_stop"] = pd.Series(short_stops, index=index, dtype=float)
+    df["baseline_confidence"] = pd.Series(confidence, index=index, dtype=float)
     return df
 
 
