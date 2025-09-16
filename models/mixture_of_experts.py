@@ -1,12 +1,8 @@
-"""Mixture-of-experts models with a gating network.
-
-The module defines simple expert models and a gating network that assigns
-probabilities to each expert based on the current market regime and the
-available system resources.
-"""
+"""Mixture-of-experts models with a gating network."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Sequence, Set
 
@@ -82,26 +78,97 @@ class GatingNetwork:
             and (not req.has_gpu or caps.has_gpu)
         )
 
+    def _resolve_diversity(
+        self,
+        diversity: np.ndarray
+        | Mapping[float | int | str, Sequence[float]]
+        | None,
+        regime: float,
+    ) -> np.ndarray | None:
+        if diversity is None:
+            return None
+        if isinstance(diversity, Mapping):
+            candidates: list[float | int | str] = [regime]
+            try:
+                candidates.append(int(regime))
+            except Exception:
+                pass
+            try:
+                candidates.append(float(regime))
+            except Exception:
+                pass
+            candidates.append("default")
+            vec = None
+            for key in candidates:
+                if key in diversity:
+                    vec = diversity[key]
+                    break
+            if vec is None and diversity:
+                vec = next(iter(diversity.values()))
+        else:
+            vec = diversity
+        if vec is None:
+            return None
+        arr = np.asarray(vec, dtype=float).reshape(-1)
+        if arr.shape[0] != len(self.experts):
+            raise ValueError("diversity weight size mismatch")
+        return arr
+
+    @staticmethod
+    def _normalise(vec: Sequence[float]) -> np.ndarray:
+        arr = np.asarray(vec, dtype=float)
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        arr = np.clip(arr, 0.0, None)
+        total = arr.sum()
+        if total <= 0.0 or not np.isfinite(total):
+            return np.ones_like(arr) / len(arr)
+        return arr / total
+
+    @staticmethod
+    def _apply_budgets(weights: np.ndarray, budgets: Sequence[float]) -> np.ndarray:
+        arr = np.asarray(budgets, dtype=float)
+        if arr.shape != weights.shape:
+            raise ValueError("risk budget size mismatch")
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        arr = np.clip(arr, 0.0, None)
+        total_budget = arr.sum()
+        if total_budget <= 0.0 or not np.isfinite(total_budget):
+            return np.ones_like(weights) / len(weights)
+        arr = arr / total_budget
+        pref = GatingNetwork._normalise(weights)
+        allocation = np.zeros_like(pref)
+        capacity = arr.copy()
+        leftover = 1.0
+        active = np.arange(len(pref))
+        while leftover > 1e-12 and active.size > 0:
+            pref_slice = pref[active]
+            slice_total = pref_slice.sum()
+            if slice_total <= 0.0 or not np.isfinite(slice_total):
+                proportion = np.ones_like(pref_slice) / pref_slice.size
+            else:
+                proportion = pref_slice / slice_total
+            step = np.minimum(capacity[active], leftover * proportion)
+            allocation[active] += step
+            leftover -= float(step.sum())
+            capacity[active] -= step
+            active = active[capacity[active] > 1e-12]
+        total = allocation.sum()
+        if total <= 0.0:
+            allocation = arr / arr.sum()
+        else:
+            allocation /= total
+        return allocation
+
     def weights(
         self,
         regime: float,
         caps: ResourceCapabilities,
-        diversity: np.ndarray | None = None,
+        diversity: np.ndarray
+        | Mapping[float | int | str, Sequence[float]]
+        | None = None,
+        risk_budgets: Sequence[float] | None = None,
     ) -> np.ndarray:
-        """Return softmax weights over experts.
-
-        Parameters
-        ----------
-        regime:
-            Market regime label used by the gating network.
-        caps:
-            Available :class:`~utils.resource_monitor.ResourceCapabilities`.
-        diversity:
-            Optional pre-computed weights favouring experts with low error
-            correlation. If provided, the softmax weights are multiplied by these
-            values and renormalised. This allows upstream training code to
-            down-weight highly correlated experts.
-        """
+        """Return softmax weights over experts respecting optional budgets."""
 
         scores = []
         for idx, spec in enumerate(self.experts):
@@ -110,26 +177,16 @@ class GatingNetwork:
             else:
                 scores.append(-self.sharpness * abs(regime - idx))
         scores_arr = np.array(scores)
-        # subtract max for numerical stability
         scores_arr -= np.nanmax(scores_arr)
         exp_scores = np.exp(scores_arr)
         if np.isinf(exp_scores).any() or np.isnan(exp_scores).any():
             exp_scores = np.nan_to_num(exp_scores, nan=0.0, posinf=0.0, neginf=0.0)
-        total = exp_scores.sum()
-        if total == 0.0:
-            base = np.ones(len(self.experts)) / len(self.experts)
-        else:
-            base = exp_scores / total
-        if diversity is not None:
-            div = np.asarray(diversity, dtype=float)
-            if div.shape != base.shape:
-                raise ValueError("diversity weight size mismatch")
-            base = base * div
-            total = base.sum()
-            if total <= 0 or not np.isfinite(total):
-                base = np.ones(len(self.experts)) / len(self.experts)
-            else:
-                base = base / total
+        base = self._normalise(exp_scores)
+        div = self._resolve_diversity(diversity, regime)
+        if div is not None:
+            base = self._normalise(base * np.clip(div, 0.0, None))
+        if risk_budgets is not None:
+            base = self._apply_budgets(base, risk_budgets)
         return base
 
     def predict(
@@ -137,11 +194,14 @@ class GatingNetwork:
         history: Sequence[float],
         regime: float,
         caps: ResourceCapabilities,
-        diversity: np.ndarray | None = None,
+        diversity: np.ndarray
+        | Mapping[float | int | str, Sequence[float]]
+        | None = None,
+        risk_budgets: Sequence[float] | None = None,
     ) -> float:
         """Combine expert predictions according to gating weights."""
 
-        w = self.weights(regime, caps, diversity)
+        w = self.weights(regime, caps, diversity, risk_budgets=risk_budgets)
         preds = np.array([spec.model.predict(history) for spec in self.experts])
         return float(np.dot(w, preds))
 
