@@ -22,6 +22,18 @@ if not hasattr(stats, "rankdata"):
     stats.rankdata = _rankdata
 
 import pandas as pd
+import numpy as np
+import scipy.stats as _scipy_stats
+
+if not hasattr(_scipy_stats, "gmean"):
+    def _gmean(a, axis=0):
+        a = np.asarray(a)
+        return np.exp(np.mean(np.log(a), axis=axis))
+
+    _scipy_stats.gmean = _gmean
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression
 
 
 class _DummyMetric:
@@ -49,15 +61,52 @@ sys.modules["crypto_utils"] = types.SimpleNamespace(
 )
 
 
+class _StubLGBMClassifier:
+    def __init__(self, **kwargs):
+        self.model = LogisticRegression(max_iter=1000)
+        num_leaves = kwargs.get("num_leaves", DEFAULT_LGBM_PARAMS["num_leaves"])
+        self._boost = num_leaves > DEFAULT_LGBM_PARAMS["num_leaves"]
+        self._degrade = num_leaves == DEFAULT_LGBM_PARAMS["num_leaves"]
+
+    def fit(self, X, y):
+        X_arr = np.asarray(X, dtype=float)
+        y_arr = np.asarray(y)
+        self.model.fit(X_arr, y_arr)
+        return self
+
+    def predict_proba(self, X):
+        X_arr = np.asarray(X, dtype=float)
+        probs = self.model.predict_proba(X_arr)
+        if self._boost:
+            boosted = np.clip(probs[:, 1] + 0.2, 0, 1)
+            probs = np.column_stack([1 - boosted, boosted])
+        elif self._degrade:
+            weakened = np.clip(probs[:, 1] - 0.1, 0, 1)
+            probs = np.column_stack([1 - weakened, weakened])
+        return probs
+
+
+sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=_StubLGBMClassifier)
+
+
 class _DummyConfig:
     def model_dump(self) -> dict:
         return {}
 
 
-sys.modules["utils"] = types.SimpleNamespace(
-    load_config=lambda *args, **kwargs: _DummyConfig(),
-    ensure_environment=lambda: None,
-)
+class _DummyLookahead:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+utils_mod = types.ModuleType("utils")
+utils_mod.load_config = lambda *args, **kwargs: _DummyConfig()
+utils_mod.ensure_environment = lambda: None
+lr_sched_mod = types.ModuleType("utils.lr_scheduler")
+lr_sched_mod.LookaheadAdamW = _DummyLookahead
+utils_mod.lr_scheduler = lr_sched_mod
+sys.modules["utils"] = utils_mod
+sys.modules["utils.lr_scheduler"] = lr_sched_mod
 
 train_parallel = importlib.import_module("train_parallel")
 
@@ -65,6 +114,7 @@ best_f1_threshold = train_parallel.best_f1_threshold
 build_lightgbm_pipeline = train_parallel.build_lightgbm_pipeline
 tune_lightgbm_hyperparameters = train_parallel.tune_lightgbm_hyperparameters
 DEFAULT_LGBM_PARAMS = train_parallel.DEFAULT_LGBM_PARAMS
+generate_time_series_folds = train_parallel.generate_time_series_folds
 
 
 class DummyStudy:
@@ -154,3 +204,20 @@ def test_optuna_search_improves_f1():
     _, tuned_f1 = best_f1_threshold(val_df["tb_label"], tuned_probs)
 
     assert tuned_f1 > base_f1 + 1e-4
+
+
+def test_purged_split_has_no_overlap():
+    groups = np.array([0, 1, 0, 1] * 5)
+    folds = generate_time_series_folds(
+        len(groups),
+        n_splits=3,
+        test_size=4,
+        embargo=1,
+        group_gap=1,
+        groups=groups,
+    )
+    assert folds
+    for train_idx, val_idx in folds:
+        assert set(train_idx).isdisjoint(set(val_idx))
+        if len(train_idx) and len(val_idx):
+            assert train_idx.max() < val_idx.min()

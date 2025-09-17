@@ -13,6 +13,18 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import types
 import contextlib
 
+class _DummyFileLock:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+sys.modules.setdefault("filelock", types.SimpleNamespace(FileLock=_DummyFileLock))
+
 env_mod = types.ModuleType("utils.environment")
 env_mod.ensure_environment = lambda: None
 sys.modules.setdefault("utils.environment", env_mod)
@@ -74,10 +86,23 @@ mlflow_mod = types.SimpleNamespace(
     log_artifact=lambda *a, **k: None,
 )
 sys.modules.setdefault("mlflow", mlflow_mod)
+sys.modules.setdefault(
+    "analytics.mlflow_client",
+    types.SimpleNamespace(
+        start_run=lambda *a, **k: contextlib.nullcontext(),
+        end_run=lambda *a, **k: None,
+        log_param=lambda *a, **k: None,
+        log_metric=lambda *a, **k: None,
+        log_dict=lambda *a, **k: None,
+        log_artifact=lambda *a, **k: None,
+    ),
+)
 for mod in ["scipy", "scipy.stats"]:
     sys.modules.pop(mod, None)
 prob_mod = types.SimpleNamespace(
-    ProbabilityCalibrator=object, log_reliability=lambda *a, **k: None
+    ProbabilityCalibrator=object,
+    CalibratedModel=object,
+    log_reliability=lambda *a, **k: None,
 )
 sys.modules.setdefault("analysis.prob_calibration", prob_mod)
 version_mod = types.ModuleType("data.versioning")
@@ -158,12 +183,6 @@ def test_pytorch_resume_online(tmp_path, monkeypatch):
 
     monkeypatch.setattr(train_nn, "load_history_config", load_history_config)
     monkeypatch.setattr(train_nn, "make_features", lambda df, validate=False: df)
-    monkeypatch.setattr(
-        train_nn,
-        "train_test_split",
-        lambda df, rows: (df.iloc[:rows].copy(), df.iloc[rows:].copy()),
-    )
-
     class _DummySplit:
         def __init__(self, *a, **k):
             pass
@@ -173,6 +192,19 @@ def test_pytorch_resume_online(tmp_path, monkeypatch):
             yield list(range(n - 1)), [n - 1]
 
     monkeypatch.setattr(train_nn, "PurgedTimeSeriesSplit", _DummySplit)
+    monkeypatch.setattr(
+        train_nn,
+        "generate_time_series_folds",
+        lambda n_samples, **_: [
+            (
+                np.arange(max(n_samples - 1, 0), dtype=int),
+                np.arange(max(n_samples - 1, 0), n_samples, dtype=int),
+            )
+        ]
+        if n_samples
+        else [],
+    )
+    monkeypatch.setattr(train_nn, "resolve_group_labels", lambda df: None)
     monkeypatch.setattr(
         train_nn,
         "make_sequence_arrays",
