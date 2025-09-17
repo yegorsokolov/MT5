@@ -118,6 +118,33 @@ class TrainingConfig(BaseModel):
     balance_classes: bool = False
     time_decay_half_life: int | None = Field(None, ge=1)
     drift: DriftConfig = Field(default_factory=DriftConfig)
+    feature_includes: List[str] = Field(
+        default_factory=list,
+        description="Feature columns to always include in training",
+    )
+    feature_excludes: List[str] = Field(
+        default_factory=list,
+        description="Feature columns to drop from training",
+    )
+    feature_families: Dict[str, bool] = Field(
+        default_factory=dict,
+        description="Map of feature family name to inclusion flag",
+    )
+    use_feature_selector: bool = Field(
+        True,
+        description="Run analysis.feature_selector.select_features on candidates",
+    )
+    feature_selector_top_k: int | None = Field(
+        None,
+        ge=1,
+        description="Optional top-k cutoff when using the feature selector",
+    )
+    feature_selector_corr_threshold: float | None = Field(
+        0.95,
+        ge=0.0,
+        le=1.0,
+        description="Correlation threshold for dropping redundant features",
+    )
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="before")

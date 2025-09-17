@@ -41,7 +41,6 @@ from models.hier_forecast import HierarchicalForecaster
 from models.quantize import apply_quantization
 from models.contrastive_encoder import initialize_model_with_contrastive
 from models.slimmable_network import SlimmableNetwork, select_width_multiplier
-from analysis.feature_selector import select_features
 from models.tft import QuantileLoss
 from models.cross_asset_transformer import CrossAssetTransformer
 from models.cross_modal_classifier import CrossModalClassifier
@@ -454,42 +453,20 @@ def main(
                     [train_df, df_pseudo], ignore_index=True, sort=False
                 )
 
-        features = [
-            "return",
-            "ma_5",
-            "ma_10",
-            "ma_30",
-            "ma_60",
-            "volatility_30",
-            "spread",
-            "rsi_14",
-            "news_sentiment",
-            "market_regime",
-        ]
-        features.extend(["risk_tolerance", *user_budget.as_features().keys()])
-        features += [
-            c
-            for c in df.columns
-            if c.startswith("cross_corr_")
-            or c.startswith("factor_")
-            or c.startswith("cross_mom_")
-        ]
-        if "volume_ratio" in df.columns:
-            features.extend(["volume_ratio", "volume_imbalance"])
-        if "SymbolCode" in df.columns:
-            features.append("SymbolCode")
-
         price_window_cols = sorted(
             c for c in df.columns if c.startswith("price_window_")
         )
         news_emb_cols = sorted(c for c in df.columns if c.startswith("news_emb_"))
-        if price_window_cols and news_emb_cols:
-            for col in price_window_cols + news_emb_cols:
-                if col not in features:
-                    features.append(col)
-
+        risk_feature_names = ["risk_tolerance", *user_budget.as_features().keys()]
         y_full = df["tb_label"]
-        features = select_features(df[features], y_full)
+        features = resolve_training_features(
+            df,
+            y_full,
+            cfg,
+            id_columns={"Timestamp", "Symbol"},
+            target_columns={"tb_label"},
+            mandatory=risk_feature_names,
+        )
         if "SymbolCode" in features:
             features.remove("SymbolCode")
         use_cross_modal = bool(price_window_cols and news_emb_cols)
