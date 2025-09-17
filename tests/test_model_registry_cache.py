@@ -1,5 +1,4 @@
 import contextlib
-import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -16,37 +15,30 @@ sys.modules["telemetry"] = types.SimpleNamespace(
     ),
 )
 
-# Capture metric names recorded by the registry
-_metric_calls = []
-metrics_stub = types.SimpleNamespace(
-    record_metric=lambda name, value, tags=None: _metric_calls.append(name),
-    model_cache_hit=lambda: _metric_calls.append("model_cache_hits"),
-    model_unload=lambda: _metric_calls.append("model_unloads"),
-)
-sys.modules["analytics.metrics_store"] = metrics_stub
+# Ensure repository root on path before importing the registry module
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-# Provide a lightweight joblib stub for model loading
-import joblib as _joblib_real
+import model_registry as mr
+from model_registry import ModelRegistry, ResourceCapabilities
+
+
+# Capture metric names recorded by the registry
+_metric_calls: list[str] = []
+
 
 class _StubModel:
     pass
 
-sys.modules["joblib"] = types.SimpleNamespace(
-    load=lambda *a, **k: _StubModel(),
-    dump=lambda *a, **k: None,
-)
 
-# Ensure repository root on path and load model_registry module
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-spec = importlib.util.spec_from_file_location(
-    "model_registry", Path(__file__).resolve().parents[1] / "model_registry.py"
-)
-mr = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mr)
-sys.modules["joblib"] = _joblib_real
+class RecordingAnalytics:
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
 
-ModelRegistry = mr.ModelRegistry
-ResourceCapabilities = mr.ResourceCapabilities
+    def model_cache_hit(self) -> None:
+        self._calls.append("model_cache_hits")
+
+    def model_unload(self) -> None:
+        self._calls.append("model_unloads")
 
 
 @dataclass
@@ -65,7 +57,15 @@ def test_ttl_eviction_and_metrics(monkeypatch):
     monitor = DummyMonitor(
         ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=True, gpu_count=1)
     )
-    registry = ModelRegistry(monitor, auto_refresh=False, cfg={"model_cache_ttl": 1})
+    analytics = RecordingAnalytics(_metric_calls)
+    registry = ModelRegistry(
+        monitor,
+        auto_refresh=False,
+        cfg={"model_cache_ttl": 1},
+        analytics=analytics,
+    )
+    monkeypatch.setattr(mr.joblib, "load", lambda *a, **k: _StubModel())
+    monkeypatch.setattr(mr.joblib, "dump", lambda *a, **k: None)
 
     t0 = time.time()
     monkeypatch.setattr(mr.time, "time", lambda: t0)
@@ -79,12 +79,15 @@ def test_ttl_eviction_and_metrics(monkeypatch):
     assert "model_unloads" in _metric_calls
 
 
-def test_downgrade_unloads_and_fallback():
+def test_downgrade_unloads_and_fallback(monkeypatch):
     _metric_calls.clear()
     monitor = DummyMonitor(
         ResourceCapabilities(cpus=8, memory_gb=32, has_gpu=True, gpu_count=1)
     )
-    registry = ModelRegistry(monitor, auto_refresh=False)
+    analytics = RecordingAnalytics(_metric_calls)
+    registry = ModelRegistry(monitor, auto_refresh=False, analytics=analytics)
+    monkeypatch.setattr(mr.joblib, "load", lambda *a, **k: _StubModel())
+    monkeypatch.setattr(mr.joblib, "dump", lambda *a, **k: None)
     registry._load_model("sentiment_large")
     assert "sentiment_large" in registry._models
 
