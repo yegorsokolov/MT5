@@ -1,8 +1,53 @@
 <table>
 <thead><tr><th>Parameter</th><th>Description</th><th>Default</th><th>Valid Range</th></tr></thead>
 <tbody>
-<tr><td>seed</td><td>Random seed for reproducibility</td><td><strong>42</strong></td><td></td></tr>
-<tr><td>risk_per_trade</td><td>Fraction of capital risked per trade</td><td><strong>required</strong></td><td><strong>&gt; 0, &lt;= 1</strong></td></tr>
-<tr><td>symbols</td><td>List of trading symbols, e.g. [&#x27;EURUSD&#x27;, &#x27;GBPUSD&#x27;]</td><td><strong>required</strong></td><td></td></tr>
-<tr><td>ddp</td><td>Enable DistributedDataParallel if true, auto-detect if null</td><td><strong>None</strong></td><td></td></tr>
+<tr><td>training.seed</td><td></td><td><strong>42</strong></td><td></td></tr>
+<tr><td>training.model_type</td><td>Primary model architecture to train (lgbm, neural, cross_modal)</td><td><strong>lgbm</strong></td><td></td></tr>
+<tr><td>training.use_pseudo_labels</td><td></td><td><strong>False</strong></td><td></td></tr>
+<tr><td>training.use_focal_loss</td><td></td><td><strong>False</strong></td><td></td></tr>
+<tr><td>training.focal_alpha</td><td></td><td><strong>0.25</strong></td><td><strong>&gt;= 0.0</strong></td></tr>
+<tr><td>training.focal_gamma</td><td></td><td><strong>2.0</strong></td><td><strong>&gt;= 0.0</strong></td></tr>
+<tr><td>training.num_leaves</td><td></td><td><strong>None</strong></td><td><strong>&gt;= 2</strong></td></tr>
+<tr><td>training.learning_rate</td><td></td><td><strong>None</strong></td><td><strong>&gt; 0</strong></td></tr>
+<tr><td>training.max_depth</td><td></td><td><strong>None</strong></td><td><strong>&gt;= 1</strong></td></tr>
+<tr><td>training.pt_mult</td><td></td><td><strong>0.01</strong></td><td><strong>&gt; 0</strong></td></tr>
+<tr><td>training.sl_mult</td><td></td><td><strong>0.01</strong></td><td><strong>&gt; 0</strong></td></tr>
+<tr><td>training.max_horizon</td><td></td><td><strong>10</strong></td><td><strong>&gt;= 1</strong></td></tr>
+<tr><td>training.balance_classes</td><td></td><td><strong>False</strong></td><td></td></tr>
+<tr><td>training.time_decay_half_life</td><td></td><td><strong>None</strong></td><td><strong>&gt;= 1</strong></td></tr>
+<tr><td>training.drift.method</td><td>Concept drift detection method</td><td><strong>adwin</strong></td><td></td></tr>
+<tr><td>training.drift.delta</td><td>Sensitivity of the detector</td><td><strong>0.002</strong></td><td><strong>&gt; 0</strong></td></tr>
+<tr><td>training.drift.threshold</td><td>Number of drift events required before reacting</td><td><strong>3</strong></td><td><strong>&gt;= 1</strong></td></tr>
+<tr><td>training.drift.cooldown</td><td>Seconds to wait before reacting again</td><td><strong>3600.0</strong></td><td><strong>&gt;= 0.0</strong></td></tr>
+<tr><td>training.feature_includes</td><td>Feature columns to always include in training</td><td><strong>[]</strong></td><td></td></tr>
+<tr><td>training.feature_excludes</td><td>Feature columns to drop from training</td><td><strong>[]</strong></td><td></td></tr>
+<tr><td>training.feature_families</td><td>Map of feature family name to inclusion flag</td><td><strong>{}</strong></td><td></td></tr>
+<tr><td>training.use_feature_selector</td><td>Run analysis.feature_selector.select_features on candidates</td><td><strong>True</strong></td><td></td></tr>
+<tr><td>training.feature_selector_top_k</td><td>Optional top-k cutoff when using the feature selector</td><td><strong>None</strong></td><td><strong>&gt;= 1</strong></td></tr>
+<tr><td>training.feature_selector_corr_threshold</td><td>Correlation threshold for dropping redundant features</td><td><strong>0.95</strong></td><td><strong>&gt;= 0.0, &lt;= 1.0</strong></td></tr>
+<tr><td>features.latency_threshold</td><td></td><td><strong>0.0</strong></td><td><strong>&gt;= 0.0</strong></td></tr>
+<tr><td>features.features</td><td></td><td><strong>[]</strong></td><td></td></tr>
+<tr><td>strategy.symbols</td><td></td><td><strong>required</strong></td><td></td></tr>
+<tr><td>strategy.risk_per_trade</td><td></td><td><strong>required</strong></td><td><strong>&gt; 0, &lt;= 1</strong></td></tr>
+<tr><td>strategy.session_position_limits</td><td></td><td><strong>{}</strong></td><td></td></tr>
+<tr><td>strategy.default_position_limit</td><td></td><td><strong>1</strong></td><td><strong>&gt;= 0</strong></td></tr>
+<tr><td>strategy.use_kalman_smoothing</td><td></td><td><strong>False</strong></td><td></td></tr>
+<tr><td>strategy.risk_profile.tolerance</td><td>Risk tolerance multiplier</td><td><strong>1.0</strong></td><td><strong>&gt;= 0.0</strong></td></tr>
+<tr><td>strategy.risk_profile.leverage_cap</td><td>Maximum allowed leverage for positions</td><td><strong>1.0</strong></td><td><strong>&gt;= 0.0</strong></td></tr>
+<tr><td>strategy.risk_profile.drawdown_limit</td><td>Fractional drawdown at which positions are force-closed</td><td><strong>0.0</strong></td><td><strong>&gt;= 0.0</strong></td></tr>
+<tr><td>services.service_cmds</td><td></td><td><strong>{}</strong></td><td></td></tr>
+<tr><td>active_learning.k</td><td>Number of candidates to query</td><td><strong>10</strong></td><td><strong>&gt;= 1</strong></td></tr>
+<tr><td>active_learning.min_confidence</td><td>Skip examples whose model confidence falls below the threshold</td><td><strong>0.5</strong></td><td><strong>&gt;= 0.0, &lt;= 1.0</strong></td></tr>
+<tr><td>active_learning.exploration_bias</td><td>Weight given to sampling unexplored regions</td><td><strong>0.0</strong></td><td><strong>&gt;= 0.0</strong></td></tr>
+<tr><td>mlflow.tracking_uri</td><td>Remote MLflow tracking URI; empty string keeps local logging</td><td><strong></strong></td><td></td></tr>
+<tr><td>mlflow.username</td><td>MLflow username when basic auth is enabled</td><td><strong></strong></td><td></td></tr>
+<tr><td>mlflow.password</td><td>MLflow password for basic auth</td><td><strong></strong></td><td></td></tr>
+<tr><td>alerting.slack_webhook</td><td>Slack webhook URL used for alert delivery</td><td><strong>None</strong></td><td></td></tr>
+<tr><td>alerting.smtp.host</td><td></td><td><strong></strong></td><td></td></tr>
+<tr><td>alerting.smtp.port</td><td></td><td><strong>587</strong></td><td><strong>&gt;= 0, &lt;= 65535</strong></td></tr>
+<tr><td>alerting.smtp.username</td><td></td><td><strong></strong></td><td></td></tr>
+<tr><td>alerting.smtp.password</td><td></td><td><strong></strong></td><td></td></tr>
+<tr><td>alerting.smtp.sender</td><td></td><td><strong></strong></td><td></td></tr>
+<tr><td>alerting.smtp.recipients</td><td></td><td><strong>[]</strong></td><td></td></tr>
+<tr><td>alerting.smtp.use_tls</td><td></td><td><strong>True</strong></td><td></td></tr>
 </tbody></table>

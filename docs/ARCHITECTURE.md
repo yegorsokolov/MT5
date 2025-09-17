@@ -26,7 +26,7 @@ This overview shows how data flows through MT5 from ingestion to execution and o
 
 ## Configuration Options
 
-```{autoclass} config_schema.ConfigSchema
+```{autoclass} config_models.AppConfig
 :members:
 :undoc-members:
 :show-inheritance:
