@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, AsyncGenerator, Dict
 
 import logging
@@ -21,6 +22,8 @@ except Exception:  # pragma: no cover - residual stacking is optional
     _residual_stacker = None
 
 _STACKER_CACHE: Dict[str, Any] = {}
+
+_FALLBACK_LOOP: asyncio.AbstractEventLoop | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -124,11 +127,67 @@ def _prepare_rows(df: pd.DataFrame) -> list[Dict[str, Any]]:
     return rows
 
 
-async def publish_rows(bus: MessageBus, rows: list[Dict[str, Any]]) -> None:
+def _normalise_format(fmt: str) -> str:
+    return (fmt or "json").strip().lower()
+
+
+def _serialise_row(row: Dict[str, Any], fmt: str) -> Any:
+    fmt = _normalise_format(fmt)
+    if fmt == "json":
+        return json.dumps(row).encode("utf-8")
+    if fmt in {"dict", "python", "raw", "protobuf"}:
+        return row
+    raise ValueError(f"Unsupported signal format: {fmt}")
+
+
+def _deserialise_message(msg: Any, fmt: str) -> Dict[str, Any] | Any | None:
+    fmt = _normalise_format(fmt)
+    if fmt == "json":
+        if isinstance(msg, dict):
+            return msg
+        if isinstance(msg, (bytes, bytearray)):
+            msg = msg.decode("utf-8", errors="ignore")
+        if isinstance(msg, str):
+            try:
+                parsed = json.loads(msg)
+            except json.JSONDecodeError:
+                logger.exception("Failed to decode JSON signal message")
+                return None
+            if isinstance(parsed, dict):
+                return parsed
+            logger.warning("Decoded JSON signal is not a dict: %s", type(parsed))
+            return None
+        logger.warning("Received unsupported JSON payload type: %s", type(msg))
+        return None
+    if fmt in {"dict", "python", "raw", "protobuf"}:
+        return msg
+    raise ValueError(f"Unsupported signal format: {fmt}")
+
+
+def _get_fallback_loop() -> asyncio.AbstractEventLoop:
+    global _FALLBACK_LOOP
+    if _FALLBACK_LOOP is None or _FALLBACK_LOOP.is_closed():
+        _FALLBACK_LOOP = asyncio.new_event_loop()
+    return _FALLBACK_LOOP
+
+
+async def publish_rows(
+    bus: MessageBus, rows: list[Dict[str, Any]], fmt: str
+) -> None:
     """Publish ``rows`` to the signals topic."""
 
     for row in rows:
-        await bus.publish(Topics.SIGNALS, row)
+        payload = _serialise_row(row, fmt)
+        await bus.publish(Topics.SIGNALS, payload)
+
+
+def _log_task_exception(task: asyncio.Task[Any]) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logger.exception("Signal publishing task failed")
 
 
 def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> None:
@@ -138,13 +197,15 @@ def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> N
     if not rows:
         return
 
-    coro = publish_rows(bus, rows)
+    coro = publish_rows(bus, rows, fmt)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        asyncio.run(coro)
+        loop = _get_fallback_loop()
+        loop.run_until_complete(coro)
     else:
-        loop.create_task(coro)
+        task = asyncio.create_task(coro)
+        task.add_done_callback(_log_task_exception)
 
 
 async def publish_dataframe_async(
@@ -155,7 +216,7 @@ async def publish_dataframe_async(
     rows = _prepare_rows(df)
     if not rows:
         return
-    await publish_rows(bus, rows)
+    await publish_rows(bus, rows, fmt)
 
 
 async def iter_messages(
@@ -183,7 +244,10 @@ async def iter_messages(
     message's ``size`` field is replaced with the adjusted value.
     """
 
-    async for msg in bus.subscribe(Topics.SIGNALS):
+    async for raw_msg in bus.subscribe(Topics.SIGNALS):
+        msg = _deserialise_message(raw_msg, fmt)
+        if msg is None:
+            continue
         if meta_clf is not None and isinstance(msg, dict):
             prob = msg.get("prob")
             if prob is not None:
