@@ -571,12 +571,32 @@ def train_multi_output_model(
         for i, col in enumerate(abs_cols):
             target = y[col].to_numpy(dtype=float)
             rmse = float(np.sqrt(np.mean((abs_pred[:, i] - target) ** 2)))
-            reports[col] = {"rmse": rmse}
+            preds = abs_pred[:, i]
+            pred_mean = float(np.mean(preds))
+            realized_mean = float(np.mean(target))
+            bias = float(np.mean(preds - target))
+            corr = float("nan")
+            std_pred = float(np.std(preds))
+            std_true = float(np.std(target))
+            if std_pred > 1e-12 and std_true > 1e-12:
+                corr = float(np.corrcoef(preds, target)[0, 1])
+            reports[col] = {
+                "rmse": rmse,
+                "pred_mean": pred_mean,
+                "realized_mean": realized_mean,
+                "bias": bias,
+                "corr": corr,
+            }
             rmse_scores.append(rmse)
             abs_rmse.append(rmse)
             logger.info("RMSE for %s: %.4f", col, rmse)
             try:  # pragma: no cover - mlflow optional
                 mlflow.log_metric(f"rmse_{col}", rmse)
+                mlflow.log_metric(f"pred_mean_{col}", pred_mean)
+                mlflow.log_metric(f"realized_mean_{col}", realized_mean)
+                mlflow.log_metric(f"bias_{col}", bias)
+                if not math.isnan(corr):
+                    mlflow.log_metric(f"corr_{col}", corr)
             except Exception:
                 pass
         regression_heads["abs_return"] = {"type": "multi_task", "columns": list(abs_cols)}
@@ -588,12 +608,32 @@ def train_multi_output_model(
         for i, col in enumerate(vol_cols):
             target = y[col].to_numpy(dtype=float)
             rmse = float(np.sqrt(np.mean((vol_pred[:, i] - target) ** 2)))
-            reports[col] = {"rmse": rmse}
+            preds = vol_pred[:, i]
+            pred_mean = float(np.mean(preds))
+            realized_mean = float(np.mean(target))
+            bias = float(np.mean(preds - target))
+            corr = float("nan")
+            std_pred = float(np.std(preds))
+            std_true = float(np.std(target))
+            if std_pred > 1e-12 and std_true > 1e-12:
+                corr = float(np.corrcoef(preds, target)[0, 1])
+            reports[col] = {
+                "rmse": rmse,
+                "pred_mean": pred_mean,
+                "realized_mean": realized_mean,
+                "bias": bias,
+                "corr": corr,
+            }
             rmse_scores.append(rmse)
             vol_rmse.append(rmse)
             logger.info("RMSE for %s: %.4f", col, rmse)
             try:  # pragma: no cover - mlflow optional
                 mlflow.log_metric(f"rmse_{col}", rmse)
+                mlflow.log_metric(f"pred_mean_{col}", pred_mean)
+                mlflow.log_metric(f"realized_mean_{col}", realized_mean)
+                mlflow.log_metric(f"bias_{col}", bias)
+                if not math.isnan(corr):
+                    mlflow.log_metric(f"corr_{col}", corr)
             except Exception:
                 pass
         regression_heads["volatility"] = {"type": "multi_task", "columns": list(vol_cols)}
