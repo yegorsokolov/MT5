@@ -7,7 +7,7 @@ from typing import Optional
 
 import yaml
 
-from utils import load_config
+from utils import ensure_environment, load_config
 
 
 def _prepare_config(
@@ -158,6 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    ensure_environment()
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "no_cache", False):

@@ -60,7 +60,7 @@ try:
 except Exception:  # noqa: E722
     shap = None
 
-from utils import load_config
+from utils import ensure_environment, load_config
 from config_models import AppConfig
 from utils.resource_monitor import monitor
 from data.history import (
@@ -780,6 +780,7 @@ def main(
         ``"max_drawdown"`` and ``"cvar"`` (expected shortfall). When provided,
         the final score is penalised if the constraints are violated.
     """
+    ensure_environment()
     if cfg is None:
         cfg = load_config()
     elif isinstance(cfg, dict):
@@ -2076,6 +2077,7 @@ def launch(
 
 
 if __name__ == "__main__":
+    ensure_environment()
     parser = argparse.ArgumentParser()
     parser.add_argument("--tune", action="store_true", help="Run hyperparameter search")
     parser.add_argument(
