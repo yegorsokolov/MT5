@@ -111,9 +111,6 @@ from models.multi_task_heads import MultiTaskHeadEstimator
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# start capability monitoring
-monitor.start()
-
 # Track active classifiers for dynamic resizing
 _ACTIVE_CLFS: list[LGBMClassifier] = []
 
@@ -157,11 +154,7 @@ def _subscribe_cpu_updates(cfg: AppConfig) -> None:
                 except Exception:
                     logger.debug("Failed to update n_jobs for classifier")
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-    loop.create_task(_watch())
+    monitor.create_task(_watch())
 
 
 def _index_to_timestamps(idx: pd.Index) -> np.ndarray:
@@ -760,8 +753,7 @@ def log_shap_importance(
         logger.warning("Failed to compute SHAP values: %s", e)
 
 
-@log_exceptions
-def main(
+def _run_training(
     cfg: AppConfig | dict | None = None,
     export: bool = False,
     resume_online: bool = False,
@@ -771,15 +763,6 @@ def main(
     df_unlabeled: pd.DataFrame | None = None,
     risk_target: dict | None = None,
 ) -> float:
-    """Train LightGBM model and return weighted F1 score.
-
-    Parameters
-    ----------
-    risk_target:
-        Optional dictionary specifying risk constraints. Supported keys are
-        ``"max_drawdown"`` and ``"cvar"`` (expected shortfall). When provided,
-        the final score is penalised if the constraints are violated.
-    """
     ensure_environment()
     if cfg is None:
         cfg = load_config()
@@ -2007,6 +1990,43 @@ def main(
     )
     mlflow.end_run()
     return float(base_f1)
+
+
+@log_exceptions
+def main(
+    cfg: AppConfig | dict | None = None,
+    export: bool = False,
+    resume_online: bool = False,
+    df_override: pd.DataFrame | None = None,
+    transfer_from: str | None = None,
+    use_pseudo_labels: bool = False,
+    df_unlabeled: pd.DataFrame | None = None,
+    risk_target: dict | None = None,
+) -> float:
+    """Train LightGBM model and return weighted F1 score.
+
+    Parameters
+    ----------
+    risk_target:
+        Optional dictionary specifying risk constraints. Supported keys are
+        ``"max_drawdown"`` and ``"cvar"`` (expected shortfall). When provided,
+        the final score is penalised if the constraints are violated.
+    """
+
+    monitor.start()
+    try:
+        return _run_training(
+            cfg=cfg,
+            export=export,
+            resume_online=resume_online,
+            df_override=df_override,
+            transfer_from=transfer_from,
+            use_pseudo_labels=use_pseudo_labels,
+            df_unlabeled=df_unlabeled,
+            risk_target=risk_target,
+        )
+    finally:
+        monitor.stop()
 
 
 def launch(

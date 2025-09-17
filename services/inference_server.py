@@ -37,7 +37,7 @@ app = FastAPI(title="Inference Server")
 # Cache of loaded models keyed by model name
 _MODEL_CACHE: Dict[str, Any] = {}
 _MODEL_DIR = Path(__file__).resolve().parents[1] / "models"
-_WIDTH_WATCH_TASK: asyncio.Task | None = None
+_WIDTH_WATCH_TASK: Any | None = None
 
 # Simple thread pool to provide a bit of concurrency.  The default can be
 # overridden via the ``INFER_WORKERS`` environment variable which allows the
@@ -63,10 +63,9 @@ def _ensure_watcher() -> None:
     global _WIDTH_WATCH_TASK
     if _WIDTH_WATCH_TASK is None:
         try:
-            loop = asyncio.get_event_loop()
-            q = monitor.subscribe()
-            _WIDTH_WATCH_TASK = loop.create_task(_watch_widths(q))
-        except RuntimeError:
+            queue = monitor.subscribe()
+            _WIDTH_WATCH_TASK = monitor.create_task(_watch_widths(queue))
+        except Exception:
             pass
 
 

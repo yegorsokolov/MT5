@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import threading
 import time
 from collections import deque
+from concurrent.futures import Future as ThreadFuture
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Awaitable, Set, Dict, Deque
+from typing import Optional, Callable, Awaitable, Set, Dict, Deque, Union, Any
 
 import psutil
 
@@ -13,7 +15,11 @@ except Exception:  # pragma: no cover - torch optional
     torch = None  # type: ignore
 
 from analytics.metrics_store import record_metric
-from . import load_config
+
+try:  # Allow direct execution without package context in tests
+    from . import load_config
+except ImportError:  # pragma: no cover - fallback for loose imports
+    from utils import load_config  # type: ignore
 
 
 def _plugin_cache_ttl() -> float:
@@ -67,6 +73,9 @@ class ResourceCapabilities:
         return self.gpu_count > 1
 
 
+FutureLike = Union[asyncio.Task, ThreadFuture]
+
+
 class ResourceMonitor:
     """Monitor and periodically refresh system resource info."""
 
@@ -82,10 +91,17 @@ class ResourceMonitor:
         self.capabilities = self._probe()
         self.capability_tier = self.capabilities.capability_tier()
         self._enable_accelerated_libraries()
-        self._task: Optional[asyncio.Task] = None
-        self._watch_task: Optional[asyncio.Task] = None
-        self._subscribers: Set[asyncio.Queue[str]] = set()
-        self._usage_subscribers: Set[asyncio.Queue[Dict[str, float]]] = set()
+        self._task: Optional[FutureLike] = None
+        self._watch_task: Optional[FutureLike] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop_thread: Optional[threading.Thread] = None
+        self._owns_loop = False
+        self._subscribers: Set[
+            tuple[asyncio.Queue[str], asyncio.AbstractEventLoop]
+        ] = set()
+        self._usage_subscribers: Set[
+            tuple[asyncio.Queue[Dict[str, float]], asyncio.AbstractEventLoop]
+        ] = set()
         self.max_rss_mb = max_rss_mb
         self.max_cpu_pct = max_cpu_pct
         self.sample_interval = sample_interval
@@ -364,50 +380,173 @@ class ResourceMonitor:
             else:
                 self._breach_checks = 0
 
+    def _future_active(self, fut: Optional[FutureLike]) -> bool:
+        return fut is not None and not fut.done()
+
     def start(self) -> None:
         """Start periodic background probing."""
-        if self._task is not None:
+        if self._task is not None and self._task.done():
+            self._task = None
+        if self._watch_task is not None and self._watch_task.done():
+            self._watch_task = None
+        if self._future_active(self._task) and self._future_active(self._watch_task):
             return
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.get_event_loop()
-        self._task = loop.create_task(self._periodic_probe())
-        if self._watch_task is None:
-            self._watch_task = loop.create_task(self._watch_usage())
+            loop = None
+
+        if loop is not None:
+            self._loop = loop
+            self._owns_loop = False
+            self._loop_thread = None
+            if not self._future_active(self._task):
+                self._task = loop.create_task(self._periodic_probe())
+            if not self._future_active(self._watch_task):
+                self._watch_task = loop.create_task(self._watch_usage())
+            return
+
+        needs_loop = (
+            self._loop is None
+            or self._loop.is_closed()
+            or not self._owns_loop
+            or self._loop_thread is None
+            or not self._loop_thread.is_alive()
+        )
+        if needs_loop:
+            self._loop = asyncio.new_event_loop()
+            self._owns_loop = True
+
+            def _run(loop_obj: asyncio.AbstractEventLoop) -> None:
+                asyncio.set_event_loop(loop_obj)
+                loop_obj.run_forever()
+
+            self._loop_thread = threading.Thread(
+                target=_run,
+                args=(self._loop,),
+                daemon=True,
+                name="ResourceMonitorLoop",
+            )
+            self._loop_thread.start()
+
+        assert self._loop is not None
+        if not self._future_active(self._task):
+            self._task = asyncio.run_coroutine_threadsafe(
+                self._periodic_probe(), self._loop
+            )
+        if not self._future_active(self._watch_task):
+            self._watch_task = asyncio.run_coroutine_threadsafe(
+                self._watch_usage(), self._loop
+            )
+
+    def create_task(self, coro: Awaitable[Any]) -> FutureLike:
+        """Schedule ``coro`` on the monitor's event loop."""
+
+        self.start()
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError("Resource monitor loop unavailable")
+        if not self._owns_loop:
+            return loop.create_task(coro)
+        if threading.current_thread() is self._loop_thread:
+            return loop.create_task(coro)
+        return asyncio.run_coroutine_threadsafe(coro, loop)
+
+    def _queue_on_loop(self, attr: str) -> asyncio.Queue[Any]:
+        self.start()
+        loop = self._loop
+        subscriber_loop: asyncio.AbstractEventLoop | None = None
+        try:
+            subscriber_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            subscriber_loop = None
+        if self._owns_loop:
+            assert loop is not None
+            if subscriber_loop is None:
+                if threading.current_thread() is self._loop_thread:
+                    q: asyncio.Queue[Any] = asyncio.Queue()
+                    self._register_queue(attr, q, loop)
+                    return q
+
+                async def _create() -> asyncio.Queue[Any]:
+                    q_inner: asyncio.Queue[Any] = asyncio.Queue()
+                    self._register_queue(attr, q_inner, loop)
+                    return q_inner
+
+                future = asyncio.run_coroutine_threadsafe(_create(), loop)
+                return future.result()
+            q = asyncio.Queue()
+            self._register_queue(attr, q, subscriber_loop)
+            return q
+
+        target_loop = subscriber_loop or loop
+        if target_loop is None:
+            target_loop = asyncio.get_event_loop()
+        q = asyncio.Queue()
+        self._register_queue(attr, q, target_loop)
+        return q
+
+    def _register_queue(
+        self,
+        attr: str,
+        queue: asyncio.Queue[Any],
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        getattr(self, attr).add((queue, loop))
 
     def subscribe(self) -> asyncio.Queue[str]:
         """Return a queue that receives capability tier updates."""
-        q: asyncio.Queue[str] = asyncio.Queue()
-        self._subscribers.add(q)
-        return q
+
+        return self._queue_on_loop("_subscribers")
 
     def subscribe_usage(self) -> asyncio.Queue[Dict[str, float]]:
         """Return a queue that receives periodic resource usage samples."""
-        q: asyncio.Queue[Dict[str, float]] = asyncio.Queue()
-        self._usage_subscribers.add(q)
-        return q
+
+        return self._queue_on_loop("_usage_subscribers")
 
     async def _notify(self, tier: str) -> None:
-        for q in list(self._subscribers):
+        for q, loop in list(self._subscribers):
             try:
-                await q.put(tier)
+                loop.call_soon_threadsafe(q.put_nowait, tier)
             except Exception:
-                self._subscribers.discard(q)
+                self._subscribers.discard((q, loop))
 
     async def _notify_usage(self, usage: Dict[str, float]) -> None:
-        for q in list(self._usage_subscribers):
+        for q, loop in list(self._usage_subscribers):
             try:
-                await q.put(usage)
+                loop.call_soon_threadsafe(q.put_nowait, usage)
             except Exception:
-                self._usage_subscribers.discard(q)
+                self._usage_subscribers.discard((q, loop))
 
     def stop(self) -> None:
         for attr in ("_task", "_watch_task"):
             task = getattr(self, attr, None)
-            if task:
+            if task is None:
+                continue
+            try:
                 task.cancel()
-                setattr(self, attr, None)
+            except Exception:
+                pass
+            setattr(self, attr, None)
+
+        self._subscribers.clear()
+        self._usage_subscribers.clear()
+
+        if self._owns_loop and self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
+            if self._loop_thread and self._loop_thread.is_alive():
+                self._loop_thread.join()
+            try:
+                self._loop.close()
+            except Exception:
+                pass
+        self._loop = None
+        self._loop_thread = None
+        self._owns_loop = False
 
     def _read_net_bytes(self) -> tuple[int, int]:
         """Return total received and sent bytes across all interfaces."""
