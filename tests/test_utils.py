@@ -21,10 +21,6 @@ log_utils_stub = types.ModuleType("log_utils")
 log_utils_stub.LOG_DIR = Path(".")
 sys.modules.setdefault("log_utils", log_utils_stub)
 
-env_stub = types.ModuleType("utils.environment")
-env_stub.ensure_environment = lambda: None
-sys.modules.setdefault("utils.environment", env_stub)
-
 import utils
 from utils import update_config
 

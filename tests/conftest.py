@@ -93,11 +93,6 @@ except Exception:  # pragma: no cover - joblib may not be installed
     _joblib_real.delayed = lambda func: func
 sys.modules.setdefault("joblib", _joblib_real)
 
-env_mod = types.ModuleType("utils.environment")
-env_mod.ensure_environment = lambda: None
-env_mod.__spec__ = importlib.machinery.ModuleSpec("utils.environment", loader=None)
-sys.modules.setdefault("utils.environment", env_mod)
-
 log_mod = types.ModuleType("log_utils")
 log_mod.LOG_FILE = Path("/tmp/app.log")
 log_mod.LOG_DIR = Path("/tmp")
