@@ -11,6 +11,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
+# Configure modest streaming parameters so tests observe chunked behaviour
+STREAM_CHUNK_SIZE = 25
+STREAM_FEATURE_LOOKBACK = 5
+
 # Avoid heavy environment checks during imports
 import types
 sys.modules.setdefault(
@@ -48,8 +52,13 @@ def _run_train(tmpdir: Path, stream: bool):
             kwargs.pop("verbose", None)
             return super().fit(X, y)
 
+    max_seen = 0
+
     def _simple_features(df: pd.DataFrame) -> pd.DataFrame:
+        nonlocal max_seen
         df = df.copy()
+        max_seen = max(max_seen, len(df))
+        df["mid"] = (df["Bid"] + df["Ask"]) / 2
         df["return"] = df["Bid"].pct_change().fillna(0)
         df["spread"] = df["Ask"] - df["Bid"]
         for col in [
@@ -77,7 +86,8 @@ def _run_train(tmpdir: Path, stream: bool):
         "symbols": ["TEST"],
         "n_splits": 2,
         "stream_history": stream,
-        "stream_chunk_size": 1000,
+        "stream_chunk_size": STREAM_CHUNK_SIZE,
+        "stream_feature_lookback": STREAM_FEATURE_LOOKBACK,
         "use_scaler": False,
         "early_stopping_rounds": 5,
     }
@@ -88,7 +98,7 @@ def _run_train(tmpdir: Path, stream: bool):
     mlflow.end_run()
     train.main()
     with open(ROOT / "classification_report.json") as f:
-        return json.load(f)
+        return json.load(f), max_seen
 
 
 def _run_train_nn(tmpdir: Path, stream: bool):
@@ -99,6 +109,7 @@ def _run_train_nn(tmpdir: Path, stream: bool):
 
     def _simple_features(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
+        df["mid"] = (df["Bid"] + df["Ask"]) / 2
         df["return"] = df["Bid"].pct_change().fillna(0)
         df["spread"] = df["Ask"] - df["Bid"]
         for col in [
@@ -123,7 +134,8 @@ def _run_train_nn(tmpdir: Path, stream: bool):
         "risk_per_trade": 0.01,
         "symbols": ["TEST"],
         "stream_history": stream,
-        "stream_chunk_size": 1000,
+        "stream_chunk_size": STREAM_CHUNK_SIZE,
+        "stream_feature_lookback": STREAM_FEATURE_LOOKBACK,
         "epochs": 1,
         "sequence_length": 5,
         "val_size": 0.2,
@@ -179,9 +191,11 @@ def test_load_history_iter_equivalent(tmp_path):
 def test_train_stream_equivalence(tmp_path):
     hist_path = DATA_DIR / "TEST_history.parquet"
     _make_history(hist_path, rows=80)
-    res_full = _run_train(tmp_path, stream=False)
-    res_stream = _run_train(tmp_path, stream=True)
+    res_full, max_full = _run_train(tmp_path, stream=False)
+    res_stream, max_stream = _run_train(tmp_path, stream=True)
     assert res_full == res_stream
+    assert max_stream <= STREAM_CHUNK_SIZE + STREAM_FEATURE_LOOKBACK
+    assert max_stream < max_full
 
 
 def test_train_nn_stream_equivalence(tmp_path):
