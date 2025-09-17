@@ -111,7 +111,6 @@ async def _watch() -> None:
 
 
 try:
-    loop = asyncio.get_running_loop()
-except RuntimeError:
-    loop = asyncio.get_event_loop()
-loop.create_task(_watch())
+    monitor.create_task(_watch())
+except Exception:
+    pass

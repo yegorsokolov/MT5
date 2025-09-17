@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 
-from utils.resource_monitor import monitor
+from utils.resource_monitor import monitor, FutureLike
 from model_registry import select_models
 from features import get_feature_pipeline
 
@@ -28,7 +28,7 @@ class EnergySaver:
         self.cpu_threshold = cpu_threshold
         self.power_threshold = power_threshold
         self.logger = logging.getLogger(__name__)
-        self._task: asyncio.Task | None = None
+        self._task: FutureLike | None = None
         self._report_dir = Path("reports/energy")
 
     async def _run(self) -> None:
@@ -56,8 +56,7 @@ class EnergySaver:
 
         if self._task is not None:
             return
-        loop = asyncio.get_event_loop()
-        self._task = loop.create_task(self._run())
+        self._task = monitor.create_task(self._run())
 
     def stop(self) -> None:
         if self._task:

@@ -58,6 +58,7 @@ _spec.loader.exec_module(_rm)  # type: ignore
 
 ResourceCapabilities = _rm.ResourceCapabilities
 ResourceMonitor = _rm.ResourceMonitor
+FutureLike = _rm.FutureLike
 monitor = _rm.monitor
 
 from telemetry import get_tracer, get_meter
@@ -208,7 +209,7 @@ class ModelRegistry:
         self.selected: Dict[str, ModelVariant] = {}
         # Keep track of previous variants so we can rollback if a canary fails
         self._previous: Dict[str, ModelVariant] = {}
-        self._task: Optional[asyncio.Task] = None
+        self._task: Optional[FutureLike] = None
         self.logger = logging.getLogger(__name__)
         self._models: Dict[str, Any] = {}
         self._finalizers: Dict[str, weakref.finalize] = {}
@@ -256,12 +257,8 @@ class ModelRegistry:
         self._pick_models()
         if auto_refresh:
             self.monitor.start()
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.get_event_loop()
             queue = self.monitor.subscribe()
-            self._task = loop.create_task(self._watch(queue))
+            self._task = self.monitor.create_task(self._watch(queue))
 
     # Registration -----------------------------------------------------
     def register_variants(self, task: str, variants: List[ModelVariant]) -> None:
