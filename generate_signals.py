@@ -55,14 +55,37 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_THRESHOLD_KEY = "default"
+
+
 def _normalise_thresholds(
     thresholds: dict[int | str, float | int] | None,
-) -> dict[int, float]:
-    """Cast regime thresholds to ``int -> float`` mapping."""
+) -> tuple[dict[int, float], float | None]:
+    """Return ``(per_regime, default)`` thresholds parsed from metadata."""
 
     if not thresholds:
-        return {}
-    return {int(k): float(v) for k, v in thresholds.items()}
+        return {}, None
+
+    regime_thresholds: dict[int, float] = {}
+    default_threshold: float | None = None
+
+    for key, value in thresholds.items():
+        if isinstance(key, str) and key.lower() == DEFAULT_THRESHOLD_KEY:
+            try:
+                default_threshold = float(value)
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                continue
+            continue
+        try:
+            norm_key = int(key)
+        except (TypeError, ValueError):
+            continue
+        try:
+            regime_thresholds[norm_key] = float(value)
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            continue
+
+    return regime_thresholds, default_threshold
 
 
 def _resolve_threshold_metadata(
@@ -76,7 +99,7 @@ def _resolve_threshold_metadata(
 
     if models:
         primary = models[0]
-        regime_thresholds = _normalise_thresholds(
+        regime_thresholds, default_override = _normalise_thresholds(
             getattr(primary, "regime_thresholds", None)
         )
         best_attr = getattr(primary, "best_threshold_", None)
@@ -87,11 +110,13 @@ def _resolve_threshold_metadata(
                 best_threshold = float(best_attr)
             except (TypeError, ValueError):  # pragma: no cover - defensive
                 best_threshold = None
+        if best_threshold is None and default_override is not None:
+            best_threshold = default_override
 
     online_best: float | None = None
     online_thresholds: dict[int, float] = {}
     if online_model is not None:
-        online_thresholds = _normalise_thresholds(
+        online_thresholds, online_default = _normalise_thresholds(
             getattr(online_model, "regime_thresholds", None)
         )
         online_attr = getattr(online_model, "best_threshold_", None)
@@ -102,6 +127,8 @@ def _resolve_threshold_metadata(
                 online_best = float(online_attr)
             except (TypeError, ValueError):  # pragma: no cover - defensive
                 online_best = None
+        if online_best is None and online_default is not None:
+            online_best = online_default
 
     if not regime_thresholds and online_thresholds:
         regime_thresholds = dict(online_thresholds)
@@ -293,7 +320,10 @@ def apply_regime_thresholds(
     if len(probs) == 0:
         return np.zeros(0, dtype=int)
 
-    thr_map = _normalise_thresholds(thresholds)
+    thr_map, override_default = _normalise_thresholds(thresholds)
+    effective_default = (
+        default_threshold if override_default is None else float(override_default)
+    )
     regimes_arr = np.asarray(regimes)
     if regimes_arr.shape[0] != len(probs):
         raise ValueError("Regimes and probabilities must have the same length")
@@ -304,7 +334,7 @@ def apply_regime_thresholds(
         mask = regimes_arr == reg
         if not np.any(mask):
             continue
-        thr = thr_map.get(int(reg), default_threshold)
+        thr = thr_map.get(int(reg), effective_default)
         preds[mask] = (probs[mask] >= thr).astype(int)
     return preds
 
@@ -334,9 +364,15 @@ def load_models(paths, versions=None, return_meta: bool = False):
         try:
             m, meta = model_store.load_model(vid)
             perf = meta.get("performance", {})
-            thr = _normalise_thresholds(perf.get("regime_thresholds"))
-            if thr:
-                setattr(m, "regime_thresholds", thr)
+            thr_map, thr_default = _normalise_thresholds(
+                perf.get("regime_thresholds")
+            )
+            if thr_map or thr_default is not None:
+                combined_thresholds: dict[int | str, float] = dict(thr_map)
+                if thr_default is not None:
+                    combined_thresholds[DEFAULT_THRESHOLD_KEY] = float(thr_default)
+                setattr(m, "regime_thresholds", combined_thresholds)
+                setattr(m, "regime_thresholds_", combined_thresholds)
             interval_params: ConformalIntervalParams | None = None
             interval_blob = perf.get("interval")
             if interval_blob:
@@ -439,10 +475,13 @@ def load_models(paths, versions=None, return_meta: bool = False):
                     thresholds = None
                 if not thresholds and isinstance(metadata_blob, Mapping):
                     thresholds = metadata_blob.get("regime_thresholds")
-                norm_thresholds = _normalise_thresholds(thresholds)
-                if norm_thresholds:
-                    setattr(model_obj, "regime_thresholds", norm_thresholds)
-                    setattr(model_obj, "regime_thresholds_", norm_thresholds)
+                norm_thresholds, default_thr = _normalise_thresholds(thresholds)
+                if norm_thresholds or default_thr is not None:
+                    combined_thresholds: dict[int | str, float] = dict(norm_thresholds)
+                    if default_thr is not None:
+                        combined_thresholds[DEFAULT_THRESHOLD_KEY] = float(default_thr)
+                    setattr(model_obj, "regime_thresholds", combined_thresholds)
+                    setattr(model_obj, "regime_thresholds_", combined_thresholds)
                 if feature_list is None:
                     feats_blob = metadata_blob.get("features")
                     if isinstance(feats_blob, list):
@@ -814,10 +853,15 @@ def main():
                             setattr(online_model, "validation_f1_", float(val_f1))
                         except (TypeError, ValueError):  # pragma: no cover
                             pass
-                    thr_map = _normalise_thresholds(payload.get("regime_thresholds"))
-                    if thr_map:
-                        setattr(online_model, "regime_thresholds", thr_map)
-                        setattr(online_model, "regime_thresholds_", thr_map)
+                    thr_map, thr_default = _normalise_thresholds(
+                        payload.get("regime_thresholds")
+                    )
+                    if thr_map or thr_default is not None:
+                        combined_thresholds: dict[int | str, float] = dict(thr_map)
+                        if thr_default is not None:
+                            combined_thresholds[DEFAULT_THRESHOLD_KEY] = float(thr_default)
+                        setattr(online_model, "regime_thresholds", combined_thresholds)
+                        setattr(online_model, "regime_thresholds_", combined_thresholds)
             else:
                 online_model = payload
 
@@ -839,12 +883,15 @@ def main():
                             setattr(online_model, "validation_f1_", float(val_f1))
                         except (TypeError, ValueError):  # pragma: no cover
                             pass
-                    thr_map = _normalise_thresholds(
+                    thr_map, thr_default = _normalise_thresholds(
                         perf_section.get("regime_thresholds")
                     )
-                    if thr_map:
-                        setattr(online_model, "regime_thresholds", thr_map)
-                        setattr(online_model, "regime_thresholds_", thr_map)
+                    if thr_map or thr_default is not None:
+                        combined_thresholds: dict[int | str, float] = dict(thr_map)
+                        if thr_default is not None:
+                            combined_thresholds[DEFAULT_THRESHOLD_KEY] = float(thr_default)
+                        setattr(online_model, "regime_thresholds", combined_thresholds)
+                        setattr(online_model, "regime_thresholds_", combined_thresholds)
             logger.info("Loaded online model from %s", online_path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to load online model: %s", exc)
