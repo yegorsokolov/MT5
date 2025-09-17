@@ -5,6 +5,7 @@ from pathlib import Path
 
 import joblib
 import numpy as np
+import pandas as pd
 
 repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
@@ -56,9 +57,6 @@ sys.modules["utils"] = utils_stub
 sys.modules["utils.market_hours"] = _make_module(
     "utils.market_hours", is_market_open=lambda: True
 )
-
-for mod in ["scipy", "scipy.stats", "scipy.sparse"]:
-    sys.modules.pop(mod, None)
 
 sys.modules["backtest"] = _make_module(
     "backtest", run_rolling_backtest=lambda *a, **k: None
@@ -123,6 +121,49 @@ sys.modules.setdefault("models", _make_module("models", model_store=model_store_
 concept_drift_stub = _make_module("analysis.concept_drift", ConceptDriftMonitor=object)
 sys.modules.setdefault("analysis.concept_drift", concept_drift_stub)
 
+
+class _StubSampler:
+    def __init__(self, *args, **kwargs):  # pragma: no cover - simple stub
+        pass
+
+
+class _StubStudy:
+    def __init__(self, *args, **kwargs):  # pragma: no cover - simple stub
+        self.best_params: dict[str, float] = {}
+        self.best_value: float = 0.0
+
+    def optimize(self, objective, n_trials):  # pragma: no cover - simple stub
+        return None
+
+
+optuna_stub = _make_module(
+    "optuna",
+    samplers=_make_module("samplers", TPESampler=_StubSampler),
+    create_study=lambda *a, **k: _StubStudy(),
+    Study=_StubStudy,
+)
+sys.modules.setdefault("optuna", optuna_stub)
+
+
+class _StubLGBMClassifier:
+    def __init__(self, **kwargs):
+        from sklearn.linear_model import LogisticRegression  # type: ignore
+
+        self._model = LogisticRegression(max_iter=1000)
+
+    def fit(self, X, y):  # pragma: no cover - simple wrapper
+        self._model.fit(X, y)
+        return self
+
+    def predict_proba(self, X):  # pragma: no cover - simple wrapper
+        return self._model.predict_proba(X)
+
+
+sys.modules.setdefault(
+    "lightgbm",
+    _make_module("lightgbm", LGBMClassifier=_StubLGBMClassifier),
+)
+
 conformal_stub = _make_module(
     "models.conformal",
     ConformalIntervalParams=object,
@@ -160,10 +201,11 @@ def test_per_symbol_thresholds_applied(tmp_path):
     assert features == metadata["features"]
     assert getattr(models[0], "model_metadata") == metadata
 
-    thresholds = generate_signals._normalise_thresholds(
+    thresholds, default_thr = generate_signals._normalise_thresholds(
         getattr(models[0], "regime_thresholds", {})
     )
     assert thresholds == {0: 0.8}
+    assert default_thr is None
 
     probs = np.array([0.55, 0.79, 0.81])
     regimes = np.array([0, 0, 0])
@@ -210,3 +252,97 @@ def test_online_regime_thresholds_applied():
         probs, regimes, thresholds, default_thr
     )
     assert preds.tolist() == [1, 0, 1]
+
+
+def test_training_regime_thresholds_align_with_application():
+    import importlib
+    import sys
+
+    for mod in ["scipy", "scipy.sparse", "scipy.stats"]:
+        sys.modules.pop(mod, None)
+    scipy = importlib.import_module("scipy")
+    sys.modules["scipy"] = scipy
+    sys.modules["scipy.sparse"] = importlib.import_module("scipy.sparse")
+    sys.modules["scipy.stats"] = importlib.import_module("scipy.stats")
+    import train_parallel
+    import warnings
+
+    warnings.filterwarnings(
+        "ignore",
+        message=".*__sklearn_tags__.*",
+        category=DeprecationWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=".*Pipeline instance is not fitted yet.*",
+        category=FutureWarning,
+    )
+
+    rng = np.random.default_rng(123)
+    reg0_train = rng.normal(loc=-0.2, scale=0.5, size=80)
+    reg1_train = rng.normal(loc=0.9, scale=0.5, size=80)
+    train_features = np.concatenate([reg0_train, reg1_train])
+    train_labels = np.concatenate([
+        (reg0_train > 0.0).astype(int),
+        (reg1_train > 1.1).astype(int),
+    ])
+
+    reg0_val = rng.normal(loc=-0.1, scale=0.45, size=40)
+    reg1_val = rng.normal(loc=0.85, scale=0.4, size=40)
+    val_features = np.concatenate([reg0_val, reg1_val])
+    val_labels = np.concatenate([
+        (reg0_val > 0.1).astype(int),
+        (reg1_val > 0.95).astype(int),
+    ])
+    val_regimes = np.concatenate(
+        [np.zeros_like(reg0_val, dtype=int), np.ones_like(reg1_val, dtype=int)]
+    )
+
+    train_df = pd.DataFrame({"f0": train_features, "tb_label": train_labels})
+    val_df = pd.DataFrame(
+        {"f0": val_features, "tb_label": val_labels, "market_regime": val_regimes}
+    )
+
+    pipeline = train_parallel.build_lightgbm_pipeline(
+        train_parallel.DEFAULT_LGBM_PARAMS,
+        use_scaler=False,
+    )
+    pipeline.fit(train_df[["f0"]], train_df["tb_label"])
+    val_probs = pipeline.predict_proba(val_df[["f0"]])[:, 1]
+
+    thresholds, preds, val_f1 = train_parallel._derive_regime_thresholds(
+        val_df, val_probs
+    )
+
+    assert "default" in thresholds
+    assert 0 in thresholds and 1 in thresholds
+    default_thr = thresholds["default"]
+
+    applied_preds = generate_signals.apply_regime_thresholds(
+        val_probs,
+        val_regimes,
+        thresholds,
+        default_thr,
+    )
+    np.testing.assert_array_equal(applied_preds, preds)
+
+    metadata = {
+        "performance": {
+            "regime_thresholds": {str(k): float(v) for k, v in thresholds.items()},
+            "validation_f1": float(val_f1),
+            "best_threshold": float(default_thr),
+        }
+    }
+    norm_map, norm_default = generate_signals._normalise_thresholds(
+        metadata["performance"]["regime_thresholds"]
+    )
+    assert norm_map == {0: thresholds[0], 1: thresholds[1]}
+    assert np.isclose(norm_default, default_thr)
+
+    applied_from_meta = generate_signals.apply_regime_thresholds(
+        val_probs,
+        val_regimes,
+        metadata["performance"]["regime_thresholds"],
+        default_thr,
+    )
+    np.testing.assert_array_equal(applied_from_meta, preds)
