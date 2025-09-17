@@ -22,6 +22,7 @@ from train_utils import (
     resolve_group_labels,
     resolve_training_features,
 )
+from training.features import select_model_features
 
 
 setup_logging()
@@ -298,6 +299,13 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
         cfg,
         id_columns={"Timestamp", "Symbol"},
         target_columns={"tb_label"},
+    )
+    features = select_model_features(
+        df,
+        features,
+        target_series,
+        model_type="lgbm",
+        mandatory=cfg.get("mandatory_features"),
     )
 
     use_scaler = cfg.get("use_scaler", True)

@@ -19,10 +19,33 @@ from train_ensemble import (
     train_moe_ensemble,
     ResourceCapabilities,
 )
+from training.pipeline import launch as pipeline_launch
 from train_utils import setup_training, end_training
 from utils import ensure_environment
 
 app = typer.Typer(help="Unified training interface")
+
+
+@app.command()
+def pipeline(
+    config: Optional[Path] = typer.Option(None, help="Path to config YAML"),
+    export: bool = typer.Option(False, help="Export model to ONNX"),
+    resume_online: bool = typer.Option(False, help="Resume incremental training"),
+    transfer_from: Optional[str] = typer.Option(None, help="Donor symbol for transfer"),
+    use_pseudo_labels: bool = typer.Option(False, help="Include pseudo-labeled samples"),
+    risk_target: Optional[str] = typer.Option(None, help="JSON string specifying risk constraints"),
+) -> None:
+    cfg = setup_training(config, experiment="pipeline")
+    risk_cfg = json.loads(risk_target) if risk_target else None
+    pipeline_launch(
+        cfg,
+        export=export,
+        resume_online=resume_online,
+        transfer_from=transfer_from,
+        use_pseudo_labels=use_pseudo_labels,
+        risk_target=risk_cfg,
+    )
+    end_training()
 
 
 @app.command()
