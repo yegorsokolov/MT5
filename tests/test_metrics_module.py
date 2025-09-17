@@ -1,4 +1,56 @@
-from prometheus_client import Counter, Gauge, CollectorRegistry
+import importlib
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+try:
+    from prometheus_client import Counter, Gauge, CollectorRegistry
+except ModuleNotFoundError:
+    class _Value:
+        def __init__(self) -> None:
+            self._total = 0.0
+
+        def inc(self, amount: float = 1.0) -> None:
+            self._total += amount
+
+        def set(self, value: float) -> None:
+            self._total = value
+
+        def get(self) -> float:
+            return self._total
+
+    class Counter:
+        def __init__(self, *args, **kwargs) -> None:
+            self._value = _Value()
+
+        def inc(self, amount: float = 1.0) -> None:
+            self._value.inc(amount)
+
+    class Gauge:
+        def __init__(self, *args, **kwargs) -> None:
+            self._value = _Value()
+
+        def set(self, value: float) -> None:
+            self._value.set(value)
+
+        def inc(self, amount: float = 1.0) -> None:
+            self._value.inc(amount)
+
+    class CollectorRegistry:
+        def __init__(self, *args, **kwargs) -> None:
+            return
+
+    prometheus_stub = types.SimpleNamespace(
+        Counter=Counter,
+        Gauge=Gauge,
+        CollectorRegistry=CollectorRegistry,
+    )
+    sys.modules.setdefault("prometheus_client", prometheus_stub)
+    from prometheus_client import Counter, Gauge, CollectorRegistry
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 import metrics
 
 
@@ -19,4 +71,13 @@ def test_metrics_counters(monkeypatch):
     assert metrics.TRADE_COUNT._value.get() == 1
     assert metrics.ERROR_COUNT._value.get() == 2
 
+
+def test_telemetry_uninitialised_by_default():
+    module = importlib.import_module("telemetry")
+    telemetry = importlib.reload(module)
+    try:
+        status = telemetry.telemetry_status()
+        assert status["initialized"] is False
+    finally:
+        importlib.reload(module)
 
