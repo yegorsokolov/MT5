@@ -45,9 +45,6 @@ def load_api(tmp_log, monkeypatch):
         safe_load=lambda *a, **k: {},
         safe_dump=lambda *a, **k: "",
     )
-    env_mod = types.ModuleType("environment")
-    env_mod.ensure_environment = lambda: None
-    sys.modules['utils.environment'] = env_mod
     utils_mod = types.ModuleType('utils')
     utils_mod.update_config = lambda *a, **k: None
     sys.modules['utils'] = utils_mod

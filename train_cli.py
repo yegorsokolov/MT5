@@ -20,6 +20,7 @@ from train_ensemble import (
     ResourceCapabilities,
 )
 from train_utils import setup_training, end_training
+from utils import ensure_environment
 
 app = typer.Typer(help="Unified training interface")
 
@@ -269,5 +270,10 @@ def ensemble(
         end_training()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    ensure_environment()
     app()
+
+
+if __name__ == "__main__":
+    main()

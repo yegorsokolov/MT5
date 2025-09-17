@@ -7,6 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 if "scipy" in sys.modules:
     del sys.modules["scipy"]
+if "scipy.stats" in sys.modules:
+    del sys.modules["scipy.stats"]
 scipy_pkg = importlib.import_module("scipy")
 sys.modules["scipy"] = scipy_pkg
 stats = importlib.import_module("scipy.stats")
@@ -33,7 +35,7 @@ if not hasattr(_scipy_stats, "gmean"):
     _scipy_stats.gmean = _gmean
 
 from sklearn.linear_model import LogisticRegression
-from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
 
 
 class _DummyMetric:
@@ -66,23 +68,23 @@ class _StubLGBMClassifier:
         self.model = LogisticRegression(max_iter=1000)
         num_leaves = kwargs.get("num_leaves", DEFAULT_LGBM_PARAMS["num_leaves"])
         self._boost = num_leaves > DEFAULT_LGBM_PARAMS["num_leaves"]
-        self._degrade = num_leaves == DEFAULT_LGBM_PARAMS["num_leaves"]
+        self._boost_model: KNeighborsClassifier | None = None
 
     def fit(self, X, y):
         X_arr = np.asarray(X, dtype=float)
         y_arr = np.asarray(y)
         self.model.fit(X_arr, y_arr)
+        if self._boost:
+            self._boost_model = KNeighborsClassifier(n_neighbors=5)
+            self._boost_model.fit(X_arr, y_arr)
         return self
 
     def predict_proba(self, X):
         X_arr = np.asarray(X, dtype=float)
-        probs = self.model.predict_proba(X_arr)
-        if self._boost:
-            boosted = np.clip(probs[:, 1] + 0.2, 0, 1)
-            probs = np.column_stack([1 - boosted, boosted])
-        elif self._degrade:
-            weakened = np.clip(probs[:, 1] - 0.1, 0, 1)
-            probs = np.column_stack([1 - weakened, weakened])
+        if self._boost and self._boost_model is not None:
+            probs = self._boost_model.predict_proba(X_arr)
+        else:
+            probs = self.model.predict_proba(X_arr)
         return probs
 
 

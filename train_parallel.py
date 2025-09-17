@@ -387,8 +387,9 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
 
 @log_exceptions
 def main() -> None:
-    from utils import load_config
+    from utils import ensure_environment, load_config
 
+    ensure_environment()
     cfg = load_config()
     seed = cfg.get("seed", 42)
     random.seed(seed)
