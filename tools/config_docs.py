@@ -5,31 +5,30 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-from annotated_types import Ge, Gt, Le, Lt
-
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from config_schema import ConfigSchema
+from config_models import AppConfig
+from config_schema import iter_config_fields
 import html
 
 
 def _range(field) -> str:
     parts: list[str] = []
-    for m in field.metadata:
-        if isinstance(m, Gt):
-            parts.append(f"> {m.gt}")
-        elif isinstance(m, Ge):
-            parts.append(f">= {m.ge}")
-        elif isinstance(m, Lt):
-            parts.append(f"< {m.lt}")
-        elif isinstance(m, Le):
-            parts.append(f"<= {m.le}")
-    return ", ".join(parts)
+    for meta in field.metadata:
+        if hasattr(meta, "gt"):
+            parts.append(f"> {meta.gt}")
+        if hasattr(meta, "ge"):
+            parts.append(f">= {meta.ge}")
+        if hasattr(meta, "lt"):
+            parts.append(f"< {meta.lt}")
+        if hasattr(meta, "le"):
+            parts.append(f"<= {meta.le}")
+    return ", ".join(dict.fromkeys(parts))
 
 
 def main() -> None:
     rows = []
-    for name, field in ConfigSchema.model_fields.items():
+    for name, field in iter_config_fields(AppConfig):
         default = (
             "required" if field.is_required() else field.get_default(call_default_factory=True)
         )

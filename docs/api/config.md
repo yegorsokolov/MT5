@@ -1,22 +1,23 @@
 # Configuration Schema
 
-```{autoclass} config_schema.ConfigSchema
-:members:
-:undoc-members:
-:show-inheritance:
-:exclude-members: check_symbols
-```
-
-## Runtime Configuration Models
-
-The declarative schema above is complemented by a set of runtime configuration
-models built on :mod:`pydantic`.  They provide strict validation, convenient
-defaults, and helper methods used throughout the trading stack.
+The canonical configuration schema is provided by
+:class:`config_models.AppConfig`.  The
+:func:`config_schema.iter_config_fields` helper exposes the flattened field
+metadata used by the documentation and dashboard tooling.
 
 ```{autoclass} config_models.AppConfig
 :members:
+:undoc-members:
 :show-inheritance:
 ```
+
+```{autofunction} config_schema.iter_config_fields
+```
+
+## Nested Configuration Models
+
+The root schema composes several nested models that encapsulate specific
+domains of the trading system.
 
 ```{autoclass} config_models.TrainingConfig
 :members:

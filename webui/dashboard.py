@@ -16,7 +16,8 @@ from analytics.regime_performance_store import RegimePerformanceStore
 from analytics.issue_client import load_default as issue_client
 from log_utils import read_decisions
 
-from config_schema import ConfigSchema
+from config_models import AppConfig
+from config_schema import iter_config_fields
 from utils import load_config
 import numpy as np
 import state_manager
@@ -34,17 +35,34 @@ def load_current_config() -> Dict[str, Any]:
     return {}
 
 
+_MISSING = object()
+
+
+def _lookup_path(data: Dict[str, Any], path: str) -> Any:
+    parts = path.split(".")
+    current: Any = data
+    for part in parts:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return _MISSING
+    return current
+
+
 @st.cache_data
 def schema_table(current: Dict[str, Any]):
     rows = []
-    for name, field in ConfigSchema.model_fields.items():
-        default = field.default if field.default is not None else "required"
+    for name, field in iter_config_fields(AppConfig):
+        default = (
+            "required" if field.is_required() else field.get_default(call_default_factory=True)
+        )
+        current_value = _lookup_path(current, name)
         rows.append(
             {
                 "parameter": name,
                 "description": field.description or "",
                 "default": default,
-                "current": current.get(name, default),
+                "current": default if current_value is _MISSING else current_value,
             }
         )
     return rows

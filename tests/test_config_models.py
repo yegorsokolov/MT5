@@ -4,10 +4,28 @@ import pytest
 import sys
 from pathlib import Path
 import importlib
+import importlib.machinery
+import types
+import contextlib
 
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+mlflow_stub = types.ModuleType("mlflow")
+mlflow_stub.set_tracking_uri = lambda *a, **k: None
+mlflow_stub.set_experiment = lambda *a, **k: None
+mlflow_stub.start_run = lambda *a, **k: contextlib.nullcontext()
+mlflow_stub.end_run = lambda *a, **k: None
+mlflow_stub.log_dict = lambda *a, **k: None
+mlflow_stub.log_param = lambda *a, **k: None
+mlflow_stub.log_params = lambda *a, **k: None
+mlflow_stub.log_metric = lambda *a, **k: None
+mlflow_stub.log_metrics = lambda *a, **k: None
+mlflow_stub.log_artifact = lambda *a, **k: None
+mlflow_stub.log_artifacts = lambda *a, **k: None
+mlflow_stub.__spec__ = importlib.machinery.ModuleSpec("mlflow", loader=None)
+sys.modules.setdefault("mlflow", mlflow_stub)
 
 sys.modules.pop("yaml", None)
 yaml = importlib.import_module("yaml")
