@@ -331,8 +331,8 @@ async def _watch_capabilities(queue: asyncio.Queue[str]) -> None:
 if not os.getenv("MT5_DOCS_BUILD"):
     _update_status()
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_watch_capabilities(monitor.subscribe()))
+        queue = monitor.subscribe()
+        monitor.create_task(_watch_capabilities(queue))
     except Exception:  # pragma: no cover - no running loop during import
         pass
 

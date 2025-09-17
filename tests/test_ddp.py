@@ -1,10 +1,12 @@
 import sys
 import pathlib
 import importlib.util
-import torch
-import torch.distributed as dist
-import torch.multiprocessing as mp
-from torch.nn.parallel import DistributedDataParallel as DDP
+import pytest
+
+torch = pytest.importorskip("torch")
+dist = pytest.importorskip("torch.distributed")
+mp = pytest.importorskip("torch.multiprocessing")
+from torch.nn.parallel import DistributedDataParallel as DDP  # type: ignore
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(

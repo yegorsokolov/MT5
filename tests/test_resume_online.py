@@ -8,6 +8,10 @@ import pandas as pd
 
 import os
 import base64
+import asyncio
+import pytest
+
+pytest.importorskip("torch")
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 import types
@@ -66,6 +70,18 @@ mon_mod = types.ModuleType("utils.resource_monitor")
 class _DummyMonitor:
     def start(self):
         pass
+
+    def stop(self):
+        pass
+
+    def subscribe(self):
+        return asyncio.Queue()
+
+    def subscribe_usage(self):
+        return asyncio.Queue()
+
+    def create_task(self, coro):
+        return None
 
     capability_tier = "lite"
     capabilities = types.SimpleNamespace(
