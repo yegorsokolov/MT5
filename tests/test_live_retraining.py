@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import sys
 import types
+import importlib
 import importlib.util
 
 root = Path(__file__).resolve().parents[1]
@@ -80,6 +81,9 @@ class DummyModel:
     def learn_one(self, x, y):
         return self
 
+    def predict_proba_one(self, x):  # pragma: no cover - deterministic stub
+        return {0: 0.5, 1: 0.5}
+
 
 river = types.ModuleType("river")
 river.compose = types.SimpleNamespace(Pipeline=lambda *a, **k: DummyModel())
@@ -89,33 +93,31 @@ sys.modules.setdefault("river", river)
 
 utils_stub = types.ModuleType("utils")
 utils_stub.load_config = lambda: {"seed": 1, "drawdown_limit": 0.1}
-sys.modules.setdefault("utils", utils_stub)
+spec_utils = importlib.machinery.ModuleSpec("utils", loader=None, is_package=True)
+spec_utils.submodule_search_locations = []
+utils_stub.__spec__ = spec_utils
+utils_stub.__path__ = []
+sys.modules["utils"] = utils_stub
 
 log_utils_stub = types.ModuleType("log_utils")
 log_utils_stub.setup_logging = lambda: None
 log_utils_stub.log_exceptions = lambda f: f
-sys.modules.setdefault("log_utils", log_utils_stub)
+log_utils_stub.log_predictions = lambda *a, **k: None
+sys.modules["log_utils"] = log_utils_stub
 
 state_manager_stub = types.ModuleType("state_manager")
 state_manager_stub.watch_config = lambda cfg: types.SimpleNamespace(stop=lambda: None)
-sys.modules.setdefault("state_manager", state_manager_stub)
+state_manager_stub.load_runtime_state = lambda *a, **k: None
+state_manager_stub.save_runtime_state = lambda *a, **k: None
+state_manager_stub.migrate_runtime_state = lambda *a, **k: None
+state_manager_stub.legacy_runtime_state_exists = lambda *a, **k: False
+sys.modules["state_manager"] = state_manager_stub
 
-saved_paths: list[Path] = []
+for mod in ["scipy", "scipy.stats", "scipy.sparse"]:
+    sys.modules.pop(mod, None)
 
-model_registry_stub = types.ModuleType("model_registry")
-
-
-def save_model(name, model, metadata, path=None):
-    p = Path(path or name)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, p)
-    p.with_suffix(".json").write_text(json.dumps(metadata))
-    saved_paths.append(p)
-    return p
-
-
-model_registry_stub.save_model = save_model
-sys.modules.setdefault("model_registry", model_registry_stub)
+model_registry_stub = sys.modules["model_registry"]
+saved_paths = model_registry_stub.saved_paths
 
 import pandas as pd
 import numpy as np
@@ -169,6 +171,32 @@ def test_live_recording_triggers_retraining(tmp_path, monkeypatch):
         train_online,
         "resolve_training_features",
         lambda df, target, cfg, **kwargs: ["feat_a", "feat_b"],
+    )
+
+    class _CfgTraining:
+        def __init__(self) -> None:
+            self.pt_mult = 0.01
+            self.sl_mult = 0.01
+            self.max_horizon = 2
+
+    class _Cfg:
+        def __init__(self) -> None:
+            self.training = _CfgTraining()
+
+        def get(self, key, default=None):
+            mapping = {
+                "seed": 0,
+                "pt_mult": self.training.pt_mult,
+                "sl_mult": self.training.sl_mult,
+                "max_horizon": self.training.max_horizon,
+                "drawdown_limit": 0.2,
+                "online_feature_window": 5,
+            }
+            return mapping.get(key, default)
+
+    monkeypatch.setattr(train_online, "load_config", lambda: _Cfg())
+    monkeypatch.setattr(
+        train_online, "watch_config", lambda cfg: types.SimpleNamespace(stop=lambda: None)
     )
 
     rec = LiveRecorder(data_path)
