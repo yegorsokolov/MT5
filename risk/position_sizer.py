@@ -50,6 +50,8 @@ class PositionSizer:
         confidence: float = 1.0,
         slippage: float | None = None,
         liquidity: float | None = None,
+        expected_return: float | None = None,
+        predicted_volatility: float | None = None,
     ) -> float:
         """Return position size based on configured sizing method.
 
@@ -69,17 +71,31 @@ class PositionSizer:
         liquidity : float, optional
             Available volume at the top of book.  The final size will not
             exceed this value.
+        expected_return : float, optional
+            Forecasted return magnitude used for logging/diagnostics.
+        predicted_volatility : float, optional
+            Forecasted volatility used to scale the Kelly allocation.
         """
         weight = 1.0
         if self.weights and symbol is not None:
             weight = self.weights.get(symbol, 0.0)
         capital = self.capital * weight
         confidence = max(0.0, min(confidence, 1.0))
+        raw_vol_input = volatility
+        if raw_vol_input is None and predicted_volatility is not None:
+            raw_vol_input = predicted_volatility
         if self.method == "kelly":
             frac = self.kelly_fraction(prob)
             base_size = capital * frac
             target = base_size
             realized = base_size
+            if predicted_volatility is not None and predicted_volatility > 0:
+                scale = self.target_vol / max(predicted_volatility, 1e-12)
+                base_size *= scale
+                target *= scale
+                realized = base_size * predicted_volatility
+            elif volatility is not None:
+                realized = base_size * volatility
         elif self.method == "var" and var is not None:
             base_size = capital * (self.target_vol / max(var, 1e-12))
             target = capital * self.target_vol
@@ -89,11 +105,11 @@ class PositionSizer:
             target = capital * self.target_vol
             realized = base_size * es
         else:
-            if volatility is None:
+            if raw_vol_input is None:
                 return 0.0
-            base_size = self.volatility_target(volatility, capital)
+            base_size = self.volatility_target(raw_vol_input, capital)
             target = capital * self.target_vol
-            realized = base_size * volatility
+            realized = base_size * raw_vol_input
         size = base_size * confidence
         slip_factor = 1.0
         if slippage is not None and slippage > 0:
@@ -137,10 +153,14 @@ class PositionSizer:
             record_metric("expected_funding_cost", fund_cost)
             record_metric("margin_required", margin_required)
             record_metric("margin_available", margin_avail)
+            if expected_return is not None:
+                record_metric("expected_return", expected_return)
+            if predicted_volatility is not None:
+                record_metric("predicted_volatility", predicted_volatility)
         except Exception:
             pass
         logger.info(
-            "Position size computed: base=%.4f adjusted=%.4f target=%.4f adj_target=%.4f slip=%.4f liq=%.4f conf=%.2f",
+            "Position size computed: base=%.4f adjusted=%.4f target=%.4f adj_target=%.4f slip=%.4f liq=%.4f conf=%.2f exp=%.4f pred_vol=%.4f",
             base_size,
             size,
             target,
@@ -148,6 +168,8 @@ class PositionSizer:
             slippage or 0.0,
             float(liquidity) if liquidity is not None else float("nan"),
             confidence,
+            expected_return or 0.0,
+            predicted_volatility or (volatility or 0.0),
         )
         return size
 
