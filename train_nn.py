@@ -10,7 +10,19 @@ from typing import Callable, TypeVar, Any
 
 import joblib
 import math
-from analytics import mlflow_client as mlflow
+import contextlib
+import types
+try:  # pragma: no cover - optional dependency
+    from analytics import mlflow_client as mlflow
+except Exception:  # pragma: no cover - fallback for tests
+    mlflow = types.SimpleNamespace(
+        start_run=lambda *a, **k: contextlib.nullcontext(),
+        end_run=lambda *a, **k: None,
+        log_param=lambda *a, **k: None,
+        log_metric=lambda *a, **k: None,
+        log_dict=lambda *a, **k: None,
+        log_artifact=lambda *a, **k: None,
+    )
 import numpy as np
 import pandas as pd
 import torch
@@ -59,10 +71,13 @@ from data.history import (
 )
 from data.features import (
     make_features,
-    train_test_split,
     make_sequence_arrays,
 )
-from train_utils import prepare_modal_arrays
+from train_utils import (
+    prepare_modal_arrays,
+    generate_time_series_folds,
+    resolve_group_labels,
+)
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 T = TypeVar("T")
@@ -387,29 +402,57 @@ def main(
         cfg.get("max_horizon", 10),
     )
 
-        train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
+    groups = resolve_group_labels(df)
+    total_rows = len(df)
+    desired_val = cfg.get("cv_test_size")
+    train_rows_cfg = cfg.get("train_rows")
+    if train_rows_cfg is not None:
+        train_rows = max(0, min(int(train_rows_cfg), total_rows - 1))
+        desired_val = max(1, total_rows - train_rows)
+    folds = generate_time_series_folds(
+        total_rows,
+        n_splits=cfg.get("cv_splits", 1),
+        test_size=desired_val,
+        embargo=cfg.get("cv_embargo", 0),
+        min_train_size=cfg.get("cv_min_train_size"),
+        group_gap=cfg.get("cv_group_gap", 0),
+        groups=groups,
+    )
+    if not folds:
+        raise ValueError("No validation folds could be generated")
+    train_idx, val_idx = folds[-1]
+    train_df = df.iloc[train_idx].copy()
+    val_df = df.iloc[val_idx].copy()
+    logger.info(
+        "Purged CV split -> train=%d val=%d (val range %s-%s)",
+        len(train_idx),
+        len(val_idx),
+        int(val_idx[0]) if len(val_idx) else "-",
+        int(val_idx[-1]) if len(val_idx) else "-",
+    )
+    test_df = val_df  # Backwards compatibility for downstream logic
 
-        if cfg.get("use_pseudo_labels"):
-            pseudo_dir = root / "data" / "pseudo_labels"
-            if pseudo_dir.exists():
-                files = list(pseudo_dir.glob("*.parquet")) + list(
-                    pseudo_dir.glob("*.csv")
+    if cfg.get("use_pseudo_labels"):
+        pseudo_dir = root / "data" / "pseudo_labels"
+        if pseudo_dir.exists():
+            files = list(pseudo_dir.glob("*.parquet")) + list(
+                pseudo_dir.glob("*.csv")
+            )
+            for p in files:
+                try:
+                    if p.suffix == ".parquet":
+                        df_pseudo = pd.read_parquet(p)
+                    else:
+                        df_pseudo = pd.read_csv(p)
+                except Exception:
+                    continue
+                if "pseudo_label" not in df_pseudo.columns:
+                    continue
+                df_pseudo = df_pseudo.copy()
+                df_pseudo["tb_label"] = df_pseudo["pseudo_label"]
+                train_df = pd.concat(
+                    [train_df, df_pseudo], ignore_index=True, sort=False
                 )
-                for p in files:
-                    try:
-                        if p.suffix == ".parquet":
-                            df_pseudo = pd.read_parquet(p)
-                        else:
-                            df_pseudo = pd.read_csv(p)
-                    except Exception:
-                        continue
-                    if "pseudo_label" not in df_pseudo.columns:
-                        continue
-                    df_pseudo = df_pseudo.copy()
-                    df_pseudo["tb_label"] = df_pseudo["pseudo_label"]
-                    train_df = pd.concat(
-                        [train_df, df_pseudo], ignore_index=True, sort=False
-                    )
 
         features = [
             "return",
@@ -1105,37 +1148,37 @@ def main(
                 with torch.no_grad():
                     for code, loader in val_loaders.items():
                         for batch in loader:
-                        if use_tft:
-                            xb, xs, xo, yb = batch
-                            xb = xb.to(device)
-                            xs = xs.to(device)
-                            xo = xo.to(device)
-                        elif use_cross_modal:
-                            xb_price, xb_news, yb = batch
-                            xb_price = xb_price.to(device)
-                            xb_news = xb_news.to(device)
-                        else:
-                            xb, yb = batch
-                            xb = xb.to(device)
-                        yb = yb.to(device)
-                        with autocast(enabled=use_amp):
-                            if isinstance(model, HierarchicalForecaster):
-                                preds = model(xb)
-                                loss = loss_fn(preds, yb.float())
-                                prob = preds[:, 0]
+                            if use_tft:
+                                xb, xs, xo, yb = batch
+                                xb = xb.to(device)
+                                xs = xs.to(device)
+                                xo = xo.to(device)
+                            elif use_cross_modal:
+                                xb_price, xb_news, yb = batch
+                                xb_price = xb_price.to(device)
+                                xb_news = xb_news.to(device)
                             else:
-                                if use_tft:
-                                    preds = model(xb, static=xs, observed=xo)
+                                xb, yb = batch
+                                xb = xb.to(device)
+                            yb = yb.to(device)
+                            with autocast(enabled=use_amp):
+                                if isinstance(model, HierarchicalForecaster):
+                                    preds = model(xb)
                                     loss = loss_fn(preds, yb.float())
-                                    prob = preds[:, len(quantiles) // 2]
-                                elif use_cross_modal:
-                                    preds = model(xb_price, xb_news)
-                                    loss = loss_fn(preds, yb)
-                                    prob = preds.squeeze()
+                                    prob = preds[:, 0]
                                 else:
-                                    preds = model(xb, code)
-                                    loss = loss_fn(preds, yb)
-                                    prob = preds.squeeze()
+                                    if use_tft:
+                                        preds = model(xb, static=xs, observed=xo)
+                                        loss = loss_fn(preds, yb.float())
+                                        prob = preds[:, len(quantiles) // 2]
+                                    elif use_cross_modal:
+                                        preds = model(xb_price, xb_news)
+                                        loss = loss_fn(preds, yb)
+                                        prob = preds.squeeze()
+                                    else:
+                                        preds = model(xb, code)
+                                        loss = loss_fn(preds, yb)
+                                        prob = preds.squeeze()
                             val_loss += loss.item() * xb.size(0)
                             val_returns_eval.append(prob.detach())
                             if isinstance(model, HierarchicalForecaster):
