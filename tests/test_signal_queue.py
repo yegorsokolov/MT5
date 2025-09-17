@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 import sys
 import types
@@ -103,9 +104,9 @@ import risk_manager
 
 class _DummyBus:
     def __init__(self) -> None:
-        self.published: list[tuple[str, dict]] = []
+        self.published: list[tuple[str, object]] = []
 
-    async def publish(self, topic: str, message: dict) -> None:
+    async def publish(self, topic: str, message: object) -> None:
         self.published.append((topic, message))
 
 
@@ -113,29 +114,39 @@ def _stub_event(*_: object, **__: object) -> None:
     return None
 
 
-def test_publish_dataframe_sync_runs_coroutine(monkeypatch):
+def test_publish_dataframe_sync_reuses_fallback_loop(monkeypatch):
     bus = _DummyBus()
     df = pd.DataFrame({"Timestamp": ["2024"], "prob": [0.55]})
 
     monkeypatch.setattr(signal_queue, "record_event", _stub_event)
     monkeypatch.setattr(signal_queue.pipeline_anomaly, "validate", _validate_stub)
 
-    called = {"run": False}
+    monkeypatch.setattr(signal_queue, "_FALLBACK_LOOP", None)
 
-    def fake_run(coro):
-        called["run"] = True
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(coro)
-        finally:
+    created_loops: list[asyncio.AbstractEventLoop] = []
+    real_new_loop = asyncio.new_event_loop
+
+    def capture_loop() -> asyncio.AbstractEventLoop:
+        loop = real_new_loop()
+        created_loops.append(loop)
+        return loop
+
+    monkeypatch.setattr(signal_queue.asyncio, "new_event_loop", capture_loop)
+
+    try:
+        signal_queue.publish_dataframe(bus, df)
+        signal_queue.publish_dataframe(bus, df)
+    finally:
+        for loop in created_loops:
             loop.close()
+        setattr(signal_queue, "_FALLBACK_LOOP", None)
 
-    monkeypatch.setattr(signal_queue.asyncio, "run", fake_run)
-
-    signal_queue.publish_dataframe(bus, df)
-
-    assert called["run"] is True
-    assert bus.published == [(signal_queue.Topics.SIGNALS, {"Timestamp": "2024", "prob": 0.55})]
+    assert len(created_loops) == 1
+    assert len(bus.published) == 2
+    for _, message in bus.published:
+        assert isinstance(message, (bytes, bytearray))
+        decoded = json.loads(message.decode("utf-8"))
+        assert decoded["prob"] == 0.55
 
 
 def test_publish_dataframe_running_loop_schedules_task(monkeypatch):
@@ -145,33 +156,89 @@ def test_publish_dataframe_running_loop_schedules_task(monkeypatch):
     monkeypatch.setattr(signal_queue, "record_event", _stub_event)
     monkeypatch.setattr(signal_queue.pipeline_anomaly, "validate", _validate_stub)
 
-    orig_run = asyncio.run
-
-    def forbid_run(*args, **kwargs):
-        raise AssertionError("asyncio.run should not be called when loop is running")
-
-    monkeypatch.setattr(signal_queue.asyncio, "run", forbid_run)
-
     scheduled = []
+    callbacks = []
 
     async def runner() -> None:
-        loop = asyncio.get_running_loop()
-        original_create_task = loop.create_task
+        original_create_task = asyncio.create_task
 
         def capture(coro):
             task = original_create_task(coro)
+
+            def wrapped(self, cb, context=None):  # noqa: ANN001 - mimic Task API
+                callbacks.append(cb)
+                if context is None:
+                    return asyncio.Task.add_done_callback(task, cb)
+                try:
+                    return asyncio.Task.add_done_callback(task, cb, context=context)
+                except TypeError:
+                    return asyncio.Task.add_done_callback(task, cb)
+
+            task.add_done_callback = types.MethodType(wrapped, task)
             scheduled.append(task)
             return task
 
-        monkeypatch.setattr(loop, "create_task", capture)
+        monkeypatch.setattr(signal_queue.asyncio, "create_task", capture)
 
         signal_queue.publish_dataframe(bus, df)
         assert scheduled, "publish_dataframe should schedule the coroutine on the running loop"
         await asyncio.gather(*scheduled)
 
-    orig_run(runner())
+    asyncio.run(runner())
 
-    assert bus.published == [(signal_queue.Topics.SIGNALS, {"Timestamp": "2025", "prob": 0.42})]
+    assert callbacks, "publish_dataframe should register a done callback"
+    assert len(bus.published) == 1
+    topic, payload = bus.published[0]
+    assert topic == signal_queue.Topics.SIGNALS
+    assert json.loads(payload.decode("utf-8"))["prob"] == 0.42
+
+
+def test_publish_dataframe_task_exception_logged(monkeypatch):
+    class _FailingBus:
+        async def publish(self, *_: object, **__: object) -> None:
+            raise RuntimeError("boom")
+
+    bus = _FailingBus()
+    df = pd.DataFrame({"Timestamp": ["2026"], "prob": [0.99]})
+
+    monkeypatch.setattr(signal_queue, "record_event", _stub_event)
+    monkeypatch.setattr(signal_queue.pipeline_anomaly, "validate", _validate_stub)
+
+    logged: list[str] = []
+
+    def capture(msg: str, *args: object, **kwargs: object) -> None:
+        logged.append(msg)
+
+    monkeypatch.setattr(signal_queue.logger, "exception", capture)
+
+    async def runner() -> None:
+        signal_queue.publish_dataframe(bus, df)
+        await asyncio.sleep(0)
+
+    asyncio.run(runner())
+
+    assert any("failed" in entry for entry in logged)
+
+
+def test_publish_dataframe_raw_format(monkeypatch):
+    bus = _DummyBus()
+    df = pd.DataFrame({"Timestamp": ["2027"], "prob": [0.11]})
+
+    monkeypatch.setattr(signal_queue, "record_event", _stub_event)
+    monkeypatch.setattr(signal_queue.pipeline_anomaly, "validate", _validate_stub)
+    monkeypatch.setattr(signal_queue, "_FALLBACK_LOOP", None)
+
+    signal_queue.publish_dataframe(bus, df, fmt="raw")
+
+    assert len(bus.published) == 1
+    topic, payload = bus.published[0]
+    assert topic == signal_queue.Topics.SIGNALS
+    assert isinstance(payload, dict)
+    assert payload["prob"] == 0.11
+    loop = signal_queue._FALLBACK_LOOP
+    if loop is not None:
+        loop.close()
+        setattr(signal_queue, "_FALLBACK_LOOP", None)
 
 
 def test_publish_and_iter():
@@ -187,7 +254,7 @@ def test_publish_and_iter():
 def test_async_publish_and_iter():
     queue = signal_queue.get_signal_backend({})
     df = pd.DataFrame({"Timestamp": ["2021"], "prob": [0.7], "confidence": [0.8]})
-    asyncio.run(signal_queue.publish_dataframe_async(queue, df))
+    asyncio.run(signal_queue.publish_dataframe_async(queue, df, fmt="raw"))
     gen = signal_queue.iter_messages(queue)
     msg = asyncio.run(asyncio.wait_for(gen.__anext__(), timeout=1))
     assert msg["prob"] == 0.7
