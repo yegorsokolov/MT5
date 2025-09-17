@@ -15,7 +15,11 @@ from lightgbm import LGBMClassifier
 from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 
 from log_utils import setup_logging, log_exceptions
-from train_utils import generate_time_series_folds, resolve_group_labels
+from train_utils import (
+    generate_time_series_folds,
+    resolve_group_labels,
+    resolve_training_features,
+)
 
 
 setup_logging()
@@ -236,33 +240,14 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
         int(val_idx[-1]) if len(val_idx) else "-",
     )
     inner_groups = groups[train_idx] if groups is not None else None
-    features = [
-        c
-        for c in [
-            "return",
-            "ma_5",
-            "ma_10",
-            "ma_30",
-            "ma_60",
-            "volatility_30",
-            "spread",
-            "rsi_14",
-            "news_sentiment",
-            "market_regime",
-        ]
-        if c in df.columns
-    ]
-    features += [
-        c
-        for c in df.columns
-        if c.startswith("cross_corr_")
-        or c.startswith("factor_")
-        or c.startswith("cross_mom_")
-    ]
-    if "volume_ratio" in df.columns:
-        features.extend(["volume_ratio", "volume_imbalance"])
-    if "SymbolCode" in df.columns:
-        features.append("SymbolCode")
+    target_series = df["tb_label"]
+    features = resolve_training_features(
+        df,
+        target_series,
+        cfg,
+        id_columns={"Timestamp", "Symbol"},
+        target_columns={"tb_label"},
+    )
 
     use_scaler = cfg.get("use_scaler", True)
     n_trials = cfg.get("lgbm_optuna_trials", 25)
