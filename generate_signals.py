@@ -65,6 +65,56 @@ def _normalise_thresholds(
     return {int(k): float(v) for k, v in thresholds.items()}
 
 
+def _resolve_threshold_metadata(
+    models: list[Any], online_model: Any | None, cfg: Mapping[str, Any]
+) -> tuple[dict[int, float], float]:
+    """Return combined regime thresholds and default cutoff for predictions."""
+
+    base_threshold = float(cfg.get("threshold", 0.5))
+    regime_thresholds: dict[int, float] = {}
+    best_threshold: float | None = None
+
+    if models:
+        primary = models[0]
+        regime_thresholds = _normalise_thresholds(
+            getattr(primary, "regime_thresholds", None)
+        )
+        best_attr = getattr(primary, "best_threshold_", None)
+        if best_attr is None:
+            best_attr = getattr(primary, "best_threshold", None)
+        if best_attr is not None:
+            try:
+                best_threshold = float(best_attr)
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                best_threshold = None
+
+    online_best: float | None = None
+    online_thresholds: dict[int, float] = {}
+    if online_model is not None:
+        online_thresholds = _normalise_thresholds(
+            getattr(online_model, "regime_thresholds", None)
+        )
+        online_attr = getattr(online_model, "best_threshold_", None)
+        if online_attr is None:
+            online_attr = getattr(online_model, "best_threshold", None)
+        if online_attr is not None:
+            try:
+                online_best = float(online_attr)
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                online_best = None
+
+    if not regime_thresholds and online_thresholds:
+        regime_thresholds = dict(online_thresholds)
+
+    if best_threshold is None and online_best is not None:
+        best_threshold = online_best
+
+    if best_threshold is None:
+        best_threshold = base_threshold
+
+    return regime_thresholds, float(best_threshold)
+
+
 def _combine_interval_params(
     params: list[ConformalIntervalParams],
 ) -> tuple[float | dict[int | str, float] | None, float | None]:
@@ -717,11 +767,6 @@ def main():
     )
     if not models and model_type != "autogluon":
         models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
-    regime_thresholds = (
-        _normalise_thresholds(getattr(models[0], "regime_thresholds", {}))
-        if models
-        else {}
-    )
 
     # Replay past trades through any newly enabled model versions
     new_versions = [v for v in model_versions if v not in prev_models]
@@ -734,13 +779,79 @@ def main():
             logger.exception("Trade replay for new models failed")
 
     online_model = None
+    online_metadata: Mapping[str, Any] | None = None
     online_path = Path(__file__).resolve().parent / "models" / "online.joblib"
     if cfg.get("use_online_model", False) and online_path.exists():
         try:
-            online_model, _ = joblib.load(online_path)
+            payload = joblib.load(online_path)
+            online_metadata = None
+            if isinstance(payload, tuple) and len(payload) >= 1:
+                online_model = payload[0]
+                if len(payload) >= 2 and isinstance(payload[1], Mapping):
+                    online_metadata = payload[1]
+            elif isinstance(payload, dict):
+                online_model = payload.get("model") or payload.get("pipeline")
+                meta_candidate = (
+                    payload.get("metadata")
+                    or payload.get("meta")
+                    or payload.get("info")
+                )
+                if isinstance(meta_candidate, Mapping):
+                    online_metadata = meta_candidate
+                if online_model is not None:
+                    best_val = payload.get("best_threshold")
+                    if best_val is not None:
+                        try:
+                            best_float = float(best_val)
+                        except (TypeError, ValueError):  # pragma: no cover - defensive
+                            best_float = None
+                        else:
+                            setattr(online_model, "best_threshold", best_float)
+                            setattr(online_model, "best_threshold_", best_float)
+                    val_f1 = payload.get("validation_f1")
+                    if val_f1 is not None:
+                        try:
+                            setattr(online_model, "validation_f1_", float(val_f1))
+                        except (TypeError, ValueError):  # pragma: no cover
+                            pass
+                    thr_map = _normalise_thresholds(payload.get("regime_thresholds"))
+                    if thr_map:
+                        setattr(online_model, "regime_thresholds", thr_map)
+                        setattr(online_model, "regime_thresholds_", thr_map)
+            else:
+                online_model = payload
+
+            if online_model is not None and isinstance(online_metadata, Mapping):
+                perf_section = online_metadata.get("performance")
+                if isinstance(perf_section, Mapping):
+                    best_val = perf_section.get("best_threshold")
+                    if best_val is not None:
+                        try:
+                            best_float = float(best_val)
+                        except (TypeError, ValueError):  # pragma: no cover - defensive
+                            best_float = None
+                        else:
+                            setattr(online_model, "best_threshold", best_float)
+                            setattr(online_model, "best_threshold_", best_float)
+                    val_f1 = perf_section.get("validation_f1")
+                    if val_f1 is not None:
+                        try:
+                            setattr(online_model, "validation_f1_", float(val_f1))
+                        except (TypeError, ValueError):  # pragma: no cover
+                            pass
+                    thr_map = _normalise_thresholds(
+                        perf_section.get("regime_thresholds")
+                    )
+                    if thr_map:
+                        setattr(online_model, "regime_thresholds", thr_map)
+                        setattr(online_model, "regime_thresholds_", thr_map)
             logger.info("Loaded online model from %s", online_path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to load online model: %s", exc)
+
+    regime_thresholds, default_threshold = _resolve_threshold_metadata(
+        models, online_model, cfg
+    )
     hist_path_pq = Path(__file__).resolve().parent / "data" / "history.parquet"
     if hist_path_pq.exists():
         df = load_history_parquet(hist_path_pq)
@@ -1081,7 +1192,7 @@ def main():
         regimes_arr = (
             regimes.to_numpy() if hasattr(regimes, "to_numpy") else np.asarray(regimes)
         )
-    default_thr = float(cfg.get("threshold", 0.5))
+    default_thr = float(default_threshold)
     if regimes_arr is not None and regime_thresholds:
         preds = apply_regime_thresholds(
             combined,
