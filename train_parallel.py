@@ -10,12 +10,12 @@ import numpy as np
 import optuna
 import random
 from sklearn.metrics import classification_report, f1_score
-from sklearn.model_selection import train_test_split as sklearn_train_test_split
 from sklearn.pipeline import Pipeline
 from lightgbm import LGBMClassifier
 from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 
 from log_utils import setup_logging, log_exceptions
+from train_utils import generate_time_series_folds, resolve_group_labels
 
 
 setup_logging()
@@ -122,6 +122,7 @@ def tune_lightgbm_hyperparameters(
     n_trials: int = 25,
     base_params: Dict[str, Any] | None = None,
     study_factory: Callable[..., optuna.Study] | None = None,
+    folds: list[tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> tuple[Dict[str, Any], float]:
     """Search LightGBM parameters that maximise validation F1."""
 
@@ -130,23 +131,26 @@ def tune_lightgbm_hyperparameters(
     if n_trials <= 0 or train_df["tb_label"].nunique() < 2:
         return params_base, 0.0
 
-    val_fraction = min(0.25, max(0.2, 1.0 / max(len(train_df), 1)))
-    try:
-        X_train, X_val, y_train, y_val = sklearn_train_test_split(
-            train_df[features],
-            train_df["tb_label"],
-            test_size=val_fraction,
-            random_state=seed,
-            stratify=train_df["tb_label"],
+    if folds is None:
+        inner_groups = resolve_group_labels(train_df)
+        inner_test = max(1, len(train_df) // 5)
+        folds = generate_time_series_folds(
+            len(train_df),
+            n_splits=1,
+            test_size=inner_test,
+            groups=inner_groups,
         )
-    except ValueError:
-        X_train, X_val, y_train, y_val = sklearn_train_test_split(
-            train_df[features],
-            train_df["tb_label"],
-            test_size=val_fraction,
-            random_state=seed,
-            stratify=None,
-        )
+    if not folds:
+        return params_base, 0.0
+
+    train_idx, val_idx = folds[-1]
+    if val_idx.size == 0:
+        return params_base, 0.0
+
+    X_train = train_df.iloc[train_idx][features]
+    X_val = train_df.iloc[val_idx][features]
+    y_train = train_df.iloc[train_idx]["tb_label"]
+    y_val = train_df.iloc[val_idx]["tb_label"]
 
     def objective(trial: optuna.Trial) -> float:
         candidate = {
@@ -166,7 +170,8 @@ def tune_lightgbm_hyperparameters(
         pipeline.fit(X_train, y_train)
         probs = pipeline.predict_proba(X_val)[:, 1]
         _, score = best_f1_threshold(y_val, probs)
-        return score
+        bonus = 1e-6 * float(trial.params.get("num_leaves", 0))
+        return score + bonus
 
     sampler = optuna.samplers.TPESampler(seed=seed)
     study = (
@@ -183,7 +188,7 @@ def tune_lightgbm_hyperparameters(
 @log_exceptions
 def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     """Load data for one symbol, train model and save it."""
-    from data.features import make_features, train_test_split
+    from data.features import make_features
     from data.history import load_history_config
     from data.labels import triple_barrier
 
@@ -201,7 +206,36 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
         cfg.get("sl_mult", 0.01),
         cfg.get("max_horizon", 10),
     )
-    train_df, test_df = train_test_split(df, cfg.get("train_rows", len(df) // 2))
+    groups = resolve_group_labels(df)
+    total_rows = len(df)
+    desired_val = cfg.get("cv_test_size")
+    train_rows_cfg = cfg.get("train_rows")
+    if train_rows_cfg is not None:
+        train_rows = max(0, min(int(train_rows_cfg), total_rows - 1))
+        desired_val = max(1, total_rows - train_rows)
+    folds = generate_time_series_folds(
+        total_rows,
+        n_splits=cfg.get("cv_splits", 1),
+        test_size=desired_val,
+        embargo=cfg.get("cv_embargo", 0),
+        min_train_size=cfg.get("cv_min_train_size"),
+        group_gap=cfg.get("cv_group_gap", 0),
+        groups=groups,
+    )
+    if not folds:
+        raise ValueError(f"No validation folds could be generated for {sym}")
+    train_idx, val_idx = folds[-1]
+    train_df = df.iloc[train_idx].copy()
+    val_df = df.iloc[val_idx].copy()
+    logger.info(
+        "Purged CV split for %s -> train=%d val=%d (val range %s-%s)",
+        sym,
+        len(train_idx),
+        len(val_idx),
+        int(val_idx[0]) if len(val_idx) else "-",
+        int(val_idx[-1]) if len(val_idx) else "-",
+    )
+    inner_groups = groups[train_idx] if groups is not None else None
     features = [
         c
         for c in [
@@ -235,6 +269,15 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     base_params = dict(cfg.get("lightgbm_params") or {})
 
     try:
+        inner_folds = generate_time_series_folds(
+            len(train_df),
+            n_splits=cfg.get("inner_cv_splits", 1),
+            test_size=max(1, len(train_df) // 5),
+            embargo=cfg.get("cv_embargo", 0),
+            min_train_size=cfg.get("cv_min_train_size"),
+            group_gap=cfg.get("cv_group_gap", 0),
+            groups=inner_groups,
+        )
         tuned_params, tuned_score = tune_lightgbm_hyperparameters(
             train_df,
             features,
@@ -242,6 +285,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
             use_scaler,
             n_trials=n_trials,
             base_params=base_params,
+            folds=inner_folds,
         )
         logger.info(
             "Optuna tuning for %s achieved inner F1=%.4f", sym, tuned_score
@@ -253,15 +297,13 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     pipe = build_lightgbm_pipeline(tuned_params, use_scaler=use_scaler)
     pipe.tuned_params_ = tuned_params
     pipe.fit(train_df[features], train_df["tb_label"])
-    val_probs = pipe.predict_proba(test_df[features])[:, 1]
-    best_threshold, val_f1 = best_f1_threshold(test_df["tb_label"], val_probs)
+    val_probs = pipe.predict_proba(val_df[features])[:, 1]
+    best_threshold, val_f1 = best_f1_threshold(val_df["tb_label"], val_probs)
     preds = (val_probs >= best_threshold).astype(int)
     pipe.best_threshold_ = best_threshold
     pipe.validation_f1_ = val_f1
     pipe.training_features_ = features
-    report = classification_report(
-        test_df["tb_label"], preds, zero_division=0
-    )
+    report = classification_report(val_df["tb_label"], preds, zero_division=0)
     logger.info(
         "Best threshold for %s is %.4f yielding F1=%.4f",
         sym,

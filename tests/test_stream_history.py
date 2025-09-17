@@ -156,7 +156,21 @@ def _run_train_nn(tmpdir: Path, stream: bool):
     df = _simple_features(load_history_parquet(DATA_DIR / "TEST_history.parquet"))
     df["Symbol"] = "TEST"
     df["SymbolCode"] = 0
-    train_df, test_df = train_nn.train_test_split(df, cfg.get("train_rows", 40))
+    train_rows = cfg.get("train_rows", 40)
+    total_rows = len(df)
+    desired_val = max(1, total_rows - train_rows)
+    folds = train_nn.generate_time_series_folds(
+        total_rows,
+        n_splits=cfg.get("cv_splits", 1),
+        test_size=desired_val,
+        embargo=cfg.get("cv_embargo", 0),
+        min_train_size=cfg.get("cv_min_train_size"),
+        group_gap=cfg.get("cv_group_gap", 0),
+        groups=train_nn.resolve_group_labels(df),
+    )
+    train_idx, test_idx = folds[-1]
+    train_df = df.iloc[train_idx]
+    test_df = df.iloc[test_idx]
     X_test, _ = train_nn.make_sequence_arrays(
         test_df, features, cfg.get("sequence_length", 5)
     )
