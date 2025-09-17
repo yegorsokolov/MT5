@@ -110,6 +110,127 @@ def _combine_interval_params(
     return quantiles, coverage
 
 
+def _apply_regression_trunk(model: Any, data: pd.DataFrame | np.ndarray):
+    """Transform ``data`` using the regression trunk defined on ``model``."""
+
+    trunk = getattr(model, "regression_trunk_", None)
+    if trunk is None:
+        steps = getattr(model, "steps", None)
+        if steps and len(steps) > 1:
+            try:
+                return model[:-1].transform(data)
+            except Exception:  # pragma: no cover - best effort fallback
+                logger.exception("Regression trunk transformation failed; using raw features")
+        return data
+
+    if isinstance(trunk, str):
+        trunk_steps = [trunk]
+    elif isinstance(trunk, (list, tuple)):
+        trunk_steps = list(trunk)
+    else:
+        if hasattr(trunk, "transform"):
+            try:
+                return trunk.transform(data)
+            except Exception:  # pragma: no cover - best effort fallback
+                logger.exception("Custom regression trunk transform failed")
+                return data
+        return data
+
+    transformed = data
+    named_steps = getattr(model, "named_steps", {})
+    for name in trunk_steps:
+        transformer = named_steps.get(name)
+        if transformer is None:
+            logger.debug("Regression trunk step %s missing on model", name)
+            continue
+        try:
+            transformed = transformer.transform(transformed)
+        except Exception:  # pragma: no cover - best effort fallback
+            logger.exception("Regression trunk step %s failed", name)
+            return data
+    return transformed
+
+
+def _get_regression_estimator(model: Any) -> Any | None:
+    """Return estimator responsible for regression heads on ``model``."""
+
+    estimator = getattr(model, "regression_estimator_", None)
+    if estimator is not None:
+        return estimator
+    named_steps = getattr(model, "named_steps", None)
+    steps = getattr(model, "steps", None)
+    if named_steps is not None and steps:
+        last_name = steps[-1][0]
+        if last_name in named_steps:
+            return named_steps[last_name]
+    if hasattr(model, "predict_regression"):
+        return model
+    return None
+
+
+def compute_regression_estimates(
+    models: list[Any], df: pd.DataFrame, fallback_features: list[str]
+) -> dict[str, np.ndarray]:
+    """Return aggregated regression predictions for ``df`` across ``models``."""
+
+    if df.empty:
+        return {}
+
+    results: dict[str, list[np.ndarray]] = {}
+    n_samples = len(df)
+
+    for mdl in models:
+        heads = getattr(mdl, "regression_heads_", {})
+        if not heads:
+            continue
+
+        reg_cols = getattr(mdl, "regression_feature_columns_", None)
+        if reg_cols:
+            columns = [c for c in reg_cols if c in df.columns]
+        else:
+            columns = [c for c in fallback_features if c in df.columns]
+        if not columns:
+            logger.debug("No regression features available for model %s", getattr(mdl, "__class__", type(mdl)))
+            continue
+
+        X_reg = df[columns]
+        shared = _apply_regression_trunk(mdl, X_reg)
+        estimator = _get_regression_estimator(mdl)
+        if estimator is None or not hasattr(estimator, "predict_regression"):
+            logger.debug("Model %s lacks regression estimator", getattr(mdl, "__class__", type(mdl)))
+            continue
+
+        for head_name, head_info in heads.items():
+            head_type = ""
+            if isinstance(head_info, Mapping):
+                raw_type = head_info.get("type")
+                head_type = str(raw_type).lower() if raw_type is not None else ""
+            if head_type and head_type != "multi_task":
+                continue
+            try:
+                preds = estimator.predict_regression(shared, head_name)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Regression prediction for head %s failed", head_name)
+                continue
+            arr = np.asarray(preds, dtype=float).reshape(-1)
+            if arr.size == 0:
+                continue
+            if len(arr) != n_samples:
+                if len(arr) < n_samples:
+                    arr = np.pad(arr, (0, n_samples - len(arr)), mode="edge")
+                else:
+                    arr = arr[:n_samples]
+            results.setdefault(head_name, []).append(arr)
+
+    aggregated: dict[str, np.ndarray] = {}
+    for head_name, arrays in results.items():
+        try:
+            aggregated[head_name] = np.mean(np.vstack(arrays), axis=0)
+        except ValueError:  # pragma: no cover - guard against malformed arrays
+            logger.exception("Failed to aggregate regression outputs for %s", head_name)
+    return aggregated
+
+
 def apply_regime_thresholds(
     probs: np.ndarray,
     regimes: np.ndarray,
@@ -743,14 +864,42 @@ def main():
                 return np.zeros(len(data))
             return ensemble.predict(data)["ensemble"]
 
+    regression_outputs = compute_regression_estimates(models, df, features)
+    expected_returns = np.asarray(
+        regression_outputs.get("abs_return", np.zeros(len(df))), dtype=float
+    )
+    predicted_volatility = np.asarray(
+        regression_outputs.get("volatility", np.zeros(len(df))), dtype=float
+    )
+    if len(expected_returns) != len(df):
+        expected_returns = np.resize(expected_returns, len(df))
+    if len(predicted_volatility) != len(df):
+        predicted_volatility = np.resize(predicted_volatility, len(df))
+    expected_returns = np.nan_to_num(expected_returns, nan=0.0)
+    predicted_volatility = np.nan_to_num(predicted_volatility, nan=0.0)
+
     hashes = pd.util.hash_pandas_object(df[features], index=False).values
     probs = np.zeros(len(df))
     pred_dict = {"ensemble": probs}
     miss_idx: list[int] = []
     for i, h in enumerate(hashes):
         val = cache.get(int(h))
-        if val is not None:
-            probs[i] = val
+        if isinstance(val, Mapping):
+            prob_val = val.get("prob")
+            exp_val = val.get("expected_return")
+            vol_val = val.get("predicted_volatility") or val.get("volatility")
+            if prob_val is not None:
+                probs[i] = float(prob_val)
+            else:
+                miss_idx.append(i)
+            if exp_val is not None:
+                expected_returns[i] = float(exp_val)
+            if vol_val is not None:
+                predicted_volatility[i] = float(vol_val)
+            if prob_val is None:
+                continue
+        elif val is not None:
+            miss_idx.append(i)
         else:
             miss_idx.append(i)
     if miss_idx:
@@ -759,8 +908,18 @@ def main():
         for j, idx in enumerate(miss_idx):
             prob = float(new_probs[j])
             probs[idx] = prob
-            cache.set(int(hashes[idx]), prob)
             monitor.update(sub_df.iloc[j][features], prob)
+
+    if cache.maxsize > 0 and len(hashes):
+        for i, h in enumerate(hashes):
+            cache.set(
+                int(h),
+                {
+                    "prob": float(probs[i]),
+                    "expected_return": float(expected_returns[i]),
+                    "predicted_volatility": float(predicted_volatility[i]),
+                },
+            )
 
     ma_ok = df["ma_cross"] == 1
     rsi_ok = df["rsi_14"] > cfg.get("rsi_buy", 55)
@@ -792,8 +951,29 @@ def main():
     if factor_cols:
         mom_ok = df[factor_cols[0]] > 0
 
+    exp_ok = np.ones(len(df), dtype=bool)
+    min_expected = cfg.get("min_expected_return")
+    if min_expected is not None:
+        threshold_exp = float(min_expected)
+        exp_ok = expected_returns >= threshold_exp
+
+    pred_vol_ok = np.ones(len(df), dtype=bool)
+    max_pred_vol = cfg.get("max_predicted_volatility")
+    if max_pred_vol is not None:
+        vol_threshold = float(max_pred_vol)
+        pred_vol_ok = predicted_volatility <= vol_threshold
+
     combined = np.where(
-        ma_ok & rsi_ok & boll_ok & vol_ok & macro_ok & news_ok & sent_ok & mom_ok,
+        ma_ok
+        & rsi_ok
+        & boll_ok
+        & vol_ok
+        & macro_ok
+        & news_ok
+        & sent_ok
+        & mom_ok
+        & exp_ok
+        & pred_vol_ok,
         probs,
         0.0,
     )
@@ -884,6 +1064,8 @@ def main():
             "Symbol": cfg.get("symbol"),
             "prob": combined,
             "pred": preds,
+            "expected_return": expected_returns,
+            "predicted_volatility": predicted_volatility,
         }
     )
     if avg_cov is not None:
@@ -921,6 +1103,8 @@ def main():
         log_df[f"prob_{name}"] = arr
     log_df["prob"] = combined
     log_df["pred"] = preds
+    log_df["expected_return"] = expected_returns
+    log_df["predicted_volatility"] = predicted_volatility
     log_predictions(log_df)
     fmt = os.getenv("SIGNAL_FORMAT", "protobuf")
     queue = get_signal_backend(cfg)
