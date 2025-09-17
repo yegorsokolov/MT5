@@ -1,5 +1,6 @@
 import builtins
 import csv
+import importlib
 import importlib.util
 import types
 from pathlib import Path
@@ -13,8 +14,84 @@ import contextlib
 # Ensure real dependencies instead of stubs from tests.conftest
 sys.modules.pop("prometheus_client", None)
 sys.modules.pop("pandas", None)
+try:
+    from prometheus_client import Counter, Gauge, CollectorRegistry, start_http_server
+except ModuleNotFoundError:
+    class _Value:
+        def __init__(self) -> None:
+            self._total = 0.0
+
+        def inc(self, amount: float = 1.0) -> None:
+            self._total += amount
+
+        def set(self, value: float) -> None:
+            self._total = value
+
+        def get(self) -> float:
+            return self._total
+
+    class Counter:
+        def __init__(self, *args, **kwargs) -> None:
+            self._value = _Value()
+
+        def inc(self, amount: float = 1.0) -> None:
+            self._value.inc(amount)
+
+    class Gauge:
+        def __init__(self, *args, **kwargs) -> None:
+            self._value = _Value()
+
+        def set(self, value: float) -> None:
+            self._value.set(value)
+
+        def inc(self, amount: float = 1.0) -> None:
+            self._value.inc(amount)
+
+    class CollectorRegistry:
+        def __init__(self, *args, **kwargs) -> None:
+            return
+
+    def start_http_server(*args, **kwargs):  # type: ignore
+        return None
+
+    prometheus_stub = types.SimpleNamespace(
+        Counter=Counter,
+        Gauge=Gauge,
+        CollectorRegistry=CollectorRegistry,
+        start_http_server=start_http_server,
+    )
+    sys.modules.setdefault("prometheus_client", prometheus_stub)
+
 from prometheus_client import Counter, Gauge
-import pandas as pd
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ModuleNotFoundError:
+    PANDAS_AVAILABLE = False
+    class _StubDataFrame(dict):
+        def to_parquet(self, *args, **kwargs) -> None:
+            return None
+
+        def to_csv(self, *args, **kwargs) -> None:
+            return None
+
+    def _stub_dataframe(*args, **kwargs):
+        return _StubDataFrame()
+
+    def _stub_concat(*args, **kwargs):
+        return _StubDataFrame()
+
+    def _stub_read_parquet(*args, **kwargs):
+        return _StubDataFrame()
+
+    pd = types.SimpleNamespace(
+        DataFrame=_stub_dataframe,
+        concat=_stub_concat,
+        read_parquet=_stub_read_parquet,
+        Timestamp=lambda *args, **kwargs: None,
+    )
+    sys.modules.setdefault("pandas", pd)
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 mlflow_stub = types.SimpleNamespace(
@@ -26,6 +103,15 @@ mlflow_stub = types.SimpleNamespace(
 sys.modules.setdefault("mlflow", mlflow_stub)
 sys.modules.setdefault(
     "utils.environment", types.SimpleNamespace(ensure_environment=lambda: None)
+)
+sys.modules.setdefault(
+    "requests",
+    types.SimpleNamespace(
+        Session=lambda: types.SimpleNamespace(
+            post=lambda *a, **k: types.SimpleNamespace(status_code=200, text="")
+        ),
+        head=lambda *a, **k: types.SimpleNamespace(status_code=200),
+    ),
 )
 spec = importlib.util.spec_from_file_location(
     "metrics", Path(__file__).resolve().parents[1] / "metrics.py"
@@ -72,6 +158,7 @@ def setup_tmp_logs(tmp_path, monkeypatch):
     return log_mod, tc, ec
 
 
+@pytest.mark.skipif(not PANDAS_AVAILABLE, reason="requires pandas")
 def test_setup_logging_returns_logger(monkeypatch, tmp_path):
     log_mod, _, _ = setup_tmp_logs(tmp_path, monkeypatch)
     orig_print = builtins.print
@@ -80,6 +167,7 @@ def test_setup_logging_returns_logger(monkeypatch, tmp_path):
     assert logger is not None
 
 
+@pytest.mark.skipif(not PANDAS_AVAILABLE, reason="requires pandas")
 def test_log_trade_and_exception(monkeypatch, tmp_path):
     log_mod, tc, ec = setup_tmp_logs(tmp_path, monkeypatch)
 
@@ -117,6 +205,7 @@ def test_log_trade_and_exception(monkeypatch, tmp_path):
     assert df.loc[0, "event"] == "buy"
 
 
+@pytest.mark.skipif(not PANDAS_AVAILABLE, reason="requires pandas")
 def test_log_predictions(monkeypatch, tmp_path):
     log_mod, _, _ = setup_tmp_logs(tmp_path, monkeypatch)
     df = pd.DataFrame(
@@ -132,3 +221,21 @@ def test_log_predictions(monkeypatch, tmp_path):
     out = log_mod.read_decisions()
     assert out.loc[0, "prob"] == 0.3
     assert out.loc[0, "event"] == "prediction"
+
+
+def test_init_telemetry_lazy(monkeypatch):
+    module = importlib.import_module("telemetry")
+    telemetry = importlib.reload(module)
+    try:
+        status_before = telemetry.telemetry_status()
+        assert status_before["initialized"] is False
+        monkeypatch.setenv("ENABLE_JAEGER_EXPORTER", "0")
+        monkeypatch.setenv("ENABLE_PROMETHEUS_EXPORTER", "0")
+        monkeypatch.setenv("ENABLE_LOGGING_OTEL", "0")
+        status_after = telemetry.init_telemetry(force=True)
+        assert status_after["initialized"] is True
+        assert status_after["tracing"] is False
+        assert status_after["metrics"] is False
+        assert status_after["logging"] is False
+    finally:
+        importlib.reload(module)

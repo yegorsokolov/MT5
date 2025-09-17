@@ -7,6 +7,8 @@ import logging
 import argparse
 import sys
 from typing import Callable, List
+import contextlib
+import types
 
 import numpy as np
 import pandas as pd
@@ -42,40 +44,84 @@ from metrics import (
 )
 
 try:
-    from telemetry import get_tracer, get_meter
-except Exception:  # pragma: no cover - fallback if telemetry not installed
+    import telemetry  # type: ignore
+except Exception:  # pragma: no cover - telemetry optional in tests
+    telemetry = types.SimpleNamespace()  # type: ignore
 
-    def get_tracer(name: str):  # type: ignore
-        class _Span:
-            def __enter__(self):
-                return None
+_tracer = None
+_meter = None
+_ticks_counter = None
+_batch_latency = None
 
-            def __exit__(self, exc_type, exc, tb):
-                return False
 
-        class _Tracer:
-            def start_as_current_span(self, *a, **k):
-                return _Span()
+def _init_telemetry_if_available() -> None:
+    init_fn = getattr(telemetry, "init_telemetry", None)
+    if callable(init_fn):
+        try:
+            init_fn()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logging.getLogger(__name__).warning("Telemetry initialisation failed: %s", exc)
 
-        return _Tracer()
 
-    def get_meter(name: str):  # type: ignore
-        class _Counter:
-            def add(self, *a, **k):
-                return None
+def _get_tracer():
+    global _tracer
+    if _tracer is None:
+        _init_telemetry_if_available()
+        tracer_fn = getattr(telemetry, "get_tracer", None)
+        if callable(tracer_fn):
+            _tracer = tracer_fn(__name__)
+        else:  # pragma: no cover - fallback for tests
+            _tracer = types.SimpleNamespace(
+                start_as_current_span=lambda *a, **k: contextlib.nullcontext()
+            )
+    return _tracer
 
-        class _Histogram:
-            def record(self, *a, **k):
-                return None
 
-        class _Meter:
-            def create_counter(self, *a, **k):
-                return _Counter()
+def _get_meter():
+    global _meter
+    if _meter is None:
+        _init_telemetry_if_available()
+        meter_fn = getattr(telemetry, "get_meter", None)
+        if callable(meter_fn):
+            _meter = meter_fn(__name__)
+        else:  # pragma: no cover - fallback for tests
+            _meter = types.SimpleNamespace(
+                create_counter=lambda *a, **k: types.SimpleNamespace(
+                    add=lambda *args, **kwargs: None
+                ),
+                create_histogram=lambda *a, **k: types.SimpleNamespace(
+                    record=lambda *args, **kwargs: None
+                ),
+            )
+    return _meter
 
-            def create_histogram(self, *a, **k):
-                return _Histogram()
 
-        return _Meter()
+def _get_ticks_counter():
+    global _ticks_counter
+    if _ticks_counter is None:
+        meter = _get_meter()
+        try:
+            _ticks_counter = meter.create_counter(
+                "ticks_fetched", description="Total ticks fetched"
+            )
+        except Exception:  # pragma: no cover - fallback for tests
+            _ticks_counter = types.SimpleNamespace(add=lambda *a, **k: None)
+    return _ticks_counter
+
+
+def _get_batch_latency_hist():
+    global _batch_latency
+    if _batch_latency is None:
+        meter = _get_meter()
+        try:
+            _batch_latency = meter.create_histogram(
+                "batch_latency_seconds",
+                unit="s",
+                description="Latency for processing tick batches",
+            )
+        except Exception:  # pragma: no cover - fallback for tests
+            _batch_latency = types.SimpleNamespace(record=lambda *a, **k: None)
+    return _batch_latency
 
 
 try:
@@ -97,16 +143,6 @@ from model_registry import register_policy, get_policy_path, save_model
 import train_online
 import train_rl
 
-tracer = get_tracer(__name__)
-meter = get_meter(__name__)
-_ticks_counter = meter.create_counter(
-    "ticks_fetched", description="Total ticks fetched"  # type: ignore[arg-type]
-)
-_batch_latency = meter.create_histogram(
-    "batch_latency_seconds",
-    unit="s",
-    description="Latency for processing tick batches",
-)
 _empty_batch_count = 0
 
 setup_logging()
@@ -218,7 +254,7 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
     cfg = load_config()
     max_empty = cfg.get("max_empty_batches", 3)
     global _empty_batch_count
-    with tracer.start_as_current_span("fetch_ticks"):
+    with _get_tracer().start_as_current_span("fetch_ticks"):
         for attempt in range(retries):
             _ensure_conn_mgr()
             broker = conn_mgr.get_active_broker()
@@ -292,14 +328,14 @@ async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFr
                     "Pipeline anomaly detected for %s ticks; dropping batch", symbol
                 )
                 return pd.DataFrame()
-            _ticks_counter.add(len(df))
+            _get_ticks_counter().add(len(df))
             return df
         return pd.DataFrame()
 
 
 async def generate_features(context: pd.DataFrame) -> pd.DataFrame:
     """Asynchronously generate features from context data."""
-    with tracer.start_as_current_span("generate_features"):
+    with _get_tracer().start_as_current_span("generate_features"):
         if context.empty:
             return pd.DataFrame()
         df = await asyncio.to_thread(make_features, context)
@@ -339,7 +375,7 @@ def apply_liquidity_adjustment(
 
 async def dispatch_signals(bus, df: pd.DataFrame) -> None:
     """Asynchronously dispatch signals to the message bus."""
-    with tracer.start_as_current_span("dispatch_signals"):
+    with _get_tracer().start_as_current_span("dispatch_signals"):
         if bus is None or df.empty:
             return
         if not pipeline_anomaly.validate(df):
@@ -396,7 +432,7 @@ async def tick_producer(
 ) -> None:
     """Continuously fetch ticks for symbols and enqueue them."""
     while True:
-        with tracer.start_as_current_span("tick_producer_loop"):
+        with _get_tracer().start_as_current_span("tick_producer_loop"):
             if queue.qsize() > throttle_threshold:
                 await asyncio.sleep(0.1)
                 continue
@@ -440,11 +476,11 @@ async def tick_worker(
             except asyncio.TimeoutError:
                 break
         start = time.perf_counter()
-        with tracer.start_as_current_span("process_batch"):
+        with _get_tracer().start_as_current_span("process_batch"):
             await process_batch(pd.concat(batch, ignore_index=True))
         latency = time.perf_counter() - start
         BATCH_LATENCY.set(latency)
-        _batch_latency.record(latency)
+        _get_batch_latency_hist().record(latency)
         if latency > target_latency and batch_size > min_batch:
             batch_size = max(min_batch, batch_size // 2)
         elif latency < target_latency / 2 and batch_size < max_batch:
@@ -467,7 +503,7 @@ async def train_realtime():
     while not mt5_direct.is_terminal_logged_in():
         input("MetaTrader 5 terminal not logged in. Log in and press Enter to retry...")
     conn_mgr.init([mt5_direct])
-    with tracer.start_as_current_span("train_realtime"):
+    with _get_tracer().start_as_current_span("train_realtime"):
         if watchdog.max_rss_mb or watchdog.max_cpu_pct:
             watchdog.alert_callback = lambda msg: asyncio.create_task(
                 _handle_resource_breach(msg)

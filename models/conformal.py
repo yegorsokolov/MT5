@@ -5,15 +5,74 @@ from typing import Any, Iterable, Mapping, Tuple
 
 import numpy as np
 
-from telemetry import get_meter
+import logging
+import types
 
-meter = get_meter(__name__)
-_interval_width = meter.create_histogram(
-    "conformal_interval_width", description="Width of conformal prediction intervals"
-)
-_interval_coverage = meter.create_histogram(
-    "conformal_interval_coverage", description="Interval coverage indicator"
-)
+try:
+    import telemetry  # type: ignore
+except Exception:  # pragma: no cover - telemetry optional in tests
+    telemetry = types.SimpleNamespace()  # type: ignore
+
+_meter = None
+_interval_width_hist = None
+_interval_coverage_hist = None
+
+
+def _init_telemetry_if_available() -> None:
+    init_fn = getattr(telemetry, "init_telemetry", None)
+    if callable(init_fn):
+        try:
+            init_fn()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logging.getLogger(__name__).warning("Telemetry initialisation failed: %s", exc)
+
+
+def _get_meter():
+    global _meter
+    if _meter is None:
+        _init_telemetry_if_available()
+        meter_fn = getattr(telemetry, "get_meter", None)
+        if callable(meter_fn):
+            _meter = meter_fn(__name__)
+        else:  # pragma: no cover - fallback for tests
+            _meter = types.SimpleNamespace(
+                create_histogram=lambda *a, **k: types.SimpleNamespace(
+                    record=lambda *args, **kwargs: None
+                )
+            )
+    return _meter
+
+
+def _get_histogram(cache_name: str, metric_name: str, description: str):
+    hist = globals()[cache_name]
+    if hist is None:
+        meter = _get_meter()
+        create_hist = getattr(meter, "create_histogram", None)
+        if callable(create_hist):
+            try:
+                hist = create_hist(metric_name, description=description)
+            except TypeError:  # pragma: no cover - compatibility for positional args
+                hist = create_hist(metric_name, description)
+        if hist is None:
+            hist = types.SimpleNamespace(record=lambda *a, **k: None)
+        globals()[cache_name] = hist
+    return hist
+
+
+def _interval_width():
+    return _get_histogram(
+        "_interval_width_hist",
+        "conformal_interval_width",
+        "Width of conformal prediction intervals",
+    )
+
+
+def _interval_coverage():
+    return _get_histogram(
+        "_interval_coverage_hist",
+        "conformal_interval_coverage",
+        "Interval coverage indicator",
+    )
 
 
 @dataclass(slots=True)
@@ -134,7 +193,7 @@ def predict_interval(
     upper = preds + q_arr
     widths = upper - lower
     for w in np.atleast_1d(widths):
-        _interval_width.record(float(w))
+        _interval_width().record(float(w))
     return lower, upper
 
 
@@ -152,7 +211,7 @@ def evaluate_coverage(
     hi = np.asarray(upper, dtype=float)
     covered = (y >= lo) & (y <= hi)
     for c in covered.astype(float).ravel():
-        _interval_coverage.record(float(c))
+        _interval_coverage().record(float(c))
     return float(np.mean(covered))
 
 

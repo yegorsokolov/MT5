@@ -1,6 +1,7 @@
 """Dynamic model selection based on system capabilities."""
 
 import asyncio
+import contextlib
 import importlib.util
 import logging
 import sys
@@ -61,13 +62,66 @@ ResourceMonitor = _rm.ResourceMonitor
 FutureLike = _rm.FutureLike
 monitor = _rm.monitor
 
-from telemetry import get_tracer, get_meter
+try:
+    import telemetry  # type: ignore
+except Exception:  # pragma: no cover - telemetry optional in tests
+    telemetry = types.SimpleNamespace()  # type: ignore
 
-tracer = get_tracer(__name__)
-meter = get_meter(__name__)
-_refresh_counter = meter.create_counter(
-    "model_refreshes", description="Number of model refresh operations"
-)
+_tracer = None
+_meter = None
+_refresh_counter = None
+
+
+def _init_telemetry_if_available() -> None:
+    init_fn = getattr(telemetry, "init_telemetry", None)
+    if callable(init_fn):
+        try:
+            init_fn()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logging.getLogger(__name__).warning("Telemetry initialisation failed: %s", exc)
+
+
+def _get_tracer():
+    global _tracer
+    if _tracer is None:
+        _init_telemetry_if_available()
+        tracer_fn = getattr(telemetry, "get_tracer", None)
+        if callable(tracer_fn):
+            _tracer = tracer_fn(__name__)
+        else:  # pragma: no cover - fallback for tests
+            _tracer = types.SimpleNamespace(
+                start_as_current_span=lambda *a, **k: contextlib.nullcontext()
+            )
+    return _tracer
+
+
+def _get_meter():
+    global _meter
+    if _meter is None:
+        _init_telemetry_if_available()
+        meter_fn = getattr(telemetry, "get_meter", None)
+        if callable(meter_fn):
+            _meter = meter_fn(__name__)
+        else:  # pragma: no cover - fallback for tests
+            _meter = types.SimpleNamespace(
+                create_counter=lambda *a, **k: types.SimpleNamespace(
+                    add=lambda *args, **kwargs: None
+                )
+            )
+    return _meter
+
+
+def _get_refresh_counter():
+    global _refresh_counter
+    if _refresh_counter is None:
+        meter = _get_meter()
+        try:
+            _refresh_counter = meter.create_counter(
+                "model_refreshes", description="Number of model refresh operations"
+            )
+        except Exception:  # pragma: no cover - fallback for tests
+            _refresh_counter = types.SimpleNamespace(add=lambda *a, **k: None)
+    return _refresh_counter
 
 TIERS = {"lite": 0, "standard": 1, "gpu": 2, "hpc": 3}
 
@@ -346,7 +400,7 @@ class ModelRegistry:
         return p
 
     def _pick_models(self) -> None:
-        with tracer.start_as_current_span("pick_models"):
+        with _get_tracer().start_as_current_span("pick_models"):
             caps = self.monitor.capabilities
             for task, variants in MODEL_REGISTRY.items():
                 baseline = variants[-1]
@@ -362,7 +416,7 @@ class ModelRegistry:
                     elif prev and prev.name == baseline.name:
                         self.logger.info("Restored %s for %s", chosen.name, task)
                 self.selected[task] = chosen
-            _refresh_counter.add(1)
+            _get_refresh_counter().add(1)
 
     async def _watch(self, queue: asyncio.Queue[str]) -> None:
         """Re-evaluate models whenever resource information is refreshed."""
@@ -400,7 +454,7 @@ class ModelRegistry:
 
     def refresh(self) -> None:
         """Manually re-run model selection using current capabilities."""
-        with tracer.start_as_current_span("refresh_models"):
+        with _get_tracer().start_as_current_span("refresh_models"):
             self._evict_oversized()
             self._pick_models()
             self._purge_unused()
@@ -578,7 +632,7 @@ class ModelRegistry:
 
     def predict_mixture(self, history: Any, regime: float) -> float:
         """Predict using the mixture-of-experts gating network."""
-        with tracer.start_as_current_span("predict_mixture"):
+        with _get_tracer().start_as_current_span("predict_mixture"):
             return self.moe.predict(history, regime, self.monitor.capabilities)
 
     # ------------------------------------------------------------------
@@ -602,7 +656,7 @@ class ModelRegistry:
         size and processed sequentially.
         """
         model_name = self.get(task)
-        with tracer.start_as_current_span("predict"):
+        with _get_tracer().start_as_current_span("predict"):
             variant = self._variant_by_name.get(model_name)
             remote_variant = self._remote_variant(task)
             use_remote = False
