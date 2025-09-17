@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-import sys
-from pathlib import Path
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-from train_utils import resolve_training_features
+from training.features import (
+    append_risk_profile_features,
+    build_feature_candidates,
+    ensure_mandatory_features,
+    select_model_features,
+)
+
+
+class _RiskProfile:
+    def __init__(self, tolerance: float = 0.5) -> None:
+        self.leverage_cap = 2.0
+        self.drawdown_limit = 0.1
+        self.tolerance = tolerance
 
 
 def _make_df(size: int = 400) -> pd.DataFrame:
@@ -20,12 +30,11 @@ def _make_df(size: int = 400) -> pd.DataFrame:
         {
             "Timestamp": ts,
             "Symbol": ["TEST"] * size,
-            "baseline_signal": baseline_factor + rng.normal(scale=0.05, size=size),
-            "long_stop": rng.normal(scale=0.1, size=size),
+            "return": baseline_factor,
+            "ma_5": baseline_factor + rng.normal(scale=0.01, size=size),
             "imbalance": order_flow_factor + rng.normal(scale=0.05, size=size),
             "cvd": order_flow_factor * 0.5 + rng.normal(scale=0.05, size=size),
             "coh_EURUSD": rng.normal(scale=0.1, size=size),
-            "noise": rng.normal(size=size),
         }
     )
     combined_signal = baseline_factor + order_flow_factor + rng.normal(scale=0.1, size=size)
@@ -33,44 +42,41 @@ def _make_df(size: int = 400) -> pd.DataFrame:
     return df
 
 
-def test_resolve_training_features_includes_predictive_families():
+def test_append_risk_profile_features_adds_budget_columns():
     df = _make_df()
-    cfg: dict[str, object] = {}
-    features = resolve_training_features(df, df["tb_label"], cfg)
-
-    assert "Timestamp" not in features
-    assert "Symbol" not in features
-    assert "baseline_signal" in features
-    assert any(col in features for col in ("imbalance", "cvd"))
+    profile = _RiskProfile()
+    budget = append_risk_profile_features(df, profile)
+    for key in budget.as_features().keys():
+        assert key in df.columns
+    assert "risk_tolerance" in df.columns
 
 
-def test_order_flow_family_can_be_removed_via_config():
+def test_build_and_select_features_respects_mandatory_columns():
     df = _make_df()
-    cfg = {"feature_families": {"order_flow": False}}
-    features = resolve_training_features(df, df["tb_label"], cfg)
-
-    assert "imbalance" not in features
-    assert "cvd" not in features
-
-
-def test_cross_spectral_family_can_be_forced():
-    df = _make_df()
-    df["coh_EURUSD"] = 0.0  # not predictive on its own
-    cfg = {"feature_families": {"cross_spectral": True}}
-    features = resolve_training_features(df, df["tb_label"], cfg)
-
-    assert "coh_EURUSD" in features
-
-
-def test_mandatory_features_are_preserved():
-    df = _make_df()
-    df["risk_tolerance"] = 0.5
-    cfg: dict[str, object] = {}
-    features = resolve_training_features(
+    profile = _RiskProfile()
+    append_risk_profile_features(df, profile)
+    candidates = build_feature_candidates(df, None)
+    mandatory = ensure_mandatory_features(["risk_tolerance"], ["risk_tolerance"])
+    selected = select_model_features(
         df,
+        candidates,
         df["tb_label"],
-        cfg,
-        mandatory=["risk_tolerance"],
+        model_type="lgbm",
+        mandatory=mandatory,
     )
+    assert "risk_tolerance" in selected
 
-    assert "risk_tolerance" in features
+
+def test_select_model_features_handles_cross_modal():
+    df = _make_df()
+    df["price_window_0"] = np.random.random(len(df))
+    df["news_emb_0"] = np.random.random(len(df))
+    candidates = ["price_window_0", "news_emb_0"]
+    selected = select_model_features(
+        df,
+        candidates,
+        df["tb_label"],
+        model_type="cross_modal",
+        mandatory=None,
+    )
+    assert set(selected) == set(candidates)
