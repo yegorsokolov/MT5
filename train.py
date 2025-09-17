@@ -14,6 +14,7 @@ import asyncio
 import joblib
 import pandas as pd
 import math
+from collections.abc import Iterator
 
 try:
     import torch
@@ -71,6 +72,7 @@ from data.history import (
 )
 from data.features import make_features
 from data.labels import multi_horizon_labels
+from data.streaming import stream_features, stream_labels
 from state_manager import save_checkpoint, load_latest_checkpoint
 from analysis.regime_detection import periodic_reclassification
 from models import model_store
@@ -799,50 +801,66 @@ def _run_training(
         mlflow.log_param("model_type", model_type)
     except Exception:
         pass
+    validate_flag = cfg.get("validate", False)
+    chunk_size = cfg.get("stream_chunk_size", 100_000)
+    stream = cfg.get("stream_history", False)
+    feature_lookback = int(cfg.get("stream_feature_lookback", 512))
+
     if df_override is not None:
         df = df_override
     else:
         symbols = cfg.strategy.symbols
-        all_dfs = []
-        chunk_size = cfg.get("stream_chunk_size", 100_000)
-        stream = cfg.get("stream_history", False)
-        for sym in symbols:
-            if stream:
-                # Stream history in configurable chunks to minimize memory usage
+        if stream:
+            feature_chunks: list[pd.DataFrame] = []
+
+            def _symbol_chunks(sym: str) -> Iterator[pd.DataFrame]:
                 pq_path = root / "data" / f"{sym}_history.parquet"
                 if pq_path.exists():
                     for chunk in load_history_iter(pq_path, chunk_size):
+                        chunk = chunk.copy()
                         chunk["Symbol"] = sym
-                        all_dfs.append(chunk)
+                        yield chunk
                 else:
-                    df_sym = load_history_config(
-                        sym, cfg, root, validate=cfg.get("validate", False)
-                    )
+                    df_sym = load_history_config(sym, cfg, root, validate=validate_flag)
                     df_sym["Symbol"] = sym
-                    all_dfs.append(df_sym)
-            else:
-                df_sym = load_history_config(
-                    sym, cfg, root, validate=cfg.get("validate", False)
-                )
+                    yield df_sym
+
+            for sym in symbols:
+                for feat_chunk in stream_features(
+                    _symbol_chunks(sym),
+                    validate=validate_flag,
+                    feature_lookback=feature_lookback,
+                ):
+                    feature_chunks.append(feat_chunk)
+
+            df = (
+                pd.concat(feature_chunks, ignore_index=True)
+                if feature_chunks
+                else pd.DataFrame()
+            )
+            if not df.empty:
+                save_history_parquet(df, root / "data" / "history.parquet")
+        else:
+            raw_frames: list[pd.DataFrame] = []
+            for sym in symbols:
+                df_sym = load_history_config(sym, cfg, root, validate=validate_flag)
                 df_sym["Symbol"] = sym
-                all_dfs.append(df_sym)
+                raw_frames.append(df_sym)
+            df_raw = pd.concat(raw_frames, ignore_index=True) if raw_frames else pd.DataFrame()
+            if not df_raw.empty:
+                save_history_parquet(df_raw, root / "data" / "history.parquet")
+            df = make_features(df_raw, validate=validate_flag) if not df_raw.empty else df_raw
 
-        df = pd.concat(all_dfs, ignore_index=True)
-        save_history_parquet(df, root / "data" / "history.parquet")
-
-        df = make_features(df, validate=cfg.get("validate", False))
-        adapter_path = root / "domain_adapter.pkl"
-        adapter = DomainAdapter.load(adapter_path)
-        num_cols = df.select_dtypes(np.number).columns
-        if len(num_cols) > 0:
-            adapter.fit_source(df[num_cols])
-            df[num_cols] = adapter.transform(df[num_cols])
-        # Always persist adapter state so subsequent runs can reuse learned
-        # statistics even if the current dataset lacks numeric columns.
-        adapter.save(adapter_path)
-        df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
-        if "Symbol" in df.columns:
-            df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
+    adapter_path = root / "domain_adapter.pkl"
+    adapter = DomainAdapter.load(adapter_path)
+    num_cols = df.select_dtypes(np.number).columns
+    if len(num_cols) > 0:
+        adapter.fit_source(df[num_cols])
+        df[num_cols] = adapter.transform(df[num_cols])
+    adapter.save(adapter_path)
+    df = periodic_reclassification(df, step=cfg.get("regime_reclass_period", 500))
+    if "Symbol" in df.columns:
+        df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
 
     rp = cfg.strategy.risk_profile
     user_budget = RiskBudget(
@@ -897,7 +915,30 @@ def _run_training(
         mlflow.log_param("data_source", "config")
 
     horizons = cfg.get("horizons", [cfg.get("max_horizon", 10)])
-    labels = multi_horizon_labels(df["mid"], horizons)
+    if stream:
+        if len(df) == 0:
+            labels = pd.DataFrame(index=df.index)
+        else:
+            step = max(int(chunk_size), 1)
+            label_chunks = list(
+                stream_labels(
+                    (
+                        df.iloc[start : start + step].copy()
+                        for start in range(0, len(df), step)
+                    ),
+                    horizons,
+                )
+            )
+            if label_chunks:
+                labels = pd.concat(label_chunks, ignore_index=True)
+            else:
+                labels = pd.DataFrame(index=pd.RangeIndex(len(df)))
+    else:
+        labels = multi_horizon_labels(df["mid"], horizons)
+    labels = labels.reset_index(drop=True)
+    if len(labels) != len(df):
+        labels = labels.reindex(range(len(df)), fill_value=0)
+    labels.index = df.index
     df = pd.concat([df, labels], axis=1)
     y = labels
     label_cols = [c for c in labels.columns if c.startswith("direction_")]
