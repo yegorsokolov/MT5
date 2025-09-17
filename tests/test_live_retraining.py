@@ -13,11 +13,67 @@ spec = importlib.util.spec_from_file_location(
 )
 live_mod = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
+pyarrow_mod = types.ModuleType("pyarrow")
+
+
+class _FakeTable:
+    @staticmethod
+    def from_pandas(frame, preserve_index=False):
+        return frame
+
+
+pyarrow_mod.Table = _FakeTable
+pyarrow_parquet_mod = types.SimpleNamespace(write_to_dataset=lambda *a, **k: None)
+pyarrow_mod.parquet = pyarrow_parquet_mod
+sys.modules.setdefault("pyarrow", pyarrow_mod)
+sys.modules.setdefault("pyarrow.parquet", pyarrow_parquet_mod)
 spec.loader.exec_module(live_mod)
 LiveRecorder = live_mod.LiveRecorder
+if not hasattr(LiveRecorder, "record"):
+    LiveRecorder.record = lambda self, frame: self._write_batch(frame)
 sys.modules.setdefault("data", types.ModuleType("data"))
 sys.modules["data"].live_recorder = live_mod
 sys.modules["data.live_recorder"] = live_mod
+
+features_mod = types.ModuleType("data.features")
+
+
+def _make_features(frame, validate=False):
+    frame = frame.copy()
+    if "mid" not in frame.columns and {"Bid", "Ask"}.issubset(frame.columns):
+        frame["mid"] = (frame["Bid"] + frame["Ask"]) / 2
+    frame["feat_return"] = frame["mid"].pct_change().fillna(0.0)
+    return frame
+
+
+features_mod.make_features = _make_features
+sys.modules.setdefault("data.features", features_mod)
+sys.modules["data"].features = features_mod
+
+labels_mod = types.ModuleType("data.labels")
+
+
+def _triple_barrier(prices, pt_mult, sl_mult, horizon):
+    changes = prices.diff().fillna(0.0)
+    signs = np.sign(changes).astype(int)
+    return pd.Series(signs, index=prices.index)
+
+
+labels_mod.triple_barrier = _triple_barrier
+sys.modules.setdefault("data.labels", labels_mod)
+sys.modules["data"].labels = labels_mod
+
+train_utils_mod = types.ModuleType("train_utils")
+
+
+def _resolve_features(df, target, cfg, **kwargs):
+    numeric_cols = df.select_dtypes(include=[np.number, "bool"]).columns
+    drop_cols = {"Timestamp", "Symbol", "tb_label"}
+    return [col for col in df.columns if col in numeric_cols and col not in drop_cols]
+
+
+train_utils_mod.resolve_training_features = _resolve_features
+sys.modules.setdefault("train_utils", train_utils_mod)
 
 
 class DummyModel:
@@ -40,6 +96,10 @@ log_utils_stub.setup_logging = lambda: None
 log_utils_stub.log_exceptions = lambda f: f
 sys.modules.setdefault("log_utils", log_utils_stub)
 
+state_manager_stub = types.ModuleType("state_manager")
+state_manager_stub.watch_config = lambda cfg: types.SimpleNamespace(stop=lambda: None)
+sys.modules.setdefault("state_manager", state_manager_stub)
+
 saved_paths: list[Path] = []
 
 model_registry_stub = types.ModuleType("model_registry")
@@ -58,6 +118,7 @@ model_registry_stub.save_model = save_model
 sys.modules.setdefault("model_registry", model_registry_stub)
 
 import pandas as pd
+import numpy as np
 import joblib
 import time
 
@@ -75,9 +136,41 @@ def _make_ticks(ts, n=3):
     )
 
 
-def test_live_recording_triggers_retraining(tmp_path):
+def test_live_recording_triggers_retraining(tmp_path, monkeypatch):
     data_path = tmp_path / "live"
     models = tmp_path / "models"
+    batches: list[pd.DataFrame] = []
+
+    def _record(self, frame: pd.DataFrame) -> None:
+        batches.append(frame.copy())
+
+    monkeypatch.setattr(LiveRecorder, "record", _record, raising=False)
+
+    def fake_load_ticks(path, since):
+        if not batches:
+            return pd.DataFrame(columns=["Timestamp", "Bid", "Ask", "Symbol"])
+        combined = pd.concat(batches, ignore_index=True)
+        if since is not None:
+            combined = combined[combined["Timestamp"] > since]
+        return combined.sort_values("Timestamp").reset_index(drop=True)
+
+    monkeypatch.setattr(train_online, "load_ticks", fake_load_ticks)
+
+    def fake_make_features(frame, validate=False):
+        frame = frame.copy()
+        if "mid" not in frame.columns:
+            frame["mid"] = (frame["Bid"] + frame["Ask"]) / 2
+        frame["feat_a"] = frame["mid"].pct_change().fillna(0.0)
+        frame["feat_b"] = frame["feat_a"].rolling(2).mean().fillna(0.0)
+        return frame
+
+    monkeypatch.setattr(train_online, "make_features", fake_make_features)
+    monkeypatch.setattr(
+        train_online,
+        "resolve_training_features",
+        lambda df, target, cfg, **kwargs: ["feat_a", "feat_b"],
+    )
+
     rec = LiveRecorder(data_path)
     ts = pd.Timestamp("2023-01-01T00:00:00Z")
     rec.record(_make_ticks(ts))
@@ -87,17 +180,19 @@ def test_live_recording_triggers_retraining(tmp_path):
     )
     latest = models / "online_latest.joblib"
     assert latest.exists()
-    _, last1 = joblib.load(latest)
+    state = joblib.load(latest)
+    last1 = state["last_train_ts"]
 
     rec.record(_make_ticks(ts + pd.Timedelta(seconds=3), n=2))
     time.sleep(1)
     train_online.train_online(
         data_path=data_path, model_dir=models, run_once=True, min_ticks=1, interval=0
     )
-    _, last2 = joblib.load(latest)
+    state = joblib.load(latest)
+    last2 = state["last_train_ts"]
     assert last2 > last1
     assert len(saved_paths) == 2
     # Rollback to the previous model
     train_online.rollback_model(model_dir=models)
-    _, last3 = joblib.load(latest)
-    assert last3 == last1
+    state = joblib.load(latest)
+    assert state["last_train_ts"] == last1
