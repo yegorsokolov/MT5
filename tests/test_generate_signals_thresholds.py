@@ -26,7 +26,7 @@ log_utils_stub = _make_module(
     log_predictions=lambda *args, **kwargs: None,
     log_exceptions=_identity,
 )
-sys.modules.setdefault("log_utils", log_utils_stub)
+sys.modules["log_utils"] = log_utils_stub
 
 state_manager_stub = _make_module(
     "state_manager",
@@ -52,32 +52,35 @@ prediction_cache_stub = _make_module(
 sys.modules.setdefault("prediction_cache", prediction_cache_stub)
 
 utils_stub = _make_module("utils", load_config=lambda *a, **k: {})
-sys.modules.setdefault("utils", utils_stub)
-sys.modules.setdefault(
-    "utils.market_hours", _make_module("utils.market_hours", is_market_open=lambda: True)
+sys.modules["utils"] = utils_stub
+sys.modules["utils.market_hours"] = _make_module(
+    "utils.market_hours", is_market_open=lambda: True
 )
 
-sys.modules.setdefault(
-    "backtest", _make_module("backtest", run_rolling_backtest=lambda *a, **k: None)
+for mod in ["scipy", "scipy.stats", "scipy.sparse"]:
+    sys.modules.pop(mod, None)
+
+sys.modules["backtest"] = _make_module(
+    "backtest", run_rolling_backtest=lambda *a, **k: None
 )
 
 river_stub = _make_module("river", compose=_make_module("compose"))
-sys.modules.setdefault("river", river_stub)
-sys.modules.setdefault("river.compose", river_stub.compose)
+sys.modules["river"] = river_stub
+sys.modules["river.compose"] = river_stub.compose
 
 data_history_stub = _make_module(
     "data.history",
     load_history_parquet=lambda *a, **k: None,
     load_history_config=lambda *a, **k: None,
 )
-sys.modules.setdefault("data.history", data_history_stub)
+sys.modules["data.history"] = data_history_stub
 
 data_features_stub = _make_module(
     "data.features",
     make_features=lambda df, *a, **k: df,
     make_sequence_arrays=lambda df, cols, seq_len: (np.zeros((0, 0)), None),
 )
-sys.modules.setdefault("data.features", data_features_stub)
+sys.modules["data.features"] = data_features_stub
 
 train_rl_stub = _make_module(
     "train_rl",
@@ -169,3 +172,41 @@ def test_per_symbol_thresholds_applied(tmp_path):
     baseline = (probs >= 0.5).astype(int)
     assert preds.tolist() == [0, 0, 1]
     assert preds.tolist() != baseline.tolist()
+
+
+def test_online_threshold_overrides_default_cutoff():
+    online_model = types.SimpleNamespace(
+        best_threshold_=0.8,
+        regime_thresholds={0: 0.8},
+    )
+    cfg = {"threshold": 0.5}
+    thresholds, default_thr = generate_signals._resolve_threshold_metadata(
+        [], online_model, cfg
+    )
+    assert np.isclose(default_thr, 0.8)
+    probs = np.array([0.55, 0.79, 0.81])
+    regimes = np.array([0, 0, 0])
+    if thresholds:
+        preds = generate_signals.apply_regime_thresholds(
+            probs, regimes, thresholds, default_thr
+        )
+    else:
+        preds = (probs >= default_thr).astype(int)
+    assert preds.tolist() == [0, 0, 1]
+
+
+def test_online_regime_thresholds_applied():
+    online_model = types.SimpleNamespace(
+        best_threshold_=0.6,
+        regime_thresholds={0: 0.55, 1: 0.75},
+    )
+    cfg = {"threshold": 0.5}
+    thresholds, default_thr = generate_signals._resolve_threshold_metadata(
+        [], online_model, cfg
+    )
+    probs = np.array([0.56, 0.74, 0.76])
+    regimes = np.array([0, 1, 1])
+    preds = generate_signals.apply_regime_thresholds(
+        probs, regimes, thresholds, default_thr
+    )
+    assert preds.tolist() == [1, 0, 1]
