@@ -1,7 +1,7 @@
 """Parallel training across symbols using Ray."""
 
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable
+from typing import Any, Callable, Dict, Iterable, Optional
 
 import json
 import logging
@@ -16,6 +16,7 @@ from lightgbm import LGBMClassifier
 from ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 
 from log_utils import setup_logging, log_exceptions
+from analysis.regime_thresholds import find_regime_thresholds
 from train_utils import (
     generate_time_series_folds,
     resolve_group_labels,
@@ -109,6 +110,55 @@ def best_f1_threshold(
             best_f1 = float(score)
             best_threshold = float(threshold)
     return best_threshold, best_f1
+
+
+def _find_regime_column(df: pd.DataFrame) -> Optional[str]:
+    """Return the column name representing the market regime if present."""
+
+    preferred = ("market_regime", "regime", "regime_id")
+    for col in preferred:
+        if col in df.columns:
+            return col
+    for col in df.columns:
+        if "regime" in col.lower():
+            return col
+    return None
+
+
+def _derive_regime_thresholds(
+    val_df: pd.DataFrame,
+    probs: np.ndarray,
+) -> tuple[Dict[int | str, float], np.ndarray, float]:
+    """Compute validation predictions and thresholds with optional regimes."""
+
+    y_val = val_df["tb_label"].to_numpy()
+    base_threshold, _ = best_f1_threshold(y_val, probs)
+    preds = (probs >= base_threshold).astype(int)
+    val_f1 = f1_score(y_val, preds, zero_division=0)
+
+    thresholds: Dict[int | str, float] = {}
+    regime_col = _find_regime_column(val_df)
+
+    if regime_col is not None:
+        try:
+            regimes = val_df[regime_col].to_numpy()
+            regime_thresholds, regime_preds = find_regime_thresholds(
+                y_val,
+                probs,
+                regimes,
+            )
+        except Exception:  # pragma: no cover - defensive against sklearn issues
+            logger.exception(
+                "Failed to compute regime thresholds using column %s", regime_col
+            )
+        else:
+            if regime_thresholds:
+                thresholds.update({int(k): float(v) for k, v in regime_thresholds.items()})
+                preds = regime_preds.astype(int)
+                val_f1 = f1_score(y_val, preds, zero_division=0)
+
+    thresholds["default"] = float(base_threshold)
+    return thresholds, preds, float(val_f1)
 
 
 def _compose_params(seed: int, overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -284,14 +334,14 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     pipe.tuned_params_ = tuned_params
     pipe.fit(train_df[features], train_df["tb_label"])
     val_probs = pipe.predict_proba(val_df[features])[:, 1]
-    best_threshold, val_f1 = best_f1_threshold(val_df["tb_label"], val_probs)
-    preds = (val_probs >= best_threshold).astype(int)
-    regime_thresholds = {0: float(best_threshold)}
+    regime_thresholds, preds, val_f1 = _derive_regime_thresholds(val_df, val_probs)
+    best_threshold = float(regime_thresholds.get("default", 0.5))
     pipe.best_threshold_ = best_threshold
     pipe.validation_f1_ = val_f1
     pipe.training_features_ = features
     pipe.regime_thresholds_ = dict(regime_thresholds)
     setattr(pipe, "regime_thresholds", dict(regime_thresholds))
+    metadata_thresholds = {str(k): float(v) for k, v in regime_thresholds.items()}
     metadata = {
         "symbol": sym,
         "features": list(features),
@@ -299,7 +349,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
         "performance": {
             "validation_f1": float(val_f1),
             "best_threshold": float(best_threshold),
-            "regime_thresholds": regime_thresholds,
+            "regime_thresholds": metadata_thresholds,
         },
     }
     setattr(pipe, "model_metadata", metadata)
