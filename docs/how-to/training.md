@@ -31,3 +31,28 @@ models inject :class:`~models.time_encoding.TimeEncoding` features before every
 attention block so sequences with uneven spacing no longer appear identical to
 the network. This typically reduces validation loss on feeds where gaps between
 bars vary, such as event-driven tick streams.
+
+## Feature selection and families
+
+``train_parallel.py`` and ``train_nn.py`` now derive candidate feature columns
+directly from the dataframe returned by :func:`data.features.make_features`.
+All numeric columns except identifiers (``Timestamp``, ``Symbol``) and labels
+are passed through :func:`analysis.feature_selector.select_features`.  Entire
+feature families such as ``baseline``, ``order_flow`` and ``cross_spectral`` can
+be retained or dropped via configuration without touching code:
+
+```yaml
+training:
+  feature_families:
+    baseline: true   # always keep baseline signals & stops
+    order_flow: true # retain imbalance/CVD features
+    cross_spectral: false
+  feature_includes:
+    - risk_tolerance
+  feature_excludes:
+    - noise_feature
+```
+
+This makes richer signals—baseline strategy confidence, order-flow imbalance
+and cross-spectral coherence—available to the optimiser by default, improving
+validation metrics on the bundled datasets.

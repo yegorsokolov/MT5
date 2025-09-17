@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Mapping, Any, Optional, Tuple, List
+from typing import Any, Iterable, List, Mapping, Optional, Tuple
 from collections.abc import Sequence
 import contextlib
 import types
@@ -22,11 +22,16 @@ except Exception:  # pragma: no cover - fallback for tests
         log_param=lambda *a, **k: None,
         log_metric=lambda *a, **k: None,
     )
+from analysis.feature_families import group_by_family
+from analysis.feature_selector import select_features
 from analysis.purged_cv import PurgedTimeSeriesSplit
 from pandas.api.types import is_numeric_dtype
 
 _PRICE_PATTERN = re.compile(r"price_window_(?P<step>\d+)(?:_(?P<feature>.+))?")
 _NEWS_PATTERN = re.compile(r"news_emb_(?P<step>\d+)(?:_(?P<feature>\d+))?")
+
+_DEFAULT_TARGET_COLUMNS = {"tb_label", "pseudo_label"}
+_DEFAULT_ID_COLUMNS = {"Timestamp", "Symbol", "symbol", "run_id", "source", "SymbolGroup"}
 
 
 def setup_training(config: Optional[str | Path | Mapping[str, Any]] = None, *, experiment: Optional[str] = None) -> Mapping[str, Any]:
@@ -182,6 +187,157 @@ def resolve_group_labels(df: pd.DataFrame) -> Optional[np.ndarray]:
     return None
 
 
+def _cfg_get(cfg: Any, key: str, default: Any) -> Any:
+    """Return configuration value ``key`` from ``cfg`` with fallback."""
+
+    getter = getattr(cfg, "get", None)
+    if callable(getter):
+        value = getter(key, default)
+        return default if value is None else value
+
+    training = getattr(cfg, "training", None)
+    if training is not None and hasattr(training, key):
+        value = getattr(training, key)
+        return default if value is None else value
+
+    if isinstance(cfg, Mapping):
+        training_section = cfg.get("training")
+        if isinstance(training_section, Mapping) and key in training_section:
+            value = training_section[key]
+            return default if value is None else value
+        value = cfg.get(key, default)
+        return default if value is None else value
+
+    return default
+
+
+def _normalise_iterable(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Mapping):
+        return [str(k) for k in value.keys()]
+    if isinstance(value, Iterable):
+        return [str(v) for v in value]
+    return [str(value)]
+
+
+def resolve_training_features(
+    df: pd.DataFrame,
+    target: Optional[pd.Series],
+    cfg: Any,
+    *,
+    id_columns: Iterable[str] | None = None,
+    target_columns: Iterable[str] | None = None,
+    mandatory: Iterable[str] | None = None,
+) -> List[str]:
+    """Derive the training feature list from ``df`` respecting configuration."""
+
+    numeric_columns = set(df.select_dtypes(include=[np.number, "bool"]).columns)
+
+    target_cols = set(_DEFAULT_TARGET_COLUMNS)
+    if target is not None and getattr(target, "name", None):
+        target_cols.add(str(target.name))
+    if target_columns:
+        target_cols.update(str(col) for col in target_columns)
+
+    id_cols = set(_DEFAULT_ID_COLUMNS)
+    if id_columns:
+        id_cols.update(str(col) for col in id_columns)
+
+    candidates = [
+        col
+        for col in df.columns
+        if col in numeric_columns and col not in target_cols and col not in id_cols
+    ]
+
+    includes_raw = _cfg_get(cfg, "feature_includes", [])
+    excludes_raw = _cfg_get(cfg, "feature_excludes", [])
+    families_raw = _cfg_get(cfg, "feature_families", {})
+    use_selector = bool(_cfg_get(cfg, "use_feature_selector", True))
+    selector_top_k = _cfg_get(cfg, "feature_selector_top_k", None)
+    corr_threshold = _cfg_get(cfg, "feature_selector_corr_threshold", 0.95)
+
+    include_cols = [col for col in _normalise_iterable(includes_raw) if col in df.columns]
+    exclude_cols = {col for col in _normalise_iterable(excludes_raw) if col in df.columns}
+
+    mandatory_cols = set(mandatory or [])
+    mandatory_cols = {col for col in mandatory_cols if col in df.columns}
+
+    override_map: dict[str, bool] = {}
+    if isinstance(families_raw, Mapping):
+        override_map = {
+            str(name).lower(): bool(value)
+            for name, value in families_raw.items()
+            if value is not None
+        }
+
+    reference_cols = set(candidates) | set(include_cols) | mandatory_cols
+    family_map = group_by_family(reference_cols)
+
+    forced = set(col for col in include_cols if col in numeric_columns)
+    forced.update(col for col in mandatory_cols if col in numeric_columns)
+
+    for family, include in override_map.items():
+        cols = family_map.get(family, set())
+        if not cols:
+            continue
+        if include:
+            forced.update(col for col in cols if col in numeric_columns)
+        else:
+            candidates = [c for c in candidates if c not in cols]
+            forced.difference_update(cols)
+
+    selected: List[str]
+    top_k: Optional[int]
+    try:
+        top_k = int(selector_top_k) if selector_top_k is not None else None
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        top_k = None
+
+    try:
+        corr_val = float(corr_threshold) if corr_threshold is not None else None
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        corr_val = 0.95
+
+    if use_selector and target is not None and candidates:
+        selected = select_features(df[candidates], target, top_k=top_k, corr_threshold=corr_val)
+    else:
+        selected = list(candidates)
+
+    final_set = {col for col in selected if col in numeric_columns}
+    final_set.update(forced)
+
+    explicit_keep = set(forced)
+
+    for col in target_cols:
+        final_set.discard(col)
+
+    for col in id_cols:
+        if col in final_set and col not in explicit_keep:
+            final_set.discard(col)
+
+    for col in exclude_cols:
+        if col in final_set and col not in mandatory_cols:
+            final_set.discard(col)
+
+    final_set = {col for col in final_set if col in numeric_columns}
+
+    if not final_set:
+        fallback = [col for col in candidates if col in numeric_columns]
+        if fallback:
+            final_set.update(fallback)
+        elif forced:
+            final_set.update(forced)
+
+    ordered: List[str] = []
+    for col in df.columns:
+        if col in final_set and col not in ordered:
+            ordered.append(col)
+    return ordered
+
+
 def generate_time_series_folds(
     n_samples: int,
     *,
@@ -241,5 +397,6 @@ __all__ = [
     "extract_news_embeddings",
     "prepare_modal_arrays",
     "resolve_group_labels",
+    "resolve_training_features",
     "generate_time_series_folds",
 ]

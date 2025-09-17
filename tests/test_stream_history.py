@@ -137,22 +137,8 @@ def _run_train_nn(tmpdir: Path, stream: bool):
     train_nn.main()
 
     state = joblib.load(ROOT / "model_transformer.pt")
-    features = [
-        "return",
-        "ma_5",
-        "ma_10",
-        "ma_30",
-        "ma_60",
-        "volatility_30",
-        "spread",
-        "rsi_14",
-        "news_sentiment",
-        "market_regime",
-        "cross_mom_TEST_1",
-        "cross_mom_TEST_2",
-        "factor_1",
-        "SymbolCode",
-    ]
+    feat_path = ROOT / "selected_features.json"
+    features = json.loads(feat_path.read_text())
     df = _simple_features(load_history_parquet(DATA_DIR / "TEST_history.parquet"))
     df["Symbol"] = "TEST"
     df["SymbolCode"] = 0
