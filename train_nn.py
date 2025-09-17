@@ -872,11 +872,7 @@ def main(
                             )
                             logger.info("Adjusted width multiplier to %s", new_width)
 
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = asyncio.get_event_loop()
-                loop.create_task(_watch())
+                monitor.create_task(_watch())
                 return
 
             async def _watch() -> None:
@@ -906,11 +902,7 @@ def main(
                             "Hot-reloaded model with scale factor %s", scale_factor
                         )
 
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.get_event_loop()
-            loop.create_task(_watch())
+            monitor.create_task(_watch())
 
         _watch_model()
         if transfer_from:
