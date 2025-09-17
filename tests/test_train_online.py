@@ -1,21 +1,43 @@
 import sys
 import types
+import json
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 state_manager_stub = types.ModuleType("state_manager")
 state_manager_stub.watch_config = lambda cfg: types.SimpleNamespace(stop=lambda: None)
-sys.modules.setdefault("state_manager", state_manager_stub)
+state_manager_stub.load_runtime_state = lambda *a, **k: None
+state_manager_stub.save_runtime_state = lambda *a, **k: None
+state_manager_stub.migrate_runtime_state = lambda *a, **k: None
+state_manager_stub.legacy_runtime_state_exists = lambda *a, **k: False
+sys.modules["state_manager"] = state_manager_stub
 
-utils_stub = types.ModuleType("utils")
-utils_stub.load_config = lambda: {"seed": 0, "drawdown_limit": 0.2}
-sys.modules.setdefault("utils", utils_stub)
+for mod in ["scipy", "scipy.stats", "scipy.sparse"]:
+    sys.modules.pop(mod, None)
+
+resource_monitor_stub = types.ModuleType("utils.resource_monitor")
+resource_monitor_stub.monitor = types.SimpleNamespace()
+resource_monitor_stub.ResourceCapabilities = lambda *a, **k: types.SimpleNamespace()
+resource_monitor_stub.ResourceMonitor = lambda *a, **k: types.SimpleNamespace()
+sys.modules["utils.resource_monitor"] = resource_monitor_stub
+
+ge_mod = types.ModuleType("great_expectations")
+core_mod = types.ModuleType("great_expectations.core")
+suite_mod = types.ModuleType("great_expectations.core.expectation_suite")
+suite_mod.ExpectationSuite = type("ExpectationSuite", (), {})
+ge_mod.core = core_mod
+sys.modules["great_expectations"] = ge_mod
+sys.modules["great_expectations.core"] = core_mod
+sys.modules["great_expectations.core.expectation_suite"] = suite_mod
+
+sys.modules["psutil"] = types.ModuleType("psutil")
 
 log_utils_stub = types.ModuleType("log_utils")
 log_utils_stub.setup_logging = lambda: None
 log_utils_stub.log_exceptions = lambda f: f
-sys.modules.setdefault("log_utils", log_utils_stub)
+log_utils_stub.log_predictions = lambda *a, **k: None
+sys.modules["log_utils"] = log_utils_stub
 
 
 class _StubModel:
@@ -33,6 +55,48 @@ import numpy as np
 import pandas as pd
 import joblib
 
+data_features_stub = types.ModuleType("data.features")
+data_features_stub.make_features = lambda df, *a, **k: df
+sys.modules["data.features"] = data_features_stub
+
+labels_stub = types.ModuleType("data.labels")
+labels_stub.triple_barrier = lambda prices, *a, **k: pd.Series(np.ones(len(prices)))
+sys.modules["data.labels"] = labels_stub
+
+live_recorder_stub = types.ModuleType("data.live_recorder")
+live_recorder_stub.load_ticks = lambda *a, **k: pd.DataFrame()
+sys.modules["data.live_recorder"] = live_recorder_stub
+
+train_utils_stub = types.ModuleType("train_utils")
+train_utils_stub.resolve_training_features = (
+    lambda df, target, cfg, **kwargs: [
+        col
+        for col in df.columns
+        if col not in {"Timestamp", "Symbol", "tb_label"}
+    ]
+)
+sys.modules["train_utils"] = train_utils_stub
+
+sys.modules.pop("model_registry", None)
+model_registry_stub = types.ModuleType("model_registry")
+model_registry_stub.saved_paths = []
+
+def _stub_save_model(name, model, metadata, path=None):
+    target = Path(path or name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, target)
+    meta_path = target.with_suffix(".json")
+    try:
+        meta_path.write_text(json.dumps(metadata))
+    except Exception:
+        pass
+    model_registry_stub.saved_paths.append(target)
+    return target
+
+
+model_registry_stub.save_model = _stub_save_model
+sys.modules["model_registry"] = model_registry_stub
+
 import train_online
 
 
@@ -43,6 +107,9 @@ class DummyModel:
     def learn_one(self, x, y):
         self.calls.append((x, y))
         return self
+
+    def predict_proba_one(self, x):  # pragma: no cover - deterministic stub
+        return {0: 0.5, 1: 0.5}
 
 
 def test_train_online_enriches_features(tmp_path, monkeypatch):
