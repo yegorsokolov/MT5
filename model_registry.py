@@ -2,65 +2,120 @@
 
 import asyncio
 import contextlib
-import importlib.util
-import logging
-import sys
-import weakref
 import gc
-import time
 import json
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+import logging
+import time
 import types
+import weakref
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
 
 import joblib
-from prediction_cache import PredictionCache
 
 from analysis.inference_latency import InferenceLatency
-from analytics.metrics_store import model_cache_hit, model_unload
 from models import residual_learner
-
-# ``models.mixture_of_experts`` depends on no heavy libraries but importing the
-# ``models`` package would trigger optional imports like ``torch``. Import the
-# module directly from its file path to keep tests lightweight.
-sys.modules.setdefault(
-    "analytics.metrics_store",
-    types.SimpleNamespace(
-        record_metric=lambda *a, **k: None,
-        model_cache_hit=lambda: None,
-        model_unload=lambda: None,
-    ),
+from models.mixture_of_experts import (
+    ExpertSpec,
+    GatingNetwork,
+    MacroExpert,
+    MeanReversionExpert,
+    TrendExpert,
 )
+from prediction_cache import PredictionCache
+try:  # pragma: no cover - optional dependency
+    from utils.resource_monitor import (
+        FutureLike,
+        ResourceCapabilities,
+        ResourceMonitor,
+        monitor as _DEFAULT_MONITOR,
+    )
+except Exception:  # pragma: no cover - fallback for lightweight testing
+    FutureLike = asyncio.Future  # type: ignore[assignment]
 
-_moe_spec = importlib.util.spec_from_file_location(
-    "mixture_of_experts", Path(__file__).with_name("models") / "mixture_of_experts.py"
-)
-_moe = importlib.util.module_from_spec(_moe_spec)
-assert _moe_spec and _moe_spec.loader
-sys.modules["mixture_of_experts"] = _moe
-_moe_spec.loader.exec_module(_moe)  # type: ignore
+    @dataclass
+    class ResourceCapabilities:  # type: ignore[no-redef]
+        cpus: int
+        memory_gb: float
+        has_gpu: bool
+        gpu_count: int
+        gpu_model: str = ""
+        cpu_flags: set[str] = field(default_factory=set)
 
-ExpertSpec = _moe.ExpertSpec
-GatingNetwork = _moe.GatingNetwork
-MacroExpert = _moe.MacroExpert
-MeanReversionExpert = _moe.MeanReversionExpert
-TrendExpert = _moe.TrendExpert
+        def capability_tier(self) -> str:
+            if self.has_gpu and self.gpu_count > 0:
+                if self.gpu_count > 1 or self.memory_gb >= 64 or self.cpus >= 16:
+                    return "hpc"
+                return "gpu"
+            if self.cpus >= 4 and self.memory_gb >= 16:
+                return "standard"
+            return "lite"
 
-# ``utils.resource_monitor`` lives inside a package whose ``__init__`` pulls in
-# heavy optional dependencies. Import the module directly from its file path to
-# avoid importing ``utils`` itself and keep tests lightweight.
-_spec = importlib.util.spec_from_file_location(
-    "resource_monitor", Path(__file__).with_name("utils") / "resource_monitor.py"
-)
-_rm = importlib.util.module_from_spec(_spec)
-assert _spec and _spec.loader
-_spec.loader.exec_module(_rm)  # type: ignore
+        def model_size(self) -> str:  # pragma: no cover - legacy alias
+            return self.capability_tier()
 
-ResourceCapabilities = _rm.ResourceCapabilities
-ResourceMonitor = _rm.ResourceMonitor
-FutureLike = _rm.FutureLike
-monitor = _rm.monitor
+        def ddp(self) -> bool:  # pragma: no cover - compatibility helper
+            return self.gpu_count > 1
+
+    class ResourceMonitor:  # type: ignore[no-redef]
+        def __init__(self) -> None:
+            self.capabilities = ResourceCapabilities(1, 1.0, False, 0)
+            self.capability_tier = self.capabilities.capability_tier()
+
+        def start(self) -> None:  # pragma: no cover - no background loop
+            pass
+
+        def subscribe(self) -> asyncio.Queue[str]:  # pragma: no cover - tests override
+            return asyncio.Queue()
+
+        def create_task(self, coro: asyncio.Future[Any]) -> asyncio.Task[Any]:  # type: ignore[override]
+            loop = asyncio.get_event_loop()
+            return loop.create_task(coro)  # pragma: no cover - simple wrapper
+
+    _DEFAULT_MONITOR = ResourceMonitor()
+
+try:  # pragma: no cover - analytics optional in tests
+    from analytics import metrics_store as _metrics_store
+except Exception:  # pragma: no cover - fallback when analytics missing
+    _metrics_store = None
+
+monitor = _DEFAULT_MONITOR
+
+
+class AnalyticsClient(Protocol):
+    """Minimal interface used by :class:`ModelRegistry` to report metrics."""
+
+    def model_cache_hit(self) -> None:
+        """Record that a cached model was reused."""
+
+    def model_unload(self) -> None:
+        """Record that a cached model was evicted."""
+
+
+class _NullAnalyticsClient:
+    def model_cache_hit(self) -> None:  # pragma: no cover - trivial stub
+        pass
+
+    def model_unload(self) -> None:  # pragma: no cover - trivial stub
+        pass
+
+
+class _MetricsStoreAnalyticsClient:
+    def model_cache_hit(self) -> None:
+        assert _metrics_store is not None
+        _metrics_store.model_cache_hit()
+
+    def model_unload(self) -> None:
+        assert _metrics_store is not None
+        _metrics_store.model_unload()
+
+
+_DEFAULT_ANALYTICS: AnalyticsClient
+if _metrics_store is None:  # pragma: no cover - optional dependency missing
+    _DEFAULT_ANALYTICS = _NullAnalyticsClient()
+else:  # pragma: no cover - exercised in integration tests
+    _DEFAULT_ANALYTICS = _MetricsStoreAnalyticsClient()
 
 try:
     import telemetry  # type: ignore
@@ -252,14 +307,17 @@ class ModelRegistry:
 
     def __init__(
         self,
-        monitor: ResourceMonitor = monitor,
+        monitor: ResourceMonitor | None = None,
+        *,
+        analytics: AnalyticsClient | None = None,
         auto_refresh: bool = True,
         latency: Optional[InferenceLatency] = None,
         cfg: Optional[Dict[str, Any]] = None,
         cache: Optional[PredictionCache] = None,
         regime_getter: Callable[[], int] | None = None,
     ) -> None:
-        self.monitor = monitor
+        self.monitor = monitor or _DEFAULT_MONITOR
+        self.analytics = analytics or _DEFAULT_ANALYTICS
         self.selected: Dict[str, ModelVariant] = {}
         # Keep track of previous variants so we can rollback if a canary fails
         self._previous: Dict[str, ModelVariant] = {}
@@ -534,7 +592,7 @@ class ModelRegistry:
             except Exception:  # pragma: no cover - training is best effort
                 self.logger.exception("Residual training failed for %s", name)
         else:
-            model_cache_hit()
+            self.analytics.model_cache_hit()
         self._last_used[name] = time.time()
         return model
 
@@ -553,7 +611,7 @@ class ModelRegistry:
             fin()
         self._models.pop(name, None)
         self._last_used.pop(name, None)
-        model_unload()
+        self.analytics.model_unload()
 
     def _evict_oversized(self) -> None:
         caps = self.monitor.capabilities
