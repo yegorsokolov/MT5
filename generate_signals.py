@@ -4,6 +4,7 @@ from log_utils import setup_logging, log_exceptions, log_predictions
 
 from pathlib import Path
 import os
+import json
 import logging
 import joblib
 import pandas as pd
@@ -366,9 +367,42 @@ def load_models(paths, versions=None, return_meta: bool = False):
         except FileNotFoundError:
             logger.warning("Model version %s not found", vid)
     for p in paths:
-        mp = Path(__file__).resolve().parent / p
-        if mp.exists():
-            models.append(joblib.load(mp))
+        mp = Path(p)
+        if not mp.is_absolute():
+            mp = Path(__file__).resolve().parent / p
+        if not mp.exists():
+            continue
+        model_obj = joblib.load(mp)
+        metadata_path = mp.with_name(f"{mp.stem}_metadata.json")
+        metadata_blob: dict[str, object] | None = None
+        if metadata_path.exists():
+            try:
+                with metadata_path.open(encoding="utf-8") as fh:
+                    metadata_blob = json.load(fh)
+            except Exception:  # pragma: no cover - best effort metadata loading
+                logger.exception("Failed to read metadata from %s", metadata_path)
+            else:
+                perf_section = metadata_blob.get("performance", {})
+                if isinstance(perf_section, Mapping):
+                    thresholds = perf_section.get("regime_thresholds")
+                else:
+                    thresholds = None
+                if not thresholds and isinstance(metadata_blob, Mapping):
+                    thresholds = metadata_blob.get("regime_thresholds")
+                norm_thresholds = _normalise_thresholds(thresholds)
+                if norm_thresholds:
+                    setattr(model_obj, "regime_thresholds", norm_thresholds)
+                    setattr(model_obj, "regime_thresholds_", norm_thresholds)
+                if feature_list is None:
+                    feats_blob = metadata_blob.get("features")
+                    if isinstance(feats_blob, list):
+                        feature_list = feats_blob
+                    else:
+                        feats_blob = metadata_blob.get("training_features")
+                        if isinstance(feats_blob, list):
+                            feature_list = feats_blob
+                setattr(model_obj, "model_metadata", metadata_blob)
+        models.append(model_obj)
     if return_meta:
         return models, feature_list, meta_model
     return models, feature_list
