@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
+import json
 import logging
 import joblib
 import pandas as pd
@@ -285,9 +286,24 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     val_probs = pipe.predict_proba(val_df[features])[:, 1]
     best_threshold, val_f1 = best_f1_threshold(val_df["tb_label"], val_probs)
     preds = (val_probs >= best_threshold).astype(int)
+    regime_thresholds = {0: float(best_threshold)}
     pipe.best_threshold_ = best_threshold
     pipe.validation_f1_ = val_f1
     pipe.training_features_ = features
+    pipe.regime_thresholds_ = dict(regime_thresholds)
+    setattr(pipe, "regime_thresholds", dict(regime_thresholds))
+    metadata = {
+        "symbol": sym,
+        "features": list(features),
+        "training_features": list(features),
+        "performance": {
+            "validation_f1": float(val_f1),
+            "best_threshold": float(best_threshold),
+            "regime_thresholds": regime_thresholds,
+        },
+    }
+    setattr(pipe, "model_metadata", metadata)
+    setattr(pipe, "model_metadata_", metadata)
     report = classification_report(val_df["tb_label"], preds, zero_division=0)
     logger.info(
         "Best threshold for %s is %.4f yielding F1=%.4f",
@@ -298,6 +314,13 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     out_path = root / "models" / f"{sym}_model.joblib"
     out_path.parent.mkdir(exist_ok=True)
     joblib.dump(pipe, out_path)
+    metadata_path = out_path.with_name(f"{out_path.stem}_metadata.json")
+    try:
+        with metadata_path.open("w", encoding="utf-8") as meta_file:
+            json.dump(metadata, meta_file, indent=2)
+        logger.info("Saved metadata for %s to %s", sym, metadata_path)
+    except Exception:  # pragma: no cover - best effort metadata persistence
+        logger.exception("Failed to write metadata for %s", sym)
     if "scaler" in pipe.named_steps:
         scaler = pipe.named_steps["scaler"]
         scaler_path = root / "models" / f"{sym}_scaler.pkl"
