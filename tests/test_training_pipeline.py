@@ -26,6 +26,11 @@ if "data.streaming" not in sys.modules:
 
 from training.data_loader import StreamingTrainingFrame, load_training_frame
 from training.labels import generate_training_labels
+from training.features import (
+    apply_domain_adaptation,
+    append_risk_profile_features,
+    build_feature_candidates,
+)
 from training.postprocess import build_model_metadata, summarise_predictions
 from training.utils import combined_sample_weight
 
@@ -121,6 +126,34 @@ def test_generate_training_labels_stream_matches_offline():
     pd.testing.assert_frame_equal(streamed, offline)
 
 
+def test_generate_training_labels_streaming_frame(monkeypatch):
+    chunks = [
+        pd.DataFrame(
+            {
+                "mid": [1.0, 1.1, 1.2],
+                "return": [0.0, 0.1, 0.2],
+                "Symbol": ["TEST"] * 3,
+            }
+        ),
+        pd.DataFrame(
+            {
+                "mid": [1.3, 1.4],
+                "return": [0.05, -0.02],
+                "Symbol": ["TEST"] * 2,
+            }
+        ),
+    ]
+    frame = StreamingTrainingFrame(iter(chunks))
+    labels_df = generate_training_labels(frame, stream=True, horizons=[1], chunk_size=2)
+    assert "direction_1" in labels_df.columns
+    assert frame.materialise_count == 0
+    cached = frame.collect_chunks()
+    assert cached and all("direction_1" in chunk.columns for chunk in cached)
+    df_full = frame.materialise()
+    assert frame.materialise_count == 1
+    assert "direction_1" in df_full.columns
+
+
 def test_combined_sample_weight_respects_quality_and_decay():
     y = np.array([0, 0, 1, 1], dtype=int)
     timestamps = np.array([0, 1, 2, 3], dtype=np.int64)
@@ -137,6 +170,87 @@ def test_postprocess_helpers_round_trip():
     assert meta["interval_alpha"] == 0.1
     frame = summarise_predictions([0, 1], [0, 1], [0.3, 0.7], [0, 1], lower=[0.1, 0.2], upper=[0.9, 0.8])
     assert list(frame.columns) == ["y_true", "pred", "prob", "market_regime", "lower", "upper"]
+
+
+def test_streaming_feature_flow_preserves_lazy_materialisation(monkeypatch, tmp_path):
+    import analysis.domain_adapter as domain_adapter
+
+    chunks = [
+        pd.DataFrame(
+            {
+                "mid": [1.0, 1.1],
+                "return": [0.0, 0.1],
+                "Symbol": ["TEST"] * 2,
+            }
+        ),
+        pd.DataFrame(
+            {
+                "mid": [1.2, 1.3],
+                "return": [0.2, -0.05],
+                "Symbol": ["TEST"] * 2,
+            }
+        ),
+    ]
+    frame = StreamingTrainingFrame(iter(chunks))
+
+    class _DummyAdapter:
+        def __init__(self) -> None:
+            self.transformed: list[int] = []
+
+        def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+            self.transformed.append(len(X))
+            return X + 1
+
+        def save(self, path):  # pragma: no cover - behaviour not critical for assertions
+            self.saved_path = path
+            return path
+
+    holder: dict[str, _DummyAdapter] = {}
+
+    def _fake_load(cls, path=None):
+        adapter = _DummyAdapter()
+        holder["adapter"] = adapter
+        return adapter
+
+    monkeypatch.setattr(domain_adapter.DomainAdapter, "load", classmethod(_fake_load))
+
+    reclass_calls = {"count": 0}
+
+    def _fake_reclass(df: pd.DataFrame, *, step: int = 500, **_kwargs):
+        reclass_calls["count"] += 1
+        out = df.copy()
+        out["market_regime"] = 0
+        return out
+
+    monkeypatch.setattr(
+        "analysis.regime_detection.periodic_reclassification", _fake_reclass
+    )
+
+    adapted = apply_domain_adaptation(frame, tmp_path / "adapter.pkl", regime_step=2)
+    assert isinstance(adapted, StreamingTrainingFrame)
+    assert frame.materialise_count == 0
+    assert "adapter" in holder
+
+    risk_profile = types.SimpleNamespace(leverage_cap=2.0, drawdown_limit=0.1, tolerance=0.5)
+    budget = append_risk_profile_features(frame, risk_profile)
+    assert budget.max_leverage == 2.0
+
+    features = build_feature_candidates(frame, budget)
+    assert "risk_tolerance" in features
+
+    labels_df = generate_training_labels(frame, stream=True, horizons=[1], chunk_size=2)
+    assert "direction_1" in labels_df.columns
+    assert frame.materialise_count == 0
+
+    cached_chunks = frame.collect_chunks()
+    assert holder["adapter"].transformed == [len(chunk) for chunk in cached_chunks if not chunk.empty]
+    assert all("risk_tolerance" in chunk.columns for chunk in cached_chunks)
+
+    df_full = frame.materialise()
+    assert frame.materialise_count == 1
+    assert "market_regime" in df_full.columns
+    assert "direction_1" in df_full.columns
+    assert reclass_calls["count"] == 1
 
 
 def test_run_training_ends_mlflow_on_exception(monkeypatch):
