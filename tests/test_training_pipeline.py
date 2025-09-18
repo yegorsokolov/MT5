@@ -1,14 +1,13 @@
-import numpy as np
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import numpy as np
 import pandas as pd
 import pytest
 import types
+import numpy as np
 
 if "data.labels" not in sys.modules:
     def _label_fn(series, horizons):
@@ -138,3 +137,265 @@ def test_postprocess_helpers_round_trip():
     assert meta["interval_alpha"] == 0.1
     frame = summarise_predictions([0, 1], [0, 1], [0.3, 0.7], [0, 1], lower=[0.1, 0.2], upper=[0.9, 0.8])
     assert list(frame.columns) == ["y_true", "pred", "prob", "market_regime", "lower", "upper"]
+
+
+def test_run_training_ends_mlflow_on_exception(monkeypatch):
+    class _StubLGBM:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    monkeypatch.setitem(sys.modules, "lightgbm", types.SimpleNamespace(LGBMClassifier=_StubLGBM))
+    fake_ge = types.SimpleNamespace()
+    fake_suite = types.SimpleNamespace(ExpectationSuite=object)
+    fake_ge.core = types.SimpleNamespace(expectation_suite=fake_suite)
+    monkeypatch.setitem(sys.modules, "great_expectations", fake_ge)
+    monkeypatch.setitem(sys.modules, "great_expectations.core", fake_ge.core)
+    monkeypatch.setitem(
+        sys.modules,
+        "great_expectations.core.expectation_suite",
+        fake_suite,
+    )
+    fake_features = types.ModuleType("features")
+    fake_features.get_feature_pipeline = lambda *args, **kwargs: []
+    fake_features.make_features = lambda *args, **kwargs: None
+    fake_features.__path__ = []  # mark as package for submodule imports
+    monkeypatch.setitem(sys.modules, "features", fake_features)
+
+    news_module = types.ModuleType("features.news")
+    news_module.add_economic_calendar_features = lambda *a, **k: None
+    news_module.add_news_sentiment_features = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "features.news", news_module)
+
+    cross_asset_module = types.ModuleType("features.cross_asset")
+    cross_asset_module.add_index_features = lambda *a, **k: None
+    cross_asset_module.add_cross_asset_features = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "features.cross_asset", cross_asset_module)
+
+    validators_module = types.ModuleType("features.validators")
+    validators_module.validate_ge = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "features.validators", validators_module)
+    monkeypatch.setitem(sys.modules, "networkx", types.ModuleType("networkx"))
+    monkeypatch.setitem(sys.modules, "pywt", types.ModuleType("pywt"))
+    monkeypatch.setitem(sys.modules, "gplearn", types.ModuleType("gplearn"))
+    gplearn_genetic = types.ModuleType("gplearn.genetic")
+    gplearn_genetic.SymbolicTransformer = object
+    monkeypatch.setitem(sys.modules, "gplearn.genetic", gplearn_genetic)
+    scheduler_module = types.ModuleType("scheduler")
+    scheduler_module.schedule_retrain = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "scheduler", scheduler_module)
+    matplotlib_module = types.ModuleType("matplotlib")
+    pyplot_module = types.SimpleNamespace(
+        figure=lambda *a, **k: None,
+        plot=lambda *a, **k: None,
+        xlabel=lambda *a, **k: None,
+        ylabel=lambda *a, **k: None,
+        title=lambda *a, **k: None,
+        legend=lambda *a, **k: None,
+        tight_layout=lambda *a, **k: None,
+        savefig=lambda *a, **k: None,
+        close=lambda *a, **k: None,
+    )
+    matplotlib_module.pyplot = pyplot_module
+    monkeypatch.setitem(sys.modules, "matplotlib", matplotlib_module)
+    monkeypatch.setitem(sys.modules, "matplotlib.pyplot", pyplot_module)
+    sklearn_module = types.ModuleType("sklearn")
+    sklearn_module.__path__ = []
+    cluster_module = types.ModuleType("sklearn.cluster")
+
+    class _StubKMeans:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    cluster_module.KMeans = _StubKMeans
+    monkeypatch.setitem(sys.modules, "sklearn", sklearn_module)
+    monkeypatch.setitem(sys.modules, "sklearn.cluster", cluster_module)
+    base_module = types.ModuleType("sklearn.base")
+    base_module.BaseEstimator = type("BaseEstimator", (), {})
+    base_module.ClassifierMixin = type("ClassifierMixin", (), {})
+    monkeypatch.setitem(sys.modules, "sklearn.base", base_module)
+    ensemble_module = types.ModuleType("sklearn.ensemble")
+    ensemble_module.RandomForestClassifier = type("RandomForestClassifier", (), {})
+    monkeypatch.setitem(sys.modules, "sklearn.ensemble", ensemble_module)
+    feature_selection_module = types.ModuleType("sklearn.feature_selection")
+    feature_selection_module.mutual_info_classif = lambda *a, **k: []
+    monkeypatch.setitem(sys.modules, "sklearn.feature_selection", feature_selection_module)
+    linear_model_module = types.ModuleType("sklearn.linear_model")
+    class _StubLinearRegression:
+        def fit(self, *args, **kwargs):
+            return self
+
+        def predict(self, X):
+            return np.zeros(len(np.asarray(X)))
+
+    class _StubLogisticRegression:
+        def fit(self, *args, **kwargs):
+            return self
+
+        def predict_proba(self, X):
+            arr = np.asarray(X)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            n = len(arr)
+            return np.column_stack([np.zeros(n), np.zeros(n)])
+
+    linear_model_module.LinearRegression = _StubLinearRegression
+    linear_model_module.LogisticRegression = _StubLogisticRegression
+    monkeypatch.setitem(sys.modules, "sklearn.linear_model", linear_model_module)
+    model_selection_module = types.ModuleType("sklearn.model_selection")
+    model_selection_module.KFold = type("KFold", (), {})
+    model_selection_module.cross_val_score = lambda *a, **k: []
+    monkeypatch.setitem(sys.modules, "sklearn.model_selection", model_selection_module)
+    calibration_module = types.ModuleType("sklearn.calibration")
+
+    class _StubCalibratedClassifierCV:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def fit(self, *args, **kwargs):
+            return self
+
+        def predict_proba(self, X):
+            arr = np.asarray(X)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            n = len(arr)
+            return np.column_stack([np.zeros(n), np.zeros(n)])
+
+    calibration_module.CalibratedClassifierCV = _StubCalibratedClassifierCV
+    calibration_module.calibration_curve = lambda *a, **k: (
+        np.array([0.0]),
+        np.array([0.0]),
+    )
+    monkeypatch.setitem(sys.modules, "sklearn.calibration", calibration_module)
+    isotonic_module = types.ModuleType("sklearn.isotonic")
+
+    class _StubIsotonicRegression:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def fit(self, *args, **kwargs):
+            return self
+
+        def predict(self, X):
+            arr = np.asarray(X)
+            return np.zeros(len(arr))
+
+    isotonic_module.IsotonicRegression = _StubIsotonicRegression
+    monkeypatch.setitem(sys.modules, "sklearn.isotonic", isotonic_module)
+    metrics_module = types.ModuleType("sklearn.metrics")
+    metrics_module.classification_report = (
+        lambda *a, **k: {"weighted avg": {"f1-score": 0.0, "precision": 0.0, "recall": 0.0}}
+    )
+    metrics_module.precision_recall_curve = (
+        lambda *a, **k: (np.array([0.0]), np.array([0.0]), np.array([0.0]))
+    )
+    metrics_module.precision_score = lambda *a, **k: 0.0
+    metrics_module.recall_score = lambda *a, **k: 0.0
+    metrics_module.f1_score = lambda *a, **k: 0.0
+    metrics_module.brier_score_loss = lambda *a, **k: 0.0
+    monkeypatch.setitem(sys.modules, "sklearn.metrics", metrics_module)
+    pipeline_module = types.ModuleType("sklearn.pipeline")
+
+    class _StubPipeline:
+        def __init__(self, steps):
+            self.steps = list(steps)
+            self.named_steps = {name: obj for name, obj in self.steps}
+
+        def fit(self, *args, **kwargs):
+            return self
+
+        def __getitem__(self, item):
+            if isinstance(item, slice):
+                return self
+            return self.steps[item]
+
+        def transform(self, X):
+            return X
+
+    pipeline_module.Pipeline = _StubPipeline
+    monkeypatch.setitem(sys.modules, "sklearn.pipeline", pipeline_module)
+
+    fake_torch = types.ModuleType("torch")
+    torch_utils = types.ModuleType("torch.utils")
+    torch_utils_data = types.ModuleType("torch.utils.data")
+    torch_utils_data.DataLoader = object
+    torch_utils_data.TensorDataset = object
+    torch_utils.data = torch_utils_data
+    torch_nn = types.ModuleType("torch.nn")
+
+    class _TorchModule:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    torch_nn.Module = _TorchModule
+    torch_nn.Parameter = lambda value: value
+    fake_torch.Tensor = object
+    fake_torch.randn = lambda *args, **kwargs: 0
+    fake_torch.cuda = types.SimpleNamespace(device_count=lambda: 0)
+    fake_torch.utils = types.SimpleNamespace(data=torch_utils_data)
+    fake_torch.nn = torch_nn
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torch.utils", torch_utils)
+    monkeypatch.setitem(sys.modules, "torch.utils.data", torch_utils_data)
+    monkeypatch.setitem(sys.modules, "torch.nn", torch_nn)
+
+    from training import pipeline
+
+    class StubMlflow:
+        def __init__(self) -> None:
+            self.started = 0
+            self.ended = 0
+
+        def start_run(self, *args, **kwargs):
+            self.started += 1
+
+        def end_run(self, *args, **kwargs):
+            self.ended += 1
+
+        def log_param(self, *args, **kwargs):
+            pass
+
+        def log_metric(self, *args, **kwargs):
+            pass
+
+        def log_artifact(self, *args, **kwargs):
+            pass
+
+    stub_mlflow = StubMlflow()
+    monkeypatch.setattr(pipeline, "mlflow", stub_mlflow)
+    monkeypatch.setattr(pipeline, "_subscribe_cpu_updates", lambda cfg: None)
+    monkeypatch.setattr(pipeline, "ensure_environment", lambda: None)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pipeline, "load_training_frame", explode)
+
+    class DummyConfig:
+        def __init__(self) -> None:
+            self.training = SimpleNamespace(
+                model_type="lgbm",
+                use_pseudo_labels=False,
+                seed=1,
+                drift_method="ks",
+                drift_delta=0.1,
+                use_focal_loss=False,
+                focal_alpha=0.25,
+                focal_gamma=2.0,
+                num_leaves=None,
+                learning_rate=None,
+                max_depth=None,
+            )
+
+        def model_dump(self):
+            return {}
+
+        def get(self, key, default=None):
+            return getattr(self, key, default)
+
+    cfg = DummyConfig()
+    with pytest.raises(RuntimeError):
+        pipeline._run_training(cfg=cfg)
+
+    assert stub_mlflow.started == 1
+    assert stub_mlflow.ended == 1
