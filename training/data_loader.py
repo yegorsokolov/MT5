@@ -8,7 +8,8 @@ trainer and alternative entry points such as the parallel trainer.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Tuple
 
@@ -16,7 +17,52 @@ import pandas as pd
 
 from config_models import AppConfig
 
-__all__ = ["load_training_frame"]
+__all__ = ["load_training_frame", "StreamingTrainingFrame"]
+
+
+@dataclass
+class StreamingTrainingFrame:
+    """Container for lazily materialised feature chunks."""
+
+    chunks: Iterable[pd.DataFrame] | Iterator[pd.DataFrame]
+    metadata: dict[str, object] = field(default_factory=dict)
+    persist_path: Path | None = None
+    _cache: list[pd.DataFrame] = field(default_factory=list, init=False, repr=False)
+    _iterator: Iterator[pd.DataFrame] = field(init=False, repr=False)
+    _materialised: pd.DataFrame | None = field(default=None, init=False, repr=False)
+    _persisted: bool = field(default=False, init=False, repr=False)
+    materialise_count: int = field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        self._iterator = iter(self.chunks)
+
+    def __iter__(self) -> Iterator[pd.DataFrame]:
+        for chunk in self._cache:
+            yield chunk
+        for chunk in self._iterator:
+            self._cache.append(chunk)
+            yield chunk
+        self._iterator = iter(())
+
+    def materialise(self) -> pd.DataFrame:
+        """Return the concatenated dataframe, caching the result."""
+
+        if self._materialised is None:
+            self.materialise_count += 1
+            frames = list(self)
+            if frames:
+                self._materialised = pd.concat(frames, ignore_index=True)
+            else:
+                self._materialised = pd.DataFrame()
+            if self.persist_path is not None and not self._persisted:
+                try:
+                    from data.history import save_history_parquet
+
+                    save_history_parquet(self._materialised, self.persist_path)
+                    self._persisted = True
+                except Exception:  # pragma: no cover - best effort persistence
+                    pass
+        return self._materialised if self._materialised is not None else pd.DataFrame()
 
 
 def _symbol_history_chunks(
@@ -51,28 +97,20 @@ def _collect_streaming_features(
     chunk_size: int,
     feature_lookback: int,
     validate: bool,
-) -> pd.DataFrame:
-    """Return feature dataframe assembled from streaming chunks."""
+) -> Iterator[pd.DataFrame]:
+    """Yield feature-engineered chunks assembled from streaming history."""
 
-    from data.history import save_history_parquet
     from data.streaming import stream_features
 
-    feature_chunks: list[pd.DataFrame] = []
     for sym in symbols:
         chunks = _symbol_history_chunks(
             sym, cfg, root, chunk_size=chunk_size, validate=validate
         )
-        for feat_chunk in stream_features(
+        yield from stream_features(
             chunks,
             validate=validate,
             feature_lookback=feature_lookback,
-        ):
-            feature_chunks.append(feat_chunk)
-    if not feature_chunks:
-        return pd.DataFrame()
-    df = pd.concat(feature_chunks, ignore_index=True)
-    save_history_parquet(df, root / "data" / "history.parquet")
-    return df
+        )
 
 
 def _collect_offline_features(
@@ -108,8 +146,8 @@ def load_training_frame(
     chunk_size: int = 100_000,
     feature_lookback: int = 512,
     validate: bool = False,
-) -> Tuple[pd.DataFrame, str]:
-    """Return the dataframe used for training along with its provenance.
+) -> Tuple[pd.DataFrame | StreamingTrainingFrame, str]:
+    """Return the dataframe or streaming iterator used for training.
 
     Parameters
     ----------
@@ -132,9 +170,11 @@ def load_training_frame(
 
     Returns
     -------
-    Tuple[pd.DataFrame, str]
-        The feature dataframe and a string describing where the data originated
-        from (``"override"`` or ``"config"``).
+    Tuple[pd.DataFrame | StreamingTrainingFrame, str]
+        Either a fully materialised feature dataframe or a
+        :class:`StreamingTrainingFrame` when ``stream=True`` along with a string
+        describing where the data originated from (``"override"`` or
+        ``"config"``).
     """
 
     if df_override is not None:
@@ -142,7 +182,7 @@ def load_training_frame(
 
     symbols = cfg.strategy.symbols
     if stream:
-        df = _collect_streaming_features(
+        iterator = _collect_streaming_features(
             symbols,
             cfg,
             root,
@@ -150,6 +190,17 @@ def load_training_frame(
             feature_lookback=feature_lookback,
             validate=validate,
         )
+        metadata = {
+            "symbols": list(symbols),
+            "chunk_size": int(chunk_size),
+            "feature_lookback": int(feature_lookback),
+            "validate": bool(validate),
+        }
+        frame = StreamingTrainingFrame(
+            iterator,
+            metadata=metadata,
+            persist_path=root / "data" / "history.parquet",
+        )
     else:
-        df = _collect_offline_features(symbols, cfg, root, validate=validate)
-    return df, "config"
+        frame = _collect_offline_features(symbols, cfg, root, validate=validate)
+    return frame, "config"

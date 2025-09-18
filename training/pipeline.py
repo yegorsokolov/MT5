@@ -89,7 +89,7 @@ from analysis.similar_days import add_similar_day_features
 from training.curriculum import CurriculumScheduler
 from models.multi_task_heads import MultiTaskHeadEstimator
 
-from training.data_loader import load_training_frame
+from training.data_loader import StreamingTrainingFrame, load_training_frame
 from training.features import (
     apply_domain_adaptation,
     append_risk_profile_features,
@@ -784,7 +784,7 @@ def _run_training(
     stream = cfg.get("stream_history", False)
     feature_lookback = int(cfg.get("stream_feature_lookback", 512))
 
-    df, data_source = load_training_frame(
+    training_data, data_source = load_training_frame(
         cfg,
         root,
         df_override=df_override,
@@ -794,9 +794,25 @@ def _run_training(
         validate=validate_flag,
     )
 
+    stream_metadata: dict[str, object] | None = None
+    if isinstance(training_data, StreamingTrainingFrame):
+        stream_metadata = training_data.metadata
+        try:  # pragma: no cover - mlflow optional
+            if stream_metadata.get("chunk_size") is not None:
+                mlflow.log_param(
+                    "stream_chunk_size", int(stream_metadata["chunk_size"])
+                )
+            if stream_metadata.get("feature_lookback") is not None:
+                mlflow.log_param(
+                    "stream_feature_lookback",
+                    int(stream_metadata["feature_lookback"]),
+                )
+        except Exception:
+            pass
+
     adapter_path = root / "domain_adapter.pkl"
     df = apply_domain_adaptation(
-        df,
+        training_data,
         adapter_path,
         regime_step=cfg.get("regime_reclass_period", 500),
     )
