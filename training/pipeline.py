@@ -33,7 +33,30 @@ from lightgbm import LGBMClassifier
 from analytics import mlflow_client as mlflow
 from datetime import datetime
 
-from data.feature_scaler import FeatureScaler
+try:
+    from data.feature_scaler import FeatureScaler
+except Exception:  # pragma: no cover - optional dependency
+    class FeatureScaler:  # type: ignore[override]
+        """Minimal scaler stub used when optional dependency is unavailable."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def fit(self, X, y=None):  # type: ignore[override]
+            return self
+
+        def transform(self, X):  # type: ignore[override]
+            return X
+
+        def fit_transform(self, X, y=None):  # type: ignore[override]
+            return X
+
+        @classmethod
+        def load(cls, path):  # type: ignore[override]
+            return cls()
+
+        def save(self, path):  # pragma: no cover - compatibility shim
+            return path
 from train_utils import prepare_modal_arrays
 
 from log_utils import setup_logging, log_exceptions, LOG_DIR
@@ -825,8 +848,13 @@ def _run_training(
 
         features = build_feature_candidates(df, user_budget, cfg=cfg)
 
-        price_window_cols = sorted(c for c in df.columns if c.startswith("price_window_"))
-        news_emb_cols = sorted(c for c in df.columns if c.startswith("news_emb_"))
+        if isinstance(df, StreamingTrainingFrame):
+            column_source = df.collect_columns()
+        else:
+            column_source = list(df.columns)
+
+        price_window_cols = sorted(c for c in column_source if c.startswith("price_window_"))
+        news_emb_cols = sorted(c for c in column_source if c.startswith("news_emb_"))
         if model_type == "cross_modal":
             if not price_window_cols or not news_emb_cols:
                 raise ValueError(
@@ -841,17 +869,31 @@ def _run_training(
         except Exception:
             pass
         horizons = cfg.get("horizons", [cfg.get("max_horizon", 10)])
-        labels = generate_training_labels(
+        labels_frame = generate_training_labels(
             df,
             stream=stream,
             horizons=horizons,
             chunk_size=chunk_size,
         )
-        df = pd.concat([df, labels], axis=1)
-        y = labels
-        label_cols = [c for c in labels.columns if c.startswith("direction_")]
-        abs_label_cols = [c for c in labels.columns if c.startswith("abs_return_")]
-        vol_label_cols = [c for c in labels.columns if c.startswith("volatility_")]
+
+        if isinstance(df, StreamingTrainingFrame):
+            column_source = df.collect_columns()
+            label_cols = [c for c in column_source if c.startswith("direction_")]
+            abs_label_cols = [c for c in column_source if c.startswith("abs_return_")]
+            vol_label_cols = [c for c in column_source if c.startswith("volatility_")]
+            df = df.materialise()
+            if label_cols or abs_label_cols or vol_label_cols:
+                label_subset = label_cols + abs_label_cols + vol_label_cols
+                labels_frame = df.loc[:, label_subset]
+            else:
+                labels_frame = pd.DataFrame(index=df.index)
+        else:
+            df = pd.concat([df, labels_frame], axis=1)
+            label_cols = [c for c in labels_frame.columns if c.startswith("direction_")]
+            abs_label_cols = [c for c in labels_frame.columns if c.startswith("abs_return_")]
+            vol_label_cols = [c for c in labels_frame.columns if c.startswith("volatility_")]
+
+        y = labels_frame
         use_multi_task_heads = bool(cfg.get("use_multi_task_heads", True))
         if model_type == "neural":
             use_multi_task_heads = True
@@ -862,9 +904,9 @@ def _run_training(
 
         sel_target = None
         if label_cols:
-            sel_target = labels[label_cols[0]]
-        elif not labels.empty:
-            sel_target = labels.iloc[:, 0]
+            sel_target = labels_frame[label_cols[0]]
+        elif not labels_frame.empty:
+            sel_target = labels_frame.iloc[:, 0]
 
         mandatory_cols = [col for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"] if col in df.columns]
         features = select_model_features(
