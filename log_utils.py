@@ -11,6 +11,7 @@ import socket
 import io
 import queue
 import threading
+from typing import NamedTuple
 
 import requests
 from functools import wraps
@@ -82,7 +83,18 @@ def _save_order_id_index() -> None:
 # Asynchronous trade/decision logging
 # ---------------------------------------------------------------------------
 
-LOG_QUEUE: "queue.Queue[tuple[str, object]]" = queue.Queue()
+class _LogQueueItem(NamedTuple):
+    """Item processed by the asynchronous logging worker."""
+
+    kind: str
+    payload: object
+    ack: threading.Event | None
+
+
+_SHUTDOWN_SENTINEL: object = object()
+
+
+LOG_QUEUE: "queue.Queue[_LogQueueItem | object]" = queue.Queue()
 _worker_thread: threading.Thread | None = None
 _trade_handler: RotatingFileHandler | None = None
 _decision_handler: RotatingFileHandler | None = None
@@ -171,16 +183,18 @@ def _log_worker() -> None:
     d_handler = _get_decision_handler()
     while True:
         item = LOG_QUEUE.get()
-        if item is None:
+        if item is _SHUTDOWN_SENTINEL:
             LOG_QUEUE.task_done()
             break
-        kind, payload = item
+        assert isinstance(item, _LogQueueItem)
         try:
-            if kind == "trade":
-                _log_trade_sync(payload, t_handler, d_handler)
-            elif kind == "decision":
-                _log_decision_sync(payload, d_handler)
+            if item.kind == "trade":
+                _log_trade_sync(item.payload, t_handler, d_handler)
+            elif item.kind == "decision":
+                _log_decision_sync(item.payload, d_handler)
         finally:
+            if item.ack:
+                item.ack.set()
             LOG_QUEUE.task_done()
 
     t_handler.close()
@@ -201,7 +215,7 @@ def shutdown_logging() -> None:
 
     global _worker_thread
     if _worker_thread and _worker_thread.is_alive():
-        LOG_QUEUE.put(None)
+        LOG_QUEUE.put(_SHUTDOWN_SENTINEL)
         LOG_QUEUE.join()
         _worker_thread.join()
         _worker_thread = None
@@ -372,12 +386,31 @@ def log_exceptions(func):
     return wrapper
 
 
-def log_trade(event: str, **fields) -> None:
-    """Queue a trade event for asynchronous logging."""
+def _enqueue_log(kind: str, payload: object, flush: bool) -> None:
+    """Submit a logging task to the worker, optionally waiting for completion."""
 
     _ensure_worker()
-    LOG_QUEUE.put(("trade", {"event": event, **fields}))
-    LOG_QUEUE.join()
+    ack = threading.Event() if flush else None
+    LOG_QUEUE.put(_LogQueueItem(kind, payload, ack))
+    if ack is not None:
+        ack.wait()
+
+
+def log_trade(event: str, *, flush: bool = False, **fields) -> None:
+    """Queue a trade event for asynchronous logging.
+
+    Parameters
+    ----------
+    event:
+        Event type for the trade row.
+    flush:
+        If ``True`` the call blocks until the trade has been written to disk.
+        Defaults to ``False`` for non-blocking behaviour.
+    **fields:
+        Additional trade metadata columns.
+    """
+
+    _enqueue_log("trade", {"event": event, **fields}, flush)
 
 
 def log_trade_history(record: dict) -> None:
@@ -408,12 +441,18 @@ def log_trade_history(record: dict) -> None:
         _save_order_id_index()
 
 
-def log_decision(df: pd.DataFrame) -> None:
-    """Queue decision rows for asynchronous logging."""
+def log_decision(df: pd.DataFrame, *, flush: bool = False) -> None:
+    """Queue decision rows for asynchronous logging.
 
-    _ensure_worker()
-    LOG_QUEUE.put(("decision", df))
-    LOG_QUEUE.join()
+    Parameters
+    ----------
+    df:
+        DataFrame with decision entries to append to the encrypted parquet log.
+    flush:
+        If ``True`` the call waits until the rows are persisted.
+    """
+
+    _enqueue_log("decision", df, flush)
 
 
 def read_decisions() -> pd.DataFrame:

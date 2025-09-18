@@ -179,7 +179,7 @@ def test_log_trade_and_exception(monkeypatch, tmp_path):
         fail()
     assert ec._value.get() == 1
 
-    log_mod.log_trade("buy", symbol="XAUUSD", price=1.2)
+    log_mod.log_trade("buy", symbol="XAUUSD", price=1.2, flush=True)
     assert tc._value.get() == 1
     path = log_mod.TRADE_LOG
     assert path.exists()
@@ -191,7 +191,7 @@ def test_log_trade_and_exception(monkeypatch, tmp_path):
     assert rows[0]["symbol"] == "XAUUSD"
 
     # New fields should extend the header once
-    log_mod.log_trade("sell", symbol="XAUUSD", price=1.3, foo="bar")
+    log_mod.log_trade("sell", symbol="XAUUSD", price=1.3, foo="bar", flush=True)
     with open(path) as f:
         reader = csv.DictReader(f)
         rows = list(reader)
@@ -203,6 +203,8 @@ def test_log_trade_and_exception(monkeypatch, tmp_path):
     assert dpath.exists()
     df = log_mod.read_decisions()
     assert df.loc[0, "event"] == "buy"
+
+    log_mod.shutdown_logging()
 
 
 @pytest.mark.skipif(not PANDAS_AVAILABLE, reason="requires pandas")
