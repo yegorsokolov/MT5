@@ -1,12 +1,28 @@
 from __future__ import annotations
 
+from utils.environment import ensure_environment as _ensure_environment
+
+_ENVIRONMENT_READY = False
+
+
+def ensure_cli_environment() -> None:
+    """Ensure that environment validation runs only once per invocation."""
+
+    global _ENVIRONMENT_READY
+    if not _ENVIRONMENT_READY:
+        _ensure_environment()
+        _ENVIRONMENT_READY = True
+
+
+ensure_cli_environment()
+
 import json
 from pathlib import Path
 from typing import List, Optional
 
-import typer
-import pandas as pd
 import numpy as np
+import pandas as pd
+import typer
 
 from tuning.baseline_opt import backtest, run_search as baseline_run_search
 from tuning.auto_search import run_search as auto_model_search
@@ -21,7 +37,6 @@ from train_ensemble import (
 )
 from training.pipeline import launch as pipeline_launch
 from train_utils import setup_training, end_training
-from utils import ensure_environment
 
 app = typer.Typer(help="Unified training interface")
 
@@ -294,7 +309,7 @@ def ensemble(
 
 
 def main() -> None:
-    ensure_environment()
+    ensure_cli_environment()
     app()
 
 
