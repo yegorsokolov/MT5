@@ -95,7 +95,7 @@ class DriftMonitor:
         self.drift_threshold = drift_threshold
         self.feature_set_path = feature_set_path
         self.logger = logging.getLogger(__name__)
-        self._task: Optional[asyncio.Task] = None
+        self._task: Optional[asyncio.Task[None]] = None
 
     def record(self, features: pd.DataFrame, preds: pd.Series) -> None:
         """Append feature and prediction samples to the drift store."""
@@ -151,16 +151,67 @@ class DriftMonitor:
             await asyncio.sleep(24 * 60 * 60)
             self.compare()
 
-    def start(self) -> None:
+    def start(self) -> asyncio.Task[None]:
         """Start daily drift monitoring."""
+
         if self._task is not None:
-            return
+            if not self._task.done():
+                return self._task
+            self._task = None
         try:
             loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.get_event_loop()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "DriftMonitor.start() requires an active running event loop"
+            ) from exc
         self._task = loop.create_task(self._periodic_check())
+        return self._task
+
+    async def stop(self) -> None:
+        """Cancel the background drift monitoring task if running."""
+
+        task = self._task
+        if task is None:
+            return
+        self._task = None
+        if task.done():
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                self.logger.exception("Drift monitor task terminated with error")
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except RuntimeError as exc:
+            if "Event loop is closed" not in str(exc):
+                raise
+        except Exception:
+            self.logger.exception("Drift monitor task terminated with error")
 
 
 monitor = DriftMonitor()
-monitor.start()
+
+
+def get_monitor() -> DriftMonitor:
+    """Return the module-level drift monitor instance."""
+
+    return monitor
+
+
+def start_monitoring(drift_monitor: DriftMonitor | None = None) -> asyncio.Task[None]:
+    """Start periodic monitoring for ``drift_monitor`` or the default instance."""
+
+    monitor_obj = drift_monitor or monitor
+    return monitor_obj.start()
+
+
+async def stop_monitoring(drift_monitor: DriftMonitor | None = None) -> None:
+    """Stop periodic monitoring for ``drift_monitor`` or the default instance."""
+
+    monitor_obj = drift_monitor or monitor
+    await monitor_obj.stop()

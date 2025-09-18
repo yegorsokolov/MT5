@@ -25,11 +25,6 @@ md_spec.loader.exec_module(monitor_drift)
 
 
 def test_feature_drift_updates_selected_features(tmp_path):
-    # cancel global task from module import to avoid side effects
-    if monitor_drift.monitor._task is not None:
-        monitor_drift.monitor._task.cancel()
-        asyncio.get_event_loop().run_until_complete(asyncio.sleep(0))
-
     rng = np.random.default_rng(0)
     baseline = pd.DataFrame({
         "f1": rng.normal(size=400),
@@ -66,4 +61,13 @@ def test_feature_drift_updates_selected_features(tmp_path):
     features, version = feature_selector.load_feature_set(feature_file)
     assert version is not None and version != base_version
     assert "f2" in features and "f1" not in features
+
+    async def runner():
+        task = monitor_drift.start_monitoring()
+        await asyncio.sleep(0)
+        await monitor_drift.stop_monitoring()
+        assert task.cancelled()
+        assert monitor_drift.monitor._task is None
+
+    asyncio.run(runner())
 
