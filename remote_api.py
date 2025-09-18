@@ -116,17 +116,54 @@ async def _handle_resource_breach(reason: str) -> None:
     await graceful_exit()
 
 
-API_KEY = SecretManager().get_secret("API_KEY")
-if not API_KEY:
-    raise RuntimeError("API_KEY secret is required")
-
 CERT_FILE = Path("certs/api.crt")
 KEY_FILE = Path("certs/api.key")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
+API_KEY: Optional[str] = None
+AUDIT_SECRET: Optional[str] = None
+
+
+def _resolve_secret(
+    name: str,
+    *,
+    override: Optional[str] = None,
+    secret_manager: Optional[SecretManager] = None,
+) -> str:
+    if override:
+        return override
+    env_value = os.getenv(name)
+    if env_value:
+        return env_value
+    manager = secret_manager or SecretManager()
+    value = manager.get_secret(name)
+    if not value:
+        raise RuntimeError(f"{name} secret is required")
+    return value
+
+
+def init_remote_api(
+    *,
+    secret_manager: Optional[SecretManager] = None,
+    api_key: Optional[str] = None,
+    audit_secret: Optional[str] = None,
+) -> None:
+    """Resolve and cache secrets required by the API."""
+
+    global API_KEY, AUDIT_SECRET
+
+    API_KEY = _resolve_secret(
+        "API_KEY", override=api_key, secret_manager=secret_manager
+    )
+    AUDIT_SECRET = _resolve_secret(
+        "AUDIT_LOG_SECRET", override=audit_secret, secret_manager=secret_manager
+    )
+
 
 async def authorize(key: str = Security(api_key_header)) -> None:
-    if API_KEY and key != API_KEY:
+    if API_KEY is None:
+        raise HTTPException(status_code=503, detail="API not initialized")
+    if key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -136,10 +173,6 @@ RATE_LIMIT = int(os.getenv("RATE_LIMIT", "5"))
 BUCKET_TTL = int(os.getenv("BUCKET_TTL", str(15 * 60)))
 AUDIT_LOG = Path("logs/api_audit.csv")
 AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
-
-AUDIT_SECRET = SecretManager().get_secret("AUDIT_LOG_SECRET")
-if not AUDIT_SECRET:
-    raise RuntimeError("AUDIT_LOG_SECRET is required")
 
 _audit_handler = RotatingFileHandler(AUDIT_LOG, maxBytes=1_000_000, backupCount=5)
 _audit_handler.setFormatter(logging.Formatter("%(message)s"))
@@ -195,6 +228,8 @@ def _allow_request(key: str) -> bool:
 
 
 def _audit_log(key: str, action: str, status: int) -> None:
+    if AUDIT_SECRET is None:
+        raise RuntimeError("AUDIT_LOG_SECRET is not initialized")
     AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.datetime.utcnow().isoformat()
     line = f"{ts},{key},{action},{status}"
@@ -277,6 +312,7 @@ async def _bot_watcher() -> None:
 
 @app.on_event("startup")
 async def _start_watcher() -> None:
+    init_remote_api()
     start_scheduler()
     asyncio.create_task(_bot_watcher())
     if resource_watchdog.max_rss_mb or resource_watchdog.max_cpu_pct:

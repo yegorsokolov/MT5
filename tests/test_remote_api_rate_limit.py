@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def load_api(tmp_path, monkeypatch, rate=2):
     monkeypatch.setenv("RATE_LIMIT", str(rate))
+    monkeypatch.setenv("API_KEY", "token")
+    monkeypatch.setenv("AUDIT_LOG_SECRET", "audit")
     sm_mod = types.ModuleType("utils.secret_manager")
 
     class SM:
@@ -66,6 +68,7 @@ def load_api(tmp_path, monkeypatch, rate=2):
     mlflow_mod.__spec__ = importlib.machinery.ModuleSpec("mlflow", loader=None)
     sys.modules["mlflow"] = mlflow_mod
     mod = importlib.reload(importlib.import_module("remote_api"))
+    mod.init_remote_api()
     mod.AUDIT_LOG = tmp_path / "audit.csv"
     for h in list(mod.audit_logger.handlers):
         mod.audit_logger.removeHandler(h)
