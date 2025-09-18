@@ -23,6 +23,7 @@
 | training.feature_includes | Feature columns to always include in training | **[]** |  |
 | training.feature_excludes | Feature columns to drop from training | **[]** |  |
 | training.feature_families | Map of feature family name to inclusion flag | **{}** |  |
+| training.feature_groups | Custom named collections of feature columns | **{}** |  |
 | training.use_feature_selector | Run analysis.feature_selector.select_features on candidates | **True** |  |
 | training.feature_selector_top_k | Optional top-k cutoff when using the feature selector | **None** | **>= 1** |
 | training.feature_selector_corr_threshold | Correlation threshold for dropping redundant features | **0.95** | **>= 0.0, <= 1.0** |

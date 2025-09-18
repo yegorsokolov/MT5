@@ -804,7 +804,7 @@ def _run_training(
     rp = cfg.strategy.risk_profile
     user_budget = append_risk_profile_features(df, rp)
 
-    features = build_feature_candidates(df, user_budget)
+    features = build_feature_candidates(df, user_budget, cfg=cfg)
 
     price_window_cols = sorted(c for c in df.columns if c.startswith("price_window_"))
     news_emb_cols = sorted(c for c in df.columns if c.startswith("news_emb_"))

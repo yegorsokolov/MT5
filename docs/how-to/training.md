@@ -34,12 +34,15 @@ bars vary, such as event-driven tick streams.
 
 ## Feature selection and families
 
-``train_parallel.py`` and ``train_nn.py`` now derive candidate feature columns
+``train_parallel.py`` and ``train_nn.py`` derive candidate feature columns
 directly from the dataframe returned by :func:`data.features.make_features`.
-All numeric columns except identifiers (``Timestamp``, ``Symbol``) and labels
-are passed through :func:`analysis.feature_selector.select_features`.  Entire
-feature families such as ``baseline``, ``order_flow`` and ``cross_spectral`` can
-be retained or dropped via configuration without touching code:
+The training CLI now seeds this candidate list using
+``training.feature_includes`` (with sensible defaults when unspecified), prunes
+entries with ``training.feature_excludes`` and evaluates the
+``training.feature_families`` toggles before invoking
+:func:`analysis.feature_selector.select_features`.  You can also define your own
+named bundles via ``training.feature_groups`` and reference them from
+``feature_families``.
 
 ```yaml
 training:
@@ -47,12 +50,16 @@ training:
     baseline: true   # always keep baseline signals & stops
     order_flow: true # retain imbalance/CVD features
     cross_spectral: false
+    macro: true
   feature_includes:
     - risk_tolerance
   feature_excludes:
     - noise_feature
+  feature_groups:
+    macro:
+      - macro_spread
 ```
 
 This makes richer signals—baseline strategy confidence, order-flow imbalance
-and cross-spectral coherence—available to the optimiser by default, improving
-validation metrics on the bundled datasets.
+and cross-spectral coherence—available to the optimiser by default, while
+letting you opt into entirely custom feature packs without touching the code.
