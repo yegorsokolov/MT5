@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import json
 import logging
+import importlib
 import joblib
 import pandas as pd
 from state_manager import (
@@ -32,14 +33,6 @@ from train_rl import (
     RLLibTradingEnv,
     HierarchicalTradingEnv,
 )
-from stable_baselines3 import PPO, SAC, A2C
-from sb3_contrib.qrdqn import QRDQN
-from sb3_contrib import TRPO, RecurrentPPO
-
-try:  # optional import for hierarchical PPO
-    from sb3_contrib import HierarchicalPPO  # type: ignore
-except Exception:  # pragma: no cover - algorithm may not be available
-    HierarchicalPPO = None  # type: ignore
 import asyncio
 from signal_queue import publish_dataframe_async, get_signal_backend
 from models.ensemble import EnsembleModel
@@ -560,6 +553,58 @@ def meta_transformer_signals(df, features, cfg):
     return probs
 
 
+def _require_module_attr(module_name: str, attr: str, algo: str):
+    """Return ``attr`` from ``module_name`` with informative fallback errors."""
+
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "RL algorithm '%s' requires optional dependency '%s'."
+            " Install the 'mt5[rl]' extras or provide the dependency manually."
+            % (algo, module_name)
+        ) from exc
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        raise RuntimeError(
+            "Importing optional dependency '%s' for RL algorithm '%s' failed"
+            % (module_name, algo)
+        ) from exc
+
+    try:
+        value = getattr(module, attr)
+    except AttributeError as exc:
+        raise RuntimeError(
+            "Optional dependency '%s' does not expose attribute '%s' required"
+            " for RL algorithm '%s'." % (module_name, attr, algo)
+        ) from exc
+
+    if value is None:
+        raise RuntimeError(
+            "Optional dependency '%s' does not provide implementation for '%s'"
+            " required for RL algorithm '%s'." % (module_name, attr, algo)
+        )
+
+    return value
+
+
+def _require_stable_baselines_class(attr: str, algo: str):
+    """Return a class from ``stable_baselines3`` for ``algo`` with fallbacks."""
+
+    return _require_module_attr("stable_baselines3", attr, algo)
+
+
+def _require_sb3_contrib_class(attr: str, algo: str):
+    """Return a class from ``sb3_contrib`` for ``algo`` with fallbacks."""
+
+    return _require_module_attr("sb3_contrib", attr, algo)
+
+
+def _require_sb3_qrdqn(algo: str):
+    """Return the QRDQN class from ``sb3_contrib.qrdqn`` with fallbacks."""
+
+    return _require_module_attr("sb3_contrib.qrdqn", "QRDQN", algo)
+
+
 def rl_signals(df, features, cfg):
     """Return probability-like signals from a trained RL agent."""
     model_path = Path(__file__).resolve().parent / "model_rl.zip"
@@ -586,116 +631,138 @@ def rl_signals(df, features, cfg):
             return np.zeros(len(df))
 
     rllib_algo = cfg.get("rllib_algorithm", "PPO").upper()
-    if algo == "PPO":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        model = PPO.load(model_path, env=env)
-    elif algo == "A2C" or algo == "A3C":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        model = A2C.load(model_path, env=env)
-    elif algo == "SAC":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        model = SAC.load(model_path, env=env)
-    elif algo == "TRPO":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        model = TRPO.load(model_path, env=env)
-    elif algo == "RECURRENTPPO":
-        env = TradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        model = RecurrentPPO.load(model_recurrent, env=env)
-    elif algo == "HIERARCHICALPPO":
-        if HierarchicalPPO is None:
-            return np.zeros(len(df))
-        env = HierarchicalTradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        model = HierarchicalPPO.load(model_hierarchical, env=env)
-    elif algo == "QRDQN":
-        env = DiscreteTradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        model = QRDQN.load(model_path, env=env)
-    elif algo == "RLLIB":
+    algo_key = algo
+    model = None
+    env = None
+    try:
+        if algo == "PPO":
+            PPO = _require_stable_baselines_class("PPO", algo)
+            env = TradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            model = PPO.load(model_path, env=env)
+        elif algo == "A2C" or algo == "A3C":
+            A2C = _require_stable_baselines_class("A2C", algo)
+            env = TradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            model = A2C.load(model_path, env=env)
+        elif algo == "SAC":
+            SAC = _require_stable_baselines_class("SAC", algo)
+            env = TradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            model = SAC.load(model_path, env=env)
+        elif algo == "TRPO":
+            TRPO = _require_sb3_contrib_class("TRPO", algo)
+            env = TradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            model = TRPO.load(model_path, env=env)
+        elif algo == "RECURRENTPPO":
+            RecurrentPPO = _require_sb3_contrib_class("RecurrentPPO", algo)
+            env = TradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            model = RecurrentPPO.load(model_recurrent, env=env)
+        elif algo == "HIERARCHICALPPO":
+            HierarchicalPPO = _require_sb3_contrib_class("HierarchicalPPO", algo)
+            env = HierarchicalTradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            model = HierarchicalPPO.load(model_hierarchical, env=env)
+        elif algo == "QRDQN":
+            QRDQN = _require_sb3_qrdqn(algo)
+            env = DiscreteTradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            model = QRDQN.load(model_path, env=env)
+        elif algo == "RLLIB":
+            try:
+                import ray
+                from ray.rllib.algorithms.ppo import PPO as RLlibPPO
+                from ray.rllib.algorithms.ddpg import DDPG
+            except Exception:
+                return np.zeros(len(df))
+
+            ray.init(ignore_reinit_error=True, include_dashboard=False)
+            env = RLLibTradingEnv(
+                df,
+                features,
+                max_position=cfg.get("rl_max_position", 1.0),
+                transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
+                risk_penalty=cfg.get("rl_risk_penalty", 0.1),
+                var_window=cfg.get("rl_var_window", 30),
+                cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
+                cvar_window=cfg.get("rl_cvar_window", 30),
+            )
+            if rllib_algo == "DDPG":
+                model = DDPG.from_checkpoint(model_rllib)
+            else:
+                model = RLlibPPO.from_checkpoint(model_rllib)
+        # other algorithms fall through to the default QRDQN fallback below
+    except RuntimeError as exc:
+        logger.error("RL signal generation unavailable: %s", exc)
+        return np.zeros(len(df))
+    except Exception:  # pragma: no cover - unexpected RL failures
+        logger.exception("Unexpected error during RL signal generation")
+        return np.zeros(len(df))
+    if model is None or env is None:
+        # Default fallback mirrors QRDQN behaviour for unknown algorithms
         try:
-            import ray
-            from ray.rllib.algorithms.ppo import PPO as RLlibPPO
-            from ray.rllib.algorithms.ddpg import DDPG
-        except Exception:
+            QRDQN = _require_sb3_qrdqn("QRDQN")
+        except RuntimeError as exc:
+            logger.error("RL signal generation unavailable: %s", exc)
             return np.zeros(len(df))
-
-        ray.init(ignore_reinit_error=True, include_dashboard=False)
-        env = RLLibTradingEnv(
-            df,
-            features,
-            max_position=cfg.get("rl_max_position", 1.0),
-            transaction_cost=cfg.get("rl_transaction_cost", 0.0001),
-            risk_penalty=cfg.get("rl_risk_penalty", 0.1),
-            var_window=cfg.get("rl_var_window", 30),
-            cvar_penalty=cfg.get("rl_cvar_penalty", 0.0),
-            cvar_window=cfg.get("rl_cvar_window", 30),
-        )
-        if rllib_algo == "DDPG":
-            model = DDPG.from_checkpoint(model_rllib)
-        else:
-            model = RLlibPPO.from_checkpoint(model_rllib)
-    else:
         env = DiscreteTradingEnv(
             df,
             features,
@@ -707,8 +774,9 @@ def rl_signals(df, features, cfg):
             cvar_window=cfg.get("rl_cvar_window", 30),
         )
         model = QRDQN.load(model_path, env=env)
+        algo_key = "QRDQN"
 
-    if algo == "RLLIB":
+    if algo_key == "RLLIB":
         obs, _ = env.reset()
     else:
         obs = env.reset()
@@ -717,24 +785,24 @@ def rl_signals(df, features, cfg):
     state = None
     episode_start = np.ones((1,), dtype=bool)
     while not done:
-        if algo == "RLLIB":
+        if algo_key == "RLLIB":
             action = model.compute_single_action(obs)
-        elif algo == "RECURRENTPPO":
+        elif algo_key == "RECURRENTPPO":
             action, state = model.predict(
                 obs, state=state, episode_start=episode_start, deterministic=True
             )
-        elif algo == "HIERARCHICALPPO":
+        elif algo_key == "HIERARCHICALPPO":
             action, _ = model.predict(obs, deterministic=True)
         else:
             action, _ = model.predict(obs, deterministic=True)
-        if algo == "HIERARCHICALPPO":
+        if algo_key == "HIERARCHICALPPO":
             a = float(action["manager"])  # direction for signal
             env_action = action
         else:
             a = float(action[0]) if not np.isscalar(action) else float(action)
             env_action = action
         actions.append(a)
-        if algo == "RLLIB":
+        if algo_key == "RLLIB":
             obs, _, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
         else:
@@ -744,7 +812,7 @@ def rl_signals(df, features, cfg):
     probs = (np.array(actions) > 0).astype(float)
     if len(probs) < len(df):
         probs = np.pad(probs, (0, len(df) - len(probs)), "edge")
-    if algo == "RLLIB":
+    if algo_key == "RLLIB":
         ray.shutdown()
     return probs
 
