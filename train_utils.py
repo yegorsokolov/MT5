@@ -286,8 +286,12 @@ def resolve_training_features(
         if include:
             forced.update(col for col in cols if col in numeric_columns)
         else:
-            candidates = [c for c in candidates if c not in cols]
-            forced.difference_update(cols)
+            candidates = [
+                c
+                for c in candidates
+                if c not in cols or c in include_cols
+            ]
+            forced.difference_update(col for col in cols if col not in include_cols)
 
     selected: List[str]
     top_k: Optional[int]

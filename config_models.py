@@ -130,6 +130,10 @@ class TrainingConfig(BaseModel):
         default_factory=dict,
         description="Map of feature family name to inclusion flag",
     )
+    feature_groups: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Custom named collections of feature columns",
+    )
     use_feature_selector: bool = Field(
         True,
         description="Run analysis.feature_selector.select_features on candidates",
@@ -173,6 +177,28 @@ class TrainingConfig(BaseModel):
                 f"model_type must be one of {sorted(allowed)}, received '{value}'"
             )
         return mt
+
+    @field_validator("feature_groups", mode="before")
+    @classmethod
+    def _normalise_feature_groups(cls, value: Any) -> dict[str, list[str]]:
+        if value is None:
+            return {}
+        if not isinstance(value, Mapping):
+            raise TypeError("feature_groups must be provided as a mapping")
+        groups: dict[str, list[str]] = {}
+        for name, cols in value.items():
+            if cols is None:
+                groups[str(name)] = []
+                continue
+            if isinstance(cols, (str, bytes)):
+                groups[str(name)] = [str(cols)]
+            elif isinstance(cols, Sequence):
+                groups[str(name)] = [str(c) for c in cols if str(c)]
+            else:
+                raise TypeError(
+                    "feature_groups entries must be provided as strings or sequences"
+                )
+        return groups
 
 
 class FeaturesConfig(BaseModel):
