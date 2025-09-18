@@ -1,5 +1,6 @@
 import base64
 import csv
+import importlib.machinery
 import importlib.util
 import os
 import queue
@@ -19,6 +20,16 @@ def setup_tmp_logs(tmp_path, monkeypatch):
         decrypt=lambda d, k: d,
     )
     sys.modules.setdefault("crypto_utils", crypto_stub)
+    requests_stub = types.ModuleType("requests")
+
+    class _DummySession:
+        def post(self, *args, **kwargs):
+            return None
+
+    requests_stub.Session = lambda: _DummySession()
+    requests_stub.head = lambda *a, **k: None
+    requests_stub.__spec__ = importlib.machinery.ModuleSpec("requests", loader=None)
+    sys.modules.setdefault("requests", requests_stub)
     spec = importlib.util.spec_from_file_location("log_utils", root / "log_utils.py")
     log_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(log_mod)
@@ -43,7 +54,10 @@ def setup_tmp_logs(tmp_path, monkeypatch):
 
 def test_log_ordering(monkeypatch, tmp_path):
     log_mod = setup_tmp_logs(tmp_path, monkeypatch)
-    for i in range(5):
+    # First call uses ``flush`` to exercise the blocking path.  Subsequent
+    # calls run asynchronously until shutdown.
+    log_mod.log_trade("buy", symbol="0", price=0, flush=True)
+    for i in range(1, 5):
         log_mod.log_trade("buy", symbol=str(i), price=i)
     log_mod.shutdown_logging()
     with open(log_mod.TRADE_LOG) as f:
@@ -67,3 +81,14 @@ def test_log_rotation(monkeypatch, tmp_path):
     log_mod.shutdown_logging()
     assert (tmp_path / "trades.csv").exists()
     assert (tmp_path / "trades.csv.1").exists()
+
+
+def test_flush_writes_immediately(monkeypatch, tmp_path):
+    log_mod = setup_tmp_logs(tmp_path, monkeypatch)
+    log_mod.log_trade("buy", symbol="A", price=1, flush=True)
+    with open(log_mod.TRADE_LOG) as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    assert rows[0]["symbol"] == "A"
+    # Even after immediate read, shutdown should still drain cleanly.
+    log_mod.shutdown_logging()
