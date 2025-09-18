@@ -1,11 +1,47 @@
-import pandas as pd
-import yaml
 import sys
-import types
-import contextlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import contextlib
+import types
+
+import pandas as pd
+import yaml
+
+from tests.yaml_helpers import ensure_real_yaml
+
+scipy_stats_stub = types.ModuleType("scipy.stats")
+
+
+def _dummy_ttest_ind(*_a, **_k):
+    return types.SimpleNamespace(pvalue=0.01)
+
+
+scipy_stats_stub.ttest_ind = _dummy_ttest_ind  # type: ignore[attr-defined]
+scipy_stub = types.ModuleType("scipy")
+scipy_stub.stats = scipy_stats_stub  # type: ignore[attr-defined]
+sys.modules["scipy"] = scipy_stub
+sys.modules["scipy.stats"] = scipy_stats_stub
+
+optuna_stub = types.ModuleType("optuna")
+optuna_stub.trial = types.SimpleNamespace(Trial=object)
+optuna_stub.create_study = lambda *a, **k: None
+sys.modules["optuna"] = optuna_stub
+
+train_stub = types.ModuleType("train")
+train_stub.main = lambda *a, **k: None
+sys.modules["train"] = train_stub
+
+backtest_stub = types.ModuleType("backtest")
+backtest_stub.run_backtest = lambda *a, **k: {}
+backtest_stub.run_rolling_backtest = lambda *a, **k: {}
+sys.modules["backtest"] = backtest_stub
+
+log_utils_stub = types.ModuleType("log_utils")
+log_utils_stub.setup_logging = lambda *a, **k: None
+log_utils_stub.log_exceptions = lambda func: func
+sys.modules["log_utils"] = log_utils_stub
 
 sys.modules["mlflow"] = types.SimpleNamespace(
     set_experiment=lambda *a, **k: None,
@@ -19,6 +55,8 @@ import auto_optimize
 
 
 def test_auto_optimize_updates_config(monkeypatch, tmp_path):
+    ensure_real_yaml()
+
     log_path = tmp_path / "hist.csv"
     monkeypatch.setattr(auto_optimize, "_LOG_PATH", log_path, raising=False)
 
@@ -34,17 +72,40 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
         "backtest_window_months": 6,
         "symbol": "XAUUSD",
     }
-    with open(cfg_path, "w") as f:
-        yaml.safe_dump(cfg, f)
+    dumped_text = yaml.safe_dump(cfg)
+    assert dumped_text
+    cfg_path.write_text(dumped_text)
+    loaded_cfg = yaml.safe_load(cfg_path.read_text())
+    assert loaded_cfg and loaded_cfg.get("threshold") == 0.55
 
-    monkeypatch.setattr(auto_optimize, "load_config", lambda: yaml.safe_load(open(cfg_path)))
+    captured_dump: dict[str, dict] = {}
+
+    class DummyConfig:
+        def __init__(self, data):
+            self._data = data
+
+        def model_dump(self):
+            dumped = dict(self._data)
+            captured_dump.setdefault("data", dumped)
+            return dumped
+
+    def load_config_stub():
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return DummyConfig(data)
+
+    monkeypatch.setattr(auto_optimize, "load_config", load_config_stub)
+
+    updates: list[dict] = []
 
     def fake_update(key, value, reason):
         if key == "rl_max_position":
             raise ValueError("risk param")
-        data = yaml.safe_load(open(cfg_path))
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
         data[key] = value
-        with open(cfg_path, "w") as f:
+        updates.append(dict(data))
+        with open(cfg_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f)
 
     monkeypatch.setattr(auto_optimize, "update_config", fake_update)
@@ -54,8 +115,10 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
     base_returns = pd.Series([0.0] * 10)
     best_metrics = {"sharpe": 0.2}
     best_returns = pd.Series([0.2] * 10)
+    seen_cfgs: list[dict] = []
 
     def fake_backtest(cfg, return_returns=False):
+        seen_cfgs.append(dict(cfg))
         if cfg.get("threshold") == 0.55:
             if return_returns:
                 return base_metrics, base_returns
@@ -72,6 +135,11 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
         return {"avg_sharpe": 1.5}
 
     monkeypatch.setattr(auto_optimize, "run_rolling_backtest", fake_cv)
+    monkeypatch.setattr(
+        auto_optimize,
+        "ttest_ind",
+        lambda *a, **k: types.SimpleNamespace(pvalue=0.01),
+    )
 
     class DummyTrial:
         params = {
@@ -116,6 +184,12 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
     df = pd.read_csv(log_path)
     assert "rl_max_position" in df.columns
     cfg_new = yaml.safe_load(open(cfg_path))
+    assert "data" in captured_dump
+    assert "threshold" in captured_dump["data"]
+    assert seen_cfgs, "run_backtest should have been called"
+    assert seen_cfgs[0]["threshold"] == 0.55
+    assert seen_cfgs[-1]["threshold"] == 0.6
+    assert updates, "update_config should have been invoked"
     assert cfg_new["rl_risk_penalty"] == 0.15
     # rl_max_position update should have been blocked
     assert cfg_new["rl_max_position"] == 1.0
