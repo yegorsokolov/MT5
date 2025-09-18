@@ -20,8 +20,14 @@ from model_registry import save_model
 from state_manager import watch_config
 from analysis.regime_thresholds import find_regime_thresholds
 
-setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for the online training service."""
+
+    setup_logging()
+    return logging.getLogger(__name__)
 
 
 @log_exceptions
@@ -50,6 +56,7 @@ def train_online(
         returns immediately. Useful for tests.
     """
 
+    init_logging()
     cfg = load_config()
     _observer = watch_config(cfg)
     seed = cfg.get("seed", 42)
@@ -655,5 +662,12 @@ def rollback_model(
     return latest_path
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Command-line entry point for the online training loop."""
+
+    init_logging()
     train_online()
+
+
+if __name__ == "__main__":
+    main()

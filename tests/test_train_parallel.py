@@ -102,15 +102,46 @@ class _DummyLookahead:
 
 
 utils_mod = types.ModuleType("utils")
+utils_mod.__path__ = []  # Mark as a package so submodules can be imported
 utils_mod.load_config = lambda *args, **kwargs: _DummyConfig()
 utils_mod.ensure_environment = lambda: None
 lr_sched_mod = types.ModuleType("utils.lr_scheduler")
 lr_sched_mod.LookaheadAdamW = _DummyLookahead
 utils_mod.lr_scheduler = lr_sched_mod
+utils_mod.PROJECT_ROOT = Path(".")
+
+
+class _DummyMonitor:
+    capabilities = types.SimpleNamespace(cpus=1)
+
+    @staticmethod
+    def subscribe():
+        class _Queue:
+            async def get(self):  # pragma: no cover - async shim
+                return None
+
+        return _Queue()
+
+    @staticmethod
+    def create_task(coro):
+        return None
+
+
+resource_monitor_mod = types.ModuleType("utils.resource_monitor")
+resource_monitor_mod.monitor = _DummyMonitor()
+data_backend_mod = types.ModuleType("utils.data_backend")
+data_backend_mod.get_dataframe_module = lambda: pd
+
+utils_mod.resource_monitor = resource_monitor_mod
+utils_mod.data_backend = data_backend_mod
+
 sys.modules["utils"] = utils_mod
 sys.modules["utils.lr_scheduler"] = lr_sched_mod
+sys.modules["utils.resource_monitor"] = resource_monitor_mod
+sys.modules["utils.data_backend"] = data_backend_mod
 
 train_parallel = importlib.import_module("train_parallel")
+train_parallel.init_logging = lambda: None
 
 best_f1_threshold = train_parallel.best_f1_threshold
 build_lightgbm_pipeline = train_parallel.build_lightgbm_pipeline
