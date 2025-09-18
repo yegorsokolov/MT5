@@ -73,20 +73,6 @@ def test_ensemble_cli_logs_metrics(tmp_path, monkeypatch):
     training_pkg.pipeline = pipeline_stub  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "training", training_pkg)
     monkeypatch.setitem(sys.modules, "training.pipeline", pipeline_stub)
-    env_module = types.ModuleType("utils.environment")
-    env_module.ensure_environment = lambda: None
-    monkeypatch.setitem(sys.modules, "utils.environment", env_module)
-
-    utils_module = types.ModuleType("utils")
-    utils_module.__path__ = []  # type: ignore[attr-defined]
-
-    def fake_load_config(*_a, **_k):
-        return types.SimpleNamespace(model_dump=lambda: {})
-
-    utils_module.load_config = fake_load_config  # type: ignore[attr-defined]
-    utils_module.environment = env_module  # type: ignore[attr-defined]
-    utils_module.ensure_environment = env_module.ensure_environment  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "utils", utils_module)
     backtest_stub = types.SimpleNamespace(run_rolling_backtest=lambda *a, **k: {})
     monkeypatch.setitem(sys.modules, "backtest", backtest_stub)
 
@@ -98,7 +84,16 @@ def test_ensemble_cli_logs_metrics(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "train_ensemble", te_stub)
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from train_cli import app
+    import train_cli
+
+    env_calls: list[None] = []
+
+    def fake_env() -> None:
+        env_calls.append(None)
+
+    monkeypatch.setattr(train_cli, "_ensure_environment", fake_env)
+
+    app = train_cli.app
 
     setup_called = False
     end_called = False
@@ -163,6 +158,7 @@ def test_ensemble_cli_logs_metrics(tmp_path, monkeypatch):
     assert any("mse_mixture" in line for line in output_lines)
 
     assert setup_called and end_called
+    assert len(env_calls) == 1
     assert metrics and ("f1_ensemble", 0.9) in metrics and ("mse_mixture", 0.1) in metrics
     assert moe_cfg_holder["cfg"]["sharpness"] == 7.5
     assert moe_cfg_holder["cfg"]["expert_weights"] == [0.5, 1.5, 2.0]

@@ -5,16 +5,15 @@ from utils.environment import ensure_environment as _ensure_environment
 _ENVIRONMENT_READY = False
 
 
-def ensure_cli_environment() -> None:
+def ensure_cli_environment(*, reset: bool = False) -> None:
     """Ensure that environment validation runs only once per invocation."""
 
     global _ENVIRONMENT_READY
+    if reset:
+        _ENVIRONMENT_READY = False
     if not _ENVIRONMENT_READY:
         _ensure_environment()
         _ENVIRONMENT_READY = True
-
-
-ensure_cli_environment()
 
 import json
 from pathlib import Path
@@ -39,6 +38,13 @@ from training.pipeline import init_logging as init_pipeline_logging, launch as p
 from train_utils import setup_training, end_training
 
 app = typer.Typer(help="Unified training interface")
+
+
+@app.callback()
+def _prepare_environment(_: typer.Context) -> None:
+    """Validate environment before executing any command."""
+
+    ensure_cli_environment(reset=True)
 
 
 @app.command()
@@ -310,7 +316,6 @@ def ensemble(
 
 
 def main() -> None:
-    ensure_cli_environment()
     app()
 
 
