@@ -10,6 +10,8 @@ import pytest
 from types import SimpleNamespace
 import types
 
+from training.data_loader import StreamingTrainingFrame
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
@@ -306,3 +308,21 @@ def test_train_nn_stream_equivalence(tmp_path):
     model_full = _run_train_nn(tmp_path, stream=False)
     model_stream = _run_train_nn(tmp_path, stream=True)
     np.testing.assert_allclose(model_full, model_stream)
+def test_streaming_frame_defers_materialisation():
+    chunks = [
+        pd.DataFrame({"value": [1, 2, 3]}),
+        pd.DataFrame({"value": [4, 5]}),
+    ]
+    frame = StreamingTrainingFrame(iter(chunks))
+    frame.apply_chunk(lambda chunk: chunk.assign(double=chunk["value"] * 2))
+    frame.apply_full(lambda df: df.assign(triple=df["double"] * 1.5))
+
+    assert frame.materialise_count == 0
+    seen_chunks = list(frame)
+    assert all("double" in chunk.columns for chunk in seen_chunks)
+    assert frame.materialise_count == 0
+
+    full = frame.materialise()
+    assert frame.materialise_count == 1
+    assert "triple" in full.columns
+

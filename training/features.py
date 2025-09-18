@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
+import numpy as np
 
 from analysis.feature_families import group_by_family
 from analysis.risk_loss import RiskBudget
+from training.data_loader import StreamingTrainingFrame
 
 if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
     from config_models import AppConfig, TrainingConfig
@@ -101,15 +103,100 @@ def _normalise_list(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _streaming_numeric_summary(
+    frame: StreamingTrainingFrame,
+) -> tuple[list[str], np.ndarray | None, np.ndarray | None, list[str]]:
+    """Return numeric column statistics and symbol order for ``frame``."""
+
+    columns: list[str] = []
+    sum_vec: np.ndarray | None = None
+    sum_cross: np.ndarray | None = None
+    total = 0
+    symbol_order: list[str] = []
+    seen_symbols: set[str] = set()
+
+    for chunk in frame:
+        numeric = chunk.select_dtypes(include="number")
+        if not numeric.empty:
+            if not columns:
+                columns = list(numeric.columns)
+                sum_vec = np.zeros(len(columns), dtype=float)
+                sum_cross = np.zeros((len(columns), len(columns)), dtype=float)
+            else:
+                missing = [col for col in columns if col not in numeric.columns]
+                if missing:
+                    numeric = numeric.reindex(columns=columns, fill_value=0.0)
+                else:
+                    numeric = numeric.loc[:, columns]
+            arr = numeric.to_numpy(dtype=float)
+            total += arr.shape[0]
+            if sum_vec is not None:
+                sum_vec += arr.sum(axis=0)
+            if sum_cross is not None:
+                sum_cross += arr.T @ arr
+        if "Symbol" in chunk.columns:
+            symbols = chunk["Symbol"].dropna().astype(str)
+            for sym in symbols:
+                if sym not in seen_symbols:
+                    seen_symbols.add(sym)
+                    symbol_order.append(sym)
+
+    if not columns or sum_vec is None or sum_cross is None or total == 0:
+        return [], None, None, symbol_order
+
+    mean = sum_vec / float(total)
+    cov = sum_cross / float(total) - np.outer(mean, mean)
+    return columns, mean, cov, symbol_order
+
+
 def apply_domain_adaptation(
     df: pd.DataFrame | object, adapter_path: Path, *, regime_step: int = 500
 ) -> pd.DataFrame:
     """Apply the persisted :class:`DomainAdapter` to numeric columns."""
 
-    df = _ensure_frame(df)
     from analysis.domain_adapter import DomainAdapter
     from analysis.regime_detection import periodic_reclassification
 
+    if isinstance(df, StreamingTrainingFrame):
+        adapter = DomainAdapter.load(adapter_path)
+        num_cols, mean, cov, symbols = _streaming_numeric_summary(df)
+        if num_cols and mean is not None and cov is not None:
+            adapter.columns_ = list(num_cols)
+            adapter.source_mean_ = mean
+            adapter.source_cov_ = cov
+
+            def _transform_chunk(chunk: pd.DataFrame) -> pd.DataFrame:
+                if not set(num_cols).issubset(chunk.columns):
+                    return chunk
+                numeric = chunk.loc[:, num_cols]
+                if numeric.empty:
+                    return chunk
+                transformed = adapter.transform(numeric)
+                result = chunk.copy()
+                result.loc[:, num_cols] = transformed.to_numpy()
+                return result
+
+            df.apply_chunk(_transform_chunk)
+
+        if symbols and "SymbolCode" not in df.columns:
+            mapping = {sym: idx for idx, sym in enumerate(symbols)}
+
+            def _attach_symbol_code(chunk: pd.DataFrame) -> pd.DataFrame:
+                if "Symbol" not in chunk.columns or "SymbolCode" in chunk.columns:
+                    return chunk
+                result = chunk.copy()
+                result["SymbolCode"] = (
+                    result["Symbol"].map(mapping).fillna(-1).astype(int)
+                )
+                return result
+
+            df.apply_chunk(_attach_symbol_code)
+
+        adapter.save(adapter_path)
+        df.apply_full(lambda frame: periodic_reclassification(frame, step=regime_step))
+        return df
+
+    df = _ensure_frame(df)
     adapter = DomainAdapter.load(adapter_path)
     num_cols = df.select_dtypes(include="number").columns
     if len(num_cols) > 0:
@@ -124,6 +211,24 @@ def apply_domain_adaptation(
 
 def append_risk_profile_features(df: pd.DataFrame | object, risk_profile) -> RiskBudget:
     """Inject user risk preferences as additional model features."""
+
+    if isinstance(df, StreamingTrainingFrame):
+        user_budget = RiskBudget(
+            max_leverage=risk_profile.leverage_cap,
+            max_drawdown=risk_profile.drawdown_limit,
+        )
+
+        values = {"risk_tolerance": risk_profile.tolerance}
+        values.update(user_budget.as_features())
+
+        def _attach(chunk: pd.DataFrame) -> pd.DataFrame:
+            result = chunk.copy()
+            for name, val in values.items():
+                result[name] = val
+            return result
+
+        df.apply_chunk(_attach)
+        return user_budget
 
     df = _ensure_frame(df)
     user_budget = RiskBudget(
@@ -145,7 +250,13 @@ def build_feature_candidates(
 ) -> list[str]:
     """Return the baseline list of feature column names respecting config."""
 
-    df = _ensure_frame(df)
+    if isinstance(df, StreamingTrainingFrame):
+        column_order = df.collect_columns()
+        column_set = set(column_order)
+    else:
+        df = _ensure_frame(df)
+        column_order = list(df.columns)
+        column_set = set(column_order)
     training_section = _resolve_training_section(cfg)
     includes = _normalise_list(_get_training_option(training_section, "feature_includes", []))
     excludes = set(
@@ -161,30 +272,30 @@ def build_feature_candidates(
     features.extend(_DEFAULT_BASE_FEATURES)
 
     if budget is not None:
-        if "risk_tolerance" in df.columns:
+        if "risk_tolerance" in column_set:
             features.append("risk_tolerance")
         for name in budget.as_features().keys():
-            if name in df.columns:
+            if name in column_set:
                 features.append(name)
 
     for prefix in _NUMERIC_PREFIXES:
-        for col in df.columns:
+        for col in column_order:
             if col.startswith(prefix):
                 features.append(col)
 
-    if "volume_ratio" in df.columns:
+    if "volume_ratio" in column_set:
         features.append("volume_ratio")
-        if "volume_imbalance" in df.columns:
+        if "volume_imbalance" in column_set:
             features.append("volume_imbalance")
 
-    if include_symbol_code and "SymbolCode" in df.columns:
+    if include_symbol_code and "SymbolCode" in column_set:
         features.append("SymbolCode")
 
     features = _dedupe_preserve_order(features)
 
-    explicit_includes = {col for col in includes if col in df.columns}
+    explicit_includes = {col for col in includes if col in column_set}
 
-    family_map = group_by_family(set(df.columns) | set(features))
+    family_map = group_by_family(set(column_set) | set(features))
 
     if isinstance(group_defs, Mapping):
         for name, cols in group_defs.items():
@@ -205,9 +316,9 @@ def build_feature_candidates(
         if not cols:
             continue
         if include_flag:
-            ordered_cols = [col for col in df.columns if col in cols]
+            ordered_cols = [col for col in column_order if col in cols]
             for col in ordered_cols:
-                if col in df.columns:
+                if col in column_set:
                     features.append(col)
             features = _dedupe_preserve_order(features)
         else:
@@ -222,10 +333,10 @@ def build_feature_candidates(
     ]
 
     for col in includes:
-        if col in df.columns and col not in features:
+        if col in column_set and col not in features:
             features.append(col)
 
-    features = [col for col in features if col in df.columns]
+    features = [col for col in features if col in column_set]
 
     return _dedupe_preserve_order(features)
 
