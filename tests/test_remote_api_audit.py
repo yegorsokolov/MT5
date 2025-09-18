@@ -30,6 +30,7 @@ def load_api(tmp_path, monkeypatch):
         info=lambda *a, **k: None,
         warning=lambda *a, **k: None,
         error=lambda *a, **k: None,
+        exception=lambda *a, **k: None,
     )
     sys.modules["log_utils"] = types.SimpleNamespace(
         LOG_FILE=tmp_path / "app.log", setup_logging=lambda: logger
@@ -41,6 +42,23 @@ def load_api(tmp_path, monkeypatch):
     sched_mod.start_scheduler = lambda: None
     sched_mod.stop_scheduler = lambda: None
     sys.modules["scheduler"] = sched_mod
+    rm_mod = types.ModuleType("utils.resource_monitor")
+
+    class DummyMonitor:
+        def __init__(self, *a, **k):
+            self.max_rss_mb = k.get("max_rss_mb")
+            self.max_cpu_pct = k.get("max_cpu_pct")
+            self.alert_callback = None
+            self.started = False
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.started = False
+
+    rm_mod.ResourceMonitor = DummyMonitor
+    sys.modules["utils.resource_monitor"] = rm_mod
     sys.modules["utils"] = types.SimpleNamespace(update_config=lambda *a, **k: None)
     sys.modules["utils.graceful_exit"] = types.SimpleNamespace(
         graceful_exit=lambda *a, **k: None
@@ -79,4 +97,4 @@ def test_rate_limit_metric(tmp_path, monkeypatch):
     child = api.API_RATE_LIMIT_REMAINING.labels(key=key)
     assert child._value.get() == pytest.approx(api.RATE_LIMIT - 1, rel=1e-3)
     assert api._allow_request(key)
-    assert child._value.get() == pytest.approx(api.RATE_LIMIT - 2, rel=1e-3)
+    assert child._value.get() == pytest.approx(api.RATE_LIMIT - 2, abs=1e-2)
