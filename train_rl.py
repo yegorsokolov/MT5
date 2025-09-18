@@ -1,11 +1,12 @@
-import asyncio
+from __future__ import annotations
+
 import asyncio
 import logging
 from log_utils import setup_logging, log_exceptions
 
 from pathlib import Path
-from typing import Any, Iterable, List
-from types import SimpleNamespace
+from typing import Any, Iterable, List, cast
+from types import ModuleType, SimpleNamespace
 
 import os
 try:
@@ -17,10 +18,18 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     pd = SimpleNamespace()  # type: ignore
 import random
+_TORCH_IMPORT_ERROR: Exception | None = None
+_TORCH_AVAILABLE = False
+_CUDA_MODULE_AVAILABLE = False
+
 try:
-    import torch
-except Exception:  # pragma: no cover - optional dependency
-    torch = SimpleNamespace()  # type: ignore
+    import torch  # type: ignore
+except Exception as exc:  # pragma: no cover - optional dependency
+    torch = cast("ModuleType | None", None)  # type: ignore[assignment]
+    _TORCH_IMPORT_ERROR = exc
+else:
+    _TORCH_AVAILABLE = True
+    _CUDA_MODULE_AVAILABLE = hasattr(torch, "cuda")
 import pickle
 import json
 
@@ -29,11 +38,72 @@ try:  # optional dependency
 except Exception:  # pragma: no cover - utils may be stubbed
     LookaheadAdamW = object  # type: ignore
 try:
-    import torch.nn as nn
+    import torch.nn as nn  # type: ignore
 except Exception:  # pragma: no cover - torch may be stubbed
-    from types import SimpleNamespace
+    nn = None  # type: ignore[assignment]
 
-    nn = SimpleNamespace(Module=object, Linear=lambda *a, **k: None)  # type: ignore
+
+def ensure_torch_available(*, require_cuda: bool = False) -> None:
+    """Ensure PyTorch (and optionally CUDA) are available before training.
+
+    Reinforcement-learning entry points call this helper before touching
+    ``torch`` so unit tests can stub modules while real executions provide a
+    friendly error message.  When ``require_cuda`` is ``True`` the function also
+    validates that CUDA kernels can be accessed, preventing confusing
+    ``AttributeError`` crashes when running on CPU-only hosts.
+    """
+
+    if not _TORCH_AVAILABLE or torch is None:
+        detail = (
+            f" (import error: {_TORCH_IMPORT_ERROR})"
+            if _TORCH_IMPORT_ERROR is not None
+            else ""
+        )
+        raise RuntimeError(
+            "Reinforcement learning training requires PyTorch. "
+            "Install it with 'pip install torch' or the appropriate extra."
+            + detail,
+        )
+    if require_cuda and not _cuda_is_available():
+        if not _CUDA_MODULE_AVAILABLE:
+            raise RuntimeError(
+                "CUDA support is not available in this PyTorch build. "
+                "Install a CUDA-enabled build or disable distributed training.",
+            )
+        raise RuntimeError(
+            "CUDA kernels are unavailable. Ensure a CUDA-enabled GPU and the "
+            "matching PyTorch build are installed or disable distributed "
+            "training.",
+        )
+
+
+def _cuda_is_available() -> bool:
+    """Return ``True`` when CUDA kernels can be used."""
+
+    if not (_TORCH_AVAILABLE and _CUDA_MODULE_AVAILABLE) or torch is None:
+        return False
+    is_available = getattr(torch.cuda, "is_available", None)
+    if callable(is_available):
+        try:
+            return bool(is_available())
+        except Exception:  # pragma: no cover - guard against driver issues
+            return False
+    return False
+
+
+def _cuda_device_count() -> int:
+    """Return the number of CUDA devices, defaulting to zero on CPU-only hosts."""
+
+    if not (_TORCH_AVAILABLE and _CUDA_MODULE_AVAILABLE) or torch is None:
+        return 0
+    device_count = getattr(torch.cuda, "device_count", None)
+    if callable(device_count):
+        try:
+            return int(device_count())
+        except Exception:  # pragma: no cover - guard against runtime driver issues
+            return 0
+    return 0
+
 try:
     import gym
     from gym import spaces
@@ -518,17 +588,42 @@ def main(
         cfg = load_config()
     if world_size is None:
         world_size = 1
+    ensure_torch_available(require_cuda=world_size > 1)
     seed = cfg.get("seed", 42) + rank
     random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    use_cuda = torch.cuda.is_available()
+    if hasattr(torch, "manual_seed"):
+        try:
+            torch.manual_seed(seed)
+        except Exception:  # pragma: no cover - guard against stubs
+            pass
+    cuda_available = _cuda_is_available()
+    if cuda_available:
+        manual_seed_all = getattr(torch.cuda, "manual_seed_all", None)
+        if callable(manual_seed_all):
+            try:
+                manual_seed_all(seed)
+            except Exception:  # pragma: no cover - guard against driver issues
+                pass
+    elif rank == 0:
+        logging.info(
+            "CUDA support unavailable; running reinforcement learning on CPU."
+        )
+    use_cuda = cuda_available
     if world_size > 1:
         backend = "nccl" if use_cuda else "gloo"
         if use_cuda:
-            torch.cuda.set_device(rank)
+            set_device = getattr(torch.cuda, "set_device", None)
+            if callable(set_device):
+                try:
+                    set_device(rank)
+                except Exception:  # pragma: no cover - guard against driver issues
+                    pass
+        if dist is None:
+            raise RuntimeError(
+                "torch.distributed is required for DistributedDataParallel. "
+                "Install a CUDA-enabled PyTorch build with distributed support.",
+            )
         dist.init_process_group(backend, rank=rank, world_size=world_size)
     if hasattr(torch, "device"):
         device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
@@ -1431,7 +1526,8 @@ def launch(cfg: dict | None = None) -> float:
             results.append(submit(main, 0, 1, cfg_s))
         return float(results[0] if results else 0.0)
     use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
-    world_size = torch.cuda.device_count()
+    ensure_torch_available(require_cuda=use_ddp)
+    world_size = _cuda_device_count()
     if use_ddp and world_size > 1:
         mp.spawn(main, args=(world_size, cfg), nprocs=world_size)
         return 0.0
@@ -1820,6 +1916,7 @@ if __name__ == "__main__":
         cfg["history_path"] = args.history_path
     if args.checkpoint_dir:
         cfg["checkpoint_dir"] = args.checkpoint_dir
+    ensure_torch_available(require_cuda=args.ddp)
     if args.tune:
         from tuning.bayesian_search import run_search
 

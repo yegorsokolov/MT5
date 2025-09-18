@@ -88,7 +88,7 @@ def train_nn_cmd(args: argparse.Namespace) -> None:
 
 
 def train_rl_cmd(args: argparse.Namespace) -> None:
-    from train_rl import main as train_rl_main
+    from train_rl import ensure_torch_available, main as train_rl_main
 
     tmp = _prepare_config(
         args.config,
@@ -98,6 +98,7 @@ def train_rl_cmd(args: argparse.Namespace) -> None:
         validate=args.validate,
     )
     try:
+        ensure_torch_available()
         train_rl_main()
     finally:
         if tmp:
