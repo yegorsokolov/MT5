@@ -98,3 +98,29 @@ async def test_graceful_exit(monkeypatch):
     assert cancelled.is_set()
     assert metrics_flushed
     assert logs_flushed
+
+
+@pytest.mark.asyncio
+async def test_monitor_cancels_tracked_tasks():
+    monitor = ResourceMonitor(sample_interval=0.05)
+
+    cancellation_events = [asyncio.Event(), asyncio.Event()]
+
+    async def worker(done: asyncio.Event) -> None:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            done.set()
+            raise
+
+    tasks = [monitor.create_task(worker(evt)) for evt in cancellation_events]
+    await asyncio.sleep(0)
+
+    monitor.stop()
+
+    await asyncio.wait_for(
+        asyncio.gather(*(evt.wait() for evt in cancellation_events)), timeout=1
+    )
+
+    assert all(task.cancelled() for task in tasks)
+    assert not monitor._tasks
