@@ -1,4 +1,5 @@
 import copy
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Dict, List
 
@@ -21,13 +22,25 @@ _LOG_PATH = Path(__file__).resolve().parent / "logs" / "optuna_history.csv"
 _LOG_PATH.parent.mkdir(exist_ok=True)
 
 
+def _config_to_dict(cfg) -> dict:
+    if hasattr(cfg, "model_dump"):
+        data = cfg.model_dump()
+        extras = getattr(cfg, "__pydantic_extra__", None) or {}
+        if extras:
+            data.update(extras)
+        return copy.deepcopy(data)
+    if isinstance(cfg, Mapping):
+        return copy.deepcopy(dict(cfg))
+    return copy.deepcopy(dict(getattr(cfg, "__dict__", {})))
+
+
 @log_exceptions
 def main():
     mlflow.set_experiment("auto_optimize")
     with mlflow.start_run():
         train_model()
 
-        cfg = load_config()
+        cfg = _config_to_dict(load_config())
         base_metrics, base_returns = run_backtest(cfg, return_returns=True)
         base_cv = run_rolling_backtest(cfg)
 

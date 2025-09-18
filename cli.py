@@ -1,7 +1,9 @@
 import argparse
+import copy
 import os
 import sys
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
@@ -23,26 +25,41 @@ def _prepare_config(
     if config is not None:
         os.environ["CONFIG_FILE"] = str(config)
     cfg = load_config()
+    if hasattr(cfg, "model_dump"):
+        cfg_dict = cfg.model_dump()
+        extras = getattr(cfg, "__pydantic_extra__", None) or {}
+        if extras:
+            cfg_dict.update(extras)
+    elif isinstance(cfg, Mapping):
+        cfg_dict = dict(cfg)
+    else:
+        cfg_dict = dict(getattr(cfg, "__dict__", {}))
+    cfg_dict = copy.deepcopy(cfg_dict)
     modified = False
     if seed is not None:
-        cfg["seed"] = seed
+        cfg_dict["seed"] = seed
+        training_cfg = cfg_dict.get("training")
+        if isinstance(training_cfg, Mapping):
+            training_cfg = dict(training_cfg)
+            training_cfg["seed"] = seed
+            cfg_dict["training"] = training_cfg
         modified = True
     if steps is not None:
         key = steps_key or "steps"
-        cfg[key] = steps
+        cfg_dict[key] = steps
         modified = True
     if n_jobs is not None:
-        cfg["n_jobs"] = n_jobs
+        cfg_dict["n_jobs"] = n_jobs
         modified = True
     if num_threads is not None:
-        cfg["num_threads"] = num_threads
+        cfg_dict["num_threads"] = num_threads
         modified = True
     if validate is not None:
-        cfg["validate"] = validate
+        cfg_dict["validate"] = validate
         modified = True
     if modified:
         tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
-        yaml.safe_dump(cfg, tmp)
+        yaml.safe_dump(cfg_dict, tmp)
         tmp.close()
         os.environ["CONFIG_FILE"] = tmp.name
         return tmp.name
