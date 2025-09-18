@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timedelta
-from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from config_models import AppConfig
 from training.features import (
     append_risk_profile_features,
     build_feature_candidates,
@@ -35,11 +38,23 @@ def _make_df(size: int = 400) -> pd.DataFrame:
             "imbalance": order_flow_factor + rng.normal(scale=0.05, size=size),
             "cvd": order_flow_factor * 0.5 + rng.normal(scale=0.05, size=size),
             "coh_EURUSD": rng.normal(scale=0.1, size=size),
+            "cross_corr_SP500": rng.normal(scale=0.1, size=size),
+            "volume_ratio": rng.normal(scale=0.05, size=size),
+            "volume_imbalance": rng.normal(scale=0.05, size=size),
         }
     )
     combined_signal = baseline_factor + order_flow_factor + rng.normal(scale=0.1, size=size)
     df["tb_label"] = (combined_signal > 0).astype(int)
     return df
+
+
+def _make_config(training: dict | None = None) -> AppConfig:
+    cfg_dict: dict = {
+        "strategy": {"symbols": ["TEST"], "risk_per_trade": 0.01},
+    }
+    if training:
+        cfg_dict["training"] = training
+    return AppConfig.model_validate(cfg_dict)
 
 
 def test_append_risk_profile_features_adds_budget_columns():
@@ -80,3 +95,49 @@ def test_select_model_features_handles_cross_modal():
         mandatory=None,
     )
     assert set(selected) == set(candidates)
+
+
+def test_build_feature_candidates_honors_config_overrides():
+    df = _make_df()
+    profile = _RiskProfile()
+    budget = append_risk_profile_features(df, profile)
+    cfg = _make_config(
+        {
+            "feature_includes": ["imbalance"],
+            "feature_excludes": ["return", "ma_5"],
+            "feature_families": {"order_flow": True},
+        }
+    )
+    candidates = build_feature_candidates(df, budget, cfg=cfg)
+    assert "imbalance" in candidates
+    assert "cvd" in candidates  # family include pulls in the rest
+    assert "return" not in candidates
+    assert "ma_5" not in candidates
+
+
+def test_build_feature_candidates_family_exclusion():
+    df = _make_df()
+    cfg = _make_config({"feature_families": {"cross_asset": False}})
+    candidates = build_feature_candidates(df, None, cfg=cfg)
+    assert all(not col.startswith("cross_corr_") for col in candidates)
+
+
+def test_build_feature_candidates_custom_groups():
+    df = _make_df()
+    df["macro_spread"] = np.random.normal(size=len(df))
+    cfg_enable = _make_config(
+        {
+            "feature_groups": {"macro": ["macro_spread"]},
+            "feature_families": {"macro": True},
+        }
+    )
+    cfg_disable = _make_config(
+        {
+            "feature_groups": {"macro": ["macro_spread"]},
+            "feature_families": {"macro": False},
+        }
+    )
+    enabled = build_feature_candidates(df, None, cfg=cfg_enable)
+    disabled = build_feature_candidates(df, None, cfg=cfg_disable)
+    assert "macro_spread" in enabled
+    assert "macro_spread" not in disabled
