@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import pandas as pd
+import pytest
 import types
 
 if "data.labels" not in sys.modules:
@@ -24,7 +25,7 @@ if "data.streaming" not in sys.modules:
 
     sys.modules["data.streaming"] = types.SimpleNamespace(stream_labels=_stream_labels)
 
-from training.data_loader import load_training_frame
+from training.data_loader import StreamingTrainingFrame, load_training_frame
 from training.labels import generate_training_labels
 from training.postprocess import build_model_metadata, summarise_predictions
 from training.utils import combined_sample_weight
@@ -41,6 +42,75 @@ def test_load_training_frame_override_returns_frame():
     result, source = load_training_frame(cfg, Path("."), df_override=df)
     pd.testing.assert_frame_equal(result, df)
     assert source == "override"
+
+
+def test_load_training_frame_stream_returns_lazy_iterator(monkeypatch, tmp_path):
+    symbols = ["TEST"]
+    cfg = SimpleNamespace(strategy=SimpleNamespace(symbols=symbols))
+
+    chunks = [
+        pd.DataFrame({"mid": [1.0, 1.1], "Symbol": "TEST"}),
+        pd.DataFrame({"mid": [1.2], "Symbol": "TEST"}),
+    ]
+
+    def fake_symbol_history_chunks(symbol, _cfg, _root, *, chunk_size, validate):
+        assert symbol == "TEST"
+        assert chunk_size == 5
+        assert validate is False
+        return iter(chunks)
+
+    monkeypatch.setattr(
+        "training.data_loader._symbol_history_chunks", fake_symbol_history_chunks
+    )
+
+    def fake_stream_features(frames, **kwargs):
+        for frame in frames:
+            out = frame.copy()
+            out["return"] = out["mid"].pct_change().fillna(0)
+            yield out
+
+    saves = {"count": 0}
+
+    def fake_save_history(df, path):
+        saves["count"] += 1
+        assert len(df) == sum(len(chunk) for chunk in chunks)
+
+    fake_stream_module = types.SimpleNamespace(stream_features=fake_stream_features)
+    fake_history_module = types.SimpleNamespace(save_history_parquet=fake_save_history)
+    fake_data_pkg = types.SimpleNamespace(
+        streaming=fake_stream_module,
+        history=fake_history_module,
+    )
+
+    monkeypatch.setitem(sys.modules, "data", fake_data_pkg)
+    monkeypatch.setitem(sys.modules, "data.streaming", fake_stream_module)
+    monkeypatch.setitem(sys.modules, "data.history", fake_history_module)
+
+    frame, source = load_training_frame(
+        cfg,
+        tmp_path,
+        stream=True,
+        chunk_size=5,
+        feature_lookback=3,
+    )
+    assert isinstance(frame, StreamingTrainingFrame)
+    assert source == "config"
+    assert frame.materialise_count == 0
+
+    observed_lengths = [len(chunk) for chunk in frame]
+    assert observed_lengths == [2, 1]
+    assert frame.materialise_count == 0
+
+    df = frame.materialise()
+    assert frame.materialise_count == 1
+    assert len(df) == 3
+    assert saves["count"] == 1
+
+    # Re-materialising should reuse the cached dataframe without re-saving
+    df_again = frame.materialise()
+    assert frame.materialise_count == 1
+    pd.testing.assert_frame_equal(df, df_again)
+    assert saves["count"] == 1
 
 
 def test_generate_training_labels_stream_matches_offline():
