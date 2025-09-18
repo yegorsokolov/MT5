@@ -69,6 +69,7 @@ def test_ensemble_cli_logs_metrics(tmp_path, monkeypatch):
     training_pkg.__path__ = []  # type: ignore[attr-defined]
     pipeline_stub = types.ModuleType("training.pipeline")
     pipeline_stub.launch = lambda *a, **k: None
+    pipeline_stub.init_logging = lambda: None
     training_pkg.pipeline = pipeline_stub  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "training", training_pkg)
     monkeypatch.setitem(sys.modules, "training.pipeline", pipeline_stub)

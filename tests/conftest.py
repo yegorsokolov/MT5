@@ -83,6 +83,14 @@ except Exception:  # pragma: no cover - pandas may not be installed
 pd_mod.__spec__ = importlib.machinery.ModuleSpec("pandas", loader=None)
 sys.modules["pandas"] = pd_mod
 
+if "pandas.api" not in sys.modules:
+    pandas_api_mod = types.ModuleType("pandas.api")
+    pandas_api_types = types.ModuleType("pandas.api.types")
+    pandas_api_types.is_numeric_dtype = lambda *a, **k: True
+    pandas_api_mod.types = pandas_api_types  # type: ignore[attr-defined]
+    sys.modules["pandas.api"] = pandas_api_mod
+    sys.modules["pandas.api.types"] = pandas_api_types
+
 try:
     import joblib as _joblib_real
 except Exception:  # pragma: no cover - joblib may not be installed
