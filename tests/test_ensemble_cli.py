@@ -65,10 +65,27 @@ def test_ensemble_cli_logs_metrics(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "train_price_distribution", price_stub)
     nn_stub = types.SimpleNamespace(main=lambda *a, **k: None)
     monkeypatch.setitem(sys.modules, "train_nn", nn_stub)
-    utils_stub = types.SimpleNamespace(
-        load_config=lambda *a, **k: types.SimpleNamespace(model_dump=lambda: {})
-    )
-    monkeypatch.setitem(sys.modules, "utils", utils_stub)
+    training_pkg = types.ModuleType("training")
+    training_pkg.__path__ = []  # type: ignore[attr-defined]
+    pipeline_stub = types.ModuleType("training.pipeline")
+    pipeline_stub.launch = lambda *a, **k: None
+    training_pkg.pipeline = pipeline_stub  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "training", training_pkg)
+    monkeypatch.setitem(sys.modules, "training.pipeline", pipeline_stub)
+    env_module = types.ModuleType("utils.environment")
+    env_module.ensure_environment = lambda: None
+    monkeypatch.setitem(sys.modules, "utils.environment", env_module)
+
+    utils_module = types.ModuleType("utils")
+    utils_module.__path__ = []  # type: ignore[attr-defined]
+
+    def fake_load_config(*_a, **_k):
+        return types.SimpleNamespace(model_dump=lambda: {})
+
+    utils_module.load_config = fake_load_config  # type: ignore[attr-defined]
+    utils_module.environment = env_module  # type: ignore[attr-defined]
+    utils_module.ensure_environment = env_module.ensure_environment  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "utils", utils_module)
     backtest_stub = types.SimpleNamespace(run_rolling_backtest=lambda *a, **k: {})
     monkeypatch.setitem(sys.modules, "backtest", backtest_stub)
 
@@ -96,6 +113,9 @@ def test_ensemble_cli_logs_metrics(tmp_path, monkeypatch):
 
     monkeypatch.setattr("train_cli.setup_training", fake_setup)
     monkeypatch.setattr("train_cli.end_training", fake_end)
+    monkeypatch.setattr("train_cli.train_ensemble_main", te_stub.main)
+    monkeypatch.setattr("train_cli.train_moe_ensemble", te_stub.train_moe_ensemble)
+    monkeypatch.setattr("train_cli.ResourceCapabilities", ResourceCapabilities)
 
     df = pd.DataFrame(
         {
