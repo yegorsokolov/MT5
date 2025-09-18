@@ -38,6 +38,17 @@ _DEFAULT_BASE_FEATURES = [
 ]
 
 
+def _ensure_frame(df: pd.DataFrame | object) -> pd.DataFrame:
+    """Return ``df`` as a DataFrame materialising streaming inputs."""
+
+    if isinstance(df, pd.DataFrame):
+        return df
+    materialise = getattr(df, "materialise", None)
+    if callable(materialise):
+        return materialise()
+    raise TypeError("Expected DataFrame-like input")
+
+
 def _dedupe_preserve_order(columns: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -91,10 +102,11 @@ def _normalise_list(value: Any) -> list[str]:
 
 
 def apply_domain_adaptation(
-    df: pd.DataFrame, adapter_path: Path, *, regime_step: int = 500
+    df: pd.DataFrame | object, adapter_path: Path, *, regime_step: int = 500
 ) -> pd.DataFrame:
     """Apply the persisted :class:`DomainAdapter` to numeric columns."""
 
+    df = _ensure_frame(df)
     from analysis.domain_adapter import DomainAdapter
     from analysis.regime_detection import periodic_reclassification
 
@@ -110,9 +122,10 @@ def apply_domain_adaptation(
     return df
 
 
-def append_risk_profile_features(df: pd.DataFrame, risk_profile) -> RiskBudget:
+def append_risk_profile_features(df: pd.DataFrame | object, risk_profile) -> RiskBudget:
     """Inject user risk preferences as additional model features."""
 
+    df = _ensure_frame(df)
     user_budget = RiskBudget(
         max_leverage=risk_profile.leverage_cap,
         max_drawdown=risk_profile.drawdown_limit,
@@ -124,7 +137,7 @@ def append_risk_profile_features(df: pd.DataFrame, risk_profile) -> RiskBudget:
 
 
 def build_feature_candidates(
-    df: pd.DataFrame,
+    df: pd.DataFrame | object,
     budget: RiskBudget | None = None,
     *,
     include_symbol_code: bool = True,
@@ -132,6 +145,7 @@ def build_feature_candidates(
 ) -> list[str]:
     """Return the baseline list of feature column names respecting config."""
 
+    df = _ensure_frame(df)
     training_section = _resolve_training_section(cfg)
     includes = _normalise_list(_get_training_option(training_section, "feature_includes", []))
     excludes = set(
