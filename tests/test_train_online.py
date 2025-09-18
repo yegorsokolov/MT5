@@ -11,6 +11,8 @@ state_manager_stub.load_runtime_state = lambda *a, **k: None
 state_manager_stub.save_runtime_state = lambda *a, **k: None
 state_manager_stub.migrate_runtime_state = lambda *a, **k: None
 state_manager_stub.legacy_runtime_state_exists = lambda *a, **k: False
+state_manager_stub.save_checkpoint = lambda *a, **k: None
+state_manager_stub.load_latest_checkpoint = lambda *a, **k: None
 sys.modules["state_manager"] = state_manager_stub
 
 for mod in ["scipy", "scipy.stats", "scipy.sparse"]:
@@ -37,6 +39,8 @@ log_utils_stub = types.ModuleType("log_utils")
 log_utils_stub.setup_logging = lambda: None
 log_utils_stub.log_exceptions = lambda f: f
 log_utils_stub.log_predictions = lambda *a, **k: None
+log_utils_stub.LOG_DIR = Path("/tmp")
+log_utils_stub.LOG_FILE = Path("/tmp/app.log")
 sys.modules["log_utils"] = log_utils_stub
 
 
@@ -61,6 +65,14 @@ sys.modules["data.features"] = data_features_stub
 
 labels_stub = types.ModuleType("data.labels")
 labels_stub.triple_barrier = lambda prices, *a, **k: pd.Series(np.ones(len(prices)))
+
+
+def _multi_horizon_stub(prices, horizons):
+    data = {f"direction_{h}": pd.Series(0, index=prices.index, dtype=int) for h in horizons}
+    return pd.DataFrame(data)
+
+
+labels_stub.multi_horizon_labels = _multi_horizon_stub
 sys.modules["data.labels"] = labels_stub
 
 live_recorder_stub = types.ModuleType("data.live_recorder")
@@ -75,6 +87,7 @@ train_utils_stub.resolve_training_features = (
         if col not in {"Timestamp", "Symbol", "tb_label"}
     ]
 )
+train_utils_stub.prepare_modal_arrays = lambda *a, **k: None
 sys.modules["train_utils"] = train_utils_stub
 
 sys.modules.pop("model_registry", None)
@@ -98,6 +111,8 @@ model_registry_stub.save_model = _stub_save_model
 sys.modules["model_registry"] = model_registry_stub
 
 import train_online
+
+train_online.init_logging = lambda: None
 
 
 class DummyModel:
