@@ -10,7 +10,7 @@ from fastapi import (
 )
 from fastapi.security.api_key import APIKeyHeader
 from subprocess import Popen
-from typing import Dict, Any, Set, Optional
+from typing import Dict, Any, Set, Optional, Deque, Awaitable
 import asyncio
 from pydantic import BaseModel
 import os
@@ -26,6 +26,8 @@ import time
 import datetime
 import hmac
 import hashlib
+from collections import deque
+import contextlib
 
 try:
     from utils.alerting import send_alert
@@ -38,7 +40,7 @@ except Exception:  # pragma: no cover - utils may be stubbed in tests
 from log_utils import LOG_FILE, setup_logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Gauge, REGISTRY
 from fastapi.responses import Response
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from risk_manager import risk_manager
 from scheduler import start_scheduler, stop_scheduler
 
@@ -50,12 +52,24 @@ except Exception:  # pragma: no cover - utils may be stubbed in tests
         def __init__(self, *a, **k):
             self.max_rss_mb = None
             self.max_cpu_pct = None
+            self.started = False
+            self.capabilities = None
 
         def start(self) -> None:
-            return
+            self.started = True
+
+        def stop(self) -> None:
+            self.started = False
 
 
 from metrics import RESOURCE_RESTARTS
+
+try:
+    from metrics import BOT_BACKOFFS, BOT_RESTARTS, BOT_RESTART_FAILURES
+except Exception:  # pragma: no cover - optional metrics
+    BOT_BACKOFFS = None  # type: ignore
+    BOT_RESTARTS = None  # type: ignore
+    BOT_RESTART_FAILURES = None  # type: ignore
 
 
 class ConfigUpdate(BaseModel):
@@ -76,6 +90,20 @@ resource_watchdog = ResourceMonitor(
 WATCHDOG_USEC = int(os.getenv("WATCHDOG_USEC", "0") or 0)
 
 
+BOT_BACKOFF_BASE_SECONDS = max(float(os.getenv("BOT_BACKOFF_BASE", "1") or 1), 0.0)
+BOT_BACKOFF_MAX_SECONDS = max(
+    float(os.getenv("BOT_BACKOFF_MAX", "60") or 60), BOT_BACKOFF_BASE_SECONDS
+)
+BOT_BACKOFF_RESET_SECONDS = max(
+    float(os.getenv("BOT_BACKOFF_RESET", "300") or 300), 0.0
+)
+BOT_MAX_CRASHES = max(int(os.getenv("BOT_MAX_CRASHES", "5") or 5), 1)
+BOT_CRASH_WINDOW = max(
+    float(os.getenv("BOT_CRASH_WINDOW", "600") or 600), BOT_BACKOFF_BASE_SECONDS
+)
+RESTART_HISTORY_LIMIT = max(BOT_MAX_CRASHES * 2, 10)
+
+
 def _sd_notify(msg: str) -> None:
     """Send a notification to systemd if the notify socket is available."""
     sock_path = os.getenv("NOTIFY_SOCKET")
@@ -93,9 +121,12 @@ def _sd_notify(msg: str) -> None:
 
 async def _systemd_watchdog(interval: float) -> None:
     """Periodically notify systemd that the service is healthy."""
-    while True:
-        await asyncio.sleep(interval)
-        _sd_notify("WATCHDOG=1")
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            _sd_notify("WATCHDOG=1")
+    except asyncio.CancelledError:
+        return
 
 
 if os.name != "nt" and getattr(resource_watchdog, "capabilities", None):
@@ -262,10 +293,21 @@ class BotInfo:
     proc: Popen
     restart_count: int = 0
     exit_code: Optional[int] = None
+    last_start: float = field(default_factory=time.monotonic)
+    last_exit: Optional[float] = None
+    cooldown_until: float = 0.0
+    pending_restart: bool = False
+    failure_streak: int = 0
+    backoff_logged: bool = False
+    restart_history: Deque[float] = field(
+        default_factory=lambda: deque(maxlen=RESTART_HISTORY_LIMIT)
+    )
 
 
 bots: Dict[str, BotInfo] = {}
 metrics_clients: Set[WebSocket] = set()
+_background_tasks: Set[asyncio.Task[Any]] = set()
+_resource_watchdog_running = False
 
 
 async def broadcast_update(data: Dict[str, Any]) -> None:
@@ -280,6 +322,19 @@ async def broadcast_update(data: Dict[str, Any]) -> None:
         metrics_clients.discard(ws)
 
 
+def _register_background_task(coro: Awaitable[Any]) -> asyncio.Task[Any]:
+    """Track background tasks so they can be cancelled during shutdown."""
+
+    task = asyncio.create_task(coro)
+
+    def _cleanup(completed: asyncio.Task[Any]) -> None:
+        _background_tasks.discard(completed)
+
+    _background_tasks.add(task)
+    task.add_done_callback(_cleanup)
+    return task
+
+
 def _log_tail(lines: int) -> str:
     """Return the last `lines` from the shared log file."""
     if not LOG_FILE.exists():
@@ -290,43 +345,159 @@ def _log_tail(lines: int) -> str:
 
 async def _check_bots_once() -> None:
     """Inspect running bots and restart or remove if exited."""
+
     async with bots_lock:
         for bid, info in list(bots.items()):
             rc = info.proc.poll()
-            if rc is not None:
-                info.exit_code = rc
+            if rc is None:
+                if (
+                    info.failure_streak
+                    and info.last_start
+                    and (time.monotonic() - info.last_start) >= BOT_BACKOFF_RESET_SECONDS
+                ):
+                    info.failure_streak = 0
+                continue
+
+            now = time.monotonic()
+            info.exit_code = rc
+            info.last_exit = now
+
+            if not info.pending_restart:
                 logger.warning("Bot %s exited with code %s", bid, rc)
-                try:
-                    info.proc = Popen(["python", "realtime_train.py"])
-                    info.restart_count += 1
-                except Exception:
+                while info.restart_history and now - info.restart_history[0] > BOT_CRASH_WINDOW:
+                    info.restart_history.popleft()
+                info.restart_history.append(now)
+                recent_attempts = len(info.restart_history)
+                if recent_attempts > BOT_MAX_CRASHES:
                     bots.pop(bid, None)
+                    message = (
+                        f"Bot {bid} exceeded restart limit after "
+                        f"{recent_attempts - 1} attempts; last exit code {rc}"
+                    )
+                    logger.error(message)
+                    try:
+                        send_alert(message)
+                    except Exception:
+                        logger.exception("send_alert failed for %s", bid)
+                    if BOT_RESTART_FAILURES:
+                        try:
+                            BOT_RESTART_FAILURES.labels(bot=bid).inc()
+                        except Exception:
+                            pass
+                    continue
+                if (
+                    info.last_start
+                    and (now - info.last_start) >= BOT_BACKOFF_RESET_SECONDS
+                ):
+                    info.failure_streak = 0
+                info.failure_streak += 1
+                delay = min(
+                    BOT_BACKOFF_MAX_SECONDS,
+                    BOT_BACKOFF_BASE_SECONDS * (2 ** (info.failure_streak - 1)),
+                )
+                info.cooldown_until = now + delay
+                info.pending_restart = True
+                info.backoff_logged = False
+                if BOT_BACKOFFS:
+                    try:
+                        BOT_BACKOFFS.labels(bot=bid).inc()
+                    except Exception:
+                        pass
+
+            if not info.pending_restart:
+                continue
+
+            remaining = info.cooldown_until - time.monotonic()
+            if remaining > 0:
+                if not info.backoff_logged and info.cooldown_until > 0:
+                    logger.info(
+                        "Restarting bot %s in %.1fs (attempt %s)",
+                        bid,
+                        max(remaining, 0.0),
+                        info.failure_streak,
+                    )
+                    info.backoff_logged = True
+                continue
+
+            try:
+                new_proc = Popen(["python", "realtime_train.py"])
+            except Exception:
+                bots.pop(bid, None)
+                logger.exception("Failed to restart bot %s", bid)
+                message = f"Failed to restart bot {bid}; removing from registry"
+                try:
+                    send_alert(message)
+                except Exception:
+                    logger.exception("send_alert failed for %s", bid)
+                if BOT_RESTART_FAILURES:
+                    try:
+                        BOT_RESTART_FAILURES.labels(bot=bid).inc()
+                    except Exception:
+                        pass
+                continue
+
+            info.proc = new_proc
+            info.restart_count += 1
+            info.last_start = time.monotonic()
+            info.pending_restart = False
+            info.cooldown_until = 0.0
+            info.backoff_logged = False
+            if BOT_RESTARTS:
+                try:
+                    BOT_RESTARTS.labels(bot=bid).inc()
+                except Exception:
+                    pass
 
 
 async def _bot_watcher() -> None:
     """Background task to monitor bot processes."""
-    while True:
-        await asyncio.sleep(1)
-        await _check_bots_once()
+    try:
+        while True:
+            await asyncio.sleep(1)
+            await _check_bots_once()
+    except asyncio.CancelledError:
+        return
 
 
 @app.on_event("startup")
 async def _start_watcher() -> None:
     init_remote_api()
     start_scheduler()
-    asyncio.create_task(_bot_watcher())
-    if resource_watchdog.max_rss_mb or resource_watchdog.max_cpu_pct:
+    _register_background_task(_bot_watcher())
+    global _resource_watchdog_running
+    if (
+        (resource_watchdog.max_rss_mb or resource_watchdog.max_cpu_pct)
+        and not _resource_watchdog_running
+    ):
         resource_watchdog.alert_callback = _handle_resource_breach
-        resource_watchdog.start()
+        try:
+            resource_watchdog.start()
+            _resource_watchdog_running = True
+        except Exception:
+            logger.exception("Failed to start resource watchdog")
     _sd_notify("READY=1")
     if WATCHDOG_USEC:
         interval = WATCHDOG_USEC / 2 / 1_000_000
-        asyncio.create_task(_systemd_watchdog(interval))
+        _register_background_task(_systemd_watchdog(interval))
 
 
 @app.on_event("shutdown")
 async def _stop_scheduler_event() -> None:
     stop_scheduler()
+    tasks = list(_background_tasks)
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    _background_tasks.difference_update(tasks)
+    global _resource_watchdog_running
+    if _resource_watchdog_running:
+        try:
+            resource_watchdog.stop()
+        except Exception:
+            logger.exception("Failed to stop resource watchdog")
+        _resource_watchdog_running = False
 
 
 @app.get("/bots")

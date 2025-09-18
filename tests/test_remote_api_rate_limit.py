@@ -25,7 +25,12 @@ def load_api(tmp_path, monkeypatch, rate=2):
 
     sm_mod.SecretManager = SM
     sys.modules["utils.secret_manager"] = sm_mod
-    logger = types.SimpleNamespace(warning=lambda *a, **k: None)
+    logger = types.SimpleNamespace(
+        warning=lambda *a, **k: None,
+        info=lambda *a, **k: None,
+        error=lambda *a, **k: None,
+        exception=lambda *a, **k: None,
+    )
     sys.modules["log_utils"] = types.SimpleNamespace(
         LOG_FILE=tmp_path / "app.log",
         setup_logging=lambda: logger,
@@ -41,6 +46,23 @@ def load_api(tmp_path, monkeypatch, rate=2):
     sched_mod.start_scheduler = lambda: None
     sched_mod.stop_scheduler = lambda: None
     sys.modules["scheduler"] = sched_mod
+    rm_mod = types.ModuleType("utils.resource_monitor")
+
+    class DummyMonitor:
+        def __init__(self, *a, **k):
+            self.max_rss_mb = k.get("max_rss_mb")
+            self.max_cpu_pct = k.get("max_cpu_pct")
+            self.alert_callback = None
+            self.started = False
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.started = False
+
+    rm_mod.ResourceMonitor = DummyMonitor
+    sys.modules["utils.resource_monitor"] = rm_mod
     sys.modules["prometheus_client"] = types.SimpleNamespace(
         Counter=lambda *a, **k: None,
         Gauge=lambda *a, **k: None,
@@ -79,24 +101,25 @@ def load_api(tmp_path, monkeypatch, rate=2):
     return mod
 
 
-def setup_client(tmp_path, monkeypatch):
+def setup_api(tmp_path, monkeypatch):
     api = load_api(tmp_path, monkeypatch)
-    return api, TestClient(api.app)
+    return api
 
 
 def test_rate_limiting_and_logging(tmp_path, monkeypatch):
-    api, client = setup_client(tmp_path, monkeypatch)
+    api = setup_api(tmp_path, monkeypatch)
 
-    # Unauthorized request
-    assert client.get("/health").status_code == 401
+    with TestClient(api.app) as client:
+        # Unauthorized request
+        assert client.get("/health").status_code == 401
 
-    # Within rate limit
-    assert client.get("/health", headers={"x-api-key": "token"}).status_code == 200
-    assert client.get("/health", headers={"x-api-key": "token"}).status_code == 200
+        # Within rate limit
+        assert client.get("/health", headers={"x-api-key": "token"}).status_code == 200
+        assert client.get("/health", headers={"x-api-key": "token"}).status_code == 200
 
-    # Exceed rate limit
-    resp = client.get("/health", headers={"x-api-key": "token"})
-    assert resp.status_code == 429
+        # Exceed rate limit
+        resp = client.get("/health", headers={"x-api-key": "token"})
+        assert resp.status_code == 429
 
     lines = (tmp_path / "audit.csv").read_text().strip().splitlines()
     assert len(lines) == 4
