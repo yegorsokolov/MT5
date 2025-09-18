@@ -96,6 +96,8 @@ class ResourceMonitor:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread: Optional[threading.Thread] = None
         self._owns_loop = False
+        self._tasks: Dict[FutureLike, Optional[asyncio.AbstractEventLoop]] = {}
+        self._tasks_lock = threading.Lock()
         self._subscribers: Set[
             tuple[asyncio.Queue[str], asyncio.AbstractEventLoop]
         ] = set()
@@ -448,10 +450,51 @@ class ResourceMonitor:
         if loop is None:
             raise RuntimeError("Resource monitor loop unavailable")
         if not self._owns_loop:
-            return loop.create_task(coro)
+            return self._track_task(loop.create_task(coro), loop)
         if threading.current_thread() is self._loop_thread:
-            return loop.create_task(coro)
-        return asyncio.run_coroutine_threadsafe(coro, loop)
+            return self._track_task(loop.create_task(coro), loop)
+        return self._track_task(asyncio.run_coroutine_threadsafe(coro, loop), loop)
+
+    def _track_task(
+        self,
+        future: FutureLike,
+        loop: Optional[asyncio.AbstractEventLoop],
+    ) -> FutureLike:
+        with self._tasks_lock:
+            self._tasks[future] = loop
+
+        def _cleanup(completed: FutureLike) -> None:
+            with self._tasks_lock:
+                self._tasks.pop(completed, None)
+
+        try:
+            future.add_done_callback(_cleanup)  # type: ignore[attr-defined]
+        except Exception:
+            with self._tasks_lock:
+                self._tasks.pop(future, None)
+        return future
+
+    def _cancel_future(
+        self,
+        future: FutureLike,
+        loop: Optional[asyncio.AbstractEventLoop] = None,
+    ) -> None:
+        target_loop = loop
+        if target_loop is None and isinstance(future, asyncio.Future):
+            try:
+                target_loop = future.get_loop()
+            except Exception:
+                target_loop = None
+        if target_loop is not None:
+            try:
+                target_loop.call_soon_threadsafe(future.cancel)  # type: ignore[arg-type]
+                return
+            except Exception:
+                pass
+        try:
+            future.cancel()
+        except Exception:
+            pass
 
     def _queue_on_loop(self, attr: str) -> asyncio.Queue[Any]:
         self.start()
@@ -524,14 +567,33 @@ class ResourceMonitor:
             task = getattr(self, attr, None)
             if task is None:
                 continue
-            try:
-                task.cancel()
-            except Exception:
-                pass
+            self._cancel_future(task, self._loop)
             setattr(self, attr, None)
 
-        self._subscribers.clear()
-        self._usage_subscribers.clear()
+        with self._tasks_lock:
+            tracked = list(self._tasks.items())
+            self._tasks.clear()
+        for future, loop in tracked:
+            self._cancel_future(future, loop)
+
+        def _drain(queue: asyncio.Queue[Any]) -> None:
+            try:
+                while True:
+                    queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+
+        for attr_name in ("_subscribers", "_usage_subscribers"):
+            queues = getattr(self, attr_name)
+            for queue, owner_loop in list(queues):
+                try:
+                    owner_loop.call_soon_threadsafe(_drain, queue)
+                except Exception:
+                    try:
+                        _drain(queue)
+                    except Exception:
+                        pass
+            queues.clear()
 
         if self._owns_loop and self._loop is not None:
             try:
