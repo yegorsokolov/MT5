@@ -41,10 +41,27 @@ def _prepare_cli(monkeypatch):
     monkeypatch.setitem(sys.modules, "train_price_distribution", tpd_stub)
     train_nn_stub = types.SimpleNamespace(main=lambda *a, **k: None)
     monkeypatch.setitem(sys.modules, "train_nn", train_nn_stub)
-    utils_stub = types.SimpleNamespace(
-        load_config=lambda *a, **k: types.SimpleNamespace(model_dump=lambda: {})
-    )
-    monkeypatch.setitem(sys.modules, "utils", utils_stub)
+    training_pkg = types.ModuleType("training")
+    training_pkg.__path__ = []  # type: ignore[attr-defined]
+    pipeline_stub = types.ModuleType("training.pipeline")
+    pipeline_stub.launch = lambda *a, **k: None
+    training_pkg.pipeline = pipeline_stub  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "training", training_pkg)
+    monkeypatch.setitem(sys.modules, "training.pipeline", pipeline_stub)
+    env_module = types.ModuleType("utils.environment")
+    env_module.ensure_environment = lambda: None
+    monkeypatch.setitem(sys.modules, "utils.environment", env_module)
+
+    utils_module = types.ModuleType("utils")
+    utils_module.__path__ = []  # type: ignore[attr-defined]
+
+    def fake_load_config(*_a, **_k):
+        return types.SimpleNamespace(model_dump=lambda: {})
+
+    utils_module.load_config = fake_load_config  # type: ignore[attr-defined]
+    utils_module.environment = env_module  # type: ignore[attr-defined]
+    utils_module.ensure_environment = env_module.ensure_environment  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "utils", utils_module)
     backtest_stub = types.SimpleNamespace(run_rolling_backtest=lambda *a, **k: {})
     monkeypatch.setitem(sys.modules, "backtest", backtest_stub)
     sys.path.append(str(Path(__file__).resolve().parents[1]))
