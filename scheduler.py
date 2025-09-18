@@ -7,7 +7,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 
 try:
@@ -23,6 +23,12 @@ _started = False
 _tasks: list[asyncio.Future] = []
 _last_retrain_ts: str | None = None
 
+
+def _noop() -> None:
+    """Placeholder job used when configuration disables a task."""
+
+    return None
+
 async def _runner(name: str, interval: float, func: Callable[[], None | asyncio.Future]) -> None:
     # delay first run by ``interval`` to avoid heavy startup work
     await asyncio.sleep(interval)
@@ -36,16 +42,26 @@ async def _runner(name: str, interval: float, func: Callable[[], None | asyncio.
             logger.exception("Job %s failed", name)
         await asyncio.sleep(interval)
 
-def _schedule_jobs(jobs: Iterable[tuple[str, Callable[[], None | asyncio.Future]]]) -> None:
+def _schedule_jobs(
+    jobs: Iterable[tuple[str, bool, Callable[[], None | asyncio.Future]]]
+) -> int:
     global _loop, _thread
-    if _loop is None:
-        _loop = asyncio.new_event_loop()
-        _thread = threading.Thread(target=_loop.run_forever, daemon=True)
-        _thread.start()
-    for name, func in jobs:
-        task = asyncio.run_coroutine_threadsafe(_runner(name, 24 * 60 * 60, func), _loop)
+    scheduled = 0
+    for name, enabled, func in jobs:
+        if not enabled:
+            logger.info("Skipping disabled scheduler job: %s", name)
+            continue
+        if _loop is None:
+            _loop = asyncio.new_event_loop()
+            _thread = threading.Thread(target=_loop.run_forever, daemon=True)
+            _thread.start()
+        task = asyncio.run_coroutine_threadsafe(
+            _runner(name, 24 * 60 * 60, func), _loop
+        )
         _tasks.append(task)
+        scheduled += 1
         logger.info("Scheduled job: %s", name)
+    return scheduled
 
 
 def stop_scheduler() -> None:
@@ -430,47 +446,79 @@ def start_scheduler() -> None:
     if _started:
         return
     cfg = load_config()
-    s_cfg = cfg.get("scheduler", {}) if isinstance(cfg, dict) else {}
-    if s_cfg.get("retrain_events", True):
+    scheduler_section: Mapping[str, Any] | None = None
+    if hasattr(cfg, "get"):
+        scheduler_section = cfg.get("scheduler")
+        if scheduler_section is None:
+            scheduler_section = cfg.get("scheduler", {})
+    if scheduler_section is None and hasattr(cfg, "model_dump"):
+        try:
+            scheduler_section = cfg.model_dump().get("scheduler")
+        except Exception:  # pragma: no cover - defensive
+            scheduler_section = None
+    if scheduler_section is None:
+        s_cfg: dict[str, Any] = {}
+    elif isinstance(scheduler_section, Mapping):
+        s_cfg = dict(scheduler_section)
+    else:
+        try:
+            s_cfg = dict(scheduler_section)
+        except TypeError:
+            s_cfg = {}
+
+    def _flag(name: str, default: bool = True) -> bool:
+        value = s_cfg.get(name, default)
+        return bool(value) if value is not None else False
+
+    if _flag("retrain_events", True):
         try:
             subscribe_retrain_events()
         except Exception:
             logger.exception("Retrain event subscription failed")
-    jobs: list[tuple[str, Callable[[], None | asyncio.Future]]] = []
-    if s_cfg.get("resource_reprobe", True):
-        jobs.append(("resource_reprobe", resource_reprobe))
-    if s_cfg.get("drift_detection", True):
-        jobs.append(("drift_detection", run_drift_detection))
-    if s_cfg.get("feature_importance_drift", True):
-        jobs.append(("feature_importance_drift", run_feature_importance_drift))
-    if s_cfg.get("change_point_detection", True):
-        jobs.append(("change_point_detection", run_change_point_detection))
-    if s_cfg.get("checkpoint_cleanup", True):
-        jobs.append(("checkpoint_cleanup", cleanup_checkpoints))
-    if s_cfg.get("trade_stats", True):
-        jobs.append(("trade_stats", run_trade_analysis))
-    if s_cfg.get("decision_review", True):
-        jobs.append(("decision_review", run_decision_review))
-    if s_cfg.get("vacuum_history", True):
-        jobs.append(("vacuum_history", vacuum_history))
-    if s_cfg.get("diagnostics", True):
-        jobs.append(("diagnostics", run_diagnostics))
-    if s_cfg.get("backups", True):
-        jobs.append(("backups", run_backups))
-    if s_cfg.get("regime_performance", True):
-        jobs.append(("regime_performance", update_regime_performance))
-    if s_cfg.get("news_vector_store", True):
-        jobs.append(("news_vector_store", rebuild_news_vectors))
-    if s_cfg.get("world_model_eval", True):
-        jobs.append(("world_model_eval", reevaluate_world_model))
-    if s_cfg.get("factor_update", True):
+    else:
+        logger.info("Skipping disabled scheduler job: retrain_events")
+    jobs_with_flags: list[tuple[str, bool, Callable[[], None | asyncio.Future]]] = [
+        ("resource_reprobe", _flag("resource_reprobe", True), resource_reprobe),
+        ("drift_detection", _flag("drift_detection", True), run_drift_detection),
+        (
+            "feature_importance_drift",
+            _flag("feature_importance_drift", True),
+            run_feature_importance_drift,
+        ),
+        (
+            "change_point_detection",
+            _flag("change_point_detection", True),
+            run_change_point_detection,
+        ),
+        ("checkpoint_cleanup", _flag("checkpoint_cleanup", True), cleanup_checkpoints),
+        ("trade_stats", _flag("trade_stats", True), run_trade_analysis),
+        ("decision_review", _flag("decision_review", True), run_decision_review),
+        ("vacuum_history", _flag("vacuum_history", True), vacuum_history),
+        ("diagnostics", _flag("diagnostics", True), run_diagnostics),
+        ("backups", _flag("backups", True), run_backups),
+        (
+            "regime_performance",
+            _flag("regime_performance", True),
+            update_regime_performance,
+        ),
+        (
+            "news_vector_store",
+            _flag("news_vector_store", True),
+            rebuild_news_vectors,
+        ),
+        ("world_model_eval", _flag("world_model_eval", True), reevaluate_world_model),
+    ]
+    factor_enabled = _flag("factor_update", True)
+    if factor_enabled:
         from analysis.factor_updater import update_factors
 
-        jobs.append(("factor_update", update_factors))
-    if jobs:
-        _schedule_jobs(jobs)
+        factor_func = update_factors
+    else:
+        factor_func = _noop
+    jobs_with_flags.append(("factor_update", factor_enabled, factor_func))
+    scheduled_jobs = _schedule_jobs(jobs_with_flags)
     _started = True
-    logger.info("Scheduler started with %d job(s)", len(jobs))
+    logger.info("Scheduler started with %d job(s)", scheduled_jobs)
 
 __all__ = [
     "start_scheduler",
