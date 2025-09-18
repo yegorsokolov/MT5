@@ -13,7 +13,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def load_api(tmp_path):
+def load_api(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_KEY", "token")
+    monkeypatch.setenv("AUDIT_LOG_SECRET", "secret")
     sm_mod = types.ModuleType("utils.secret_manager")
 
     class SM:
@@ -48,6 +50,7 @@ def load_api(tmp_path):
     import prometheus_client
     sys.modules["prometheus_client"] = prometheus_client
     mod = importlib.reload(importlib.import_module("remote_api"))
+    mod.init_remote_api()
     mod.AUDIT_LOG = tmp_path / "audit.csv"
     for h in list(mod.audit_logger.handlers):
         mod.audit_logger.removeHandler(h)
@@ -59,8 +62,8 @@ def load_api(tmp_path):
     return mod
 
 
-def test_audit_log_hmac(tmp_path):
-    api = load_api(tmp_path)
+def test_audit_log_hmac(tmp_path, monkeypatch):
+    api = load_api(tmp_path, monkeypatch)
     api._audit_log("key1", "/test", 200)
     line = api.AUDIT_LOG.read_text().strip().splitlines()[-1]
     parts = line.split(",")
@@ -69,8 +72,8 @@ def test_audit_log_hmac(tmp_path):
     assert parts[-1] == expected
 
 
-def test_rate_limit_metric(tmp_path):
-    api = load_api(tmp_path)
+def test_rate_limit_metric(tmp_path, monkeypatch):
+    api = load_api(tmp_path, monkeypatch)
     key = "client"
     assert api._allow_request(key)
     child = api.API_RATE_LIMIT_REMAINING.labels(key=key)
