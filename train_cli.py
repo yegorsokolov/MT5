@@ -35,7 +35,7 @@ from train_ensemble import (
     train_moe_ensemble,
     ResourceCapabilities,
 )
-from training.pipeline import launch as pipeline_launch
+from training.pipeline import init_logging as init_pipeline_logging, launch as pipeline_launch
 from train_utils import setup_training, end_training
 
 app = typer.Typer(help="Unified training interface")
@@ -50,6 +50,7 @@ def pipeline(
     use_pseudo_labels: bool = typer.Option(False, help="Include pseudo-labeled samples"),
     risk_target: Optional[str] = typer.Option(None, help="JSON string specifying risk constraints"),
 ) -> None:
+    init_pipeline_logging()
     cfg = setup_training(config, experiment="pipeline")
     risk_cfg = json.loads(risk_target) if risk_target else None
     pipeline_launch(

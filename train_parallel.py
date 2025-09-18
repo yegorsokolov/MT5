@@ -24,9 +24,14 @@ from train_utils import (
 )
 from training.features import select_model_features
 
-
-setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for parallel training."""
+
+    setup_logging()
+    return logging.getLogger(__name__)
 
 
 DEFAULT_LGBM_PARAMS: Dict[str, Any] = {
@@ -244,6 +249,7 @@ def tune_lightgbm_hyperparameters(
 @log_exceptions
 def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
     """Load data for one symbol, train model and save it."""
+    init_logging()
     from data.features import make_features
     from data.history import load_history_config
     from data.labels import triple_barrier
@@ -397,6 +403,7 @@ def train_symbol(sym: str, cfg: Dict, root: Path) -> str:
 def main() -> None:
     from utils import ensure_environment, load_config
 
+    init_logging()
     ensure_environment()
     cfg = load_config()
     seed = cfg.get("seed", 42)

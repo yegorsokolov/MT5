@@ -5,9 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 
-from log_utils import setup_logging
 from ray_utils import init as ray_init, shutdown as ray_shutdown
-from training.pipeline import launch, main
+from training.pipeline import init_logging as init_pipeline_logging, launch, main
 from utils import ensure_environment, load_config
 
 
@@ -148,7 +147,7 @@ def _run_evolutionary_search(risk_target: dict | None) -> None:
 
 
 def main_cli() -> None:
-    setup_logging()
+    init_pipeline_logging()
     ensure_environment()
     args = _build_parser().parse_args()
     risk_target = json.loads(args.risk_target) if args.risk_target else None

@@ -135,8 +135,14 @@ from training.postprocess import (
 )
 from training.utils import combined_sample_weight
 
-setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for the training pipeline."""
+
+    setup_logging()
+    return logging.getLogger(__name__)
 
 # Track active classifiers for dynamic resizing
 _ACTIVE_CLFS: list[LGBMClassifier] = []
@@ -2013,6 +2019,7 @@ def main(
         the final score is penalised if the constraints are violated.
     """
 
+    init_logging()
     monitor.start()
     try:
         return _run_training(

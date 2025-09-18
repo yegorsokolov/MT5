@@ -455,6 +455,8 @@ def test_run_training_ends_mlflow_on_exception(monkeypatch):
 
     from training import pipeline
 
+    monkeypatch.setattr(pipeline, "init_logging", lambda: None)
+
     class StubMlflow:
         def __init__(self) -> None:
             self.started = 0
