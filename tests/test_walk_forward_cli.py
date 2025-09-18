@@ -49,27 +49,21 @@ def _prepare_cli(monkeypatch):
     training_pkg.pipeline = pipeline_stub  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "training", training_pkg)
     monkeypatch.setitem(sys.modules, "training.pipeline", pipeline_stub)
-    env_module = types.ModuleType("utils.environment")
-    env_module.ensure_environment = lambda: None
-    monkeypatch.setitem(sys.modules, "utils.environment", env_module)
-
-    utils_module = types.ModuleType("utils")
-    utils_module.__path__ = []  # type: ignore[attr-defined]
-
-    def fake_load_config(*_a, **_k):
-        return types.SimpleNamespace(model_dump=lambda: {})
-
-    utils_module.load_config = fake_load_config  # type: ignore[attr-defined]
-    utils_module.environment = env_module  # type: ignore[attr-defined]
-    utils_module.ensure_environment = env_module.ensure_environment  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "utils", utils_module)
     backtest_stub = types.SimpleNamespace(run_rolling_backtest=lambda *a, **k: {})
     monkeypatch.setitem(sys.modules, "backtest", backtest_stub)
     sys.path.append(str(Path(__file__).resolve().parents[1]))
+    import train_cli
 
-    from train_cli import app
+    env_calls: list[None] = []
 
-    return app, metrics
+    def fake_env() -> None:
+        env_calls.append(None)
+
+    monkeypatch.setattr(train_cli, "_ensure_environment", fake_env)
+    monkeypatch.setattr("train_cli.setup_training", lambda *a, **k: {})
+    monkeypatch.setattr("train_cli.end_training", lambda: None)
+
+    return train_cli.app, metrics, env_calls
 
 
 def test_walk_forward_cli_no_leakage(tmp_path, monkeypatch):
@@ -77,7 +71,7 @@ def test_walk_forward_cli_no_leakage(tmp_path, monkeypatch):
     data_path = tmp_path / "data.csv"
     df.to_csv(data_path, index=False)
 
-    app, metrics = _prepare_cli(monkeypatch)
+    app, metrics, env_calls = _prepare_cli(monkeypatch)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -99,6 +93,7 @@ def test_walk_forward_cli_no_leakage(tmp_path, monkeypatch):
     records = json.loads(result.stdout.strip())
 
     assert len(records) == 2
+    assert len(env_calls) == 1
     assert len(metrics) == 2
 
     for rec in records:
