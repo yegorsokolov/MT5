@@ -17,6 +17,8 @@ def load_api(tmp_log, monkeypatch):
             return 'token'
     sm_mod.SecretManager = SM
     sys.modules['utils.secret_manager'] = sm_mod
+    monkeypatch.setenv("API_KEY", "token")
+    monkeypatch.setenv("AUDIT_LOG_SECRET", "audit")
     logs = []
     logger = types.SimpleNamespace(warning=lambda msg, *a: logs.append(msg % a if a else msg))
     sys.modules['log_utils'] = types.SimpleNamespace(
@@ -58,6 +60,7 @@ def load_api(tmp_log, monkeypatch):
     mlflow_mod.__spec__ = importlib.machinery.ModuleSpec('mlflow', loader=None)
     sys.modules['mlflow'] = mlflow_mod
     mod = importlib.reload(importlib.import_module('remote_api'))
+    mod.init_remote_api()
     mod._logs = logs
     return mod
 
