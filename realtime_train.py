@@ -503,109 +503,112 @@ async def train_realtime():
     while not mt5_direct.is_terminal_logged_in():
         input("MetaTrader 5 terminal not logged in. Log in and press Enter to retry...")
     conn_mgr.init([mt5_direct])
-    with _get_tracer().start_as_current_span("train_realtime"):
-        if watchdog.max_rss_mb or watchdog.max_cpu_pct:
-            watchdog.alert_callback = lambda msg: asyncio.create_task(
-                _handle_resource_breach(msg)
-            )
-        seed = cfg.get("seed", 42)
-        random.seed(seed)
-        np.random.seed(seed)
-        scaler_path = root / "scaler.pkl"
-        scaler = FeatureScaler.load(scaler_path)
-        adapter_path = root / "domain_adapter.pkl"
-        adapter = DomainAdapter.load(adapter_path)
-        batch_count = 0
-        reestimate_interval = cfg.get("adapter_reestimate_interval", 100)
-        rl_update_interval = cfg.get("rl_update_interval", 1000)
-        meta_update_interval = cfg.get("meta_update_interval", 5000)
+    with contextlib.ExitStack() as stack:
+        stack.callback(exec_engine.stop_optimizer)
+        exec_engine.start_optimizer()
+        with _get_tracer().start_as_current_span("train_realtime"):
+            if watchdog.max_rss_mb or watchdog.max_cpu_pct:
+                watchdog.alert_callback = lambda msg: asyncio.create_task(
+                    _handle_resource_breach(msg)
+                )
+            seed = cfg.get("seed", 42)
+            random.seed(seed)
+            np.random.seed(seed)
+            scaler_path = root / "scaler.pkl"
+            scaler = FeatureScaler.load(scaler_path)
+            adapter_path = root / "domain_adapter.pkl"
+            adapter = DomainAdapter.load(adapter_path)
+            batch_count = 0
+            reestimate_interval = cfg.get("adapter_reestimate_interval", 100)
+            rl_update_interval = cfg.get("rl_update_interval", 1000)
+            meta_update_interval = cfg.get("meta_update_interval", 5000)
 
-        symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
+            symbols = cfg.get("symbols") or [cfg.get("symbol", "EURUSD")]
 
-        signal_backend = cfg.get("signal_backend", "none")
-        bus = None
-        if signal_backend != "none":
-            bus = get_signal_backend(cfg)
-            logger.info("Using %s backend for signal bus", signal_backend)
+            signal_backend = cfg.get("signal_backend", "none")
+            bus = None
+            if signal_backend != "none":
+                bus = get_signal_backend(cfg)
+                logger.info("Using %s backend for signal bus", signal_backend)
 
-        async def process_batch(batch: pd.DataFrame) -> None:
-            nonlocal batch_count
-            feats = await generate_features(batch)
-            if feats.empty:
-                return
-            feats = apply_liquidity_adjustment(feats)
-            num_cols = feats.select_dtypes(np.number).columns
-            if len(num_cols) > 0:
-                raw_feats = feats[num_cols].copy()
-                feats[num_cols] = adapter.transform(feats[num_cols])
-                scaler.partial_fit(feats[num_cols])
-                feats[num_cols] = scaler.transform(feats[num_cols])
-                scaler.save(scaler_path)
-                batch_count += 1
-                if batch_count % reestimate_interval == 0:
-                    adapter.reestimate(raw_feats)
-                    adapter.save(adapter_path)
-                    if (
-                        adapter.source_mean_ is not None
-                        and adapter.target_mean_ is not None
-                        and adapter.source_cov_ is not None
-                        and adapter.target_cov_ is not None
-                    ):
-                        mean_diff = float(
-                            np.linalg.norm(adapter.source_mean_ - adapter.target_mean_)
-                        )
-                        cov_diff = float(
-                            np.linalg.norm(adapter.source_cov_ - adapter.target_cov_)
-                        )
-                        logger.info(
-                            "Domain adapter alignment: mean diff %.4f cov diff %.4f",
-                            mean_diff,
-                            cov_diff,
-                        )
-            if not pipeline_anomaly.validate(feats):
-                logger.warning("Pipeline anomaly detected in features; dropping batch")
-                return
-            await dispatch_signals(bus, feats)
-            await asyncio.to_thread(
-                train_online.train_online,
-                data_path=recorder.root,
-                model_dir=root / "models",
-                min_ticks=cfg.get("online_min_ticks", 1000),
-                interval=cfg.get("online_interval", 300),
-                run_once=True,
-            )
-            # Schedule periodic RL and meta-learning updates based on the
-            # number of processed batches.  Each update trains on ticks
-            # recorded by ``LiveRecorder`` and persists the resulting policies
-            # through :mod:`model_registry` for later reuse.
-            if batch_count and batch_count % rl_update_interval == 0:
+            async def process_batch(batch: pd.DataFrame) -> None:
+                nonlocal batch_count
+                feats = await generate_features(batch)
+                if feats.empty:
+                    return
+                feats = apply_liquidity_adjustment(feats)
+                num_cols = feats.select_dtypes(np.number).columns
+                if len(num_cols) > 0:
+                    raw_feats = feats[num_cols].copy()
+                    feats[num_cols] = adapter.transform(feats[num_cols])
+                    scaler.partial_fit(feats[num_cols])
+                    feats[num_cols] = scaler.transform(feats[num_cols])
+                    scaler.save(scaler_path)
+                    batch_count += 1
+                    if batch_count % reestimate_interval == 0:
+                        adapter.reestimate(raw_feats)
+                        adapter.save(adapter_path)
+                        if (
+                            adapter.source_mean_ is not None
+                            and adapter.target_mean_ is not None
+                            and adapter.source_cov_ is not None
+                            and adapter.target_cov_ is not None
+                        ):
+                            mean_diff = float(
+                                np.linalg.norm(adapter.source_mean_ - adapter.target_mean_)
+                            )
+                            cov_diff = float(
+                                np.linalg.norm(adapter.source_cov_ - adapter.target_cov_)
+                            )
+                            logger.info(
+                                "Domain adapter alignment: mean diff %.4f cov diff %.4f",
+                                mean_diff,
+                                cov_diff,
+                            )
+                if not pipeline_anomaly.validate(feats):
+                    logger.warning("Pipeline anomaly detected in features; dropping batch")
+                    return
+                await dispatch_signals(bus, feats)
                 await asyncio.to_thread(
-                    run_rl_curriculum, recorder.root, root / "models"
+                    train_online.train_online,
+                    data_path=recorder.root,
+                    model_dir=root / "models",
+                    min_ticks=cfg.get("online_min_ticks", 1000),
+                    interval=cfg.get("online_interval", 300),
+                    run_once=True,
                 )
-            if batch_count and batch_count % meta_update_interval == 0:
-                await asyncio.to_thread(run_meta_update, recorder.root, root / "models")
+                # Schedule periodic RL and meta-learning updates based on the
+                # number of processed batches.  Each update trains on ticks
+                # recorded by ``LiveRecorder`` and persists the resulting policies
+                # through :mod:`model_registry` for later reuse.
+                if batch_count and batch_count % rl_update_interval == 0:
+                    await asyncio.to_thread(
+                        run_rl_curriculum, recorder.root, root / "models"
+                    )
+                if batch_count and batch_count % meta_update_interval == 0:
+                    await asyncio.to_thread(run_meta_update, recorder.root, root / "models")
 
-        tick_queue: asyncio.Queue = asyncio.Queue()
-        train_queue: asyncio.Queue = asyncio.Queue()
-        producer = asyncio.create_task(
-            tick_producer(
-                symbols,
-                tick_queue,
-                throttle_threshold=cfg.get("backlog_threshold", 1000),
-            )
-        )
-        recorder_task = asyncio.create_task(recorder.run(tick_queue, train_queue))
-        workers = [
-            asyncio.create_task(
-                tick_worker(
-                    train_queue,
-                    process_batch,
-                    target_latency=cfg.get("target_batch_latency", 1.0),
+            tick_queue: asyncio.Queue = asyncio.Queue()
+            train_queue: asyncio.Queue = asyncio.Queue()
+            producer = asyncio.create_task(
+                tick_producer(
+                    symbols,
+                    tick_queue,
+                    throttle_threshold=cfg.get("backlog_threshold", 1000),
                 )
             )
-            for _ in range(cfg.get("worker_count", 1))
-        ]
-        await asyncio.gather(producer, recorder_task, *workers)
+            recorder_task = asyncio.create_task(recorder.run(tick_queue, train_queue))
+            workers = [
+                asyncio.create_task(
+                    tick_worker(
+                        train_queue,
+                        process_batch,
+                        target_latency=cfg.get("target_batch_latency", 1.0),
+                    )
+                )
+                for _ in range(cfg.get("worker_count", 1))
+            ]
+            await asyncio.gather(producer, recorder_task, *workers)
 
 
 if __name__ == "__main__":
