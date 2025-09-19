@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import logging
 import sys
 import types
 from pathlib import Path
@@ -18,6 +19,17 @@ def _load_cli(monkeypatch: pytest.MonkeyPatch):
     utils_stub.ensure_environment = lambda: None
     utils_stub.load_config = lambda *a, **k: {}
     monkeypatch.setitem(sys.modules, "utils", utils_stub)
+    resource_monitor_stub = types.ModuleType("utils.resource_monitor")
+    monitor_stub = types.SimpleNamespace(
+        capabilities=types.SimpleNamespace(capability_tier=lambda: "lite", ddp=lambda: False),
+        capability_tier="lite",
+        start=lambda: None,
+        stop=lambda: None,
+        subscribe=lambda: types.SimpleNamespace(get=lambda: None),
+        create_task=lambda *a, **k: None,
+    )
+    resource_monitor_stub.monitor = monitor_stub  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "utils.resource_monitor", resource_monitor_stub)
     monkeypatch.delitem(sys.modules, "cli", raising=False)
     return importlib.import_module("cli")
 
@@ -361,6 +373,12 @@ def _load_train_rl(monkeypatch: pytest.MonkeyPatch):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     monkeypatch.setitem(sys.modules, "train_rl", module)
+    monkeypatch.setattr(
+        module,
+        "init_logging",
+        lambda: logging.getLogger("test_train_rl"),
+        raising=False,
+    )
     return module
 
 

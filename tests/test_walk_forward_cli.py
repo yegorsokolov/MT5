@@ -1,5 +1,6 @@
 import json
 import types
+import logging
 import contextlib
 import sys
 from pathlib import Path
@@ -51,8 +52,19 @@ def _prepare_cli(monkeypatch):
     monkeypatch.setitem(sys.modules, "training.pipeline", pipeline_stub)
     backtest_stub = types.SimpleNamespace(run_rolling_backtest=lambda *a, **k: {})
     monkeypatch.setitem(sys.modules, "backtest", backtest_stub)
+    utils_env_stub = types.ModuleType("utils.environment")
+    utils_env_stub.ensure_environment = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "utils.environment", utils_env_stub)
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     import train_cli
+    import walk_forward
+
+    monkeypatch.setattr(
+        walk_forward,
+        "init_logging",
+        lambda: logging.getLogger("test_walk_forward_cli"),
+        raising=False,
+    )
 
     env_calls: list[None] = []
 
