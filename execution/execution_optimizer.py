@@ -3,6 +3,7 @@ from __future__ import annotations
 """Simple learning component for execution parameter tuning."""
 
 import json
+import threading
 from pathlib import Path
 from statistics import mean
 from typing import Dict, Optional
@@ -10,6 +11,29 @@ from typing import Dict, Optional
 from .fill_history import load_history
 
 PARAMS_FILE = Path("execution_params.json")
+
+
+class OptimizationLoopHandle:
+    """Handle for the background optimisation loop."""
+
+    def __init__(self, thread: threading.Thread, stop_event: threading.Event) -> None:
+        self._thread = thread
+        self._stop_event = stop_event
+
+    def stop(self) -> None:
+        """Signal the optimisation loop to stop."""
+
+        self._stop_event.set()
+
+    def join(self, timeout: Optional[float] = None) -> None:
+        """Wait for the optimisation thread to exit."""
+
+        self._thread.join(timeout)
+
+    def is_alive(self) -> bool:
+        """Return whether the optimisation thread is still running."""
+
+        return self._thread.is_alive()
 
 
 class ExecutionOptimizer:
@@ -44,17 +68,24 @@ class ExecutionOptimizer:
         return {"limit_offset": 0.0, "slice_size": None}
 
     # ------------------------------------------------------------------
-    def schedule_nightly(self) -> None:
+    def schedule_nightly(self) -> OptimizationLoopHandle:
         """Run optimization once every 24h in a background thread."""
-        import threading
-        import time
+
+        stop_event = threading.Event()
 
         def loop() -> None:
-            while True:
+            while not stop_event.is_set():
                 try:
                     self.optimize()
                 except Exception:
                     pass
-                time.sleep(24 * 60 * 60)
+                if stop_event.wait(24 * 60 * 60):
+                    break
 
-        threading.Thread(target=loop, daemon=True).start()
+        thread = threading.Thread(
+            target=loop,
+            name="ExecutionOptimizerNightly",
+            daemon=True,
+        )
+        thread.start()
+        return OptimizationLoopHandle(thread, stop_event)

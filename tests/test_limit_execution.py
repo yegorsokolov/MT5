@@ -38,11 +38,18 @@ from execution.engine import ExecutionEngine
 
 
 class DummyOpt:
+    class DummyHandle:
+        def stop(self):
+            pass
+
+        def join(self, timeout=None):
+            pass
+
     def get_params(self):
         return {"limit_offset": 0.0, "slice_size": None}
 
     def schedule_nightly(self):
-        pass
+        return self.DummyHandle()
 
 
 @pytest.mark.asyncio

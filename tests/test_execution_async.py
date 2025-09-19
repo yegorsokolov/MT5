@@ -35,12 +35,19 @@ from execution.engine import ExecutionEngine
 
 @pytest.mark.asyncio
 async def test_async_place_order_partial_fill_and_slippage():
+    class DummyHandle:
+        def stop(self):
+            pass
+
+        def join(self, timeout=None):
+            pass
+
     class DummyOpt:
         def get_params(self):
             return {"limit_offset": 0.0, "slice_size": None}
 
         def schedule_nightly(self):
-            pass
+            return DummyHandle()
 
     engine = ExecutionEngine(optimizer=DummyOpt())
     depth = {"bid_vol": 5.0, "ask_vol": 5.0}
