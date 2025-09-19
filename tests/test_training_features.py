@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -55,6 +56,33 @@ def _make_config(training: dict | None = None) -> AppConfig:
     if training:
         cfg_dict["training"] = training
     return AppConfig.model_validate(cfg_dict)
+
+
+def _bruteforce_best_threshold(y: np.ndarray, probs: np.ndarray) -> tuple[float, np.ndarray]:
+    unique_scores = np.unique(probs)
+    best_threshold = 0.5
+    best_f1 = -1.0
+    best_preds = np.zeros_like(y, dtype=int)
+
+    for threshold in unique_scores:
+        preds = (probs >= threshold).astype(int)
+        tp = int(np.sum((preds == 1) & (y == 1)))
+        fp = int(np.sum((preds == 1) & (y == 0)))
+        fn = int(np.sum((preds == 0) & (y == 1)))
+
+        precision = tp / (tp + fp) if (tp + fp) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        if precision + recall == 0.0:
+            f1 = 0.0
+        else:
+            f1 = 2 * precision * recall / (precision + recall)
+
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold = float(threshold)
+            best_preds = preds
+
+    return best_threshold, best_preds
 
 
 def test_append_risk_profile_features_adds_budget_columns():
@@ -141,3 +169,70 @@ def test_build_feature_candidates_custom_groups():
     disabled = build_feature_candidates(df, None, cfg=cfg_disable)
     assert "macro_spread" in enabled
     assert "macro_spread" not in disabled
+
+
+def test_regime_thresholds_numpy_fallback_matches_bruteforce():
+    import importlib
+
+    module_name = "analysis.regime_thresholds"
+    original_module = sys.modules.pop(module_name, None)
+    original_sklearn = sys.modules.get("sklearn")
+    original_metrics = sys.modules.get("sklearn.metrics")
+
+    created_sklearn_stub = False
+    if original_sklearn is None:
+        sklearn_stub = types.ModuleType("sklearn")
+        sklearn_stub.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["sklearn"] = sklearn_stub
+        created_sklearn_stub = True
+
+    broken_metrics = types.ModuleType("sklearn.metrics")
+
+    def _missing_attr(name):  # pragma: no cover - exercised in tests
+        raise ImportError("precision_recall_curve requires SciPy")
+
+    broken_metrics.__getattr__ = _missing_attr  # type: ignore[attr-defined]
+    sys.modules["sklearn.metrics"] = broken_metrics
+    if created_sklearn_stub:
+        sys.modules["sklearn"].metrics = broken_metrics  # type: ignore[attr-defined]
+
+    try:
+        regime_thresholds = importlib.import_module(module_name)
+        pr_curve = regime_thresholds.find_regime_thresholds.__globals__["precision_recall_curve"]
+        assert pr_curve.__module__ == module_name
+
+        y = np.array([0, 1, 1, 0, 0, 1])
+        probs = np.array([0.12, 0.81, 0.93, 0.25, 0.62, 0.78])
+        regimes = np.array([0, 0, 0, 1, 1, 1])
+
+        thresholds, preds = regime_thresholds.find_regime_thresholds(y, probs, regimes)
+
+        expected_thresholds: dict[int, float] = {}
+        expected_preds = np.zeros_like(y)
+        for regime in np.unique(regimes):
+            mask = regimes == regime
+            thr, pred = _bruteforce_best_threshold(y[mask], probs[mask])
+            expected_thresholds[int(regime)] = thr
+            expected_preds[mask] = pred
+
+        for regime, thr in expected_thresholds.items():
+            assert np.isclose(thresholds[regime], thr)
+        np.testing.assert_array_equal(preds, expected_preds)
+
+        import math
+
+        assert math.isfinite(sum(expected_thresholds.values()))
+    finally:
+        sys.modules.pop(module_name, None)
+        if original_module is not None:
+            sys.modules[module_name] = original_module
+
+        if original_metrics is not None:
+            sys.modules["sklearn.metrics"] = original_metrics
+        else:
+            sys.modules.pop("sklearn.metrics", None)
+
+        if created_sklearn_stub:
+            sys.modules.pop("sklearn", None)
+        elif original_sklearn is not None:
+            sys.modules["sklearn"] = original_sklearn
