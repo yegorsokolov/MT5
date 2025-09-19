@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Future
 import atexit
 import logging
 import os
@@ -20,9 +21,10 @@ logger = logging.getLogger(__name__)
 _loop: asyncio.AbstractEventLoop | None = None
 _thread: threading.Thread | None = None
 _started = False
-_tasks: list[asyncio.Future] = []
+_tasks: list[Future[Any]] = []
 _last_retrain_ts: str | None = None
 _failed_retrain_attempts: dict[str, int] = {}
+_retrain_watcher: Future[Any] | None = None
 
 
 def _noop() -> None:
@@ -74,10 +76,15 @@ def _schedule_jobs(
 
 def stop_scheduler() -> None:
     """Stop the background scheduler and cancel all tasks."""
-    global _loop, _thread, _tasks, _started
+    global _loop, _thread, _tasks, _started, _retrain_watcher
     if _loop is None:
+        _retrain_watcher = None
+        _tasks.clear()
+        _started = False
         return
     tasks = list(_tasks)
+    if _retrain_watcher is not None and _retrain_watcher not in tasks:
+        tasks.append(_retrain_watcher)
     for task in tasks:
         task.cancel()
     try:
@@ -91,6 +98,7 @@ def stop_scheduler() -> None:
         except Exception:
             pass
     _tasks.clear()
+    _retrain_watcher = None
     try:
         _loop.call_soon_threadsafe(_loop.stop)
     except Exception:
@@ -204,7 +212,9 @@ def process_retrain_events(store: EventStore | None = None) -> None:
             _last_retrain_ts = max(_last_retrain_ts, ts)
 
 
-def subscribe_retrain_events(store: EventStore | None = None, interval: float = 60.0) -> None:
+def subscribe_retrain_events(
+    store: EventStore | None = None, interval: float = 60.0
+) -> Future[Any] | None:
     """Start background task that checks for retrain events."""
     if store is None:
         from event_store import EventStore
@@ -216,9 +226,20 @@ def subscribe_retrain_events(store: EventStore | None = None, interval: float = 
             process_retrain_events(store)
             await asyncio.sleep(interval)
 
+    global _retrain_watcher
+    if _retrain_watcher is not None:
+        if not _retrain_watcher.done():
+            return _retrain_watcher
+        try:
+            _tasks.remove(_retrain_watcher)
+        except ValueError:
+            pass
+        _retrain_watcher = None
     loop = _ensure_background_loop()
     future = asyncio.run_coroutine_threadsafe(_watch(), loop)
     _tasks.append(future)
+    _retrain_watcher = future
+    return future
 
 def cleanup_checkpoints() -> None:
     """Remove old checkpoints, keeping the most recent files."""

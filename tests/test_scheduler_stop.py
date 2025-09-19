@@ -1,3 +1,4 @@
+import asyncio
 import subprocess
 import sys
 import threading
@@ -28,12 +29,101 @@ def test_stop_scheduler_cancels_tasks_and_stops_loop():
     assert all(t.cancelled() for t in tasks)
 
 
+def test_start_stop_scheduler_clears_retrain_watcher(monkeypatch: pytest.MonkeyPatch):
+    scheduler.stop_scheduler()
+    scheduler._tasks.clear()
+    scheduler._loop = None
+    scheduler._thread = None
+    scheduler._started = False
+    scheduler._retrain_watcher = None
+
+    class DummyStore:
+        def iter_events(self, event_type: str):  # pragma: no cover - signature compat
+            assert event_type == "retrain"
+            if False:
+                yield None  # pragma: no cover - generator formality
+
+    processed = threading.Event()
+
+    def fake_process(store_obj: DummyStore) -> None:
+        processed.set()
+
+    scheduler_flags = {
+        "retrain_events": True,
+        "resource_reprobe": False,
+        "drift_detection": False,
+        "feature_importance_drift": False,
+        "change_point_detection": False,
+        "checkpoint_cleanup": False,
+        "trade_stats": False,
+        "decision_review": False,
+        "vacuum_history": False,
+        "diagnostics": False,
+        "backups": False,
+        "regime_performance": False,
+        "news_vector_store": False,
+        "world_model_eval": False,
+        "factor_update": False,
+    }
+
+    cfg = {"scheduler": scheduler_flags}
+
+    monkeypatch.setattr(scheduler, "load_config", lambda: cfg)
+    monkeypatch.setattr(scheduler, "process_retrain_events", fake_process)
+
+    original_subscribe = scheduler.subscribe_retrain_events
+    store = DummyStore()
+
+    def subscribe_wrapper():
+        return original_subscribe(store=store, interval=0.01)
+
+    monkeypatch.setattr(scheduler, "subscribe_retrain_events", subscribe_wrapper)
+
+    scheduler.start_scheduler()
+
+    assert processed.wait(timeout=2), "retrain watcher never triggered"
+    assert scheduler._retrain_watcher is not None
+
+    loop = scheduler._loop
+    assert loop is not None
+
+    async def _pending_tasks() -> list[asyncio.Task]:
+        current = asyncio.current_task()
+        return [
+            task
+            for task in asyncio.all_tasks()
+            if task is not current and not task.done()
+        ]
+
+    pending_tasks = asyncio.run_coroutine_threadsafe(_pending_tasks(), loop).result(
+        timeout=1
+    )
+    assert pending_tasks, "expected retrain watcher task to be pending"
+
+    watcher_future = scheduler._retrain_watcher
+    initial_task_count = len(scheduler._tasks)
+
+    scheduler._started = False
+    scheduler.start_scheduler()
+
+    assert scheduler._retrain_watcher is watcher_future
+    assert len(scheduler._tasks) == initial_task_count
+
+    scheduler.stop_scheduler()
+
+    assert scheduler._retrain_watcher is None
+    assert scheduler._tasks == []
+    for task in pending_tasks:
+        assert task.done()
+
+
 def test_start_scheduler_respects_disabled_jobs(monkeypatch: pytest.MonkeyPatch):
     scheduler.stop_scheduler()
     scheduler._tasks.clear()
     scheduler._loop = None
     scheduler._thread = None
     scheduler._started = False
+    scheduler._retrain_watcher = None
 
     scheduler_flags = {
         "retrain_events": False,
@@ -84,6 +174,7 @@ def test_subscribe_retrain_events_runs_from_plain_thread(
     scheduler._thread = None
     scheduler._started = False
     scheduler._last_retrain_ts = None
+    scheduler._retrain_watcher = None
 
     consumed: list[dict[str, object]] = []
     processed = threading.Event()
@@ -140,6 +231,7 @@ def test_process_retrain_events_retries_failed_runs(
     scheduler._started = False
     scheduler._last_retrain_ts = None
     scheduler._failed_retrain_attempts.clear()
+    scheduler._retrain_watcher = None
 
     events = [
         {
@@ -156,12 +248,13 @@ def test_process_retrain_events_retries_failed_runs(
 
     outcomes: list[tuple[str, str]] = []
 
-    from analytics import metrics_store
+    from analytics import metrics_store as metrics_module
 
     monkeypatch.setattr(
-        metrics_store,
+        metrics_module,
         "log_retrain_outcome",
         lambda model, status: outcomes.append((model, status)),
+        raising=False,
     )
 
     call_count = {"value": 0}
