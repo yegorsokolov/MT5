@@ -22,6 +22,7 @@ _thread: threading.Thread | None = None
 _started = False
 _tasks: list[asyncio.Future] = []
 _last_retrain_ts: str | None = None
+_failed_retrain_attempts: dict[str, int] = {}
 
 
 def _noop() -> None:
@@ -103,6 +104,7 @@ def stop_scheduler() -> None:
     _loop = None
     _thread = None
     _started = False
+    _failed_retrain_attempts.clear()
 
 
 atexit.register(stop_scheduler)
@@ -144,13 +146,18 @@ def process_retrain_events(store: EventStore | None = None) -> None:
 
         store = EventStore()
 
-    global _last_retrain_ts
+    global _last_retrain_ts, _failed_retrain_attempts
     for ev in store.iter_events("retrain"):
-        ts = ev["timestamp"]
-        if _last_retrain_ts is not None and ts <= _last_retrain_ts:
-            continue
+        ts = str(ev["timestamp"])
         payload = ev.get("payload", {})
-        model = payload.get("model", "classic")
+        model = str(payload.get("model", "classic"))
+        attempt_key = f"{ts}|{model}"
+        if (
+            _last_retrain_ts is not None
+            and ts <= _last_retrain_ts
+            and attempt_key not in _failed_retrain_attempts
+        ):
+            continue
         cmd = _training_cmd(model)
         env = os.environ.copy()
         ckpt = payload.get("checkpoint_dir")
@@ -158,14 +165,43 @@ def process_retrain_events(store: EventStore | None = None) -> None:
             env["CHECKPOINT_DIR"] = ckpt
         try:
             subprocess.run(cmd, check=True, env=env)
-            log_retrain_outcome(model, "success")
         except Exception:
-            logger.exception("Retraining failed for %s", model)
+            attempts = _failed_retrain_attempts.get(attempt_key, 0) + 1
+            _failed_retrain_attempts[attempt_key] = attempts
+            logger.exception(
+                "Retraining failed for %s", model,
+                extra={
+                    "model": model,
+                    "event_timestamp": ts,
+                    "attempt": attempts,
+                },
+            )
             try:
                 log_retrain_outcome(model, "failed")
             except Exception:
                 pass
-        _last_retrain_ts = ts
+            try:
+                log_retrain_outcome(model, "retry_scheduled")
+            except Exception:
+                pass
+            logger.info(
+                "Scheduled retrain retry",
+                extra={
+                    "model": model,
+                    "event_timestamp": ts,
+                    "attempt": attempts,
+                },
+            )
+            continue
+        _failed_retrain_attempts.pop(attempt_key, None)
+        try:
+            log_retrain_outcome(model, "success")
+        except Exception:
+            pass
+        if _last_retrain_ts is None:
+            _last_retrain_ts = ts
+        else:
+            _last_retrain_ts = max(_last_retrain_ts, ts)
 
 
 def subscribe_retrain_events(store: EventStore | None = None, interval: float = 60.0) -> None:

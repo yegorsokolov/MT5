@@ -1,3 +1,4 @@
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -127,3 +128,75 @@ def test_subscribe_retrain_events_runs_from_plain_thread(
     assert scheduler._tasks
 
     scheduler.stop_scheduler()
+
+
+def test_process_retrain_events_retries_failed_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler.stop_scheduler()
+    scheduler._tasks.clear()
+    scheduler._loop = None
+    scheduler._thread = None
+    scheduler._started = False
+    scheduler._last_retrain_ts = None
+    scheduler._failed_retrain_attempts.clear()
+
+    events = [
+        {
+            "timestamp": "2024-02-02T12:34:56",
+            "type": "retrain",
+            "payload": {"model": "classic"},
+        }
+    ]
+
+    class DummyStore:
+        def iter_events(self, event_type: str):  # pragma: no cover - signature compat
+            assert event_type == "retrain"
+            yield from events
+
+    outcomes: list[tuple[str, str]] = []
+
+    from analytics import metrics_store
+
+    monkeypatch.setattr(
+        metrics_store,
+        "log_retrain_outcome",
+        lambda model, status: outcomes.append((model, status)),
+    )
+
+    call_count = {"value": 0}
+
+    def fake_run(cmd, check=True, env=None):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(scheduler.subprocess, "run", fake_run)
+
+    store = DummyStore()
+
+    scheduler.process_retrain_events(store)
+
+    attempt_key = "2024-02-02T12:34:56|classic"
+    assert call_count["value"] == 1
+    assert scheduler._last_retrain_ts is None
+    assert scheduler._failed_retrain_attempts[attempt_key] == 1
+    assert outcomes == [
+        ("classic", "failed"),
+        ("classic", "retry_scheduled"),
+    ]
+
+    scheduler.process_retrain_events(store)
+
+    assert call_count["value"] == 2
+    assert scheduler._last_retrain_ts == "2024-02-02T12:34:56"
+    assert scheduler._failed_retrain_attempts == {}
+    assert outcomes == [
+        ("classic", "failed"),
+        ("classic", "retry_scheduled"),
+        ("classic", "success"),
+    ]
+
+    scheduler._last_retrain_ts = None
+    scheduler._failed_retrain_attempts.clear()
