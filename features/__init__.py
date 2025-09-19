@@ -117,6 +117,7 @@ if not os.getenv("MT5_DOCS_BUILD"):
         divergence,
         evolved_indicators,
         evolved_symbols,
+        oracle_intelligence,
     )
     from analysis import cross_spectral
 
@@ -193,6 +194,7 @@ def register_builtin_features(
     register("baseline_signal", baseline_signal.compute, min_cpus=1, min_mem_gb=1.0)
     register("evolved_indicators", evolved_indicators.compute, min_cpus=1, min_mem_gb=1.0)
     register("evolved_symbols", evolved_symbols.compute, min_cpus=1, min_mem_gb=1.0)
+    register("oracle_intelligence", oracle_intelligence.compute, min_cpus=1, min_mem_gb=1.0)
 
     _DEFAULTS_LOADED = True
 
