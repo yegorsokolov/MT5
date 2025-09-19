@@ -37,6 +37,7 @@ def load_api(tmp_path, monkeypatch):
     )
     risk_mod = types.ModuleType("risk_manager")
     risk_mod.risk_manager = types.SimpleNamespace(status=lambda: {})
+    risk_mod.ensure_scheduler_started = lambda: None
     sys.modules["risk_manager"] = risk_mod
     sched_mod = types.ModuleType("scheduler")
     sched_mod.start_scheduler = lambda: None

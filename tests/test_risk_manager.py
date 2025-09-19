@@ -60,7 +60,9 @@ def load_api(tmp_log, monkeypatch):
         start_scheduler=lambda *a, **k: None,
         stop_scheduler=lambda *a, **k: None,
     )
-    return importlib.reload(importlib.import_module("remote_api"))
+    mod = importlib.reload(importlib.import_module("remote_api"))
+    mod.init_remote_api()
+    return mod
 
 
 def setup_client(tmp_path, monkeypatch):

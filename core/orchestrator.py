@@ -23,6 +23,7 @@ import state_manager
 from analysis import replay
 from . import state_sync
 from analytics.metrics_store import record_metric
+import risk_manager as risk_manager_module
 from risk_manager import risk_manager, subscribe_to_broker_alerts
 from deployment.canary import CanaryManager
 from news.aggregator import NewsAggregator
@@ -158,6 +159,23 @@ class Orchestrator:
             self.monitor.max_rss_mb = max_rss
         if max_cpu is not None:
             self.monitor.max_cpu_pct = max_cpu
+        starter = getattr(risk_manager_module, "ensure_scheduler_started", None)
+        started = False
+        if callable(starter):
+            try:
+                starter()
+                started = True
+            except Exception:
+                self.logger.exception(
+                    "Risk manager scheduler helper failed; attempting direct start"
+                )
+        if not started:
+            try:
+                import scheduler
+
+                scheduler.start_scheduler()
+            except Exception:
+                self.logger.exception("Scheduler start failed")
         self.monitor.start()
         self.registry.refresh()
         state_sync.pull_event_store()

@@ -41,6 +41,7 @@ from log_utils import LOG_FILE, setup_logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Gauge, REGISTRY
 from fastapi.responses import Response
 from dataclasses import dataclass, field
+import risk_manager as risk_manager_module
 from risk_manager import risk_manager
 from scheduler import start_scheduler, stop_scheduler
 
@@ -102,6 +103,19 @@ BOT_CRASH_WINDOW = max(
     float(os.getenv("BOT_CRASH_WINDOW", "600") or 600), BOT_BACKOFF_BASE_SECONDS
 )
 RESTART_HISTORY_LIMIT = max(BOT_MAX_CRASHES * 2, 10)
+
+
+def _start_risk_background_services() -> None:
+    starter = getattr(risk_manager_module, "ensure_scheduler_started", None)
+    if callable(starter):
+        try:
+            starter()
+            return
+        except Exception:
+            logger.exception(
+                "Risk manager initialization helper failed; falling back to direct start"
+            )
+    start_scheduler()
 
 
 def _sd_notify(msg: str) -> None:
@@ -462,7 +476,7 @@ async def _bot_watcher() -> None:
 @app.on_event("startup")
 async def _start_watcher() -> None:
     init_remote_api()
-    start_scheduler()
+    _start_risk_background_services()
     _register_background_task(_bot_watcher())
     global _resource_watchdog_running
     if (
