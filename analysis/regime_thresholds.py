@@ -5,6 +5,58 @@ from typing import Dict, Iterable, Tuple
 import numpy as np
 
 
+def _precision_recall_curve_numpy(
+    y_true: np.ndarray, probs: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute a precision/recall curve using only NumPy operations."""
+
+    if y_true.size == 0:
+        return (
+            np.array([1.0], dtype=float),
+            np.array([0.0], dtype=float),
+            np.array([], dtype=float),
+        )
+
+    order = np.argsort(probs, kind="mergesort")[::-1]
+    y_sorted = y_true[order]
+    probs_sorted = probs[order]
+
+    distinct_value_indices = np.where(np.diff(probs_sorted))[0]
+    threshold_idxs = np.r_[distinct_value_indices, y_sorted.size - 1]
+
+    true_positives = np.cumsum(y_sorted, dtype=float)[threshold_idxs]
+    false_positives = 1 + threshold_idxs - true_positives
+
+    predicted_positive = true_positives + false_positives
+    precision = np.zeros_like(true_positives, dtype=float)
+    np.divide(true_positives, predicted_positive, out=precision, where=predicted_positive != 0)
+
+    if true_positives[-1] == 0:
+        recall = np.ones_like(true_positives, dtype=float)
+    else:
+        recall = true_positives / true_positives[-1]
+
+    sl = slice(None, None, -1)
+    precision = np.hstack((precision[sl], np.array([1.0], dtype=float)))
+    recall = np.hstack((recall[sl], np.array([0.0], dtype=float)))
+    thresholds = probs_sorted[threshold_idxs][sl]
+
+    return precision, recall, thresholds
+
+
+try:  # pragma: no cover - exercised via tests when SciPy is available
+    from sklearn.metrics import precision_recall_curve  # pylint: disable=import-outside-toplevel
+except (ModuleNotFoundError, ImportError):
+
+    def precision_recall_curve(
+        y_true: Iterable[int] | np.ndarray,
+        probs: Iterable[float] | np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        y_arr = np.asarray(y_true, dtype=int).ravel()
+        p_arr = np.asarray(probs, dtype=float).ravel()
+        return _precision_recall_curve_numpy(y_arr, p_arr)
+
+
 def find_regime_thresholds(
     y_true: Iterable[int] | np.ndarray,
     probs: Iterable[float] | np.ndarray,
@@ -28,15 +80,6 @@ def find_regime_thresholds(
     np.ndarray
         Binary predictions generated using the regime-specific thresholds.
     """
-    try:
-        from sklearn.metrics import precision_recall_curve  # pylint: disable=import-outside-toplevel
-    except (ModuleNotFoundError, ImportError):
-        import sys
-
-        sys.modules.pop("scipy", None)
-        sys.modules.pop("scipy.stats", None)
-        from sklearn.metrics import precision_recall_curve  # type: ignore  # pylint: disable=import-outside-toplevel
-
     y = np.ravel(np.asarray(y_true))
     p = np.asarray(probs)
     r = np.asarray(regimes)
