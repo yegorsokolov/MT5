@@ -105,8 +105,32 @@ log_utils_stub.log_exceptions = lambda f: f
 log_utils_stub.log_predictions = lambda *a, **k: None
 sys.modules["log_utils"] = log_utils_stub
 
+sklearn_stub = types.ModuleType("sklearn")
+metrics_stub = types.ModuleType("sklearn.metrics")
+
+
+def _f1_score(y_true, y_pred, zero_division=0):
+    tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 1)
+    fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 1)
+    fn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 0)
+    if tp == 0:
+        return float(zero_division)
+    precision = tp / (tp + fp) if (tp + fp) else zero_division
+    recall = tp / (tp + fn) if (tp + fn) else zero_division
+    if precision == 0 and recall == 0:
+        return float(zero_division)
+    return float(2 * precision * recall / (precision + recall))
+
+
+metrics_stub.f1_score = _f1_score
+sklearn_stub.metrics = metrics_stub
+sys.modules["sklearn"] = sklearn_stub
+sys.modules["sklearn.metrics"] = metrics_stub
+
 state_manager_stub = types.ModuleType("state_manager")
-state_manager_stub.watch_config = lambda cfg: types.SimpleNamespace(stop=lambda: None)
+state_manager_stub.watch_config = lambda cfg: types.SimpleNamespace(
+    stop=lambda: None, join=lambda: None
+)
 state_manager_stub.load_runtime_state = lambda *a, **k: None
 state_manager_stub.save_runtime_state = lambda *a, **k: None
 state_manager_stub.migrate_runtime_state = lambda *a, **k: None
@@ -195,9 +219,19 @@ def test_live_recording_triggers_retraining(tmp_path, monkeypatch):
             return mapping.get(key, default)
 
     monkeypatch.setattr(train_online, "load_config", lambda: _Cfg())
-    monkeypatch.setattr(
-        train_online, "watch_config", lambda cfg: types.SimpleNamespace(stop=lambda: None)
-    )
+    class _ObserverStub:
+        def __init__(self) -> None:
+            self.stop_calls = 0
+            self.join_calls = 0
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+
+        def join(self) -> None:
+            self.join_calls += 1
+
+    observer = _ObserverStub()
+    monkeypatch.setattr(train_online, "watch_config", lambda cfg: observer)
 
     rec = LiveRecorder(data_path)
     ts = pd.Timestamp("2023-01-01T00:00:00Z")
@@ -210,6 +244,8 @@ def test_live_recording_triggers_retraining(tmp_path, monkeypatch):
     assert latest.exists()
     state = joblib.load(latest)
     last1 = state["last_train_ts"]
+    assert observer.stop_calls == 1
+    assert observer.join_calls == 1
 
     rec.record(_make_ticks(ts + pd.Timedelta(seconds=3), n=2))
     time.sleep(1)
@@ -219,6 +255,8 @@ def test_live_recording_triggers_retraining(tmp_path, monkeypatch):
     state = joblib.load(latest)
     last2 = state["last_train_ts"]
     assert last2 > last1
+    assert observer.stop_calls == 2
+    assert observer.join_calls == 2
     assert len(saved_paths) == 2
     # Rollback to the previous model
     train_online.rollback_model(model_dir=models)
