@@ -1,4 +1,5 @@
 import sys
+import importlib.machinery
 import types
 import json
 from pathlib import Path
@@ -6,7 +7,9 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 state_manager_stub = types.ModuleType("state_manager")
-state_manager_stub.watch_config = lambda cfg: types.SimpleNamespace(stop=lambda: None)
+state_manager_stub.watch_config = lambda cfg: types.SimpleNamespace(
+    stop=lambda: None, join=lambda: None
+)
 state_manager_stub.load_runtime_state = lambda *a, **k: None
 state_manager_stub.save_runtime_state = lambda *a, **k: None
 state_manager_stub.migrate_runtime_state = lambda *a, **k: None
@@ -17,6 +20,14 @@ sys.modules["state_manager"] = state_manager_stub
 
 for mod in ["scipy", "scipy.stats", "scipy.sparse"]:
     sys.modules.pop(mod, None)
+
+utils_stub = types.ModuleType("utils")
+utils_stub.load_config = lambda *a, **k: {}
+utils_spec = importlib.machinery.ModuleSpec("utils", loader=None, is_package=True)
+utils_spec.submodule_search_locations = []
+utils_stub.__spec__ = utils_spec
+utils_stub.__path__ = []
+sys.modules["utils"] = utils_stub
 
 resource_monitor_stub = types.ModuleType("utils.resource_monitor")
 resource_monitor_stub.monitor = types.SimpleNamespace()
@@ -42,6 +53,28 @@ log_utils_stub.log_predictions = lambda *a, **k: None
 log_utils_stub.LOG_DIR = Path("/tmp")
 log_utils_stub.LOG_FILE = Path("/tmp/app.log")
 sys.modules["log_utils"] = log_utils_stub
+
+sklearn_stub = types.ModuleType("sklearn")
+metrics_stub = types.ModuleType("sklearn.metrics")
+
+
+def _f1_score(y_true, y_pred, zero_division=0):
+    tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 1)
+    fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 1)
+    fn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 0)
+    if tp == 0:
+        return float(zero_division)
+    precision = tp / (tp + fp) if (tp + fp) else zero_division
+    recall = tp / (tp + fn) if (tp + fn) else zero_division
+    if precision == 0 and recall == 0:
+        return float(zero_division)
+    return float(2 * precision * recall / (precision + recall))
+
+
+metrics_stub.f1_score = _f1_score
+sklearn_stub.metrics = metrics_stub
+sys.modules["sklearn"] = sklearn_stub
+sys.modules["sklearn.metrics"] = metrics_stub
 
 
 class _StubModel:
@@ -155,7 +188,19 @@ def test_train_online_enriches_features(tmp_path, monkeypatch):
             return mapping.get(key, default)
 
     monkeypatch.setattr(train_online, "load_config", lambda: DummyCfg())
-    monkeypatch.setattr(train_online, "watch_config", lambda cfg: types.SimpleNamespace(stop=lambda: None))
+    class ObserverStub:
+        def __init__(self) -> None:
+            self.stop_calls = 0
+            self.join_calls = 0
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+
+        def join(self) -> None:
+            self.join_calls += 1
+
+    observer = ObserverStub()
+    monkeypatch.setattr(train_online, "watch_config", lambda cfg: observer)
 
     timestamps = pd.date_range("2024-01-01", periods=6, freq="min", tz="UTC")
     ticks = pd.DataFrame(
@@ -168,6 +213,15 @@ def test_train_online_enriches_features(tmp_path, monkeypatch):
     )
 
     call_state = {"count": 0}
+
+    dump_calls: list[tuple[object, Path]] = []
+    original_dump = train_online.joblib.dump
+
+    def _tracking_dump(obj, path):
+        dump_calls.append((obj, Path(path)))
+        return original_dump(obj, path)
+
+    monkeypatch.setattr(train_online.joblib, "dump", _tracking_dump)
 
     def fake_load_ticks(path, since):
         if call_state["count"] == 0:
@@ -216,11 +270,19 @@ def test_train_online_enriches_features(tmp_path, monkeypatch):
         interval=0,
     )
 
+    assert dump_calls, "Expected joblib.dump to be invoked"
     latest_path = model_dir / "online_latest.joblib"
-    state = joblib.load(latest_path)
-    assert state["feature_columns"] == ["feat_a", "feat_b"]
-    assert state["label_column"] == "tb_label"
-    assert isinstance(state["last_train_ts"], pd.Timestamp)
+    latest_entries = [
+        (obj, path) for obj, path in dump_calls if Path(path) == latest_path
+    ]
+    assert latest_entries, "State dump to online_latest.joblib was not recorded"
+    state_obj, state_path = latest_entries[-1]
+    assert isinstance(state_obj, dict)
+    assert state_obj["feature_columns"] == ["feat_a", "feat_b"]
+    assert state_obj["label_column"] == "tb_label"
+    assert isinstance(state_obj["last_train_ts"], pd.Timestamp)
     assert dummy_model.calls
     assert saved_metadata["metadata"]["preprocessing"]["feature_columns"] == ["feat_a", "feat_b"]
     assert saved_metadata["metadata"]["preprocessing"]["label_column"] == "tb_label"
+    assert observer.stop_calls == 1
+    assert observer.join_calls == 1
