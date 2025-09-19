@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sqlite3
 import json
 from pathlib import Path
@@ -8,13 +9,18 @@ import threading
 import datetime as _dt
 import os
 import logging
-import requests
 from utils.resource_monitor import monitor
 
 try:  # optional state sync
     from core import state_sync
 except Exception:  # pragma: no cover - optional dependency
     state_sync = None
+
+_requests_spec = importlib.util.find_spec("requests")
+if _requests_spec is not None:
+    requests = importlib.import_module("requests")
+else:  # pragma: no cover - optional dependency
+    requests = None
 
 
 class EventStore:
@@ -30,7 +36,28 @@ class EventStore:
     ) -> None:
         base = Path(__file__).resolve().parent
         self.path = Path(path) if path else base / "events.db"
-        self.conn = sqlite3.connect(self.path)
+        self.lock = threading.Lock()
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        with self.lock:
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.fetchone()
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA busy_timeout = 5000")
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        payload TEXT NOT NULL
+                    )
+                    """
+                )
+                self.conn.commit()
+            finally:
+                cursor.close()
         self.ds_path = Path(dataset_dir) if dataset_dir else self.path.with_suffix(".parquet")
         try:
             self.ds_path.mkdir(parents=True, exist_ok=True)
@@ -40,24 +67,17 @@ class EventStore:
         self.disk_io_threshold = disk_io_threshold
         self.backend = backend or (getattr(state_sync, "BACKEND", None) if state_sync else None)
         self.logger = logging.getLogger(__name__)
-        self.conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                type TEXT NOT NULL,
-                payload TEXT NOT NULL
-            )
-            """
-        )
-        self.lock = threading.Lock()
 
     def record(self, event_type: str, payload: Dict[str, Any]) -> None:
         """Record an event of the given type with the provided payload."""
         ts = _dt.datetime.utcnow().isoformat()
         data = json.dumps(payload, default=str)
         usage = getattr(monitor, "latest_usage", {})
-        if self.remote_url and usage.get("disk_write", 0) > self.disk_io_threshold:
+        if (
+            requests is not None
+            and self.remote_url
+            and usage.get("disk_write", 0) > self.disk_io_threshold
+        ):
             try:
                 requests.post(
                     self.remote_url,
@@ -68,11 +88,15 @@ class EventStore:
             except Exception:
                 pass
         with self.lock:
-            self.conn.execute(
-                "INSERT INTO events(timestamp, type, payload) VALUES (?, ?, ?)",
-                (ts, event_type, data),
-            )
-            self.conn.commit()
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(
+                    "INSERT INTO events(timestamp, type, payload) VALUES (?, ?, ?)",
+                    (ts, event_type, data),
+                )
+                self.conn.commit()
+            finally:
+                cursor.close()
             try:
                 import pyarrow as pa  # type: ignore
                 import pyarrow.dataset as ds  # type: ignore
@@ -102,19 +126,25 @@ class EventStore:
 
     def iter_events(self, event_type: Optional[str] = None) -> Iterable[Dict[str, Any]]:
         """Yield events in order, optionally filtered by type."""
-        cur = self.conn.cursor()
-        if event_type:
-            cur.execute(
-                "SELECT timestamp, type, payload FROM events WHERE type=? ORDER BY id",
-                (event_type,),
-            )
-        else:
-            cur.execute("SELECT timestamp, type, payload FROM events ORDER BY id")
-        for ts, et, pl in cur.fetchall():
+        with self.lock:
+            cur = self.conn.cursor()
+            try:
+                if event_type:
+                    cur.execute(
+                        "SELECT timestamp, type, payload FROM events WHERE type=? ORDER BY id",
+                        (event_type,),
+                    )
+                else:
+                    cur.execute("SELECT timestamp, type, payload FROM events ORDER BY id")
+                rows = cur.fetchall()
+            finally:
+                cur.close()
+        for ts, et, pl in rows:
             yield {"timestamp": ts, "type": et, "payload": json.loads(pl)}
 
     def close(self) -> None:  # pragma: no cover - trivial
-        self.conn.close()
+        with self.lock:
+            self.conn.close()
 
     def _replicate(self) -> None:
         if not self.backend or not state_sync:
