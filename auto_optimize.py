@@ -14,7 +14,19 @@ from utils import load_config, update_config
 from backtest import run_backtest, run_rolling_backtest
 from log_utils import setup_logging, log_exceptions
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for the auto optimisation service."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +48,7 @@ def _config_to_dict(cfg) -> dict:
 
 @log_exceptions
 def main():
+    init_logging()
     mlflow.set_experiment("auto_optimize")
     with mlflow.start_run():
         train_model()

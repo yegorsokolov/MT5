@@ -35,7 +35,19 @@ try:  # optional metrics integration
 except Exception:  # pragma: no cover - metrics are optional
     SLIPPAGE_BPS = PARTIAL_FILL_COUNT = SKIPPED_TRADE_COUNT = None
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for backtest routines."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -287,6 +299,7 @@ def run_backtest(
     latency_ms: int = 0,
     slippage_model=None,
 ) -> dict | tuple[dict, pd.Series]:
+    init_logging()
     if cfg.get("sim_env") and AgentMarketSimulator is not None:
         sim = AgentMarketSimulator(
             seed=int(cfg.get("sim_seed", 42)),
@@ -366,6 +379,7 @@ def run_rolling_backtest(
     slippage_model=None,
 ) -> dict:
     """Perform rolling train/test backtests and aggregate metrics."""
+    init_logging()
     if cfg.get("sim_env") and AgentMarketSimulator is not None:
         sim = AgentMarketSimulator(
             seed=int(cfg.get("sim_seed", 42)),
@@ -490,6 +504,7 @@ def run_rolling_backtest(
 
 @log_exceptions
 def main():
+    init_logging()
     import argparse
 
     parser = argparse.ArgumentParser(description="Run backtest")

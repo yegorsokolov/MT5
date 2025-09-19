@@ -145,7 +145,19 @@ import train_rl
 
 _empty_batch_count = 0
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for the realtime training service."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 exec_engine = ExecutionEngine()
 
@@ -251,6 +263,7 @@ async def _handle_resource_breach(reason: str) -> None:
 
 async def fetch_ticks(symbol: str, n: int = 1000, retries: int = 3) -> pd.DataFrame:
     """Fetch recent tick data from the active broker asynchronously."""
+    init_logging()
     cfg = load_config()
     max_empty = cfg.get("max_empty_batches", 3)
     global _empty_batch_count
@@ -491,6 +504,7 @@ async def tick_worker(
 
 @log_exceptions
 async def train_realtime():
+    init_logging()
     cfg = load_config()
     root = Path(__file__).resolve().parent
     recorder = LiveRecorder(
