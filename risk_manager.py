@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, TYPE_CHECKING
+from typing import Any, Dict, List, TYPE_CHECKING
 import asyncio
 import os
 import json
+from concurrent.futures import Future
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,11 @@ from portfolio import (
 from analysis.extreme_value import estimate_tail_probability, log_evt_result
 from analysis.exposure_matrix import ExposureMatrix
 from analysis.scenario_mc import generate_correlated_shocks
+
+try:  # pragma: no cover - resource monitor optional in some tests
+    from utils.resource_monitor import monitor
+except Exception:  # pragma: no cover - fall back to event loop scheduling
+    monitor = None  # type: ignore[assignment]
 
 try:
     from news.impact_model import get_impact
@@ -756,14 +762,28 @@ except Exception:
     pass
 
 
-def subscribe_to_broker_alerts(rm: RiskManager | None = None) -> asyncio.Task | None:
+def subscribe_to_broker_alerts(
+    rm: RiskManager | None = None,
+) -> asyncio.Future[Any] | Future[Any] | None:
     """Subscribe ``rm`` to broker divergence alerts."""
+
     rm = rm or risk_manager
     try:
         from data.tick_aggregator import divergence_alerts
     except Exception:
         return None
+
     queue = divergence_alerts()
+    create_task = getattr(monitor, "create_task", None) if monitor is not None else None
+    if callable(create_task):
+        coro = rm.watch_feed_divergence(queue)
+        try:
+            handle = create_task(coro)
+        except Exception:
+            coro.close()
+        else:
+            return handle
+
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -771,4 +791,7 @@ def subscribe_to_broker_alerts(rm: RiskManager | None = None) -> asyncio.Task | 
     return loop.create_task(rm.watch_feed_divergence(queue))
 
 
-start_scheduler()
+def ensure_scheduler_started() -> None:
+    """Ensure the shared scheduler thread is running."""
+
+    start_scheduler()
