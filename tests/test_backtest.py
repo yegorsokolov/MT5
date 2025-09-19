@@ -1,6 +1,7 @@
 import pytest
 import sys
 import types
+import logging
 import importlib.util
 from pathlib import Path
 
@@ -35,6 +36,40 @@ sys.modules.setdefault(
 sys.modules.setdefault(
     "analysis.strategy_evaluator",
     types.SimpleNamespace(StrategyEvaluator=object),
+)
+
+
+class _DummyExecutionEngine:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def start_optimizer(self):
+        return None
+
+    def stop_optimizer(self):
+        return None
+
+    def execute(self, *args, **kwargs):
+        return types.SimpleNamespace(status="filled", price=1.0)
+
+
+sys.modules.setdefault(
+    "execution",
+    types.SimpleNamespace(ExecutionEngine=_DummyExecutionEngine),
+)
+sys.modules.setdefault(
+    "execution.execution_optimizer",
+    types.SimpleNamespace(
+        ExecutionOptimizer=type(
+            "EO",
+            (),
+            {
+                "get_params": lambda self: {"limit_offset": 0.0, "slice_size": None},
+                "schedule_nightly": lambda self: None,
+            },
+        ),
+        OptimizationLoopHandle=object,
+    ),
 )
 
 sk_module = types.ModuleType("sklearn")
@@ -112,6 +147,8 @@ sys.modules["log_utils"] = types.SimpleNamespace(
     setup_logging=lambda: None, log_exceptions=lambda f: f
 )
 spec.loader.exec_module(backtest)
+
+backtest.init_logging = lambda: logging.getLogger("test_backtest")
 
 trailing_stop = backtest.trailing_stop
 

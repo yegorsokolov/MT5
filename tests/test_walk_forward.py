@@ -21,6 +21,8 @@ sys.modules["mlflow"] = types.SimpleNamespace(
 
 import walk_forward
 
+walk_forward.init_logging = lambda: logging.getLogger("test_walk_forward")
+
 
 def test_aggregate_results():
     results = {
