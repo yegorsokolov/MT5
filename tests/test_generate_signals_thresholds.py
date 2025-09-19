@@ -254,6 +254,82 @@ def test_online_regime_thresholds_applied():
     assert preds.tolist() == [1, 0, 1]
 
 
+def test_regime_thresholds_fallback_preserves_import_state():
+    import importlib
+
+    module_name = "analysis.regime_thresholds"
+    original_module = sys.modules.pop(module_name, None)
+    original_sklearn = sys.modules.get("sklearn")
+    original_metrics = sys.modules.get("sklearn.metrics")
+    original_scipy = sys.modules.get("scipy")
+    original_scipy_stats = sys.modules.get("scipy.stats")
+
+    created_sklearn_stub = False
+    if original_sklearn is None:
+        sklearn_stub = types.ModuleType("sklearn")
+        sklearn_stub.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["sklearn"] = sklearn_stub
+        created_sklearn_stub = True
+
+    broken_metrics = types.ModuleType("sklearn.metrics")
+
+    def _missing_attr(name):  # pragma: no cover - exercised in tests
+        raise ImportError("precision_recall_curve requires SciPy")
+
+    broken_metrics.__getattr__ = _missing_attr  # type: ignore[attr-defined]
+    sys.modules["sklearn.metrics"] = broken_metrics
+    if created_sklearn_stub:
+        sys.modules["sklearn"].metrics = broken_metrics  # type: ignore[attr-defined]
+
+    sentinel_scipy = types.ModuleType("scipy")
+    sentinel_scipy_stats = types.ModuleType("scipy.stats")
+    sys.modules["scipy"] = sentinel_scipy
+    sys.modules["scipy.stats"] = sentinel_scipy_stats
+
+    try:
+        regime_thresholds = importlib.import_module(module_name)
+        pr_curve = regime_thresholds.find_regime_thresholds.__globals__["precision_recall_curve"]
+        assert pr_curve.__module__ == module_name
+
+        y = np.array([0, 1, 1, 0, 0, 1])
+        probs = np.array([0.1, 0.8, 0.9, 0.2, 0.6, 0.7])
+        regimes = np.array([0, 0, 0, 1, 1, 1])
+
+        thresholds, preds = regime_thresholds.find_regime_thresholds(y, probs, regimes)
+
+        assert np.isclose(thresholds[0], 0.8)
+        assert np.isclose(thresholds[1], 0.7)
+        np.testing.assert_array_equal(preds, np.array([0, 1, 1, 0, 0, 1]))
+
+        assert sys.modules.get("scipy") is sentinel_scipy
+        assert sys.modules.get("scipy.stats") is sentinel_scipy_stats
+        assert sys.modules.get("sklearn.metrics") is broken_metrics
+    finally:
+        sys.modules.pop(module_name, None)
+        if original_module is not None:
+            sys.modules[module_name] = original_module
+
+        if original_metrics is not None:
+            sys.modules["sklearn.metrics"] = original_metrics
+        else:
+            sys.modules.pop("sklearn.metrics", None)
+
+        if created_sklearn_stub:
+            sys.modules.pop("sklearn", None)
+        elif original_sklearn is not None:
+            sys.modules["sklearn"] = original_sklearn
+
+        if original_scipy is not None:
+            sys.modules["scipy"] = original_scipy
+        else:
+            sys.modules.pop("scipy", None)
+
+        if original_scipy_stats is not None:
+            sys.modules["scipy.stats"] = original_scipy_stats
+        else:
+            sys.modules.pop("scipy.stats", None)
+
+
 def test_training_regime_thresholds_align_with_application():
     import importlib
     import sys
