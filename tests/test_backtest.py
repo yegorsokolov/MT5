@@ -32,6 +32,10 @@ sys.modules.setdefault(
         monitor=types.SimpleNamespace(capability_tier=lambda: "lite")
     ),
 )
+sys.modules.setdefault(
+    "analysis.strategy_evaluator",
+    types.SimpleNamespace(StrategyEvaluator=object),
+)
 
 sk_module = types.ModuleType("sklearn")
 sk_module.pipeline = types.SimpleNamespace(Pipeline=object)
@@ -86,6 +90,10 @@ sys.modules.setdefault(
             },
         )
     ),
+)
+sys.modules["requests"] = types.SimpleNamespace(
+    Session=lambda: types.SimpleNamespace(post=lambda *a, **k: None),
+    get=lambda *a, **k: None,
 )
 ray_stub = types.SimpleNamespace(remote=lambda f: f)
 sys.modules.setdefault(
