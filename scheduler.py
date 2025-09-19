@@ -29,6 +29,17 @@ def _noop() -> None:
 
     return None
 
+
+def _ensure_background_loop() -> asyncio.AbstractEventLoop:
+    """Return the scheduler's background event loop, creating it if needed."""
+
+    global _loop, _thread
+    if _loop is None or _thread is None or not _thread.is_alive():
+        _loop = asyncio.new_event_loop()
+        _thread = threading.Thread(target=_loop.run_forever, daemon=True)
+        _thread.start()
+    return _loop
+
 async def _runner(name: str, interval: float, func: Callable[[], None | asyncio.Future]) -> None:
     # delay first run by ``interval`` to avoid heavy startup work
     await asyncio.sleep(interval)
@@ -45,18 +56,14 @@ async def _runner(name: str, interval: float, func: Callable[[], None | asyncio.
 def _schedule_jobs(
     jobs: Iterable[tuple[str, bool, Callable[[], None | asyncio.Future]]]
 ) -> int:
-    global _loop, _thread
     scheduled = 0
     for name, enabled, func in jobs:
         if not enabled:
             logger.info("Skipping disabled scheduler job: %s", name)
             continue
-        if _loop is None:
-            _loop = asyncio.new_event_loop()
-            _thread = threading.Thread(target=_loop.run_forever, daemon=True)
-            _thread.start()
+        loop = _ensure_background_loop()
         task = asyncio.run_coroutine_threadsafe(
-            _runner(name, 24 * 60 * 60, func), _loop
+            _runner(name, 24 * 60 * 60, func), loop
         )
         _tasks.append(task)
         scheduled += 1
@@ -69,8 +76,19 @@ def stop_scheduler() -> None:
     global _loop, _thread, _tasks, _started
     if _loop is None:
         return
-    for task in _tasks:
+    tasks = list(_tasks)
+    for task in tasks:
         task.cancel()
+    try:
+        asyncio.run_coroutine_threadsafe(asyncio.sleep(0), _loop).result(timeout=0.5)
+    except Exception:
+        pass
+    for task in tasks:
+        try:
+            if not task.done():
+                task.result(timeout=0.5)
+        except Exception:
+            pass
     _tasks.clear()
     try:
         _loop.call_soon_threadsafe(_loop.stop)
@@ -162,11 +180,9 @@ def subscribe_retrain_events(store: EventStore | None = None, interval: float = 
             process_retrain_events(store)
             await asyncio.sleep(interval)
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-    loop.create_task(_watch())
+    loop = _ensure_background_loop()
+    future = asyncio.run_coroutine_threadsafe(_watch(), loop)
+    _tasks.append(future)
 
 def cleanup_checkpoints() -> None:
     """Remove old checkpoints, keeping the most recent files."""
