@@ -5,6 +5,9 @@ import logging
 import importlib.util
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
@@ -164,3 +167,17 @@ def test_trailing_stop_does_not_loosen():
     stop = 1.04
     new_stop = trailing_stop(1.0, 1.05, stop, 0.02)
     assert new_stop == stop
+
+
+def test_compute_metrics_constant_returns():
+    returns = pd.Series([0.0] * 10)
+    metrics = backtest.compute_metrics(returns)
+    assert metrics["sharpe"] == 0.0
+    assert all(np.isfinite(list(metrics.values())))
+
+
+def test_compute_metrics_near_constant_positive_returns():
+    returns = pd.Series([0.01] * 10)
+    metrics = backtest.compute_metrics(returns)
+    assert metrics["sharpe"] == 0.0
+    assert all(np.isfinite(list(metrics.values())))

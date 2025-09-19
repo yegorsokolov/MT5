@@ -29,7 +29,11 @@ def compute_metrics(returns: pd.Series) -> dict:
     cumulative = (1 + returns).cumprod()
     peak = cumulative.cummax()
     drawdown = (cumulative - peak) / peak
-    sharpe = np.sqrt(252) * returns.mean() / returns.std(ddof=0)
+    std = returns.std(ddof=0)
+    if not np.isfinite(std) or std < 1e-12:
+        sharpe = 0.0
+    else:
+        sharpe = np.sqrt(252) * returns.mean() / std
     return {
         "sharpe": sharpe,
         "max_drawdown": drawdown.min() * 100,
