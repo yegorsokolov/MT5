@@ -123,6 +123,17 @@ fake_mt5 = types.SimpleNamespace(
     COPY_TICKS_ALL=0, copy_ticks_from=_fake_copy, initialize=_fake_init
 )
 sys.modules["MetaTrader5"] = fake_mt5
+conn_mgr_stub = types.SimpleNamespace(_manager=None)
+
+
+def _conn_init(mods):
+    conn_mgr_stub._manager = object()
+
+
+conn_mgr_stub.init = _conn_init
+conn_mgr_stub.get_active_broker = lambda: fake_mt5
+conn_mgr_stub.failover = lambda: None
+sys.modules["brokers.connection_manager"] = conn_mgr_stub
 
 import realtime_train as rt
 

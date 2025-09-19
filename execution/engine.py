@@ -21,7 +21,7 @@ from .algorithms import (
     simple_slicer,
 )
 from .rl_executor import RLExecutor
-from .execution_optimizer import ExecutionOptimizer
+from .execution_optimizer import ExecutionOptimizer, OptimizationLoopHandle
 from .fill_history import record_fill
 from metrics import SLIPPAGE_BPS, REALIZED_SLIPPAGE_BPS
 from event_store.event_writer import record as record_event
@@ -76,10 +76,37 @@ class ExecutionEngine:
         # Queue used to emit fill or cancellation events for asynchronous
         # execution.  Tests consume from this queue to verify event ordering.
         self.event_queue: asyncio.Queue = asyncio.Queue()
+        self._optimizer_handle: Optional[OptimizationLoopHandle] = None
+
+    # ------------------------------------------------------------------
+    def start_optimizer(self) -> Optional[OptimizationLoopHandle]:
+        """Start the nightly optimiser loop if configured."""
+
+        if self.optimizer is None:
+            return None
+        if self._optimizer_handle is not None:
+            return self._optimizer_handle
         try:
-            self.optimizer.schedule_nightly()
+            handle = self.optimizer.schedule_nightly()
+        except Exception:
+            handle = None
+        self._optimizer_handle = handle
+        return handle
+
+    # ------------------------------------------------------------------
+    def stop_optimizer(self) -> None:
+        """Stop the nightly optimiser loop if it is running."""
+
+        handle = self._optimizer_handle
+        if not handle:
+            return
+        try:
+            handle.stop()
+            handle.join()
         except Exception:
             pass
+        finally:
+            self._optimizer_handle = None
 
     # ------------------------------------------------------------------
     def rebalance_capital(
