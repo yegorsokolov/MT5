@@ -4,8 +4,68 @@ import sys
 import importlib.util
 from pathlib import Path
 import pandas as pd
-import sys
 import numpy as np
+
+
+def test_eval_rl_compute_metrics_constant_returns(monkeypatch):
+    sb3_stub = types.ModuleType("stable_baselines3")
+    sb3_stub.__path__ = []
+    sb3_stub.PPO = object
+    sb3_stub.SAC = object
+    monkeypatch.setitem(sys.modules, "stable_baselines3", sb3_stub)
+    sb3_contrib_stub = types.ModuleType("sb3_contrib")
+    sb3_contrib_stub.__path__ = []
+    sb3_contrib_qrdqn = types.ModuleType("sb3_contrib.qrdqn")
+    sb3_contrib_qrdqn.QRDQN = object
+    sb3_contrib_stub.qrdqn = sb3_contrib_qrdqn
+    monkeypatch.setitem(sys.modules, "sb3_contrib", sb3_contrib_stub)
+    monkeypatch.setitem(sys.modules, "sb3_contrib.qrdqn", sb3_contrib_qrdqn)
+    utils_stub = types.ModuleType("utils")
+    utils_stub.load_config = lambda: {}
+    monkeypatch.setitem(sys.modules, "utils", utils_stub)
+    data_pkg = types.ModuleType("data")
+    data_pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "data", data_pkg)
+    sys.modules.pop("features", None)
+    features_stub_module = types.ModuleType("features")
+    features_stub_module.make_features = lambda df: df
+    monkeypatch.setitem(sys.modules, "features", features_stub_module)
+    data_history_stub = types.ModuleType("data.history")
+    data_history_stub.load_history_parquet = lambda *a, **k: None
+    data_history_stub.save_history_parquet = lambda *a, **k: None
+    data_history_stub.load_history_config = lambda *a, **k: pd.DataFrame()
+    monkeypatch.setitem(sys.modules, "data.history", data_history_stub)
+    data_features_stub = types.ModuleType("data.features")
+    data_features_stub.make_features = lambda df: df
+    monkeypatch.setitem(sys.modules, "data.features", data_features_stub)
+    setattr(data_pkg, "features", data_features_stub)
+    train_rl_stub = types.ModuleType("train_rl")
+    train_rl_stub.TradingEnv = object
+    train_rl_stub.DiscreteTradingEnv = object
+    monkeypatch.setitem(sys.modules, "train_rl", train_rl_stub)
+    rl_stub = types.ModuleType("rl")
+    rl_multi = types.ModuleType("rl.multi_objective")
+    rl_multi.pareto_frontier = lambda *a, **k: []
+    rl_stub.multi_objective = rl_multi
+    rl_stub.__path__ = []
+    monkeypatch.setitem(sys.modules, "rl", rl_stub)
+    monkeypatch.setitem(sys.modules, "rl.multi_objective", rl_multi)
+    log_utils_stub = types.ModuleType("log_utils")
+    log_utils_stub.setup_logging = lambda: None
+    log_utils_stub.log_exceptions = lambda f: f
+    monkeypatch.setitem(sys.modules, "log_utils", log_utils_stub)
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    spec = importlib.util.spec_from_file_location(
+        "eval_rl", Path(__file__).resolve().parents[1] / "eval_rl.py"
+    )
+    eval_rl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(eval_rl)
+
+    returns = pd.Series([0.0] * 10)
+    metrics = eval_rl.compute_metrics(returns)
+    assert metrics["sharpe"] == 0.0
+    assert all(np.isfinite(list(metrics.values())))
 
 
 def test_rl_evaluation_metrics(monkeypatch, tmp_path):
@@ -27,13 +87,41 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
         __spec__=types.SimpleNamespace(),
     )
     monkeypatch.setitem(sys.modules, "prometheus_client", prom_stub)
-    torch_utils_data_stub = types.SimpleNamespace(DataLoader=object, TensorDataset=object)
+    ray_utils_stub = types.SimpleNamespace(
+        init=lambda **k: None,
+        shutdown=lambda: None,
+        cluster_available=lambda: False,
+        submit=lambda *a, **k: None,
+        ray=types.SimpleNamespace(remote=lambda f: f),
+    )
+    monkeypatch.setitem(sys.modules, "ray_utils", ray_utils_stub)
+    class _TensorDataset:
+        def __init__(self, *arrays):
+            self.data = list(zip(*arrays))
+
+        def __iter__(self):
+            return iter(self.data)
+
+        def __len__(self):
+            return len(self.data)
+
+    class _DataLoader:
+        def __init__(self, dataset, batch_size=32, shuffle=False):
+            self.dataset = dataset
+
+        def __iter__(self):
+            return iter(self.dataset)
+
+    torch_utils_data_stub = types.SimpleNamespace(DataLoader=_DataLoader, TensorDataset=_TensorDataset)
     torch_utils_stub = types.SimpleNamespace(data=torch_utils_data_stub)
     torch_nn_stub = types.SimpleNamespace(Module=object, functional=types.SimpleNamespace())
     torch_stub = types.SimpleNamespace(
         manual_seed=lambda *a, **k: None,
         cuda=types.SimpleNamespace(is_available=lambda: False, manual_seed_all=lambda *a, **k: None),
         nn=torch_nn_stub,
+        tensor=lambda data, dtype=None: np.array(data),
+        float32=np.float32,
+        zeros=lambda *a, **k: np.zeros(*a, **k),
     )
     monkeypatch.setitem(sys.modules, "torch", torch_stub)
     monkeypatch.setitem(sys.modules, "torch.nn", torch_nn_stub)
@@ -44,7 +132,9 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
         def __init__(self, low, high, shape=None, dtype=None):
             self.shape = shape if shape is not None else getattr(low, "shape", (len(low),))
 
-    gym_stub = types.SimpleNamespace(Env=object, spaces=types.SimpleNamespace(Box=DummyBox))
+    gym_stub = types.SimpleNamespace(
+        Env=object, spaces=types.SimpleNamespace(Box=DummyBox), Wrapper=object
+    )
     monkeypatch.setitem(sys.modules, "gym", gym_stub)
     monkeypatch.setitem(sys.modules, "utils", types.SimpleNamespace(load_config=lambda: {}))
     monkeypatch.setitem(
@@ -60,6 +150,7 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
         start=lambda: None,
         capability_tier=lambda: "lite",
         capabilities=types.SimpleNamespace(capability_tier=lambda: "lite", ddp=lambda: False),
+        create_task=lambda coro: None,
     )
     monkeypatch.setitem(
         sys.modules, "utils.resource_monitor", types.SimpleNamespace(monitor=monitor_stub)
@@ -69,6 +160,8 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     state_stub = types.SimpleNamespace(
         save_checkpoint=lambda *a, **k: None,
         load_latest_checkpoint=lambda *a, **k: None,
+        load_router_state=lambda *a, **k: None,
+        save_router_state=lambda *a, **k: None,
     )
     monkeypatch.setitem(sys.modules, "state_manager", state_stub)
     history_stub = types.SimpleNamespace(
@@ -76,13 +169,20 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
         save_history_parquet=lambda *a, **k: None,
         load_history_config=lambda *a, **k: pd.DataFrame(),
     )
-    features_stub = types.SimpleNamespace(make_features=lambda df: df)
-    monkeypatch.setitem(sys.modules, "data", types.SimpleNamespace())
+    data_features_stub = types.ModuleType("data.features")
+    data_features_stub.make_features = lambda df: df
+    data_pkg = types.ModuleType("data")
+    data_pkg.__path__ = []
+    monkeypatch.setitem(sys.modules, "data", data_pkg)
     monkeypatch.setitem(sys.modules, "data.history", history_stub)
-    monkeypatch.setitem(sys.modules, "data.features", features_stub)
+    monkeypatch.setitem(sys.modules, "data.features", data_features_stub)
     monkeypatch.setitem(
         sys.modules, "data.versioning", types.SimpleNamespace(compute_hash=lambda *a, **k: "0")
     )
+    sys.modules.pop("features", None)
+    features_module = types.ModuleType("features")
+    features_module.make_features = lambda df: df
+    monkeypatch.setitem(sys.modules, "features", features_module)
     metrics_stub = types.ModuleType("metrics_store")
     metrics_stub.record_metric = lambda *a, **k: None
     metrics_stub.TS_PATH = ""
@@ -92,11 +192,32 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     sys.modules.pop("analytics.metrics_store", None)
     monkeypatch.setitem(sys.modules, "analytics", analytics_stub)
     monkeypatch.setitem(sys.modules, "analytics.metrics_store", metrics_stub)
+    regime_store_stub = types.ModuleType("analytics.regime_performance_store")
+    regime_store_stub.RegimePerformanceStore = object
+    monkeypatch.setitem(sys.modules, "analytics.regime_performance_store", regime_store_stub)
+    metrics_aggregator_stub = types.ModuleType("analytics.metrics_aggregator")
+    metrics_aggregator_stub.record_metric = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "analytics.metrics_aggregator", metrics_aggregator_stub)
     model_store_stub = types.SimpleNamespace(save_model=lambda *a, **k: "0")
     graph_net_stub = types.SimpleNamespace(GraphNet=object)
-    monkeypatch.setitem(sys.modules, "models", types.SimpleNamespace(model_store=model_store_stub))
+    models_pkg = types.ModuleType("models")
+    models_pkg.__path__ = []
+    models_pkg.model_store = model_store_stub
+    models_pkg.graph_net = graph_net_stub
+    monkeypatch.setitem(sys.modules, "models", models_pkg)
     monkeypatch.setitem(sys.modules, "models.model_store", model_store_stub)
     monkeypatch.setitem(sys.modules, "models.graph_net", graph_net_stub)
+    ftrl_stub = types.ModuleType("models.ftrl")
+    ftrl_stub.FTRLModel = object
+    monkeypatch.setitem(sys.modules, "models.ftrl", ftrl_stub)
+    model_registry_stub = types.ModuleType("model_registry")
+    model_registry_stub.register_policy = lambda *a, **k: None
+    model_registry_stub.save_model = lambda *a, **k: None
+    model_registry_stub.get_policy_path = lambda *a, **k: str(tmp_path / "policy.zip")
+    monkeypatch.setitem(sys.modules, "model_registry", model_registry_stub)
+    event_store_stub = types.ModuleType("event_store")
+    event_store_stub.EventStore = object
+    monkeypatch.setitem(sys.modules, "event_store", event_store_stub)
     class DummyRiskEnv:
         action_space = types.SimpleNamespace(shape=(1,))
         observation_space = types.SimpleNamespace(shape=(1,))
@@ -123,7 +244,7 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
                 optimizer=types.SimpleNamespace(state_dict=lambda: {}, get_lr=lambda: 0),
             )
 
-        def learn(self, total_timesteps):
+        def learn(self, total_timesteps, **kwargs):
             pass
 
         def predict(self, obs, deterministic=True):
@@ -160,6 +281,26 @@ def test_rl_evaluation_metrics(monkeypatch, tmp_path):
     )
     monkeypatch.setitem(sys.modules, "sb3_contrib", sb3_contrib_stub)
     monkeypatch.setitem(sys.modules, "sb3_contrib.qrdqn", sb3_contrib_stub.qrdqn)
+
+    market_sim_stub = types.ModuleType("analysis.market_simulator")
+
+    class DummySimulator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def perturb(self, prices, policy, steps=10):
+            return np.asarray(list(prices))
+
+    market_sim_stub.AdversarialMarketSimulator = DummySimulator
+    market_sim_stub.generate_stress_scenarios = lambda *a, **k: []
+    monkeypatch.setitem(sys.modules, "analysis.market_simulator", market_sim_stub)
+    regime_detection_stub = types.ModuleType("analysis.regime_detection")
+    regime_detection_stub.periodic_reclassification = lambda df, **kwargs: df
+    regime_detection_stub.detect_regimes = lambda df, **kwargs: pd.Series(0, index=df.index)
+    monkeypatch.setitem(sys.modules, "analysis.regime_detection", regime_detection_stub)
+    model_card_stub = types.ModuleType("analysis.model_card")
+    model_card_stub.generate = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "analysis.model_card", model_card_stub)
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     spec = importlib.util.spec_from_file_location(
