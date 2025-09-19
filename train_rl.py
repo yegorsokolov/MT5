@@ -575,7 +575,19 @@ def self_optimize(model: object, env: object, cfg: dict) -> None:
                         pass
 
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for reinforcement learning trainers."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 Orchestrator.start()
 
@@ -584,6 +596,7 @@ Orchestrator.start()
 def main(
     rank: int = 0, world_size: int | None = None, cfg: dict | None = None
 ) -> float:
+    init_logging()
     if cfg is None:
         cfg = load_config()
     if world_size is None:
@@ -1493,6 +1506,7 @@ def main(
 
 
 def launch(cfg: dict | None = None) -> float:
+    init_logging()
     if cfg is None:
         cfg = load_config()
     curriculum_cfg = cfg.get("curriculum") if isinstance(cfg, dict) else None
@@ -1525,7 +1539,16 @@ def launch(cfg: dict | None = None) -> float:
             cfg_s["seed"] = s
             results.append(submit(main, 0, 1, cfg_s))
         return float(results[0] if results else 0.0)
-    use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
+    capabilities = getattr(monitor, "capabilities", None)
+    default_ddp = False
+    if capabilities is not None:
+        ddp_fn = getattr(capabilities, "ddp", None)
+        if callable(ddp_fn):
+            try:
+                default_ddp = bool(ddp_fn())
+            except Exception:  # pragma: no cover - defensive fallback
+                default_ddp = False
+    use_ddp = bool(cfg.get("ddp", default_ddp))
     ensure_torch_available(require_cuda=use_ddp)
     world_size = _cuda_device_count()
     if use_ddp and world_size > 1:
@@ -1536,6 +1559,7 @@ def launch(cfg: dict | None = None) -> float:
 
 
 def train_constrained(cfg: dict) -> float:
+    init_logging()
     """Train :class:`ConstrainedAgent` on a tiny synthetic environment.
 
     The routine demonstrates how risk budgets can be enforced using a primal–
@@ -1555,6 +1579,7 @@ def train_constrained(cfg: dict) -> float:
 
 
 def train_graph_rl(cfg: dict) -> float:
+    init_logging()
     """Train :class:`GraphAgent` using precomputed graphs.
 
     The implementation is intentionally lightweight and operates on synthetic
@@ -1590,6 +1615,7 @@ def train_graph_rl(cfg: dict) -> float:
 
 
 def train_hierarchical(cfg: dict) -> float:
+    init_logging()
     """Run a lightweight training loop for :class:`HierarchicalAgent`."""
 
     symbol = cfg.get("symbol", "A")
@@ -1673,6 +1699,7 @@ def eval_hierarchical(cfg: dict) -> float:
 
 
 def train_execution(cfg: dict) -> float:
+    init_logging()
     """Train an execution policy using :class:`RLExecutor`."""
     source = cfg.get("order_book_source")
     if source is None:
@@ -1832,6 +1859,7 @@ if __name__ == "__main__":
         help="Fine-tune from meta weights when regime shifts",
     )
     args = parser.parse_args()
+    init_logging()
     cfg = load_config()
     if args.strategy_config:
         path = Path(args.strategy_config)

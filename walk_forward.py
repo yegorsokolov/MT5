@@ -9,7 +9,19 @@ from backtest import run_rolling_backtest
 from backtesting.walk_forward import rolling_windows
 from log_utils import setup_logging, log_exceptions
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for walk-forward utilities."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 # default location for walk forward summary output
@@ -95,6 +107,7 @@ def walk_forward_train(
 
 @log_exceptions
 def main() -> pd.DataFrame | None:
+    init_logging()
     """Run rolling backtests for all configured symbols and log summary."""
     cfg = load_config()
 

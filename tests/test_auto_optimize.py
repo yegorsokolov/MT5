@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import contextlib
+import logging
 import types
 
 import pandas as pd
@@ -33,6 +34,11 @@ train_stub = types.ModuleType("train")
 train_stub.main = lambda *a, **k: None
 sys.modules["train"] = train_stub
 
+utils_stub = types.ModuleType("utils")
+utils_stub.load_config = lambda: {}
+utils_stub.update_config = lambda *a, **k: None
+sys.modules["utils"] = utils_stub
+
 backtest_stub = types.ModuleType("backtest")
 backtest_stub.run_backtest = lambda *a, **k: {}
 backtest_stub.run_rolling_backtest = lambda *a, **k: {}
@@ -56,6 +62,12 @@ import auto_optimize
 
 def test_auto_optimize_updates_config(monkeypatch, tmp_path):
     ensure_real_yaml()
+
+    monkeypatch.setattr(
+        auto_optimize,
+        "init_logging",
+        lambda: logging.getLogger("test_auto_optimize"),
+    )
 
     log_path = tmp_path / "hist.csv"
     monkeypatch.setattr(auto_optimize, "_LOG_PATH", log_path, raising=False)
