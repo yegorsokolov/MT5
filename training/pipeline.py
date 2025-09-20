@@ -13,6 +13,7 @@ import asyncio
 import joblib
 import pandas as pd
 import math
+import weakref
 
 try:
     import torch
@@ -146,12 +147,21 @@ def init_logging() -> logging.Logger:
     return logging.getLogger(__name__)
 
 # Track active classifiers for dynamic resizing
-_ACTIVE_CLFS: list[LGBMClassifier] = []
+_ACTIVE_CLFS: weakref.WeakSet[LGBMClassifier] = weakref.WeakSet()
 
 
 def _register_clf(clf: LGBMClassifier) -> None:
     """Keep reference to classifier for dynamic n_jobs updates."""
-    _ACTIVE_CLFS.append(clf)
+    _ACTIVE_CLFS.add(clf)
+
+
+def _prune_finished_classifiers() -> None:
+    """Drop any classifiers that are no longer strongly referenced."""
+
+    global _ACTIVE_CLFS
+    if not _ACTIVE_CLFS:
+        return
+    _ACTIVE_CLFS = weakref.WeakSet(_ACTIVE_CLFS)
 
 
 def _normalise_regime_thresholds(
@@ -182,11 +192,19 @@ def _subscribe_cpu_updates(cfg: AppConfig) -> None:
         while True:
             await q.get()
             n_jobs = cfg.get("n_jobs") or monitor.capabilities.cpus
-            for c in list(_ACTIVE_CLFS):
+            stale_seen = False
+            for c in tuple(_ACTIVE_CLFS):
+                if c is None:
+                    stale_seen = True
+                    continue
                 try:
                     c.set_params(n_jobs=n_jobs)
+                except ReferenceError:
+                    stale_seen = True
                 except Exception:
                     logger.debug("Failed to update n_jobs for classifier")
+            if stale_seen:
+                _prune_finished_classifiers()
 
     monitor.create_task(_watch())
 
@@ -1996,6 +2014,7 @@ def _run_training(
                 mlflow.end_run()
             except Exception:
                 pass
+        _prune_finished_classifiers()
     return float(base_f1)
 
 
