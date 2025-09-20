@@ -34,6 +34,22 @@ def load_api(tmp_log, monkeypatch):
     sched_mod = types.ModuleType('scheduler')
     sched_mod.start_scheduler = lambda: None
     sched_mod.stop_scheduler = lambda: None
+
+    async def async_stub(*a, **k):
+        return None
+
+    sched_mod.schedule_retrain = lambda *a, **k: None
+    sched_mod.resource_reprobe = async_stub
+    sched_mod.run_drift_detection = lambda: None
+    sched_mod.run_feature_importance_drift = lambda: None
+    sched_mod.run_change_point_detection = lambda: None
+    sched_mod.run_trade_analysis = lambda: None
+    sched_mod.run_decision_review = lambda: None
+    sched_mod.run_diagnostics = lambda: None
+    sched_mod.rebuild_news_vectors = lambda: None
+    sched_mod.update_regime_performance = lambda: None
+    sched_mod.run_backups = lambda: None
+    sched_mod.cleanup_checkpoints = lambda: None
     sys.modules['scheduler'] = sched_mod
     sys.modules['prometheus_client'] = types.SimpleNamespace(
         Counter=lambda *a, **k: None,

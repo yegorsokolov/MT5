@@ -3,7 +3,10 @@ import types
 import importlib
 import asyncio
 from pathlib import Path
-from fastapi.testclient import TestClient
+try:
+    from fastapi.testclient import TestClient
+except Exception:  # pragma: no cover - fallback when FastAPI lacks testclient
+    from starlette.testclient import TestClient  # type: ignore
 import contextlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -56,9 +59,24 @@ def load_api(tmp_log, monkeypatch):
         start_run=contextlib.nullcontext,
         log_dict=lambda *a, **k: None,
     )
+    async def async_stub(*a, **k):
+        return None
+
     sys.modules["scheduler"] = types.SimpleNamespace(
         start_scheduler=lambda *a, **k: None,
         stop_scheduler=lambda *a, **k: None,
+        schedule_retrain=lambda *a, **k: None,
+        resource_reprobe=async_stub,
+        run_drift_detection=lambda *a, **k: None,
+        run_feature_importance_drift=lambda *a, **k: None,
+        run_change_point_detection=lambda *a, **k: None,
+        run_trade_analysis=lambda *a, **k: None,
+        run_decision_review=lambda *a, **k: None,
+        run_diagnostics=lambda *a, **k: None,
+        rebuild_news_vectors=lambda *a, **k: None,
+        update_regime_performance=lambda *a, **k: None,
+        run_backups=lambda *a, **k: None,
+        cleanup_checkpoints=lambda *a, **k: None,
     )
     mod = importlib.reload(importlib.import_module("remote_api"))
     mod.init_remote_api()
