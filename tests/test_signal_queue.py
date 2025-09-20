@@ -102,6 +102,13 @@ scheduler_mod.start_scheduler = lambda: None
 import risk_manager
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_fallback_loop():
+    signal_queue._shutdown_fallback_loop()
+    yield
+    signal_queue._shutdown_fallback_loop()
+
+
 class _DummyBus:
     def __init__(self) -> None:
         self.published: list[tuple[str, object]] = []
@@ -121,8 +128,6 @@ def test_publish_dataframe_sync_reuses_fallback_loop(monkeypatch):
     monkeypatch.setattr(signal_queue, "record_event", _stub_event)
     monkeypatch.setattr(signal_queue.pipeline_anomaly, "validate", _validate_stub)
 
-    monkeypatch.setattr(signal_queue, "_FALLBACK_LOOP", None)
-
     created_loops: list[asyncio.AbstractEventLoop] = []
     real_new_loop = asyncio.new_event_loop
 
@@ -133,13 +138,8 @@ def test_publish_dataframe_sync_reuses_fallback_loop(monkeypatch):
 
     monkeypatch.setattr(signal_queue.asyncio, "new_event_loop", capture_loop)
 
-    try:
-        signal_queue.publish_dataframe(bus, df)
-        signal_queue.publish_dataframe(bus, df)
-    finally:
-        for loop in created_loops:
-            loop.close()
-        setattr(signal_queue, "_FALLBACK_LOOP", None)
+    signal_queue.publish_dataframe(bus, df)
+    signal_queue.publish_dataframe(bus, df)
 
     assert len(created_loops) == 1
     assert len(bus.published) == 2
@@ -226,7 +226,6 @@ def test_publish_dataframe_raw_format(monkeypatch):
 
     monkeypatch.setattr(signal_queue, "record_event", _stub_event)
     monkeypatch.setattr(signal_queue.pipeline_anomaly, "validate", _validate_stub)
-    monkeypatch.setattr(signal_queue, "_FALLBACK_LOOP", None)
 
     signal_queue.publish_dataframe(bus, df, fmt="raw")
 
@@ -235,10 +234,6 @@ def test_publish_dataframe_raw_format(monkeypatch):
     assert topic == signal_queue.Topics.SIGNALS
     assert isinstance(payload, dict)
     assert payload["prob"] == 0.11
-    loop = signal_queue._FALLBACK_LOOP
-    if loop is not None:
-        loop.close()
-        setattr(signal_queue, "_FALLBACK_LOOP", None)
 
 
 def test_publish_and_iter():

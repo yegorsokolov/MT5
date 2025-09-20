@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
-from typing import Any, AsyncGenerator, Dict
-
 import logging
+import threading
+from typing import Any, AsyncGenerator, Dict
 import pandas as pd
 import numpy as np
 
@@ -24,6 +25,9 @@ except Exception:  # pragma: no cover - residual stacking is optional
 _STACKER_CACHE: Dict[str, Any] = {}
 
 _FALLBACK_LOOP: asyncio.AbstractEventLoop | None = None
+_FALLBACK_THREAD: threading.Thread | None = None
+_FALLBACK_LOOP_LOCK = threading.Lock()
+_FALLBACK_SHUTDOWN_REGISTERED = False
 
 logger = logging.getLogger(__name__)
 
@@ -164,11 +168,98 @@ def _deserialise_message(msg: Any, fmt: str) -> Dict[str, Any] | Any | None:
     raise ValueError(f"Unsupported signal format: {fmt}")
 
 
+def _run_loop_forever(loop: asyncio.AbstractEventLoop, ready: threading.Event) -> None:
+    asyncio.set_event_loop(loop)
+    ready.set()
+    loop.run_forever()
+
+
+def _ensure_shutdown_registered() -> None:
+    global _FALLBACK_SHUTDOWN_REGISTERED
+    if not _FALLBACK_SHUTDOWN_REGISTERED:
+        atexit.register(_shutdown_fallback_loop)
+        _FALLBACK_SHUTDOWN_REGISTERED = True
+
+
 def _get_fallback_loop() -> asyncio.AbstractEventLoop:
-    global _FALLBACK_LOOP
-    if _FALLBACK_LOOP is None or _FALLBACK_LOOP.is_closed():
-        _FALLBACK_LOOP = asyncio.new_event_loop()
-    return _FALLBACK_LOOP
+    global _FALLBACK_LOOP, _FALLBACK_THREAD
+
+    ready: threading.Event | None = None
+    loop: asyncio.AbstractEventLoop | None
+    thread: threading.Thread | None
+    with _FALLBACK_LOOP_LOCK:
+        loop = _FALLBACK_LOOP
+        thread = _FALLBACK_THREAD
+
+        if loop is not None:
+            if loop.is_closed():
+                loop = None
+                thread = None
+                _FALLBACK_LOOP = None
+                _FALLBACK_THREAD = None
+            elif thread is None or not thread.is_alive():
+                try:
+                    loop.close()
+                except RuntimeError:
+                    pass
+                loop = None
+                thread = None
+                _FALLBACK_LOOP = None
+                _FALLBACK_THREAD = None
+
+        if loop is None:
+            loop = asyncio.new_event_loop()
+            ready = threading.Event()
+            thread = threading.Thread(
+                target=_run_loop_forever,
+                args=(loop, ready),
+                name="signal-queue-fallback-loop",
+                daemon=True,
+            )
+            _FALLBACK_LOOP = loop
+            _FALLBACK_THREAD = thread
+            _ensure_shutdown_registered()
+            thread.start()
+
+    if ready is not None:
+        ready.wait()
+
+    if loop is None:
+        raise RuntimeError("Failed to initialize fallback event loop")
+
+    return loop
+
+
+def _shutdown_fallback_loop() -> None:
+    global _FALLBACK_LOOP, _FALLBACK_THREAD
+
+    with _FALLBACK_LOOP_LOCK:
+        loop = _FALLBACK_LOOP
+        thread = _FALLBACK_THREAD
+        _FALLBACK_LOOP = None
+        _FALLBACK_THREAD = None
+
+    if loop is None:
+        return
+
+    should_close = True
+
+    if thread is not None and thread.is_alive():
+        if not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass
+        thread.join(timeout=5)
+        if thread.is_alive():
+            logger.warning("Fallback event loop thread did not terminate cleanly")
+            should_close = False
+
+    if should_close and not loop.is_closed():
+        try:
+            loop.close()
+        except RuntimeError:
+            logger.exception("Failed to close fallback event loop cleanly")
 
 
 async def publish_rows(
@@ -202,7 +293,8 @@ def publish_dataframe(bus: MessageBus, df: pd.DataFrame, fmt: str = "json") -> N
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = _get_fallback_loop()
-        loop.run_until_complete(coro)
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        future.result()
     else:
         task = asyncio.create_task(coro)
         task.add_done_callback(_log_task_exception)
