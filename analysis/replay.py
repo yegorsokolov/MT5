@@ -407,9 +407,10 @@ async def watch_upgrades(threshold: float = 0.05) -> None:
 
     from model_registry import ModelRegistry
     from utils.resource_monitor import monitor
-    from features import report_status
+    from features import report_status, start_capability_watch
 
     monitor.start()
+    start_capability_watch()
     registry = ModelRegistry(auto_refresh=False)
     queue = monitor.subscribe()
     prev_models: Dict[str, str] = {

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from functools import wraps
 from importlib.metadata import entry_points
+import threading
 
 # Re-export the high level feature construction helper so consumers like RL
 # environments can simply import ``features.make_features`` without depending on
@@ -207,6 +208,10 @@ _STATUS: Dict[str, object] = {}
 # Output directory for dashboard consumption
 _REPORT_DIR = Path("reports/feature_status")
 
+# Synchronisation primitives for capability watcher initialisation
+_capability_watch_started = False
+_capability_watch_lock = threading.Lock()
+
 
 def _meets_requirements(spec: FeatureSpec, caps: ResourceCapabilities) -> bool:
     return (
@@ -329,14 +334,41 @@ async def _watch_capabilities(queue: asyncio.Queue[str]) -> None:
         _update_status()
 
 
-# Initialise on import and subscribe to capability changes when possible
+def start_capability_watch() -> None:
+    """Ensure feature availability reacts to resource capability changes."""
+
+    if os.getenv("MT5_DOCS_BUILD"):
+        return
+
+    _update_status()
+
+    global _capability_watch_started
+    if _capability_watch_started:
+        return
+
+    with _capability_watch_lock:
+        if _capability_watch_started:
+            return
+
+        subscribe = getattr(monitor, "subscribe", None)
+        create_task = getattr(monitor, "create_task", None)
+        if not callable(subscribe) or not callable(create_task):
+            logger.debug("Resource monitor does not expose async helpers; skipping watch")
+            return
+
+        try:
+            queue = subscribe()
+            create_task(_watch_capabilities(queue))
+        except Exception:  # pragma: no cover - defensive against loop absence
+            logger.debug("Failed to start capability watcher", exc_info=True)
+            return
+
+        _capability_watch_started = True
+
+
+# Initialise on import without subscribing to avoid side effects
 if not os.getenv("MT5_DOCS_BUILD"):
     _update_status()
-    try:
-        queue = monitor.subscribe()
-        monitor.create_task(_watch_capabilities(queue))
-    except Exception:  # pragma: no cover - no running loop during import
-        pass
 
 
 __all__ = [
@@ -347,4 +379,5 @@ __all__ = [
     "make_features",
     "validate_module",
     "validator",
+    "start_capability_watch",
 ]
