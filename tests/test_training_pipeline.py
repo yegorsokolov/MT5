@@ -272,6 +272,7 @@ def test_run_training_ends_mlflow_on_exception(monkeypatch):
     fake_features = types.ModuleType("features")
     fake_features.get_feature_pipeline = lambda *args, **kwargs: []
     fake_features.make_features = lambda *args, **kwargs: None
+    fake_features.start_capability_watch = lambda: None
     fake_features.__path__ = []  # mark as package for submodule imports
     monkeypatch.setitem(sys.modules, "features", fake_features)
 
