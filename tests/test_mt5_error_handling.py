@@ -84,6 +84,8 @@ def test_order_send_raises_on_failure(load_mt5_direct):
     assert "volume too high" in str(err)
     assert err.details["last_error_code"] == 5001
     assert err.details["request"] == request
+    assert "resolution" in err.details
+    assert "volume" in " ".join(err.details["resolution"]["steps"])
 
 
 def test_symbol_select_failure_raises(load_mt5_direct):
@@ -102,6 +104,7 @@ def test_symbol_select_failure_raises(load_mt5_direct):
     err = excinfo.value
     assert err.code == 4301
     assert "EURUSD" in str(err)
+    assert "resolution" in err.details
 
 
 def test_copy_ticks_from_none_raises(load_mt5_direct):
@@ -120,3 +123,4 @@ def test_copy_ticks_from_none_raises(load_mt5_direct):
     err = excinfo.value
     assert err.code == 4401
     assert "no data" in str(err)
+    assert "resolution" in err.details
