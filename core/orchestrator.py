@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover - fallback stub
 
 from utils import load_config
 from utils.resource_monitor import ResourceMonitor, monitor
+from features import start_capability_watch
 import model_registry
 import plugins  # noqa: F401 - imported for side effects
 import state_manager
@@ -177,6 +178,7 @@ class Orchestrator:
             except Exception:
                 self.logger.exception("Scheduler start failed")
         self.monitor.start()
+        start_capability_watch()
         self.registry.refresh()
         state_sync.pull_event_store()
         self._resume()
