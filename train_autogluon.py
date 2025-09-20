@@ -9,12 +9,25 @@ from data.history import save_history_parquet, load_history_config
 from data.features import make_features, train_test_split
 from log_utils import setup_logging, log_exceptions
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for AutoGluon training."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 
 @log_exceptions
 def main():
+    init_logging()
     cfg = load_config()
     seed = cfg.get("seed", 42)
     random.seed(seed)

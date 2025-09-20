@@ -65,8 +65,13 @@ PluginTimeoutError = _pr.PluginTimeoutError
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_MEM_MB: float | None = None
 
-setup_logging()
-logger = logging.getLogger(__name__)
+def get_logger() -> logging.Logger:
+    """Return a module-scoped logger without reconfiguring handlers."""
+
+    return logging.getLogger(__name__)
+
+
+logger = get_logger()
 
 
 # ---------------------------------------------------------------------------

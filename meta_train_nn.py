@@ -22,8 +22,19 @@ from data.features import (
 )
 from log_utils import setup_logging, log_exceptions
 
+_LOGGING_INITIALIZED = False
 
-setup_logging()
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for meta-training routines."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -165,6 +176,7 @@ def _features(df: pd.DataFrame) -> list[str]:
 
 @log_exceptions
 def main() -> None:  # pragma: no cover - heavy compute
+    init_logging()
     cfg = load_config()
     seed = cfg.get("seed", 42)
     random.seed(seed)

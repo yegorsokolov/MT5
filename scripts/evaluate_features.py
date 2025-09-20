@@ -7,7 +7,19 @@ from log_utils import setup_logging, log_exceptions
 from utils import load_config, update_config
 from backtest import run_rolling_backtest
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for feature evaluation runs."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 _LOG_FILE = Path(__file__).resolve().parent.parent / "logs" / "feature_eval.csv"
@@ -21,6 +33,7 @@ def _feature_flags(cfg: dict) -> list[str]:
 
 @log_exceptions
 def main() -> None:
+    init_logging()
     cfg = load_config()
     flags = _feature_flags(cfg)
     base_metrics = run_rolling_backtest(cfg)
