@@ -10,7 +10,7 @@ from fastapi import (
 )
 from fastapi.security.api_key import APIKeyHeader
 from subprocess import Popen
-from typing import Dict, Any, Set, Optional, Deque, Awaitable
+from typing import Dict, Any, Set, Optional, Deque, Awaitable, Callable
 import asyncio
 from pydantic import BaseModel
 import os
@@ -43,7 +43,22 @@ from fastapi.responses import Response
 from dataclasses import dataclass, field
 import risk_manager as risk_manager_module
 from risk_manager import risk_manager
-from scheduler import start_scheduler, stop_scheduler
+from scheduler import (
+    start_scheduler,
+    stop_scheduler,
+    schedule_retrain,
+    resource_reprobe,
+    run_drift_detection,
+    run_feature_importance_drift,
+    run_change_point_detection,
+    cleanup_checkpoints,
+    rebuild_news_vectors,
+    run_decision_review,
+    run_trade_analysis,
+    run_diagnostics,
+    update_regime_performance,
+    run_backups,
+)
 
 try:
     from utils.resource_monitor import ResourceMonitor
@@ -77,6 +92,15 @@ class ConfigUpdate(BaseModel):
     key: str
     value: Any
     reason: str
+
+
+class ControlRequest(BaseModel):
+    task: str
+
+
+class RetrainRequest(BaseModel):
+    model: str = "classic"
+    update_hyperparams: bool = False
 
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -116,6 +140,28 @@ BOT_CRASH_WINDOW = max(
     float(os.getenv("BOT_CRASH_WINDOW", "600") or 600), BOT_BACKOFF_BASE_SECONDS
 )
 RESTART_HISTORY_LIMIT = max(BOT_MAX_CRASHES * 2, 10)
+
+
+async def _run_sync(func: Callable[[], None]) -> None:
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, func)
+
+
+CONTROL_TASKS: Dict[str, Callable[[], Awaitable[Any]]] = {
+    "cleanup_checkpoints": lambda: _run_sync(cleanup_checkpoints),
+    "run_drift_detection": lambda: _run_sync(run_drift_detection),
+    "run_feature_importance_drift": lambda: _run_sync(run_feature_importance_drift),
+    "run_change_point_detection": lambda: _run_sync(run_change_point_detection),
+    "run_trade_analysis": lambda: _run_sync(run_trade_analysis),
+    "run_decision_review": lambda: _run_sync(run_decision_review),
+    "run_diagnostics": lambda: _run_sync(run_diagnostics),
+    "rebuild_news_vectors": lambda: _run_sync(rebuild_news_vectors),
+    "update_regime_performance": lambda: _run_sync(update_regime_performance),
+    "run_backups": lambda: _run_sync(run_backups),
+}
+CONTROL_TASKS["resource_reprobe"] = resource_reprobe
+
+RETRAIN_MODELS = ("classic", "nn", "rl")
 
 
 def _start_risk_background_services() -> None:
@@ -577,6 +623,49 @@ async def push_metrics(data: Dict[str, Any], _: None = Depends(authorize)):
 async def get_metrics() -> Response:
     """Expose Prometheus metrics."""
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/controls")
+async def list_controls(_: None = Depends(authorize)):
+    """Return available manual control tasks."""
+
+    return {
+        "tasks": sorted(CONTROL_TASKS.keys()),
+        "retrain_models": sorted(RETRAIN_MODELS),
+    }
+
+
+@app.post("/controls/run")
+async def run_control(req: ControlRequest, _: None = Depends(authorize)):
+    """Execute a manual control task."""
+
+    func = CONTROL_TASKS.get(req.task)
+    if func is None:
+        raise HTTPException(status_code=404, detail="Unknown control task")
+    try:
+        await func()
+    except Exception as exc:
+        logger.exception("Manual control %s failed", req.task)
+        raise HTTPException(status_code=500, detail=f"Task {req.task} failed: {exc}") from exc
+    return {"status": "ok", "task": req.task}
+
+
+@app.post("/controls/retrain")
+async def schedule_manual_retrain(req: RetrainRequest, _: None = Depends(authorize)):
+    """Schedule a manual model retraining."""
+
+    model = (req.model or "classic").strip()
+    if not model:
+        model = "classic"
+    normalised = model.lower()
+    if normalised not in {m.lower() for m in RETRAIN_MODELS}:
+        raise HTTPException(status_code=400, detail="Unsupported model")
+    try:
+        schedule_retrain(model=normalised, update_hyperparams=req.update_hyperparams)
+    except Exception as exc:
+        logger.exception("Manual retrain scheduling failed for %s", normalised)
+        raise HTTPException(status_code=500, detail=f"Retrain scheduling failed: {exc}") from exc
+    return {"status": "scheduled", "model": normalised}
 
 
 @app.get("/risk/status")
