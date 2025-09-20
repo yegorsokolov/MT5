@@ -93,6 +93,7 @@ def load_api(tmp_log, monkeypatch):
     mlflow_mod.__spec__ = importlib.machinery.ModuleSpec('mlflow', loader=None)
     sys.modules['mlflow'] = mlflow_mod
     mod = importlib.reload(importlib.import_module('remote_api'))
+    mod.init_logging()
     mod.init_remote_api()
     mod._logs = logs
     return mod
