@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import logging
 
 
 class DummyModel:
@@ -60,8 +61,15 @@ def test_eval_reports_tradeoffs(monkeypatch, caplog):
     monkeypatch.setitem(sys.modules, "data.features", features_stub)
 
     monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace())
+    log_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    test_logger = logging.getLogger("test_eval_rl")
     log_utils_stub = types.ModuleType("log_utils")
-    log_utils_stub.setup_logging = lambda *a, **k: None
+
+    def _setup_logging(*args, **kwargs):
+        log_calls.append((args, kwargs))
+        return test_logger
+
+    log_utils_stub.setup_logging = _setup_logging
     log_utils_stub.log_exceptions = lambda f: f
     metrics_stub = types.ModuleType("metrics")
     metrics_stub.ERROR_COUNT = metrics_stub.TRADE_COUNT = object()
@@ -70,11 +78,14 @@ def test_eval_reports_tradeoffs(monkeypatch, caplog):
 
     import eval_rl
 
+    assert not log_calls
+
     model_path = Path(eval_rl.__file__).resolve().parent / "model_rl.zip"
     model_path.touch()
 
     with caplog.at_level("INFO"):
         eval_rl.main()
+    assert len(log_calls) == 1
     assert "return_total" in caplog.text
     assert "risk_total" in caplog.text
     assert "cost_total" in caplog.text

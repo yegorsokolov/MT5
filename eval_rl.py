@@ -20,7 +20,19 @@ from train_rl import TradingEnv, DiscreteTradingEnv
 from rl.multi_objective import pareto_frontier
 from log_utils import setup_logging, log_exceptions
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for RL evaluation."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -79,6 +91,7 @@ def feature_list(df: pd.DataFrame) -> List[str]:
 
 @log_exceptions
 def main() -> None:
+    init_logging()
     cfg = load_config()
     root = Path(__file__).resolve().parent
     df = load_dataset(cfg, root)
