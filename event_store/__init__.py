@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sqlite3
 import json
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 import threading
@@ -25,6 +26,8 @@ else:  # pragma: no cover - optional dependency
 
 class EventStore:
     """Simple append-only event store backed by SQLite."""
+
+    _FETCH_BATCH_SIZE = 1000
 
     def __init__(
         self,
@@ -126,21 +129,32 @@ class EventStore:
 
     def iter_events(self, event_type: Optional[str] = None) -> Iterable[Dict[str, Any]]:
         """Yield events in order, optionally filtered by type."""
+        query = "SELECT timestamp, type, payload FROM events ORDER BY id"
+        params: tuple[Any, ...] = ()
+        if event_type:
+            query = (
+                "SELECT timestamp, type, payload FROM events WHERE type=? ORDER BY id"
+            )
+            params = (event_type,)
+
         with self.lock:
-            cur = self.conn.cursor()
-            try:
-                if event_type:
-                    cur.execute(
-                        "SELECT timestamp, type, payload FROM events WHERE type=? ORDER BY id",
-                        (event_type,),
-                    )
-                else:
-                    cur.execute("SELECT timestamp, type, payload FROM events ORDER BY id")
-                rows = cur.fetchall()
-            finally:
-                cur.close()
-        for ts, et, pl in rows:
-            yield {"timestamp": ts, "type": et, "payload": json.loads(pl)}
+            cursor = self.conn.cursor()
+
+        with closing(cursor) as cur:
+            cur.arraysize = self._FETCH_BATCH_SIZE
+            with self.lock:
+                cur.execute(query, params)
+            while True:
+                with self.lock:
+                    rows = cur.fetchmany(self._FETCH_BATCH_SIZE)
+                if not rows:
+                    break
+                for ts, et, pl in rows:
+                    yield {
+                        "timestamp": ts,
+                        "type": et,
+                        "payload": json.loads(pl),
+                    }
 
     def close(self) -> None:  # pragma: no cover - trivial
         with self.lock:
