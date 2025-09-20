@@ -79,8 +79,21 @@ class ConfigUpdate(BaseModel):
     reason: str
 
 
+logger: logging.Logger = logging.getLogger(__name__)
+_logging_initialized: bool = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise application logging once and return the configured logger."""
+
+    global logger, _logging_initialized
+    if not _logging_initialized:
+        logger = setup_logging()
+        _logging_initialized = True
+    return logger
+
+
 app = FastAPI(title="MT5 Bot Controller")
-logger = setup_logging()
 
 MAX_RSS_MB = float(os.getenv("MAX_RSS_MB", "0") or 0)
 MAX_CPU_PCT = float(os.getenv("MAX_CPU_PCT", "0") or 0)
@@ -194,6 +207,8 @@ def init_remote_api(
     audit_secret: Optional[str] = None,
 ) -> None:
     """Resolve and cache secrets required by the API."""
+
+    init_logging()
 
     global API_KEY, AUDIT_SECRET
 
@@ -660,6 +675,7 @@ async def bot_logs(bot_id: str, lines: int = 50, _: None = Depends(authorize)):
 
 
 if __name__ == "__main__":
+    init_logging()
     if not CERT_FILE.exists() or not KEY_FILE.exists():
         raise RuntimeError("SSL certificate or key file missing")
     uvicorn.run(

@@ -69,6 +69,7 @@ def load_api(tmp_path, monkeypatch):
     import prometheus_client
     sys.modules["prometheus_client"] = prometheus_client
     mod = importlib.reload(importlib.import_module("remote_api"))
+    mod.init_logging()
     mod.init_remote_api()
     mod.AUDIT_LOG = tmp_path / "audit.csv"
     for h in list(mod.audit_logger.handlers):
