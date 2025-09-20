@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 
@@ -18,6 +19,17 @@ def _study(storage: Path, name: str) -> optuna.Study:
         storage=storage_url,
         load_if_exists=True,
     )
+
+
+@contextmanager
+def _mlflow_run(cfg: dict, run_name: str = "tuning") -> None:
+    """Context manager to ensure MLflow runs are always closed."""
+
+    mlflow.start_run(run_name, cfg)
+    try:
+        yield
+    finally:
+        mlflow.end_run()
 
 
 def tune_lgbm(cfg: dict, n_trials: int = 20) -> None:
@@ -46,11 +58,10 @@ def tune_lgbm(cfg: dict, n_trials: int = 20) -> None:
         cfg_trial.update(params)
         return float(train_main(cfg_trial))
 
-    mlflow.start_run("tuning", cfg)
-    study.optimize(objective, n_trials=n_trials)
-    mlflow.log_params(study.best_params)
-    mlflow.log_metric("best_f1", study.best_value)
-    mlflow.end_run()
+    with _mlflow_run(cfg):
+        study.optimize(objective, n_trials=n_trials)
+        mlflow.log_params(study.best_params)
+        mlflow.log_metric("best_f1", study.best_value)
 
 
 def tune_transformer(cfg: dict, n_trials: int = 20) -> None:
@@ -72,11 +83,10 @@ def tune_transformer(cfg: dict, n_trials: int = 20) -> None:
         cfg_trial["ddp"] = False
         return float(nn_launch(cfg_trial))
 
-    mlflow.start_run("tuning", cfg)
-    study.optimize(objective, n_trials=n_trials)
-    mlflow.log_params(study.best_params)
-    mlflow.log_metric("best_accuracy", study.best_value)
-    mlflow.end_run()
+    with _mlflow_run(cfg):
+        study.optimize(objective, n_trials=n_trials)
+        mlflow.log_params(study.best_params)
+        mlflow.log_metric("best_accuracy", study.best_value)
 
 
 def tune_rl(cfg: dict, n_trials: int = 20) -> None:
@@ -97,11 +107,10 @@ def tune_rl(cfg: dict, n_trials: int = 20) -> None:
         cfg_trial["ddp"] = False
         return float(rl_launch(cfg_trial))
 
-    mlflow.start_run("tuning", cfg)
-    study.optimize(objective, n_trials=n_trials)
-    mlflow.log_params(study.best_params)
-    mlflow.log_metric("best_return", study.best_value)
-    mlflow.end_run()
+    with _mlflow_run(cfg):
+        study.optimize(objective, n_trials=n_trials)
+        mlflow.log_params(study.best_params)
+        mlflow.log_metric("best_return", study.best_value)
 
 
 __all__ = ["tune_lgbm", "tune_transformer", "tune_rl"]
