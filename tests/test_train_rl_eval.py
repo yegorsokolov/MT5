@@ -1,5 +1,6 @@
 import types
 import sys
+import logging
 
 import importlib.util
 from pathlib import Path
@@ -50,8 +51,15 @@ def test_eval_rl_compute_metrics_constant_returns(monkeypatch):
     rl_stub.__path__ = []
     monkeypatch.setitem(sys.modules, "rl", rl_stub)
     monkeypatch.setitem(sys.modules, "rl.multi_objective", rl_multi)
+    log_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    test_logger = logging.getLogger("test_eval_rl")
     log_utils_stub = types.ModuleType("log_utils")
-    log_utils_stub.setup_logging = lambda: None
+
+    def _setup_logging(*args, **kwargs):
+        log_calls.append((args, kwargs))
+        return test_logger
+
+    log_utils_stub.setup_logging = _setup_logging
     log_utils_stub.log_exceptions = lambda f: f
     monkeypatch.setitem(sys.modules, "log_utils", log_utils_stub)
 
@@ -61,6 +69,8 @@ def test_eval_rl_compute_metrics_constant_returns(monkeypatch):
     )
     eval_rl = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(eval_rl)
+
+    assert not log_calls
 
     returns = pd.Series([0.0] * 10)
     metrics = eval_rl.compute_metrics(returns)

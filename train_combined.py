@@ -29,7 +29,19 @@ from data.features import (
 )
 from log_utils import setup_logging, log_exceptions
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for the combined training pipeline."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 from train_meta import load_symbol_data, train_base_model, train_meta_network
 from train_rl import TradingEnv, DiscreteTradingEnv
@@ -272,6 +284,7 @@ def evaluate_filters(df: pd.DataFrame, cfg: dict, root: Path) -> List[str]:
 
 @log_exceptions
 def main() -> None:
+    init_logging()
     cfg = load_config()
     seed = cfg.get("seed", 42)
     random.seed(seed)

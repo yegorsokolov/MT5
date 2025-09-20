@@ -22,7 +22,19 @@ from git.exc import GitCommandError
 
 from log_utils import setup_logging, log_exceptions
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for artifact synchronisation."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 REPO_PATH = Path(__file__).resolve().parents[1]
@@ -57,6 +69,7 @@ def _push_with_token(repo: Repo) -> None:
 def sync_artifacts() -> None:
     """Commit and push logs, checkpoints and configuration files."""
 
+    init_logging()
     repo = Repo(REPO_PATH)
 
     paths = [LOG_DIR, CHECKPOINT_DIR, *CONFIG_FILES]
