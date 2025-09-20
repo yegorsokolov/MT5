@@ -1,9 +1,10 @@
+import importlib
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import contextlib
 import logging
 import types
 
@@ -11,6 +12,92 @@ import pandas as pd
 import yaml
 
 from tests.yaml_helpers import ensure_real_yaml
+
+MLFLOW_STATE: dict[str, Any] = {}
+
+
+def _reset_mlflow_state() -> None:
+    MLFLOW_STATE.clear()
+    MLFLOW_STATE.update(
+        start_calls=0,
+        end_calls=0,
+        tracking_uri=None,
+        experiment=None,
+        experiments=[],
+        active=None,
+        params=[],
+        metrics=[],
+        dicts=[],
+    )
+
+
+_reset_mlflow_state()
+
+
+def _mlflow_set_tracking_uri(uri: str) -> None:
+    MLFLOW_STATE["tracking_uri"] = uri
+
+
+def _mlflow_set_experiment(name: str) -> None:
+    MLFLOW_STATE["experiment"] = name
+    MLFLOW_STATE.setdefault("experiments", []).append(name)
+
+
+def _mlflow_start_run():
+    if MLFLOW_STATE["active"] is not None:
+        raise RuntimeError("nested run")
+    MLFLOW_STATE["start_calls"] += 1
+    MLFLOW_STATE["active"] = object()
+    return None
+
+
+def _mlflow_end_run() -> None:
+    if MLFLOW_STATE["active"] is not None:
+        MLFLOW_STATE["end_calls"] += 1
+        MLFLOW_STATE["active"] = None
+
+
+def _mlflow_active_run():
+    return MLFLOW_STATE["active"]
+
+
+def _mlflow_log_params(params):
+    MLFLOW_STATE.setdefault("params", []).append(dict(params))
+
+
+def _mlflow_log_param(key, value):
+    MLFLOW_STATE.setdefault("params", []).append({key: value})
+
+
+def _mlflow_log_metrics(metrics):
+    MLFLOW_STATE.setdefault("metrics", []).append(dict(metrics))
+
+
+def _mlflow_log_metric(key, value, step=None):
+    record = {key: value}
+    if step is not None:
+        record["step"] = step
+    MLFLOW_STATE.setdefault("metrics", []).append(record)
+
+
+def _mlflow_log_dict(payload, name):
+    MLFLOW_STATE.setdefault("dicts", []).append((payload, name))
+
+
+mlflow_stub = types.ModuleType("mlflow")
+mlflow_stub.set_tracking_uri = _mlflow_set_tracking_uri
+mlflow_stub.set_experiment = _mlflow_set_experiment
+mlflow_stub.start_run = _mlflow_start_run
+mlflow_stub.end_run = _mlflow_end_run
+mlflow_stub.active_run = _mlflow_active_run
+mlflow_stub.log_param = _mlflow_log_param
+mlflow_stub.log_params = _mlflow_log_params
+mlflow_stub.log_metric = _mlflow_log_metric
+mlflow_stub.log_metrics = _mlflow_log_metrics
+mlflow_stub.log_dict = _mlflow_log_dict
+mlflow_stub.log_artifact = lambda *a, **k: None
+mlflow_stub.log_artifacts = lambda *a, **k: None
+sys.modules["mlflow"] = mlflow_stub
 
 scipy_stats_stub = types.ModuleType("scipy.stats")
 
@@ -37,6 +124,8 @@ sys.modules["train"] = train_stub
 utils_stub = types.ModuleType("utils")
 utils_stub.load_config = lambda: {}
 utils_stub.update_config = lambda *a, **k: None
+utils_stub.PROJECT_ROOT = Path.cwd()
+utils_stub.sanitize_config = lambda cfg, **_: cfg
 sys.modules["utils"] = utils_stub
 
 backtest_stub = types.ModuleType("backtest")
@@ -49,19 +138,18 @@ log_utils_stub.setup_logging = lambda *a, **k: None
 log_utils_stub.log_exceptions = lambda func: func
 sys.modules["log_utils"] = log_utils_stub
 
-sys.modules["mlflow"] = types.SimpleNamespace(
-    set_experiment=lambda *a, **k: None,
-    start_run=lambda: contextlib.nullcontext(),
-    log_params=lambda *a, **k: None,
-    log_metrics=lambda *a, **k: None,
-)
 sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=object)
+
+import analytics.mlflow_client as mlflow_client
+
+importlib.reload(mlflow_client)
 
 import auto_optimize
 
 
 def test_auto_optimize_updates_config(monkeypatch, tmp_path):
     ensure_real_yaml()
+    _reset_mlflow_state()
 
     monkeypatch.setattr(
         auto_optimize,
@@ -178,18 +266,6 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr(auto_optimize.optuna, "create_study", lambda **_: DummyStudy())
 
-    class DummyRun:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(auto_optimize.mlflow, "set_experiment", lambda *_: None)
-    monkeypatch.setattr(auto_optimize.mlflow, "start_run", lambda: DummyRun())
-    monkeypatch.setattr(auto_optimize.mlflow, "log_params", lambda params: None)
-    monkeypatch.setattr(auto_optimize.mlflow, "log_metrics", lambda metrics: None)
-
     auto_optimize.main()
 
     assert log_path.exists()
@@ -205,4 +281,101 @@ def test_auto_optimize_updates_config(monkeypatch, tmp_path):
     assert cfg_new["rl_risk_penalty"] == 0.15
     # rl_max_position update should have been blocked
     assert cfg_new["rl_max_position"] == 1.0
+
+
+def test_auto_optimize_uses_single_mlflow_run(monkeypatch, tmp_path):
+    ensure_real_yaml()
+    _reset_mlflow_state()
+
+    monkeypatch.setattr(
+        auto_optimize,
+        "init_logging",
+        lambda: logging.getLogger("test_auto_optimize_single_run"),
+    )
+
+    log_path = tmp_path / "hist.csv"
+    monkeypatch.setattr(auto_optimize, "_LOG_PATH", log_path, raising=False)
+
+    base_cfg = {
+        "threshold": 0.55,
+        "trailing_stop_pips": 20,
+        "rsi_buy": 55,
+        "rl_max_position": 1.0,
+        "rl_risk_penalty": 0.1,
+        "rl_transaction_cost": 0.0001,
+        "rl_max_kl": 0.01,
+        "backtest_window_months": 6,
+    }
+
+    def load_config_stub():
+        return dict(base_cfg)
+
+    monkeypatch.setattr(auto_optimize, "load_config", load_config_stub)
+    monkeypatch.setattr(auto_optimize, "update_config", lambda *a, **k: None)
+
+    def training_stub():
+        started = auto_optimize.mlflow_client.start_run("training", {"stage": "train"})
+        if started:
+            auto_optimize.mlflow_client.end_run()
+
+    monkeypatch.setattr(auto_optimize, "train_model", training_stub)
+
+    base_metrics = {"sharpe": 0.1}
+    base_returns = pd.Series([0.0, 0.0])
+    best_metrics = {"sharpe": 0.2}
+    best_returns = pd.Series([0.2, 0.2])
+
+    def fake_backtest(cfg, return_returns=False):
+        if cfg.get("threshold") == base_cfg["threshold"]:
+            if return_returns:
+                return base_metrics, base_returns
+            return base_metrics
+        if return_returns:
+            return best_metrics, best_returns
+        return best_metrics
+
+    monkeypatch.setattr(auto_optimize, "run_backtest", fake_backtest)
+
+    def fake_cv(cfg):
+        if cfg.get("threshold") == base_cfg["threshold"]:
+            return {"avg_sharpe": 0.5}
+        return {"avg_sharpe": 1.5}
+
+    monkeypatch.setattr(auto_optimize, "run_rolling_backtest", fake_cv)
+    monkeypatch.setattr(
+        auto_optimize,
+        "ttest_ind",
+        lambda *a, **k: types.SimpleNamespace(pvalue=0.01),
+    )
+
+    class DummyTrial:
+        params = {
+            "threshold": 0.6,
+            "trailing_stop_pips": 15,
+            "rsi_buy": 60,
+            "rl_max_position": 1.5,
+            "rl_risk_penalty": 0.15,
+            "rl_transaction_cost": 0.0002,
+            "rl_max_kl": 0.02,
+            "backtest_window_months": 6,
+        }
+
+        def suggest_float(self, name, low, high):
+            return self.params[name]
+
+        def suggest_int(self, name, low, high):
+            return self.params[name]
+
+    class DummyStudy:
+        def optimize(self, func, n_trials, **kwargs):
+            for _ in range(n_trials):
+                func(DummyTrial())
+
+    monkeypatch.setattr(auto_optimize.optuna, "create_study", lambda **_: DummyStudy())
+
+    auto_optimize.main()
+
+    assert log_path.exists()
+    assert MLFLOW_STATE["start_calls"] == 1
+    assert MLFLOW_STATE["end_calls"] == 1
 
