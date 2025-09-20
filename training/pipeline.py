@@ -121,6 +121,7 @@ from training.features import (
     build_feature_candidates,
     select_model_features,
 )
+from training.preprocessing import FeatureSanitizer
 from training.labels import generate_training_labels
 from sklearn.metrics import (
     classification_report,
@@ -184,6 +185,49 @@ def _lgbm_params(cfg: AppConfig) -> dict:
     if cfg.training.max_depth is not None:
         params["max_depth"] = cfg.training.max_depth
     return params
+
+
+def _cfg_get(cfg: AppConfig | dict | None, key: str, default: object = None) -> object:
+    """Best-effort lookup supporting nested ``training`` sections."""
+
+    if cfg is None:
+        return default
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    getter = getattr(cfg, "get", None)
+    if callable(getter):
+        value = getter(key, None)
+        if value is not None:
+            return value
+    value = getattr(cfg, key, None)
+    if value is not None:
+        return value
+    training = getattr(cfg, "training", None)
+    if training is None:
+        return default
+    if isinstance(training, dict):
+        return training.get(key, default)
+    training_get = getattr(training, "get", None)
+    if callable(training_get):
+        value = training_get(key, None)
+        if value is not None:
+            return value
+    value = getattr(training, key, None)
+    return value if value is not None else default
+
+
+def _make_sanitizer(cfg: AppConfig | dict | None) -> FeatureSanitizer:
+    """Instantiate :class:`FeatureSanitizer` respecting configuration."""
+
+    method = _cfg_get(cfg, "sanitizer_fill_method", None)
+    if method is None:
+        method = _cfg_get(cfg, "sanitizer_fill", "median")
+    value = _cfg_get(cfg, "sanitizer_fill_value", None)
+    try:
+        method = str(method).lower()
+    except Exception:
+        method = "median"
+    return FeatureSanitizer(fill_method=method, fill_value=value)
 
 
 def _subscribe_cpu_updates(cfg: AppConfig) -> None:
@@ -424,7 +468,7 @@ def train_multi_output_model(
     """Train a shared-trunk multi-task model and return per-task metrics."""
 
     cfg = cfg or {}
-    steps: list[tuple[str, object]] = []
+    steps: list[tuple[str, object]] = [("sanitizer", _make_sanitizer(cfg))]
     if cfg.get("use_scaler", True):
         steps.append(("scaler", FeatureScaler()))
 
@@ -472,6 +516,9 @@ def train_multi_output_model(
     pipe.classification_thresholds_ = {}
 
     pipe.fit(X, y)
+    sanitizer = pipe.named_steps.get("sanitizer")
+    if sanitizer is not None and hasattr(sanitizer, "state_dict"):
+        pipe.sanitizer_state_ = sanitizer.state_dict()
 
     reports: dict[str, object] = {}
     f1_scores: list[float] = []
@@ -824,7 +871,8 @@ def _run_training(
 
     mlflow_run_active = False
     try:
-        mlflow_run_active = bool(mlflow.start_run("training", cfg))
+        mlflow.start_run("training", cfg)
+        mlflow_run_active = True
     except Exception:  # pragma: no cover - mlflow optional
         mlflow_run_active = False
     try:
@@ -1186,7 +1234,7 @@ def _run_training(
                     pipe.named_steps["scaler"].load_state_dict(scaler_state)
             else:
                 start_batch = 0
-                steps: list[tuple[str, object]] = []
+                steps: list[tuple[str, object]] = [("sanitizer", _make_sanitizer(cfg))]
                 if cfg.get("use_scaler", True):
                     steps.append(("scaler", FeatureScaler.load(scaler_path)))
                 clf_params = {
@@ -1201,6 +1249,9 @@ def _run_training(
                 steps.append(("clf", LGBMClassifier(**clf_params)))
                 pipe = Pipeline(steps)
             _register_clf(pipe.named_steps["clf"])
+            sanitizer = pipe.named_steps.get("sanitizer")
+            if sanitizer is not None and not getattr(sanitizer, "_fitted", False):
+                sanitizer.fit(X)
             n_batches = math.ceil(len(X) / batch_size)
             half_life = cfg.get("time_decay_half_life")
             for batch_idx in range(start_batch, n_batches):
@@ -1209,6 +1260,8 @@ def _run_training(
                 Xb = X.iloc[start:end]
                 yb = y.iloc[start:end]
                 dq_w = dq_score_samples(Xb)
+                if sanitizer is not None:
+                    Xb = sanitizer.transform(Xb)
                 if "scaler" in pipe.named_steps:
                     scaler = pipe.named_steps["scaler"]
                     if getattr(scaler, "group_col", None):
@@ -1356,7 +1409,7 @@ def _run_training(
                     )
 
             if use_multi_task_heads:
-                steps = []
+                steps = [("sanitizer", _make_sanitizer(cfg))]
                 if cfg.get("use_scaler", True):
                     steps.append(("scaler", FeatureScaler()))
                 hidden_default = 32
@@ -1415,7 +1468,7 @@ def _run_training(
                 pipe.regression_heads_ = heads
                 pipe.regression_target_columns_ = {k: v["columns"] for k, v in heads.items()}
             else:
-                steps = []
+                steps = [("sanitizer", _make_sanitizer(cfg))]
                 if model_type != "cross_modal" and cfg.get("use_scaler", True):
                     steps.append(("scaler", FeatureScaler()))
                 if model_type == "cross_modal":
@@ -1471,6 +1524,9 @@ def _run_training(
                     pipe.fit(X_train, y_train, **fit_params)
                     val_probs = pipe.predict_proba(X_val)
                     probs = val_probs[:, 1]
+            sanitizer = pipe.named_steps.get("sanitizer")
+            if sanitizer is not None and hasattr(sanitizer, "state_dict"):
+                pipe.sanitizer_state_ = sanitizer.state_dict()
             pipe.head_config_ = getattr(pipe, "head_config_", {})
             pipe.classification_thresholds_ = getattr(
                 pipe, "classification_thresholds_", {}
@@ -1802,6 +1858,11 @@ def _run_training(
         if final_pipe is not None:
             setattr(final_pipe, "model_metadata", model_metadata)
             setattr(final_pipe, "regime_thresholds", regime_thresholds)
+            sanitizer = final_pipe.named_steps.get("sanitizer") if hasattr(final_pipe, "named_steps") else None
+            if sanitizer is not None and hasattr(sanitizer, "state_dict"):
+                sanitizer_state = sanitizer.state_dict()
+                final_pipe.sanitizer_state_ = sanitizer_state
+                model_metadata["sanitizer"] = sanitizer_state
         if final_pipe and "scaler" in final_pipe.named_steps:
             final_pipe.named_steps["scaler"].save(scaler_path)
         logger.info("Model saved to %s", root / "model.joblib")
