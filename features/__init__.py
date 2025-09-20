@@ -211,6 +211,23 @@ _REPORT_DIR = Path("reports/feature_status")
 # Synchronisation primitives for capability watcher initialisation
 _capability_watch_started = False
 _capability_watch_lock = threading.Lock()
+_capability_watch_future: Optional[asyncio.Future] = None
+
+
+def _clear_capability_watch_state() -> None:
+    """Reset bookkeeping for the capability watcher task."""
+
+    global _capability_watch_started, _capability_watch_future
+    _capability_watch_started = False
+    _capability_watch_future = None
+
+
+def _capability_watch_done(fut: asyncio.Future) -> None:
+    """Callback executed when the capability watcher terminates."""
+
+    with _capability_watch_lock:
+        if _capability_watch_future is fut:
+            _clear_capability_watch_state()
 
 
 def _meets_requirements(spec: FeatureSpec, caps: ResourceCapabilities) -> bool:
@@ -342,11 +359,14 @@ def start_capability_watch() -> None:
 
     _update_status()
 
-    global _capability_watch_started
-    if _capability_watch_started:
-        return
+    global _capability_watch_started, _capability_watch_future
 
     with _capability_watch_lock:
+        future = _capability_watch_future
+        done_method = getattr(future, "done", None) if future is not None else None
+        if callable(done_method) and done_method():
+            _clear_capability_watch_state()
+
         if _capability_watch_started:
             return
 
@@ -358,12 +378,17 @@ def start_capability_watch() -> None:
 
         try:
             queue = subscribe()
-            create_task(_watch_capabilities(queue))
+            future = create_task(_watch_capabilities(queue))
         except Exception:  # pragma: no cover - defensive against loop absence
             logger.debug("Failed to start capability watcher", exc_info=True)
             return
 
         _capability_watch_started = True
+        _capability_watch_future = future
+
+        add_done_callback = getattr(future, "add_done_callback", None)
+        if callable(add_done_callback):
+            add_done_callback(_capability_watch_done)
 
 
 # Initialise on import without subscribing to avoid side effects
