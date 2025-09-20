@@ -6,7 +6,7 @@ import random
 import logging
 import argparse
 import sys
-from typing import Callable, List
+from typing import Any, Callable, List
 import contextlib
 import types
 
@@ -160,6 +160,120 @@ def init_logging() -> logging.Logger:
 
 logger = logging.getLogger(__name__)
 exec_engine = ExecutionEngine()
+
+
+def _stdin_supports_interaction() -> bool:
+    """Return ``True`` when standard input appears to be interactive."""
+
+    stream = getattr(sys, "stdin", None)
+    if stream is None:
+        return False
+    isatty = getattr(stream, "isatty", None)
+    if callable(isatty):
+        try:
+            return bool(isatty())
+        except Exception:
+            return False
+    return False
+
+
+def _coerce_positive_float(value: Any) -> float | None:
+    """Attempt to parse ``value`` as a positive float returning ``None`` on failure."""
+
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    """Attempt to parse ``value`` as a positive integer returning ``None`` on failure."""
+
+    if value is None:
+        return None
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
+
+
+def _wait_for_terminal_login(*, timeout: float | None, max_retries: int | None) -> None:
+    """Block until the MetaTrader terminal reports a logged-in session.
+
+    When standard input is interactive the user is prompted to confirm the
+    terminal login status.  In non-interactive environments the function falls
+    back to periodic polling with exponential backoff.  ``max_retries``
+    controls how many failed checks are tolerated before raising an error and
+    ``timeout`` limits the total wait duration.
+    """
+
+    interactive = _stdin_supports_interaction()
+    failures = 0
+    prompt = "Please log into your MetaTrader 5 terminal and press Enter to continue..."
+    delay = 5.0
+    max_delay = 30.0
+    start = time.monotonic()
+
+    while True:
+        if max_retries is not None and failures > max_retries:
+            logger.error(
+                "MetaTrader 5 terminal login not detected after %d attempts", failures
+            )
+            raise RuntimeError(
+                "MetaTrader 5 terminal login not detected after "
+                f"{failures} attempts (max retries {max_retries})"
+            )
+
+        if mt5_direct.is_terminal_logged_in():
+            attempt = failures + 1
+            if attempt > 1:
+                logger.info(
+                    "MetaTrader 5 terminal connection established after %d attempts",
+                    attempt,
+                )
+            else:
+                logger.info("MetaTrader 5 terminal connection established")
+            return
+
+        now = time.monotonic()
+        if timeout is not None and now - start >= timeout:
+            logger.error(
+                "Timed out waiting for MetaTrader 5 terminal login after %.0f seconds",
+                timeout,
+            )
+            raise RuntimeError(
+                f"Timed out waiting for MetaTrader 5 terminal login after {timeout:.0f} seconds"
+            )
+
+        failures += 1
+
+        if interactive:
+            try:
+                message = (
+                    prompt
+                    if failures == 1
+                    else "MetaTrader 5 terminal not logged in. Log in and press Enter to retry..."
+                )
+                input(message)
+            except EOFError:
+                interactive = False
+                logger.warning(
+                    "Standard input unavailable; switching to background polling for terminal login",
+                )
+            continue
+
+        wait = delay
+        logger.info(
+            "MetaTrader 5 terminal not logged in (attempt %d); retrying in %.1fs",
+            failures,
+            wait,
+        )
+        time.sleep(wait)
+        delay = min(delay * 1.5, max_delay)
 
 
 def run_rl_curriculum(data_path: Path, model_dir: Path) -> None:
@@ -513,9 +627,13 @@ async def train_realtime():
         flush_interval=cfg.get("recorder_flush_interval", 1.0),
     )
     _ensure_data_downloaded(cfg, root)
-    input("Please log into your MetaTrader 5 terminal and press Enter to continue...")
-    while not mt5_direct.is_terminal_logged_in():
-        input("MetaTrader 5 terminal not logged in. Log in and press Enter to retry...")
+    timeout = _coerce_positive_float(os.getenv("MT5_TERMINAL_LOGIN_TIMEOUT"))
+    if timeout is None:
+        timeout = _coerce_positive_float(cfg.get("terminal_login_timeout"))
+    max_retries = _coerce_positive_int(os.getenv("MT5_TERMINAL_LOGIN_RETRIES"))
+    if max_retries is None:
+        max_retries = _coerce_positive_int(cfg.get("terminal_login_retries"))
+    _wait_for_terminal_login(timeout=timeout, max_retries=max_retries)
     conn_mgr.init([mt5_direct])
     with contextlib.ExitStack() as stack:
         stack.callback(exec_engine.stop_optimizer)
