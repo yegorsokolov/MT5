@@ -75,6 +75,7 @@ except Exception:  # noqa: E722
     shap = None
 
 from utils import ensure_environment, load_config
+from features import start_capability_watch
 from config_models import AppConfig
 from utils.resource_monitor import monitor
 from state_manager import save_checkpoint, load_latest_checkpoint
@@ -2021,6 +2022,7 @@ def main(
 
     init_logging()
     monitor.start()
+    start_capability_watch()
     try:
         return _run_training(
             cfg=cfg,
