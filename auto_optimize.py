@@ -9,6 +9,8 @@ from scipy.stats import ttest_ind
 import optuna
 import mlflow
 
+from analytics import mlflow_client
+
 from train import main as train_model
 from utils import load_config, update_config
 from backtest import run_backtest, run_rolling_backtest
@@ -49,8 +51,14 @@ def _config_to_dict(cfg) -> dict:
 @log_exceptions
 def main():
     init_logging()
-    mlflow.set_experiment("auto_optimize")
-    with mlflow.start_run():
+    cfg_for_run = load_config()
+    run_started = False
+    try:
+        try:
+            run_started = mlflow_client.start_run("auto_optimize", cfg_for_run)
+        except Exception:  # pragma: no cover - mlflow optional
+            run_started = False
+
         train_model()
 
         cfg = _config_to_dict(load_config())
@@ -199,6 +207,12 @@ def main():
                 "best_cv_sharpe": best_cv.get("avg_sharpe", float("nan")),
             }
         )
+    finally:
+        if run_started:
+            try:
+                mlflow_client.end_run()
+            except Exception:  # pragma: no cover - mlflow optional
+                pass
 
 
 if __name__ == "__main__":

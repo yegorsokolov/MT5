@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Any
 import os
+from contextlib import contextmanager
 
 import mlflow
 import log_utils
@@ -35,8 +36,22 @@ def _configure(experiment: str, cfg: Mapping[str, Any]) -> None:
     mlflow.set_experiment(experiment)
 
 
-def start_run(experiment: str, cfg: Mapping[str, Any]) -> None:
-    """Start an MLflow run and log the configuration."""
+def start_run(experiment: str, cfg: Mapping[str, Any]) -> bool:
+    """Start an MLflow run and log the configuration.
+
+    Returns ``True`` when a new run was started. When an MLflow run is already
+    active (for example because an orchestrator opened it) the existing run is
+    reused and ``False`` is returned.
+    """
+
+    try:  # pragma: no cover - mlflow optional
+        active = getattr(mlflow, "active_run", None)
+        if callable(active):
+            if active() is not None:
+                return False
+    except Exception:  # noqa: BLE001
+        pass
+
     _configure(experiment, cfg)
     mlflow.start_run()
     raw_cfg = getattr(cfg, "_raw_config", None)
@@ -49,11 +64,25 @@ def start_run(experiment: str, cfg: Mapping[str, Any]) -> None:
         else dict(cfg)
     )
     mlflow.log_dict(payload, "config.yaml")
+    return True
 
 
 def end_run() -> None:
     """End the current MLflow run."""
     mlflow.end_run()
+
+
+@contextmanager
+def run(experiment: str, cfg: Mapping[str, Any]):
+    """Context manager that starts an MLflow run when necessary."""
+
+    started = False
+    try:
+        started = start_run(experiment, cfg)
+        yield started
+    finally:
+        if started:
+            end_run()
 
 
 def log_param(key: str, value: Any) -> None:
