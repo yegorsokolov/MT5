@@ -1,5 +1,7 @@
 """Utility functions for configuration loading."""
 
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 from datetime import datetime
 from contextlib import contextmanager
@@ -14,6 +16,68 @@ from config_models import AppConfig, ConfigError
 from .secret_manager import SecretManager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+_SECRET_PREFIX = "secret://"
+_MASK = "***"
+
+
+def _is_sequence(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _sanitize_value(resolved: Any, raw: Any | None, mask: str) -> Any:
+    if isinstance(raw, str):
+        if raw.startswith(_SECRET_PREFIX):
+            return mask
+        return resolved if resolved is not None else raw
+    if isinstance(resolved, str) and resolved.startswith(_SECRET_PREFIX):
+        return mask
+
+    if isinstance(resolved, Mapping) or isinstance(raw, Mapping):
+        resolved_map = resolved if isinstance(resolved, Mapping) else {}
+        raw_map = raw if isinstance(raw, Mapping) else {}
+        keys = set(resolved_map.keys()) | set(raw_map.keys())
+        return {
+            key: _sanitize_value(resolved_map.get(key), raw_map.get(key), mask)
+            for key in keys
+        }
+
+    if _is_sequence(resolved) or _is_sequence(raw):
+        resolved_seq = list(resolved) if _is_sequence(resolved) else []
+        raw_seq = list(raw) if _is_sequence(raw) else []
+        length = max(len(resolved_seq), len(raw_seq))
+        return [
+            _sanitize_value(
+                resolved_seq[idx] if idx < len(resolved_seq) else None,
+                raw_seq[idx] if idx < len(raw_seq) else None,
+                mask,
+            )
+            for idx in range(length)
+        ]
+
+    return resolved if resolved is not None else raw
+
+
+def sanitize_config(
+    cfg: BaseModel | Mapping[str, Any] | Any,
+    *,
+    raw_cfg: Mapping[str, Any] | None = None,
+    mask: str = _MASK,
+) -> Any:
+    """Return ``cfg`` with secret placeholders masked."""
+
+    raw_data = raw_cfg
+    if isinstance(cfg, BaseModel):
+        resolved = cfg.model_dump()
+        raw_data = raw_data or getattr(cfg, "_raw_config", None)
+    elif isinstance(cfg, Mapping):
+        resolved = dict(cfg)
+        raw_data = raw_data or getattr(cfg, "_raw_config", None)
+        resolved.pop("_raw_config", None)
+    else:
+        resolved = cfg
+
+    return _sanitize_value(resolved, raw_data, mask)
 
 
 def _config_path(path: str | Path | None = None) -> Path:
@@ -81,6 +145,9 @@ def load_config(
     """Load the configuration optionally preserving raw placeholders."""
 
     data = load_config_data(path=path, resolve_secrets=resolve_secrets)
+    raw_data: dict[str, Any] | None = None
+    if resolve_secrets:
+        raw_data = load_config_data(path=path, resolve_secrets=False)
     if not resolve_secrets:
         return data
 
@@ -88,6 +155,8 @@ def load_config(
         cfg = AppConfig(**data)
     except ValidationError as e:
         raise ConfigError(f"Invalid configuration: {e}") from e
+    if raw_data is not None:
+        object.__setattr__(cfg, "_raw_config", deepcopy(raw_data))
     return cfg
 
 
@@ -154,8 +223,25 @@ def mlflow_run(experiment: str, cfg):
     mlflow.set_tracking_uri(f"file:{logs_dir / 'mlruns'}")
     mlflow.set_experiment(experiment)
     with mlflow.start_run():
-        data = cfg.model_dump() if isinstance(cfg, BaseModel) else cfg
-        mlflow.log_dict(data, "config.yaml")
+        raw_cfg = None
+        if isinstance(cfg, BaseModel):
+            raw_cfg = getattr(cfg, "_raw_config", None)
+        elif isinstance(cfg, Mapping):
+            raw_cfg = getattr(cfg, "_raw_config", None)
+        data = (
+            cfg.model_dump()
+            if isinstance(cfg, BaseModel)
+            else (dict(cfg) if isinstance(cfg, Mapping) else cfg)
+        )
+        sanitized = sanitize_config(cfg, raw_cfg=raw_cfg)
+        payload = (
+            sanitized
+            if isinstance(sanitized, Mapping)
+            else raw_cfg
+            if isinstance(raw_cfg, Mapping)
+            else data
+        )
+        mlflow.log_dict(payload, "config.yaml")
         yield
 
 
@@ -165,6 +251,7 @@ __all__ = [
     "load_config",
     "save_config",
     "update_config",
+    "sanitize_config",
     "mlflow_run",
 ]
 

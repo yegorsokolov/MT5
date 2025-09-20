@@ -8,7 +8,7 @@ import os
 
 import mlflow
 import log_utils
-from utils import PROJECT_ROOT
+from utils import PROJECT_ROOT, sanitize_config
 
 
 def _configure(experiment: str, cfg: Mapping[str, Any]) -> None:
@@ -39,7 +39,16 @@ def start_run(experiment: str, cfg: Mapping[str, Any]) -> None:
     """Start an MLflow run and log the configuration."""
     _configure(experiment, cfg)
     mlflow.start_run()
-    mlflow.log_dict(cfg, "config.yaml")
+    raw_cfg = getattr(cfg, "_raw_config", None)
+    sanitized = sanitize_config(cfg, raw_cfg=raw_cfg)
+    payload = (
+        sanitized
+        if isinstance(sanitized, Mapping)
+        else raw_cfg
+        if isinstance(raw_cfg, Mapping)
+        else dict(cfg)
+    )
+    mlflow.log_dict(payload, "config.yaml")
 
 
 def end_run() -> None:
