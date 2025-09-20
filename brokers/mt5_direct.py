@@ -1,6 +1,6 @@
 import datetime as dt
 import logging
-from typing import List
+from typing import Any, Dict, List, Optional, Tuple
 
 import MetaTrader5 as _mt5
 try:  # allow import to be stubbed in tests
@@ -19,6 +19,112 @@ IS_CUDF = pd.__name__ == "cudf"
 logger = logging.getLogger(__name__)
 
 from analysis.broker_tca import broker_tca
+
+
+class MT5Error(RuntimeError):
+    """Base exception raised for MetaTrader5 related failures."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: Optional[int] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
+class MT5OrderError(MT5Error):
+    """Raised when an order could not be executed successfully."""
+
+
+_SUCCESS_RETCODE_NAMES = (
+    "TRADE_RETCODE_DONE",
+    "TRADE_RETCODE_DONE_PARTIAL",
+    "TRADE_RETCODE_PLACED",
+    "TRADE_RETCODE_CANCELED",
+    "TRADE_RETCODE_SL",
+    "TRADE_RETCODE_TP",
+)
+_SUCCESS_RETCODES = {
+    getattr(_mt5, name)
+    for name in _SUCCESS_RETCODE_NAMES
+    if hasattr(_mt5, name)
+}
+if not _SUCCESS_RETCODES:
+    # ``MetaTrader5`` stubs used in unit tests may not expose the symbolic
+    # constants.  Fall back to treating ``0`` as a generic success code.
+    _SUCCESS_RETCODES = {0}
+
+
+def _get_last_error() -> Tuple[Optional[int], Optional[str]]:
+    """Return the latest MetaTrader5 error tuple if available."""
+
+    last_error = getattr(_mt5, "last_error", None)
+    if callable(last_error):
+        try:
+            code, message = last_error()
+            if code == 0 and not message:
+                return None, None
+            return int(code), str(message)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Failed to read MetaTrader5.last_error", exc_info=True)
+    return None, None
+
+
+def _compose_error_message(prefix: str, code: Optional[int], message: Optional[str]) -> str:
+    if code is not None and message:
+        return f"{prefix}: [{code}] {message}"
+    if code is not None:
+        return f"{prefix}: [{code}]"
+    if message:
+        return f"{prefix}: {message}"
+    return prefix
+
+
+def _raise_last_error(prefix: str) -> None:
+    code, message = _get_last_error()
+    raise MT5Error(_compose_error_message(prefix, code, message), code=code)
+
+
+def _ensure_order_success(result: Any, request: Dict[str, Any]) -> None:
+    """Validate the response from ``MetaTrader5.order_send``."""
+
+    if result is None:
+        code, message = _get_last_error()
+        details: Dict[str, Any] = {"request": request}
+        raise MT5OrderError(
+            _compose_error_message("MetaTrader5 order_send returned no result", code, message),
+            code=code,
+            details=details,
+        )
+
+    retcode = getattr(result, "retcode", None)
+    if retcode in _SUCCESS_RETCODES or retcode is None:
+        return
+
+    comment = getattr(result, "comment", None)
+    code, message = _get_last_error()
+    msg_parts = [f"MetaTrader5 order_send failed with retcode {retcode}"]
+    if comment:
+        msg_parts.append(comment)
+    if code is not None or message:
+        msg_parts.append(_compose_error_message("last error", code, message))
+
+    details = {
+        "retcode": retcode,
+        "comment": comment,
+        "request_id": getattr(result, "request_id", None),
+        "order": getattr(result, "order", None),
+        "deal": getattr(result, "deal", None),
+        "volume": getattr(result, "volume", None),
+        "last_error_code": code,
+        "last_error_message": message,
+        "request": request,
+    }
+    raise MT5OrderError("; ".join(msg_parts), code=retcode, details=details)
 
 # Expose key constants for consumers
 COPY_TICKS_ALL = getattr(_mt5, "COPY_TICKS_ALL", 0)
@@ -72,7 +178,13 @@ def initialize(**kwargs) -> bool:
             shutdown()
     except Exception:
         pass
-    return bool(_mt5.initialize(**kwargs))
+    success = bool(_mt5.initialize(**kwargs))
+    if not success:
+        code, message = _get_last_error()
+        logger.error(
+            _compose_error_message("Failed to initialize MetaTrader5", code, message)
+        )
+    return success
 
 
 def is_terminal_logged_in() -> bool:
@@ -91,7 +203,18 @@ def order_send(request):
     """Proxy to ``MetaTrader5.order_send`` with latency/slippage tracking."""
 
     order_ts = pd.Timestamp.utcnow()
-    result = _mt5.order_send(request)
+    try:
+        result = _mt5.order_send(request)
+    except Exception as exc:
+        code, message = _get_last_error()
+        details = {"request": request}
+        raise MT5OrderError(
+            _compose_error_message(
+                "MetaTrader5 order_send raised an exception", code, message
+            ),
+            code=code,
+            details=details,
+        ) from exc
     fill_ts = pd.Timestamp.utcnow()
     try:
         req_price = float(request.get("price", 0) or 0)
@@ -102,12 +225,17 @@ def order_send(request):
         broker_tca.record("mt5_direct", order_ts, fill_ts, slippage)
     except Exception:
         pass
+    _ensure_order_success(result, request)
     return result
 
 
 def symbol_select(symbol: str, enable: bool = True) -> bool:
     """Select or deselect a trading symbol."""
-    return bool(_mt5.symbol_select(symbol, enable))
+    success = bool(_mt5.symbol_select(symbol, enable))
+    if not success:
+        action = "enable" if enable else "disable"
+        _raise_last_error(f"Failed to {action} symbol {symbol}")
+    return success
 
 
 def positions_get(**kwargs):
@@ -117,7 +245,10 @@ def positions_get(**kwargs):
 
 def copy_ticks_from(symbol: str, from_time, count: int, flags: int):
     """Proxy to ``MetaTrader5.copy_ticks_from``."""
-    return _mt5.copy_ticks_from(symbol, from_time, count, flags)
+    ticks = _mt5.copy_ticks_from(symbol, from_time, count, flags)
+    if ticks is None:
+        _raise_last_error(f"Failed to copy ticks for {symbol}")
+    return ticks
 
 
 def fetch_history(symbol: str, start: dt.datetime, end: dt.datetime):
