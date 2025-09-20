@@ -4,6 +4,7 @@ import sys
 import types
 import contextlib
 import importlib.machinery
+import inspect
 from pathlib import Path
 
 # Pre-stub modules so early imports succeed
@@ -28,6 +29,155 @@ prom_mod.generate_latest = lambda: b""
 prom_mod.CONTENT_TYPE_LATEST = "text/plain"
 prom_mod.__spec__ = importlib.machinery.ModuleSpec("prometheus_client", loader=None)
 sys.modules.setdefault("prometheus_client", prom_mod)
+
+fastapi_mod = types.ModuleType("fastapi")
+
+
+class _StubHTTPException(Exception):
+    def __init__(self, status_code: int, detail: str | None = None) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+class _StubRouter:
+    def __init__(self) -> None:
+        self._shutdown_handlers: list = []
+
+    async def shutdown(self) -> None:
+        for handler in list(self._shutdown_handlers):
+            result = handler()
+            if inspect.isawaitable(result):
+                await result
+
+    async def startup(self) -> None:  # pragma: no cover - unused hook
+        return
+
+
+class _StubFastAPI:
+    def __init__(self, *args, **kwargs) -> None:
+        self.router = _StubRouter()
+
+    def _register(self, func):  # type: ignore[no-untyped-def]
+        return func
+
+    def get(self, _path: str):  # type: ignore[no-untyped-def]
+        return self._register
+
+    def post(self, _path: str):  # type: ignore[no-untyped-def]
+        return self._register
+
+    def on_event(self, event: str):  # type: ignore[no-untyped-def]
+        def decorator(func):
+            if event == "shutdown":
+                self.router._shutdown_handlers.append(func)
+            return func
+
+        return decorator
+
+
+fastapi_mod.FastAPI = _StubFastAPI
+fastapi_mod.HTTPException = _StubHTTPException
+fastapi_mod.__spec__ = importlib.machinery.ModuleSpec("fastapi", loader=None)
+sys.modules.setdefault("fastapi", fastapi_mod)
+
+pydantic_mod = types.ModuleType("pydantic")
+
+
+class _StubBaseModel:
+    def __init__(self, **data):
+        for key, value in data.items():
+            setattr(self, key, value)
+
+
+pydantic_mod.BaseModel = _StubBaseModel
+pydantic_mod.ValidationError = type("ValidationError", (Exception,), {})
+pydantic_mod.__spec__ = importlib.machinery.ModuleSpec("pydantic", loader=None)
+sys.modules.setdefault("pydantic", pydantic_mod)
+
+slimmable_mod = types.ModuleType("models.slimmable_network")
+
+
+class _StubSlimmableNetwork:
+    def __init__(self, width_multipliers=(0.25, 0.5, 1.0)) -> None:
+        self.width_multipliers = list(width_multipliers)
+        self.active_multiplier = self.width_multipliers[-1]
+
+    def set_width(self, width: float) -> None:
+        self.active_multiplier = width
+
+
+def _stub_select_width_multiplier(widths):  # type: ignore[no-untyped-def]
+    return sorted(widths)[-1]
+
+
+slimmable_mod.SlimmableNetwork = _StubSlimmableNetwork
+slimmable_mod.select_width_multiplier = _stub_select_width_multiplier
+slimmable_mod.__spec__ = importlib.machinery.ModuleSpec(
+    "models.slimmable_network", loader=None
+)
+sys.modules.setdefault("models.slimmable_network", slimmable_mod)
+
+filelock_mod = types.ModuleType("filelock")
+
+
+class _StubFileLock:
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def __enter__(self):  # pragma: no cover - trivial context manager
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover - trivial
+        return None
+
+    def acquire(self, *args, **kwargs) -> None:  # pragma: no cover - trivial
+        return None
+
+    def release(self) -> None:  # pragma: no cover - trivial
+        return None
+
+
+filelock_mod.FileLock = _StubFileLock
+filelock_mod.__spec__ = importlib.machinery.ModuleSpec("filelock", loader=None)
+sys.modules.setdefault("filelock", filelock_mod)
+
+config_models_mod = types.ModuleType("config_models")
+
+
+class _StubAppConfig:
+    def __init__(self, **data) -> None:
+        self.__dict__.update(data)
+
+    def model_dump(self) -> dict:
+        return {k: v for k, v in self.__dict__.items() if k != "_raw_config"}
+
+
+config_models_mod.AppConfig = _StubAppConfig
+config_models_mod.ConfigError = type("ConfigError", (Exception,), {})
+config_models_mod.__spec__ = importlib.machinery.ModuleSpec("config_models", loader=None)
+sys.modules.setdefault("config_models", config_models_mod)
+
+psutil_mod = types.ModuleType("psutil")
+
+
+class _StubProcess:
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def cpu_percent(self) -> float:
+        return 0.0
+
+    def memory_info(self):  # pragma: no cover - trivial stub
+        return types.SimpleNamespace(rss=0)
+
+
+psutil_mod.Process = _StubProcess
+psutil_mod.cpu_count = lambda logical=True: 4
+psutil_mod.virtual_memory = lambda: types.SimpleNamespace(total=8 * (1024**3))
+psutil_mod.disk_io_counters = lambda: types.SimpleNamespace(read_bytes=0, write_bytes=0)
+psutil_mod.__spec__ = importlib.machinery.ModuleSpec("psutil", loader=None)
+sys.modules.setdefault("psutil", psutil_mod)
 
 metrics_mod = types.ModuleType("analytics.metrics_store")
 metrics_mod.record_metric = lambda *a, **k: None
