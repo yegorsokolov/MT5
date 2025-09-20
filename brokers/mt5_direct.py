@@ -86,7 +86,38 @@ def _compose_error_message(prefix: str, code: Optional[int], message: Optional[s
 
 def _raise_last_error(prefix: str) -> None:
     code, message = _get_last_error()
-    raise MT5Error(_compose_error_message(prefix, code, message), code=code)
+    err = MT5Error(_compose_error_message(prefix, code, message), code=code)
+    raise _attach_resolution(err)
+
+
+def _attach_resolution(error: "MT5Error") -> "MT5Error":
+    """Populate ``error.details['resolution']`` with suggested actions."""
+
+    details = getattr(error, "details", None)
+    if not isinstance(details, dict):
+        error.details = {}  # type: ignore[attr-defined]
+    try:  # pragma: no cover - defensive best effort
+        from brokers.mt5_issue_solver import MT5IssueSolver
+
+        solver = MT5IssueSolver()
+        plan = solver.explain(error)
+        if plan:
+            error.details["resolution"] = plan  # type: ignore[index]
+    except Exception:
+        logger.debug("Failed to build MT5 resolution plan", exc_info=True)
+    return error
+
+
+def _timestamp_utcnow():
+    for module in (pd, _pd):
+        ts_cls = getattr(module, "Timestamp", None)
+        utcnow = getattr(ts_cls, "utcnow", None) if ts_cls is not None else None
+        if callable(utcnow):
+            try:
+                return utcnow()
+            except Exception:
+                continue
+    return dt.datetime.now(dt.UTC)
 
 
 def _ensure_order_success(result: Any, request: Dict[str, Any]) -> None:
@@ -95,11 +126,12 @@ def _ensure_order_success(result: Any, request: Dict[str, Any]) -> None:
     if result is None:
         code, message = _get_last_error()
         details: Dict[str, Any] = {"request": request}
-        raise MT5OrderError(
+        err = MT5OrderError(
             _compose_error_message("MetaTrader5 order_send returned no result", code, message),
             code=code,
             details=details,
         )
+        raise _attach_resolution(err)
 
     retcode = getattr(result, "retcode", None)
     if retcode in _SUCCESS_RETCODES or retcode is None:
@@ -124,7 +156,9 @@ def _ensure_order_success(result: Any, request: Dict[str, Any]) -> None:
         "last_error_message": message,
         "request": request,
     }
-    raise MT5OrderError("; ".join(msg_parts), code=retcode, details=details)
+    raise _attach_resolution(
+        MT5OrderError("; ".join(msg_parts), code=retcode, details=details)
+    )
 
 # Expose key constants for consumers
 COPY_TICKS_ALL = getattr(_mt5, "COPY_TICKS_ALL", 0)
@@ -202,20 +236,21 @@ def is_terminal_logged_in() -> bool:
 def order_send(request):
     """Proxy to ``MetaTrader5.order_send`` with latency/slippage tracking."""
 
-    order_ts = pd.Timestamp.utcnow()
+    order_ts = _timestamp_utcnow()
     try:
         result = _mt5.order_send(request)
     except Exception as exc:
         code, message = _get_last_error()
         details = {"request": request}
-        raise MT5OrderError(
+        err = MT5OrderError(
             _compose_error_message(
                 "MetaTrader5 order_send raised an exception", code, message
             ),
             code=code,
             details=details,
-        ) from exc
-    fill_ts = pd.Timestamp.utcnow()
+        )
+        raise _attach_resolution(err) from exc
+    fill_ts = _timestamp_utcnow()
     try:
         req_price = float(request.get("price", 0) or 0)
         typ = request.get("type")
