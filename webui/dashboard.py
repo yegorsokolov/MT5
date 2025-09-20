@@ -89,15 +89,36 @@ def fetch_json(path: str, api_key: str) -> Dict[str, Any]:
         return {}
 
 
-def post_json(path: str, api_key: str):
+def post_json(path: str, api_key: str, payload: Dict[str, Any] | None = None):
     try:
         resp = requests.post(
-            f"{API_URL}{path}", headers=_auth_headers(api_key), **_ssl_opts()
+            f"{API_URL}{path}",
+            headers=_auth_headers(api_key),
+            json=payload,
+            **_ssl_opts(),
         )
         resp.raise_for_status()
         return True
     except Exception:
         return False
+
+
+def fetch_controls(api_key: str) -> Dict[str, Any]:
+    data = fetch_json("/controls", api_key)
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def trigger_control(task: str, api_key: str) -> bool:
+    return post_json("/controls/run", api_key, {"task": task})
+
+
+def schedule_control_retrain(
+    model: str, update_hyperparams: bool, api_key: str
+) -> bool:
+    payload = {"model": model, "update_hyperparams": update_hyperparams}
+    return post_json("/controls/retrain", api_key, payload)
 
 
 def main() -> None:
@@ -168,7 +189,9 @@ def main() -> None:
                 except OSError:
                     pass
 
-    tabs = st.tabs(["Overview", "Performance", "Config Explorer", "Logs", "Traces"])
+    tabs = st.tabs(
+        ["Overview", "Performance", "Config Explorer", "Logs", "Traces", "Controls"]
+    )
 
     # Overview tab
     with tabs[0]:
@@ -786,6 +809,50 @@ def main() -> None:
                     st.text("\n".join(lines))
                 else:
                     st.write("No logs available")
+
+    # Controls tab
+    with tabs[5]:
+        st.subheader("Manual Controls")
+        control_data = fetch_controls(api_key)
+        tasks = control_data.get("tasks", []) if isinstance(control_data, dict) else []
+        if tasks:
+            st.caption(
+                "Trigger maintenance routines and diagnostics without shell access."
+            )
+            cols = st.columns(min(3, len(tasks))) if tasks else []
+            for idx, task in enumerate(tasks):
+                col = cols[idx % len(cols)] if cols else st
+                label = task.replace("_", " ").title()
+                if col.button(label, key=f"control-task-{task}"):
+                    if trigger_control(task, api_key):
+                        st.success(f"Triggered {label}")
+                    else:
+                        st.error(f"Failed to run {label}")
+        else:
+            st.write("No manual tasks available from the controller.")
+
+        st.subheader("Manual Retraining")
+        retrain_models = (
+            control_data.get("retrain_models", [])
+            if isinstance(control_data, dict)
+            else []
+        )
+        if retrain_models:
+            model = st.selectbox(
+                "Model",
+                retrain_models,
+                key="control-retrain-model",
+            )
+            update_hp = st.checkbox(
+                "Update hyperparameters", key="control-retrain-hp"
+            )
+            if st.button("Schedule Retrain", key="control-retrain-button"):
+                if schedule_control_retrain(model, update_hp, api_key):
+                    st.success(f"Retrain scheduled for {model}")
+                else:
+                    st.error("Failed to schedule retrain")
+        else:
+            st.write("No retraining options available from the controller.")
 
 
 if __name__ == "__main__":
