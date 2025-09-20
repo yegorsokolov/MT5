@@ -2,6 +2,7 @@ import sys
 import types
 import builtins
 import importlib
+import logging
 from pathlib import Path
 
 import pytest
@@ -36,12 +37,29 @@ def test_generate_signals_closed_market(monkeypatch):
         publish_dataframe_async=lambda *a, **k: None,
     )
 
+    log_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    test_logger = logging.getLogger("test_generate_signals")
+
+    log_utils_stub = types.ModuleType("log_utils")
+
+    def _setup_logging(*args, **kwargs):
+        log_calls.append((args, kwargs))
+        return test_logger
+
+    log_utils_stub.setup_logging = _setup_logging
+    log_utils_stub.log_exceptions = lambda func: func
+    log_utils_stub.log_predictions = lambda *a, **k: None
+    log_utils_stub.__spec__ = importlib.machinery.ModuleSpec("log_utils", loader=None)
+    monkeypatch.setitem(sys.modules, "log_utils", log_utils_stub)
+
     def fake_backtest(cfg):
         calls['called'] = True
 
     sys.modules['backtest'] = types.SimpleNamespace(run_rolling_backtest=fake_backtest)
 
     import generate_signals
+
+    assert not log_calls
 
     monkeypatch.setattr(generate_signals, 'is_market_open', lambda: False)
     monkeypatch.setattr(generate_signals, 'load_config', lambda: {})
@@ -56,6 +74,7 @@ def test_generate_signals_closed_market(monkeypatch):
         generate_signals.main()
 
     assert calls.get('called')
+    assert len(log_calls) == 1
 
 
 def test_generate_signals_supervised_without_rl_dependencies(monkeypatch):
@@ -90,13 +109,17 @@ def test_generate_signals_supervised_without_rl_dependencies(monkeypatch):
         types.SimpleNamespace(Session=lambda *a, **k: _DummySession(), head=lambda *a, **k: None),
     )
 
+    log_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    test_logger = logging.getLogger("test_generate_signals")
+
     log_utils_stub = types.ModuleType("log_utils")
-    log_utils_stub.setup_logging = lambda *a, **k: None
 
-    def _passthrough(func):
-        return func
+    def _setup_logging(*args, **kwargs):
+        log_calls.append((args, kwargs))
+        return test_logger
 
-    log_utils_stub.log_exceptions = _passthrough
+    log_utils_stub.setup_logging = _setup_logging
+    log_utils_stub.log_exceptions = lambda func: func
     log_utils_stub.log_predictions = lambda *a, **k: None
     log_utils_stub.__spec__ = importlib.machinery.ModuleSpec("log_utils", loader=None)
     monkeypatch.setitem(sys.modules, "log_utils", log_utils_stub)
@@ -177,6 +200,7 @@ def test_generate_signals_supervised_without_rl_dependencies(monkeypatch):
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     generate_signals = importlib.import_module("generate_signals")
+    assert not log_calls
 
     df = pd.DataFrame({"f1": [0.1, 0.2, 0.3], "f2": [0.4, 0.5, 0.6]})
 

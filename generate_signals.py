@@ -44,7 +44,19 @@ from models.conformal import (
     predict_interval,
 )
 
-setup_logging()
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for signal generation."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -819,6 +831,7 @@ def rl_signals(df, features, cfg):
 
 @log_exceptions
 def main():
+    init_logging()
     parser = argparse.ArgumentParser(description="Generate probability signals")
     parser.add_argument(
         "--simulate-closed-market",

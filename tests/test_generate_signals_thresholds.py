@@ -1,6 +1,7 @@
 import json
 import sys
 import types
+import logging
 from pathlib import Path
 
 import joblib
@@ -21,9 +22,17 @@ def _identity(func):
     return func
 
 
+LOG_CALLS: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+
+def _setup_logging(*args, **kwargs):
+    LOG_CALLS.append((args, kwargs))
+    return logging.getLogger("test_generate_signals_thresholds")
+
+
 log_utils_stub = _make_module(
     "log_utils",
-    setup_logging=lambda *args, **kwargs: None,
+    setup_logging=_setup_logging,
     log_predictions=lambda *args, **kwargs: None,
     log_exceptions=_identity,
 )
@@ -173,6 +182,18 @@ conformal_stub = _make_module(
 sys.modules.setdefault("models.conformal", conformal_stub)
 
 import generate_signals  # type: ignore  # noqa: E402
+
+assert not LOG_CALLS
+
+
+def test_init_logging_configures_once():
+    LOG_CALLS.clear()
+    first_logger = generate_signals.init_logging()
+    assert len(LOG_CALLS) == 1
+    second_logger = generate_signals.init_logging()
+    assert len(LOG_CALLS) == 1
+    assert first_logger is second_logger
+    LOG_CALLS.clear()
 
 
 class _DummyModel:
