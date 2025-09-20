@@ -3,6 +3,7 @@ import os
 import pkgutil
 import sys
 from pathlib import Path
+from typing import Any
 
 try:
     import psutil  # type: ignore
@@ -10,10 +11,15 @@ except Exception:  # pragma: no cover - handled later
     psutil = None  # type: ignore
 
 try:
-    from . import load_config, save_config
+    from . import load_config_data, save_config
 except Exception:  # pragma: no cover - handled later
-    load_config = None  # type: ignore
+    load_config_data = None  # type: ignore
     save_config = None  # type: ignore
+
+try:
+    from config_models import AppConfig
+except Exception:  # pragma: no cover - handled later
+    AppConfig = None  # type: ignore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQ_FILE = PROJECT_ROOT / "requirements-core.txt"
@@ -39,21 +45,55 @@ def _check_dependencies() -> list[str]:
     return missing
 
 
+def _greater_than(value: Any, threshold: int) -> bool:
+    try:
+        return value is not None and value > threshold
+    except TypeError:
+        return False
+
+
 def _adjust_config_for_low_spec() -> None:
-    if not CONFIG_FILE.exists():
+    if not CONFIG_FILE.exists() or load_config_data is None or save_config is None:
         return
-    cfg = load_config(CONFIG_FILE).model_dump() if load_config else {}
+
+    raw_cfg: dict[str, Any] = load_config_data(
+        path=CONFIG_FILE, resolve_secrets=False
+    )
+    resolved_cfg: dict[str, Any] = load_config_data(
+        path=CONFIG_FILE, resolve_secrets=True
+    )
+
+    raw_training = raw_cfg.get("training")
+    if not isinstance(raw_training, dict):
+        raw_training = {}
+        raw_cfg["training"] = raw_training
+
+    resolved_training = resolved_cfg.get("training")
+    if not isinstance(resolved_training, dict):
+        resolved_training = {}
+        resolved_cfg["training"] = resolved_training
+
     changed = False
-    if cfg.get("batch_size", 64) > 32:
-        cfg["batch_size"] = 32
+
+    batch_size = resolved_training.get("batch_size")
+    if batch_size is None or _greater_than(batch_size, 32):
+        raw_training["batch_size"] = 32
+        resolved_training["batch_size"] = 32
         changed = True
-    n_jobs = cfg.get("n_jobs")
-    if n_jobs is not None and n_jobs > 1:
-        cfg["n_jobs"] = 1
+
+    n_jobs = resolved_training.get("n_jobs")
+    if _greater_than(n_jobs, 1):
+        raw_training["n_jobs"] = 1
+        resolved_training["n_jobs"] = 1
         changed = True
-    if changed:
-        if save_config:
-            save_config(cfg)
+
+    if not changed:
+        return
+
+    if AppConfig is not None:
+        AppConfig(**resolved_cfg)
+
+    save_config(raw_cfg)
 
 
 def ensure_environment() -> None:
