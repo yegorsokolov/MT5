@@ -61,12 +61,23 @@ def health() -> Dict[str, Any]:
 
 def _ensure_watcher() -> None:
     global _WIDTH_WATCH_TASK
+    task = _WIDTH_WATCH_TASK
+    if task is not None:
+        try:
+            cancelled = bool(getattr(task, "cancelled", lambda: False)())
+            done = bool(getattr(task, "done", lambda: False)())
+        except Exception:
+            _WIDTH_WATCH_TASK = None
+        else:
+            if not cancelled and not done:
+                return
+            _WIDTH_WATCH_TASK = None
     if _WIDTH_WATCH_TASK is None:
         try:
             queue = monitor.subscribe()
             _WIDTH_WATCH_TASK = monitor.create_task(_watch_widths(queue))
         except Exception:
-            pass
+            _WIDTH_WATCH_TASK = None
 
 
 def _load_model(name: str) -> Any:
@@ -105,6 +116,30 @@ async def _watch_widths(queue: asyncio.Queue[str]) -> None:
                 if new_width != model.active_multiplier:
                     model.set_width(new_width)
                     logger.info("Adjusted width of %s to %s", name, new_width)
+
+
+@app.on_event("shutdown")
+async def _shutdown_event() -> None:
+    """Release background resources when the FastAPI app stops."""
+
+    global _WIDTH_WATCH_TASK
+    task = _WIDTH_WATCH_TASK
+    try:
+        monitor.stop()
+    except Exception:
+        pass
+    if task is not None:
+        try:
+            task.cancel()
+        except Exception:
+            pass
+        _WIDTH_WATCH_TASK = None
+    else:
+        _WIDTH_WATCH_TASK = None
+    try:
+        _EXECUTOR.shutdown(wait=False)
+    except Exception:
+        pass
 
 
 @app.post("/predict")
