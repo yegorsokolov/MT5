@@ -3,6 +3,7 @@
 from pathlib import Path
 from datetime import datetime
 from contextlib import contextmanager
+from typing import Any, Literal, overload
 import os
 import yaml
 import mlflow
@@ -13,6 +14,17 @@ from config_models import AppConfig, ConfigError
 from .secret_manager import SecretManager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _config_path(path: str | Path | None = None) -> Path:
+    """Return the configuration path, falling back to defaults."""
+
+    if path is None:
+        cfg_path = os.getenv("CONFIG_FILE")
+        if cfg_path:
+            return Path(cfg_path)
+        return PROJECT_ROOT / "config.yaml"
+    return Path(path)
 
 
 def _resolve_secrets(val):
@@ -27,21 +39,50 @@ def _resolve_secrets(val):
     return val
 
 
-def load_config(path: str | Path | None = None) -> AppConfig:
-    """Load YAML configuration and validate using :class:`AppConfig`."""
-    if path is None:
-        cfg_path = os.getenv("CONFIG_FILE")
-        if cfg_path:
-            path = Path(cfg_path)
-        else:
-            path = PROJECT_ROOT / "config.yaml"
-    else:
-        path = Path(path)
+def load_config_data(
+    path: str | Path | None = None, *, resolve_secrets: bool = True
+) -> dict[str, Any]:
+    """Return the raw configuration mapping.
 
-    with open(path, "r") as f:
+    Parameters
+    ----------
+    path:
+        Optional path to load from. Defaults to the ``CONFIG_FILE`` environment
+        variable or ``config.yaml`` under the project root.
+    resolve_secrets:
+        When ``True`` (default) secret placeholders are resolved via
+        :class:`SecretManager`. When ``False`` the original placeholders are
+        preserved.
+    """
+
+    cfg_path = _config_path(path)
+    with open(cfg_path, "r") as f:
         data = yaml.safe_load(f) or {}
+    return _resolve_secrets(data) if resolve_secrets else data
 
-    data = _resolve_secrets(data)
+
+@overload
+def load_config(
+    path: str | Path | None = None, *, resolve_secrets: Literal[True] = True
+) -> AppConfig:
+    ...
+
+
+@overload
+def load_config(
+    path: str | Path | None = None, *, resolve_secrets: Literal[False]
+) -> dict[str, Any]:
+    ...
+
+
+def load_config(
+    path: str | Path | None = None, *, resolve_secrets: bool = True
+) -> AppConfig | dict[str, Any]:
+    """Load the configuration optionally preserving raw placeholders."""
+
+    data = load_config_data(path=path, resolve_secrets=resolve_secrets)
+    if not resolve_secrets:
+        return data
 
     try:
         cfg = AppConfig(**data)
@@ -50,15 +91,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     return cfg
 
 
-def save_config(cfg: AppConfig | dict) -> None:
+def save_config(cfg: AppConfig | dict, path: str | Path | None = None) -> None:
     """Persist configuration back to the YAML file."""
-    cfg_path = os.getenv("CONFIG_FILE")
-    if cfg_path:
-        path = Path(cfg_path)
-    else:
-        path = PROJECT_ROOT / "config.yaml"
+
+    cfg_path = _config_path(path)
     data = cfg.model_dump() if isinstance(cfg, BaseModel) else cfg
-    with open(path, "w") as f:
+    with open(cfg_path, "w") as f:
         yaml.safe_dump(data, f)
 
 
@@ -84,21 +122,26 @@ def update_config(key: str, value, reason: str) -> None:
     if key in _RISK_KEYS:
         raise ValueError(f'Modification of {key} is not allowed due to FTMO risk rules')
 
-    cfg_path_env = os.getenv('CONFIG_FILE')
-    if cfg_path_env:
-        cfg_path = Path(cfg_path_env)
-    else:
-        cfg_path = PROJECT_ROOT / 'config.yaml'
+    cfg_path = _config_path()
     lock = FileLock(str(cfg_path) + '.lock')
 
     with lock:
-        cfg = load_config().model_dump()
-        old = cfg.get(key)
+        raw_cfg = load_config(resolve_secrets=False)
+        if not isinstance(raw_cfg, dict):
+            raw_cfg = raw_cfg.model_dump()
+        old = raw_cfg.get(key)
         if old == value:
             return
 
-        cfg[key] = value
-        save_config(cfg)
+        raw_cfg[key] = value
+
+        resolved_cfg = _resolve_secrets(raw_cfg)
+        try:
+            AppConfig(**resolved_cfg)
+        except ValidationError as e:
+            raise ConfigError(f"Invalid configuration: {e}") from e
+
+        save_config(raw_cfg)
 
         with open(_LOG_PATH, 'a') as f:
             f.write(f"{datetime.utcnow().isoformat()},{key},{old},{value},{reason}\n")
@@ -118,6 +161,7 @@ def mlflow_run(experiment: str, cfg):
 
 __all__ = [
     "PROJECT_ROOT",
+    "load_config_data",
     "load_config",
     "save_config",
     "update_config",
