@@ -24,6 +24,32 @@ if "data.streaming" not in sys.modules:
 
     sys.modules["data.streaming"] = types.SimpleNamespace(stream_labels=_stream_labels)
 
+if "lightgbm" not in sys.modules:
+
+    class _StubLGBMClassifier:
+        def __init__(self, **params):
+            self._params = {"n_estimators": 100, "n_jobs": params.get("n_jobs", 1)}
+            self._params.update(params)
+            for key, value in self._params.items():
+                setattr(self, key, value)
+            self.fitted_ = False
+
+        def get_params(self, deep: bool = True) -> dict:
+            return dict(self._params)
+
+        def set_params(self, **params):  # type: ignore[override]
+            self._params.update(params)
+            for key, value in params.items():
+                setattr(self, key, value)
+            return self
+
+        def fit(self, X, y=None, **kwargs):  # type: ignore[override]
+            self.fitted_ = True
+            self.booster_ = kwargs.get("init_model")
+            return self
+
+    sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=_StubLGBMClassifier)
+
 from training.data_loader import StreamingTrainingFrame, load_training_frame
 from training.labels import generate_training_labels
 from training.features import (
@@ -251,6 +277,293 @@ def test_streaming_feature_flow_preserves_lazy_materialisation(monkeypatch, tmp_
     assert "market_regime" in df_full.columns
     assert "direction_1" in df_full.columns
     assert reclass_calls["count"] == 1
+
+
+def test_active_classifier_tracker_releases_finished_estimators(monkeypatch):
+    import asyncio
+    import contextlib
+    import gc
+    import weakref
+    import sys
+
+    import types as _types
+
+    class _MonitorStub:
+        def __init__(self) -> None:
+            self.capabilities = types.SimpleNamespace(cpus=2)
+            self.queue: asyncio.Queue | None = None
+            self.tasks: list[asyncio.Task] = []
+
+        def subscribe(self) -> asyncio.Queue:
+            if self.queue is None:
+                self.queue = asyncio.Queue()
+            return self.queue
+
+        def create_task(self, coro):  # type: ignore[override]
+            task = asyncio.create_task(coro)
+            self.tasks.append(task)
+            return task
+
+    class _MiniPipeline:
+        def __init__(self, clf):
+            self.named_steps = {"clf": clf}
+
+        def fit(self, X, y):  # pragma: no cover - simple passthrough
+            if hasattr(self.named_steps["clf"], "fit"):
+                self.named_steps["clf"].fit(X, y)
+            return self
+
+    async def _exercise() -> None:
+        ge_mod = _types.ModuleType("great_expectations")
+        ge_dataset_mod = _types.ModuleType("great_expectations.dataset")
+
+        class _StubResult(dict):
+            def __init__(self) -> None:
+                super().__init__(success=True)
+
+            def to_json_dict(self) -> dict:
+                return dict(self)
+
+        class _StubDataset:
+            def __init__(self, df):
+                self.df = df
+
+            def validate(self, expectation_suite):  # pragma: no cover - simple stub
+                return _StubResult()
+
+        ge_dataset_mod.PandasDataset = _StubDataset
+        ge_core_mod = _types.ModuleType("great_expectations.core")
+        ge_expectation_mod = _types.ModuleType("great_expectations.core.expectation_suite")
+        ge_expectation_mod.ExpectationSuite = object
+        ge_mod.dataset = ge_dataset_mod
+        ge_mod.core = ge_core_mod
+        ge_core_mod.expectation_suite = ge_expectation_mod
+        monkeypatch.setitem(sys.modules, "great_expectations", ge_mod)
+        monkeypatch.setitem(sys.modules, "great_expectations.dataset", ge_dataset_mod)
+        monkeypatch.setitem(sys.modules, "great_expectations.core", ge_core_mod)
+        monkeypatch.setitem(
+            sys.modules,
+            "great_expectations.core.expectation_suite",
+            ge_expectation_mod,
+        )
+
+        joblib_mod = sys.modules.get("joblib")
+        if joblib_mod is None:
+            joblib_mod = _types.ModuleType("joblib")
+            monkeypatch.setitem(sys.modules, "joblib", joblib_mod)
+        monkeypatch.setattr(joblib_mod, "Memory", lambda *a, **k: None, raising=False)
+
+        features_mod = _types.ModuleType("features")
+        features_mod.start_capability_watch = lambda: None
+        features_mod.auto_indicators = types.SimpleNamespace(
+            REGISTRY_PATH=Path("."),
+            apply=lambda X, registry_path=None, formula_dir=None: X,
+            generate=lambda X, hypernet, asset, reg, registry_path=None: (X, {}),
+        )
+        monkeypatch.setitem(sys.modules, "features", features_mod)
+
+        mpl_mod = _types.ModuleType("matplotlib")
+        pyplot_mod = types.SimpleNamespace(
+            figure=lambda *a, **k: None,
+            plot=lambda *a, **k: None,
+            xlabel=lambda *a, **k: None,
+            ylabel=lambda *a, **k: None,
+            title=lambda *a, **k: None,
+            legend=lambda *a, **k: None,
+            tight_layout=lambda *a, **k: None,
+            savefig=lambda *a, **k: None,
+            close=lambda *a, **k: None,
+        )
+        mpl_mod.pyplot = pyplot_mod
+        monkeypatch.setitem(sys.modules, "matplotlib", mpl_mod)
+        monkeypatch.setitem(sys.modules, "matplotlib.pyplot", pyplot_mod)
+
+        sklearn_mod = _types.ModuleType("sklearn")
+        sklearn_mod.__path__ = []
+        monkeypatch.setitem(sys.modules, "sklearn", sklearn_mod)
+
+        sklearn_base = _types.ModuleType("sklearn.base")
+
+        class _StubBaseEstimator:
+            pass
+
+        class _StubClassifierMixin:
+            pass
+
+        sklearn_base.BaseEstimator = _StubBaseEstimator
+        sklearn_base.ClassifierMixin = _StubClassifierMixin
+        monkeypatch.setitem(sys.modules, "sklearn.base", sklearn_base)
+
+        sklearn_calib = _types.ModuleType("sklearn.calibration")
+
+        class _StubCalibratedClassifierCV:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def fit(self, *args, **kwargs):  # pragma: no cover - trivial stub
+                return self
+
+            def predict_proba(self, X):  # pragma: no cover - trivial stub
+                arr = np.asarray(X)
+                if arr.ndim == 1:
+                    arr = arr.reshape(-1, 1)
+                n = len(arr)
+                return np.column_stack([np.zeros(n), np.zeros(n)])
+
+        sklearn_calib.CalibratedClassifierCV = _StubCalibratedClassifierCV
+        sklearn_calib.calibration_curve = (
+            lambda *a, **k: (np.array([0.0]), np.array([0.0]))
+        )
+        monkeypatch.setitem(sys.modules, "sklearn.calibration", sklearn_calib)
+
+        sklearn_isotonic = _types.ModuleType("sklearn.isotonic")
+
+        class _StubIsotonicRegression:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def fit(self, *args, **kwargs):  # pragma: no cover - trivial stub
+                return self
+
+            def predict(self, X):  # pragma: no cover - trivial stub
+                arr = np.asarray(X)
+                if arr.ndim == 1:
+                    arr = arr.reshape(-1, 1)
+                return np.zeros(len(arr))
+
+        sklearn_isotonic.IsotonicRegression = _StubIsotonicRegression
+        monkeypatch.setitem(sys.modules, "sklearn.isotonic", sklearn_isotonic)
+
+        sklearn_linear = _types.ModuleType("sklearn.linear_model")
+
+        class _StubLogisticRegression:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def fit(self, *args, **kwargs):  # pragma: no cover - trivial stub
+                return self
+
+            def predict_proba(self, X):  # pragma: no cover - trivial stub
+                arr = np.asarray(X)
+                if arr.ndim == 1:
+                    arr = arr.reshape(-1, 1)
+                n = len(arr)
+                return np.column_stack([np.zeros(n), np.zeros(n)])
+
+        sklearn_linear.LogisticRegression = _StubLogisticRegression
+        monkeypatch.setitem(sys.modules, "sklearn.linear_model", sklearn_linear)
+
+        sklearn_metrics = _types.ModuleType("sklearn.metrics")
+        sklearn_metrics.brier_score_loss = lambda *a, **k: 0.0
+        sklearn_metrics.precision_score = lambda *a, **k: 0.0
+        sklearn_metrics.recall_score = lambda *a, **k: 0.0
+        sklearn_metrics.f1_score = lambda *a, **k: 0.0
+        sklearn_metrics.classification_report = (
+            lambda *a, **k: {"weighted avg": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0}}
+        )
+        sklearn_metrics.precision_recall_curve = (
+            lambda *a, **k: (np.array([0.0]), np.array([0.0]), np.array([0.0]))
+        )
+        monkeypatch.setitem(sys.modules, "sklearn.metrics", sklearn_metrics)
+
+        scheduler_mod = _types.ModuleType("scheduler")
+        scheduler_mod.schedule_retrain = lambda *a, **k: None
+        monkeypatch.setitem(sys.modules, "scheduler", scheduler_mod)
+
+        sklearn_ensemble = _types.ModuleType("sklearn.ensemble")
+
+        class _StubRandomForestClassifier:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def fit(self, *args, **kwargs):  # pragma: no cover - trivial stub
+                return self
+
+            def predict_proba(self, X):  # pragma: no cover - trivial stub
+                arr = np.asarray(X)
+                if arr.ndim == 1:
+                    arr = arr.reshape(-1, 1)
+                n = len(arr)
+                return np.column_stack([np.zeros(n), np.zeros(n)])
+
+        sklearn_ensemble.RandomForestClassifier = _StubRandomForestClassifier
+        monkeypatch.setitem(sys.modules, "sklearn.ensemble", sklearn_ensemble)
+
+        sklearn_pipeline = _types.ModuleType("sklearn.pipeline")
+
+        class _StubPipeline:
+            def __init__(self, steps):
+                self.steps = list(steps)
+                self.named_steps = {name: step for name, step in self.steps}
+
+            def fit(self, X, y=None, **kwargs):  # pragma: no cover - trivial stub
+                for _, step in self.steps:
+                    if hasattr(step, "fit"):
+                        step.fit(X, y)
+                return self
+
+            def __getitem__(self, item):  # pragma: no cover - trivial stub
+                if isinstance(item, slice):
+                    return self
+                return self.steps[item]
+
+        sklearn_pipeline.Pipeline = _StubPipeline
+        monkeypatch.setitem(sys.modules, "sklearn.pipeline", sklearn_pipeline)
+
+        from training import pipeline
+
+        monitor_stub = _MonitorStub()
+        monkeypatch.setattr(pipeline, "monitor", monitor_stub)
+        pipeline._ACTIVE_CLFS.clear()
+        cfg: dict[str, object] = {}
+        pipeline._subscribe_cpu_updates(cfg)
+        await asyncio.sleep(0)
+
+        try:
+            X = np.array([[0.0], [1.0], [2.0], [3.0]], dtype=float)
+            y = np.array([0, 1, 0, 1], dtype=int)
+
+            live_pipe = _MiniPipeline(pipeline.LGBMClassifier(n_estimators=5, n_jobs=1))
+            live_pipe.fit(X, y)
+            live_clf = live_pipe.named_steps["clf"]
+            pipeline._register_clf(live_clf)
+
+            stale_pipe = _MiniPipeline(pipeline.LGBMClassifier(n_estimators=5, n_jobs=1))
+            stale_pipe.fit(X, y)
+            stale_clf = stale_pipe.named_steps["clf"]
+            pipeline._register_clf(stale_clf)
+
+            assert len(pipeline._ACTIVE_CLFS) == 2
+
+            stale_ref = weakref.ref(stale_clf)
+            del stale_pipe
+            del stale_clf
+            for _ in range(3):
+                gc.collect()
+                await asyncio.sleep(0)
+                if len(pipeline._ACTIVE_CLFS) == 1:
+                    break
+
+            assert stale_ref() is None
+            assert len(pipeline._ACTIVE_CLFS) == 1
+
+            live_clf.set_params(n_jobs=1)
+            monitor_stub.capabilities.cpus = 7
+            assert monitor_stub.queue is not None
+            monitor_stub.queue.put_nowait("capability-update")
+            for _ in range(5):
+                await asyncio.sleep(0)
+                if live_clf.get_params().get("n_jobs") == 7:
+                    break
+            assert live_clf.get_params().get("n_jobs") == 7
+        finally:
+            for task in monitor_stub.tasks:
+                task.cancel()
+            if monitor_stub.tasks:
+                await asyncio.gather(*monitor_stub.tasks, return_exceptions=True)
+            pipeline._ACTIVE_CLFS.clear()
+
+    asyncio.run(_exercise())
 
 
 def test_run_training_ends_mlflow_on_exception(monkeypatch):
