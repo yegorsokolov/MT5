@@ -19,12 +19,80 @@ from typing import Any, Callable, Dict, Iterable, TYPE_CHECKING
 import asyncio
 import os
 import random
+import threading
 
 import pandas as pd
 
 from strategies.graph_dsl import Indicator, StrategyGraph
 from feature_store import latest_version, request_indicator
 from .shadow_runner import ShadowRunner
+
+
+_BACKGROUND_LOOP: asyncio.AbstractEventLoop | None = None
+_BACKGROUND_THREAD: threading.Thread | None = None
+_BACKGROUND_LOOP_LOCK = threading.Lock()
+
+
+def _ensure_background_loop() -> asyncio.AbstractEventLoop:
+    """Return a long-lived background event loop for shadow runners."""
+
+    global _BACKGROUND_LOOP, _BACKGROUND_THREAD
+    with _BACKGROUND_LOOP_LOCK:
+        loop = _BACKGROUND_LOOP
+        thread = _BACKGROUND_THREAD
+        if (
+            loop is not None
+            and loop.is_running()
+            and thread is not None
+            and thread.is_alive()
+        ):
+            return loop
+
+        if loop is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=0.1)
+            loop.close()
+
+        ready = threading.Event()
+        loop = asyncio.new_event_loop()
+
+        def _runner(ev_loop: asyncio.AbstractEventLoop, ready_event: threading.Event) -> None:
+            asyncio.set_event_loop(ev_loop)
+            ready_event.set()
+            ev_loop.run_forever()
+
+        thread = threading.Thread(
+            target=_runner,
+            args=(loop, ready),
+            name="EvolutionLabShadowLoop",
+            daemon=True,
+        )
+        thread.start()
+        ready.wait()
+        _BACKGROUND_LOOP = loop
+        _BACKGROUND_THREAD = thread
+        return loop
+
+
+def _shutdown_background_loop() -> None:
+    """Stop the shared background event loop (primarily for tests)."""
+
+    global _BACKGROUND_LOOP, _BACKGROUND_THREAD
+    with _BACKGROUND_LOOP_LOCK:
+        loop = _BACKGROUND_LOOP
+        thread = _BACKGROUND_THREAD
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+        if loop is not None and not loop.is_closed():
+            loop.close()
+        _BACKGROUND_LOOP = None
+        _BACKGROUND_THREAD = None
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from model_registry import ModelRegistry
@@ -174,13 +242,12 @@ class EvolutionLab:
             else:  # pragma: no cover - fallback when orchestrator absent
                 runner = ShadowRunner(name=name, handler=chosen)
                 try:
-                    import asyncio
-
                     loop = asyncio.get_running_loop()
                 except RuntimeError:  # pragma: no cover - no running loop
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                loop.create_task(runner.run())
+                    loop = _ensure_background_loop()
+                    asyncio.run_coroutine_threadsafe(runner.run(), loop)
+                else:
+                    loop.create_task(runner.run())
 
     # ------------------------------------------------------------------
     async def evolve_queue(
@@ -266,7 +333,14 @@ class EvolutionLab:
                     if self.register is not None:
                         self.register(name, chosen)
                     else:  # pragma: no cover - fallback when orchestrator absent
-                        loop.create_task(ShadowRunner(name=name, handler=chosen).run())
+                        runner = ShadowRunner(name=name, handler=chosen)
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:  # pragma: no cover - no running loop
+                            loop = _ensure_background_loop()
+                            asyncio.run_coroutine_threadsafe(runner.run(), loop)
+                        else:
+                            loop.create_task(runner.run())
                 queue.task_done()
 
         tasks = [
