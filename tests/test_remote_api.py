@@ -4,7 +4,10 @@ from pathlib import Path
 import types
 import importlib
 import pytest
-from fastapi.testclient import TestClient
+try:
+    from fastapi.testclient import TestClient
+except Exception:  # pragma: no cover - fallback when FastAPI lacks testclient
+    from starlette.testclient import TestClient  # type: ignore
 import asyncio
 import contextlib
 from typing import List
@@ -46,6 +49,33 @@ def load_api(tmp_log, monkeypatch):
     sched_mod = types.ModuleType('scheduler')
     sched_mod.start_scheduler = lambda: None
     sched_mod.stop_scheduler = lambda: None
+    sched_mod.tasks_run = []
+
+    def make_task(name):
+        def _task(*args, **kwargs):
+            sched_mod.tasks_run.append((name, args, kwargs))
+        return _task
+
+    async def async_task(name):
+        sched_mod.tasks_run.append((name, (), {}))
+
+    sched_mod.cleanup_checkpoints = make_task('cleanup_checkpoints')
+    sched_mod.run_drift_detection = make_task('run_drift_detection')
+    sched_mod.run_feature_importance_drift = make_task('run_feature_importance_drift')
+    sched_mod.run_change_point_detection = make_task('run_change_point_detection')
+    sched_mod.run_trade_analysis = make_task('run_trade_analysis')
+    sched_mod.run_decision_review = make_task('run_decision_review')
+    sched_mod.run_diagnostics = make_task('run_diagnostics')
+    sched_mod.rebuild_news_vectors = make_task('rebuild_news_vectors')
+    sched_mod.update_regime_performance = make_task('update_regime_performance')
+    sched_mod.run_backups = make_task('run_backups')
+    sched_mod.resource_reprobe = lambda: async_task('resource_reprobe')
+    sched_mod.retrain_calls: List[tuple[str, bool]] = []
+
+    def schedule_retrain_stub(model='classic', update_hyperparams=False, store=None):
+        sched_mod.retrain_calls.append((model, update_hyperparams))
+
+    sched_mod.schedule_retrain = schedule_retrain_stub
     sys.modules['scheduler'] = sched_mod
     rm_mod = types.ModuleType('utils.resource_monitor')
 
@@ -114,6 +144,12 @@ def setup_api(tmp_path, monkeypatch):
     api = load_api(tmp_path / "app.log", monkeypatch)
     api.bots.clear()
     Path(api.LOG_FILE).write_text("line1\nline2\n")
+    sched = sys.modules.get('scheduler')
+    if sched is not None:
+        if hasattr(sched, 'tasks_run'):
+            sched.tasks_run.clear()
+        if hasattr(sched, 'retrain_calls'):
+            sched.retrain_calls.clear()
     return api
 
 def test_health_auth(tmp_path, monkeypatch):
@@ -306,3 +342,50 @@ def test_bot_crash_limit_triggers_alert(tmp_path, monkeypatch):
     assert "bot-loop" not in api.bots
     assert alerts
     assert any("bot-loop" in msg for msg in alerts)
+
+
+def test_controls_list(tmp_path, monkeypatch):
+    api = setup_api(tmp_path, monkeypatch)
+    with TestClient(api.app) as client:
+        resp = client.get("/controls", headers={"x-api-key": "token"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "tasks" in data and "retrain_models" in data
+        assert any(task == "cleanup_checkpoints" for task in data["tasks"])
+
+
+def test_controls_run(tmp_path, monkeypatch):
+    api = setup_api(tmp_path, monkeypatch)
+    with TestClient(api.app) as client:
+        resp = client.post(
+            "/controls/run",
+            headers={"x-api-key": "token"},
+            json={"task": "run_drift_detection"},
+        )
+        assert resp.status_code == 200
+    sched = sys.modules["scheduler"]
+    assert ("run_drift_detection", (), {}) in sched.tasks_run
+
+
+def test_controls_run_unknown(tmp_path, monkeypatch):
+    api = setup_api(tmp_path, monkeypatch)
+    with TestClient(api.app) as client:
+        resp = client.post(
+            "/controls/run",
+            headers={"x-api-key": "token"},
+            json={"task": "unknown"},
+        )
+        assert resp.status_code == 404
+
+
+def test_controls_retrain(tmp_path, monkeypatch):
+    api = setup_api(tmp_path, monkeypatch)
+    with TestClient(api.app) as client:
+        resp = client.post(
+            "/controls/retrain",
+            headers={"x-api-key": "token"},
+            json={"model": "nn", "update_hyperparams": True},
+        )
+        assert resp.status_code == 200
+    sched = sys.modules["scheduler"]
+    assert ("nn", True) in sched.retrain_calls
