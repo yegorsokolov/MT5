@@ -823,8 +823,10 @@ def _run_training(
     feval = make_focal_loss_metric(focal_alpha, focal_gamma) if use_focal else None
 
     mlflow_run_active = False
-    mlflow.start_run("training", cfg.model_dump())
-    mlflow_run_active = True
+    try:
+        mlflow_run_active = bool(mlflow.start_run("training", cfg))
+    except Exception:  # pragma: no cover - mlflow optional
+        mlflow_run_active = False
     try:
         try:  # pragma: no cover - mlflow optional
             mlflow.log_param("model_type", model_type)
