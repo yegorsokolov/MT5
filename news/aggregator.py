@@ -19,7 +19,21 @@ try:  # pragma: no cover - pandas is optional at runtime
 except Exception:  # pragma: no cover
     pd = None  # type: ignore
 
-from .scrapers import cbc, cnn, forexfactory_news, global_feed, reuters, yahoo
+from .scrapers import (
+    cbc,
+    cnn,
+    forexfactory_news,
+    global_feed,
+    investing,
+    marketwatch,
+    reuters,
+    yahoo,
+)
+
+try:  # pragma: no cover - optional AI helpers
+    from . import ai_enrichment
+except Exception:  # pragma: no cover
+    ai_enrichment = None  # type: ignore
 
 
 DEFAULT_SCRAPERS = [
@@ -29,6 +43,8 @@ DEFAULT_SCRAPERS = [
     reuters.fetch,
     yahoo.fetch,
     global_feed.fetch,
+    marketwatch.fetch,
+    investing.fetch,
 ]
 
 
@@ -211,6 +227,31 @@ class NewsAggregator:
 
             analysis = dict(ev.get("analysis") or {})
             analysis["sentiment"] = sentiment
+
+            if ai_enrichment is not None:
+                summary_source = ev.get("summary") or text
+                ai_summary = ai_enrichment.summarize_text(summary_source)
+                if ai_summary:
+                    analysis["summary"] = ai_summary
+
+                keywords = ai_enrichment.extract_keywords(text)
+                if keywords:
+                    analysis["keywords"] = keywords
+
+                topics = ai_enrichment.classify_topics(text)
+                if topics:
+                    analysis["topics"] = topics
+
+                ml_sentiment = ai_enrichment.predict_sentiment(text)
+                if ml_sentiment is not None:
+                    analysis["ml_sentiment"] = ml_sentiment
+                    if sentiment:
+                        sentiment = float((sentiment + ml_sentiment) / 2)
+                    else:
+                        sentiment = float(ml_sentiment)
+                    sentiment = max(-1.0, min(1.0, sentiment))
+                    ev["sentiment"] = sentiment
+                    analysis["sentiment"] = sentiment
 
             impact = ev.get("impact")
             if impact is not None:

@@ -12,7 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from news import aggregator as news_aggregator
 from news.aggregator import NewsAggregator
-from news.scrapers import cbc, cnn, forexfactory_news, global_feed, reuters, yahoo
+from news.scrapers import (
+    cbc,
+    cnn,
+    forexfactory_news,
+    global_feed,
+    investing,
+    marketwatch,
+    reuters,
+    yahoo,
+)
 
 
 FOREXFACTORY_HTML = """
@@ -76,6 +85,28 @@ GLOBAL_JSON = json.dumps(
     }
 )
 
+MARKETWATCH_RSS = """
+<rss><channel>
+  <item>
+    <title>MarketWatch Title (TSLA)</title>
+    <link>http://marketwatch.com/a</link>
+    <pubDate>Mon, 01 Jan 2024 06:00:00 GMT</pubDate>
+    <description><![CDATA[Stocks surge as Tesla ($TSLA) beats forecasts.]]></description>
+  </item>
+</channel></rss>
+"""
+
+INVESTING_RSS = """
+<rss><channel>
+  <item>
+    <title>Investing.com update</title>
+    <link>http://investing.com/a</link>
+    <pubDate>Mon, 01 Jan 2024 07:00:00 GMT</pubDate>
+    <description><![CDATA[Company (MSFT) rises on strong guidance.]]></description>
+  </item>
+</channel></rss>
+"""
+
 
 def test_parsers() -> None:
     assert forexfactory_news.parse(FOREXFACTORY_HTML)[0]["symbols"] == ["USD"]
@@ -86,6 +117,12 @@ def test_parsers() -> None:
     parsed = global_feed.parse(GLOBAL_JSON)
     assert parsed[0]["summary"] == "Markets rally on upbeat outlook"
     assert parsed[0]["symbols"] == ["TSLA", "AAPL"]
+    mw = marketwatch.parse(MARKETWATCH_RSS)
+    assert mw[0]["symbols"] == ["TSLA"]
+    assert "Tesla" in mw[0]["summary"]
+    inv = investing.parse(INVESTING_RSS)
+    assert inv[0]["symbols"] == ["MSFT"]
+    assert "guidance" in inv[0]["summary"].lower()
 
 
 def test_dedup_and_ttl(tmp_path: Path) -> None:
@@ -161,4 +198,8 @@ def test_analysis_enrichment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert event["analysis"]["uncertainty"] == pytest.approx(0.05)
     assert event["impact"] == pytest.approx(0.25)
     assert event["impact_uncertainty"] == pytest.approx(0.05)
+    assert event["analysis"]["summary"]
+    assert event["analysis"]["keywords"]
+    assert "markets" in event["analysis"]["topics"]
+    assert event["analysis"].get("ml_sentiment") is not None
 
