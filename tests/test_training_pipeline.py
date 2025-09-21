@@ -9,6 +9,8 @@ import pytest
 import types
 import numpy as np
 
+from config_models import AppConfig
+
 if "data.labels" not in sys.modules:
     def _label_fn(series, horizons):
         data = {f"direction_{h}": pd.Series(0, index=series.index, dtype=int) for h in horizons}
@@ -64,6 +66,31 @@ from training.utils import combined_sample_weight
 class _DummyStrategy:
     def __init__(self) -> None:
         self.symbols: list[str] = []
+
+
+def test_cfg_get_handles_typed_training_fields():
+    from training import pipeline
+
+    cfg = AppConfig.model_validate(
+        {
+            "strategy": {"symbols": ["EURUSD"], "risk_per_trade": 0.05},
+            "training": {
+                "batch_size": 64,
+                "online_batch_size": 512,
+                "n_jobs": 3,
+            },
+        }
+    )
+
+    assert pipeline._cfg_get(cfg, "batch_size") == 64
+    assert pipeline._cfg_get(cfg, "online_batch_size") == 512
+    assert pipeline._cfg_get(cfg, "n_jobs") == 3
+
+    defaulted = AppConfig.model_validate(
+        {"strategy": {"symbols": ["EURUSD"], "risk_per_trade": 0.05}}
+    )
+    assert pipeline._cfg_get(defaulted, "online_batch_size") == 1000
+    assert defaulted.get("batch_size") is None
 
 
 def test_load_training_frame_override_returns_frame():
