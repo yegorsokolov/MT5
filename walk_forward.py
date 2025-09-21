@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 from copy import deepcopy
 import logging
 from pathlib import Path
@@ -103,17 +104,27 @@ def walk_forward_train(
     records = []
 
     # import mlflow lazily so tests can stub it easily
-    import mlflow
+    try:
+        import mlflow
+    except ImportError:
+        mlflow = None
+        logger.warning(
+            "MLflow is not installed; skipping tracking for walk_forward_train."
+        )
 
     for i, (train, test) in enumerate(windows):
-        with mlflow.start_run(run_name=f"window_{i}"):
+        run_context = (
+            mlflow.start_run(run_name=f"window_{i}") if mlflow else nullcontext()
+        )
+        with run_context:
             if model_type == "mean":
                 pred = train["return"].mean()
             else:
                 raise ValueError(f"Unsupported model type: {model_type}")
 
             rmse = float(((test["return"] - pred) ** 2).mean() ** 0.5)
-            mlflow.log_metric("rmse", rmse)
+            if mlflow:
+                mlflow.log_metric("rmse", rmse)
 
             records.append(
                 {
