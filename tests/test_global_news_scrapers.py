@@ -157,6 +157,8 @@ def test_dedup_and_ttl(tmp_path: Path) -> None:
     assert "analysis" in res[0]
     assert "sentiment" in res[0]["analysis"]
     assert "impact" in res[0]["analysis"]
+    assert "severity" in res[0]["analysis"]
+    assert "sentiment_effect" in res[0]["analysis"]
 
 
 def test_analysis_enrichment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,10 +198,16 @@ def test_analysis_enrichment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert event["analysis"]["sentiment"] > 0
     assert event["analysis"]["impact"] == pytest.approx(0.25)
     assert event["analysis"]["uncertainty"] == pytest.approx(0.05)
+    assert event["analysis"]["length_score"] >= 0
+    assert event["analysis"]["length_score"] <= 1
+    assert event["analysis"]["effect_minutes"] > 0
+    assert event["analysis"]["effect_half_life_minutes"] > 0
     assert event["impact"] == pytest.approx(0.25)
     assert event["impact_uncertainty"] == pytest.approx(0.05)
     assert event["analysis"]["summary"]
     assert event["analysis"]["keywords"]
     assert "markets" in event["analysis"]["topics"]
     assert event["analysis"].get("ml_sentiment") is not None
+    assert event["analysis"]["severity"] >= 0
+    assert "sentiment_effect" in event["analysis"]
 

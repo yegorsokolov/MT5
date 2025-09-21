@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import aiohttp
+import numpy as np
 import pandas as pd
 from bs4 import BeautifulSoup
 
 from . import impact_model
+from .effect_length import estimate_effect_length
+
+try:  # pragma: no cover - optional persistent risk settings
+    from state_manager import load_user_risk  # type: ignore
+except Exception:  # pragma: no cover
+    load_user_risk = None  # type: ignore
 
 
 # Directory for persisted headlines
@@ -171,6 +179,25 @@ _POSITIVE = {"beat", "beats", "surge", "rally", "gain", "up"}
 _NEGATIVE = {"fall", "drops", "miss", "down", "loss", "warning"}
 
 
+def _risk_scale() -> float:
+    if load_user_risk is None:  # pragma: no cover - optional dependency
+        return 1.0
+    try:
+        cfg = load_user_risk()
+        daily = float(cfg.get("daily_drawdown", 0.0))
+        total = float(cfg.get("total_drawdown", 0.0))
+        blackout = float(cfg.get("news_blackout_minutes", 0.0))
+    except Exception:
+        return 1.0
+    if not math.isfinite(daily) or daily < 0:
+        daily = 0.0
+    if not math.isfinite(total) or total <= 0:
+        total = max(daily, 1.0)
+    ratio = max(0.05, min(1.0, daily / total if total else 0.5))
+    blackout_factor = 1.0 - min(max(blackout, 0.0) / 720.0, 0.5)
+    return float(max(0.4, min(1.6, (0.75 + 0.5 * ratio) * blackout_factor)))
+
+
 def _sentiment(title: str) -> float:
     t = title.lower()
     pos = any(w in t for w in _POSITIVE)
@@ -181,13 +208,65 @@ def _sentiment(title: str) -> float:
 def _score_headlines(headlines: List[Dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(headlines)
     if df.empty:
-        return pd.DataFrame(columns=["symbol", "timestamp", "title", "url", "news_movement_score"])
-    df["sentiment"] = df["title"].apply(_sentiment)
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "timestamp",
+                "title",
+                "url",
+                "news_movement_score",
+                "severity",
+                "sentiment_effect",
+                "length_score",
+                "effect_minutes",
+                "effect_half_life",
+                "risk_scale",
+                "importance_score",
+            ]
+        )
+    df["sentiment"] = df["title"].apply(_sentiment).astype(float)
     df["surprise"] = 0.0
     df["historical_response"] = 0.0
     df = df.rename(columns={"title": "text"})
+    text_series = df["text"].fillna("")
+    risk = _risk_scale()
+    df["risk_scale"] = float(risk)
+    effects = [
+        estimate_effect_length(
+            text=text,
+            magnitude=abs(sent),
+            importance=0.5,
+            risk_scale=risk,
+        )
+        for text, sent in zip(text_series, df["sentiment"])
+    ]
+    df["word_count"] = text_series.str.split().str.len().fillna(0).astype(float)
+    df["length_score"] = np.array([eff.score for eff in effects], dtype=float)
+    df["effect_minutes"] = np.array([eff.minutes for eff in effects], dtype=float)
+    df["effect_half_life"] = np.array([eff.half_life for eff in effects], dtype=float)
+    df["importance_score"] = np.array([eff.importance for eff in effects], dtype=float)
+    df["severity"] = np.clip(
+        df["sentiment"].abs() * (0.55 + 0.25 * df["length_score"] + 0.2 * df["importance_score"]) * risk,
+        0.0,
+        1.0,
+    )
+    df["sentiment_effect"] = df["sentiment"] * df["severity"]
     scored = impact_model.score(
-        df[["symbol", "timestamp", "surprise", "sentiment", "historical_response", "text"]]
+        df[[
+            "symbol",
+            "timestamp",
+            "surprise",
+            "sentiment",
+            "historical_response",
+            "text",
+            "severity",
+            "length_score",
+            "effect_minutes",
+            "effect_half_life",
+            "risk_scale",
+            "importance_score",
+            "sentiment_effect",
+        ]]
     )
     out = df.merge(scored, on=["symbol", "timestamp"])
     out = out.rename(columns={"text": "title", "impact": "news_movement_score"})
@@ -227,11 +306,92 @@ def load_scores(cache_dir: Path | None = None) -> pd.DataFrame:
     cached = _load_cache(cache_dir)
     if not cached:
         return pd.DataFrame(
-            columns=["symbol", "timestamp", "title", "url", "news_movement_score"]
+            columns=[
+                "symbol",
+                "timestamp",
+                "title",
+                "url",
+                "news_movement_score",
+                "severity",
+                "sentiment_effect",
+                "length_score",
+                "effect_minutes",
+                "effect_half_life",
+                "risk_scale",
+                "importance_score",
+            ]
         )
     df = pd.DataFrame(cached)
-    if "news_movement_score" not in df.columns:
-        df["news_movement_score"] = 0.0
+    df["news_movement_score"] = df.get("news_movement_score", 0.0).astype(float)
+    df["sentiment"] = df.get("sentiment", 0.0).astype(float)
+    text_series = df.get("title", pd.Series([""] * len(df))).fillna("")
+    word_counts = text_series.str.split().str.len().fillna(0).astype(float)
+    df["word_count"] = word_counts
+
+    risk_default = _risk_scale()
+    risk_series = df.get("risk_scale")
+    if isinstance(risk_series, pd.Series):
+        risk_values = risk_series.astype(float).fillna(risk_default)
+    elif len(df):
+        base_risk = risk_series if risk_series is not None else risk_default
+        try:
+            base_risk = float(base_risk)
+        except (TypeError, ValueError):
+            base_risk = risk_default
+        risk_values = pd.Series([base_risk] * len(df), index=df.index, dtype=float)
+    else:
+        risk_values = pd.Series([], dtype=float)
+    if risk_values.empty and len(df):
+        risk_values = pd.Series([risk_default] * len(df), index=df.index, dtype=float)
+
+    importance_series = df.get("importance_score")
+    if isinstance(importance_series, pd.Series):
+        importance_values = importance_series.astype(float).fillna(0.5).clip(0.0, 1.0)
+    elif len(df):
+        base_importance = 0.5 if importance_series is None else importance_series
+        try:
+            base_importance = float(base_importance)
+        except (TypeError, ValueError):
+            base_importance = 0.5
+        importance_values = pd.Series([base_importance] * len(df), index=df.index, dtype=float)
+    else:
+        importance_values = pd.Series([], dtype=float)
+    if importance_values.empty and len(df):
+        importance_values = pd.Series([0.5] * len(df), index=df.index, dtype=float)
+
+    effects = [
+        estimate_effect_length(
+            text=text,
+            magnitude=abs(sent),
+            importance=imp,
+            risk_scale=risk,
+        )
+        for text, sent, imp, risk in zip(
+            text_series.tolist(),
+            df["sentiment"].tolist(),
+            importance_values.tolist(),
+            risk_values.tolist(),
+        )
+    ]
+
+    df["length_score"] = np.array([eff.score for eff in effects], dtype=float)
+    df["effect_minutes"] = np.array([eff.minutes for eff in effects], dtype=float)
+    df["effect_half_life"] = np.array([eff.half_life for eff in effects], dtype=float)
+    inferred_importance = np.array([eff.importance for eff in effects], dtype=float)
+    df["importance_score"] = np.maximum(
+        importance_values.to_numpy(dtype=float) if len(importance_values) else np.array([], dtype=float),
+        inferred_importance,
+    )
+    df["risk_scale"] = risk_values.to_numpy(dtype=float) if len(risk_values) else np.array([], dtype=float)
+
+    df["severity"] = np.clip(
+        df["sentiment"].abs()
+        * (0.55 + 0.25 * df["length_score"] + 0.2 * df["importance_score"])
+        * df["risk_scale"],
+        0.0,
+        1.0,
+    )
+    df["sentiment_effect"] = df["sentiment"] * df["severity"]
     return df
 
 
