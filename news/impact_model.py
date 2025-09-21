@@ -49,6 +49,30 @@ def _model_loader(path: Path | str) -> GradientBoostingRegressor:
 _MODEL = LazyModel(loader=_model_loader)
 
 
+def _build_features(events: pd.DataFrame, text_col: pd.Series) -> pd.DataFrame:
+    data: dict[str, pd.Series | np.ndarray] = {
+        "surprise": events["surprise"],
+        "sentiment": events["sentiment"],
+        "historical_response": events["historical_response"],
+        "similarity": _similarity_scores(text_col),
+    }
+    for col in (
+        "severity",
+        "length_score",
+        "effect_minutes",
+        "effect_half_life",
+        "risk_scale",
+        "importance_score",
+        "sentiment_effect",
+    ):
+        if col in events.columns:
+            try:
+                data[col] = events[col].astype(float)
+            except Exception:
+                data[col] = events[col]
+    return pd.DataFrame(data)
+
+
 def _similarity_scores(texts: pd.Series, k: int = 5) -> pd.Series:
     """Return average similarity of each text to the existing vector store."""
 
@@ -68,14 +92,7 @@ def train(events: pd.DataFrame, target: pd.Series) -> GradientBoostingRegressor:
         if "event" in events.columns
         else events.get("text", pd.Series([""] * len(events)))
     )
-    features = pd.DataFrame(
-        {
-            "surprise": events["surprise"],
-            "sentiment": events["sentiment"],
-            "historical_response": events["historical_response"],
-            "similarity": _similarity_scores(text_col),
-        }
-    )
+    features = _build_features(events, text_col)
     model = GradientBoostingRegressor()
     model.fit(features, target)
     preds = model.predict(features)
@@ -104,14 +121,7 @@ def score(events: pd.DataFrame) -> pd.DataFrame:
         if "event" in events.columns
         else events.get("text", pd.Series([""] * len(events)))
     )
-    feats = pd.DataFrame(
-        {
-            "surprise": events["surprise"],
-            "sentiment": events["sentiment"],
-            "historical_response": events["historical_response"],
-            "similarity": _similarity_scores(text_col),
-        }
-    )
+    feats = _build_features(events, text_col)
     impact = model.predict(feats)
     return pd.DataFrame(
         {

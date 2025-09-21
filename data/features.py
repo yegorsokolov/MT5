@@ -934,11 +934,29 @@ def make_features(df: pd.DataFrame, validate: bool = False) -> pd.DataFrame:
                     df[f"news_sentiment_{k}"] = 0.0
                 if f"news_impact_{k}" not in df.columns:
                     df[f"news_impact_{k}"] = 0.0
+                if f"news_severity_{k}" not in df.columns:
+                    df[f"news_severity_{k}"] = 0.0
+                if f"news_sentiment_effect_{k}" not in df.columns:
+                    df[f"news_sentiment_effect_{k}"] = 0.0
+                if f"news_length_score_{k}" not in df.columns:
+                    df[f"news_length_score_{k}"] = 0.0
+                if f"news_effect_minutes_{k}" not in df.columns:
+                    df[f"news_effect_minutes_{k}"] = 0.0
+                if f"news_effect_half_life_{k}" not in df.columns:
+                    df[f"news_effect_half_life_{k}"] = 0.0
+            if "news_risk_scale" not in df.columns:
+                df["news_risk_scale"] = 1.0
         except Exception:
             logger.debug("news sentiment merge failed", exc_info=True)
             for k in range(3):
                 df[f"news_sentiment_{k}"] = 0.0
                 df[f"news_impact_{k}"] = 0.0
+                df[f"news_severity_{k}"] = 0.0
+                df[f"news_sentiment_effect_{k}"] = 0.0
+                df[f"news_length_score_{k}"] = 0.0
+                df[f"news_effect_minutes_{k}"] = 0.0
+                df[f"news_effect_half_life_{k}"] = 0.0
+            df["news_risk_scale"] = 1.0
         try:
             df = _apply_transform(add_corporate_actions, df)
         except Exception:
