@@ -1,6 +1,7 @@
 import logging
 import os
 import pkgutil
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,16 +31,65 @@ REC_RAM_GB = 8
 MIN_CORES = 1
 REC_CORES = 4
 
+_SPECIFIER_SPLIT_RE = re.compile(r"\s*(?:==|!=|<=|>=|~=|===|<|>|=)")
+
+
+def _parse_requirement_line(line: str) -> tuple[str, str] | None:
+    """Extract the requirement and canonical module name from a line.
+
+    Returns ``None`` when the line does not represent an installable package
+    (empty strings, comments, options, etc.).
+    """
+
+    if not line:
+        return None
+
+    candidate = line.split("#", 1)[0].strip()
+    if not candidate:
+        return None
+
+    if candidate.startswith("#"):
+        return None
+
+    candidate = candidate.split(";", 1)[0].strip()
+    if not candidate:
+        return None
+
+    if candidate.startswith("-"):
+        return None
+
+    candidate = candidate.split("@", 1)[0].strip()
+    if not candidate:
+        return None
+
+    candidate = candidate.replace("(", " ").replace(")", " ")
+
+    if "[" in candidate:
+        candidate = candidate.split("[", 1)[0].strip()
+        if not candidate:
+            return None
+
+    base_name = _SPECIFIER_SPLIT_RE.split(candidate, 1)[0].strip().strip("()")
+    if not base_name or base_name.startswith("#"):
+        return None
+
+    module_name = base_name.replace("-", "_")
+    if not module_name:
+        return None
+
+    return base_name, module_name
+
+
 def _check_dependencies() -> list[str]:
     missing: list[str] = []
     if not REQ_FILE.exists():
         return missing
+
     for line in REQ_FILE.read_text().splitlines():
-        pkg = line.strip()
-        if not pkg or pkg.startswith("#"):
+        parsed = _parse_requirement_line(line)
+        if parsed is None:
             continue
-        pkg_name = pkg.split("==")[0]
-        module_name = pkg_name.replace("-", "_")
+        pkg_name, module_name = parsed
         if pkgutil.find_loader(module_name) is None:
             missing.append(pkg_name)
     return missing
