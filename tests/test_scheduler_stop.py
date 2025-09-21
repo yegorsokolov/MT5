@@ -1,19 +1,39 @@
 import asyncio
+import importlib
 import subprocess
 import sys
 import threading
+import time
+import types
 from pathlib import Path
 
 import pytest
 
-pytest.importorskip("pydantic")
+pydantic_spec = importlib.util.find_spec("pydantic")
+if pydantic_spec is None:
+    pytest.skip("pydantic not available", allow_module_level=True)
 
 repo_root = str(Path(__file__).resolve().parents[1])
 sys.path.insert(0, repo_root)
 sys.modules.pop("scheduler", None)
 sys.modules.pop("config_models", None)
 sys.modules.pop("event_store", None)
-from config_models import AppConfig
+try:
+    from config_models import AppConfig
+except Exception:
+    class _AppConfigDict(dict):
+        def model_dump(self) -> dict[str, object]:
+            return dict(self)
+
+    class _AppConfig:
+        @classmethod
+        def model_validate(cls, data: dict[str, object]) -> _AppConfigDict:
+            return _AppConfigDict(data)
+
+    config_models_stub = types.ModuleType("config_models")
+    config_models_stub.AppConfig = _AppConfig
+    sys.modules["config_models"] = config_models_stub
+    from config_models import AppConfig
 import scheduler
 
 
@@ -45,7 +65,7 @@ def test_start_stop_scheduler_clears_retrain_watcher(monkeypatch: pytest.MonkeyP
 
     processed = threading.Event()
 
-    def fake_process(store_obj: DummyStore) -> None:
+    async def fake_process(store_obj: DummyStore) -> None:
         processed.set()
 
     scheduler_flags = {
@@ -195,7 +215,7 @@ def test_subscribe_retrain_events_runs_from_plain_thread(
 
     store = DummyStore()
 
-    def fake_process(store_obj: DummyStore) -> None:
+    async def fake_process(store_obj: DummyStore) -> None:
         for event in store_obj.iter_events("retrain"):
             consumed.append(event)
             processed.set()
@@ -269,7 +289,7 @@ def test_process_retrain_events_retries_failed_runs(
 
     store = DummyStore()
 
-    scheduler.process_retrain_events(store)
+    asyncio.run(scheduler.process_retrain_events(store))
 
     attempt_key = "2024-02-02T12:34:56|classic"
     assert call_count["value"] == 1
@@ -280,7 +300,7 @@ def test_process_retrain_events_retries_failed_runs(
         ("classic", "retry_scheduled"),
     ]
 
-    scheduler.process_retrain_events(store)
+    asyncio.run(scheduler.process_retrain_events(store))
 
     assert call_count["value"] == 2
     assert scheduler._last_retrain_ts == "2024-02-02T12:34:56"
@@ -293,3 +313,72 @@ def test_process_retrain_events_retries_failed_runs(
 
     scheduler._last_retrain_ts = None
     scheduler._failed_retrain_attempts.clear()
+
+
+def test_slow_retrain_command_runs_off_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler.stop_scheduler()
+    scheduler._tasks.clear()
+    scheduler._loop = None
+    scheduler._thread = None
+    scheduler._started = False
+    scheduler._last_retrain_ts = None
+    scheduler._failed_retrain_attempts.clear()
+    scheduler._retrain_watcher = None
+
+    metrics_stub = types.SimpleNamespace(log_retrain_outcome=lambda *a, **k: None)
+    analytics_pkg = types.SimpleNamespace(metrics_store=metrics_stub)
+    monkeypatch.setitem(sys.modules, "analytics", analytics_pkg)
+    monkeypatch.setitem(sys.modules, "analytics.metrics_store", metrics_stub)
+
+    class DummyStore:
+        def __init__(self) -> None:
+            self._events = [
+                {
+                    "timestamp": "2024-03-03T00:00:00",
+                    "type": "retrain",
+                    "payload": {"model": "classic"},
+                }
+            ]
+
+        def iter_events(self, event_type: str):  # pragma: no cover - signature compat
+            assert event_type == "retrain"
+            while self._events:
+                yield self._events.pop(0)
+
+    store = DummyStore()
+
+    start_event = threading.Event()
+    finish_event = threading.Event()
+
+    def slow_run(cmd, check=True, env=None):
+        start_event.set()
+        time.sleep(0.1)
+        finish_event.set()
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(scheduler.subprocess, "run", slow_run)
+
+    progress_markers: list[float] = []
+
+    async def _monitor_progress() -> None:
+        while not start_event.is_set():
+            await asyncio.sleep(0.005)
+        loop = asyncio.get_running_loop()
+        while not finish_event.is_set():
+            progress_markers.append(loop.time())
+            await asyncio.sleep(0.01)
+
+    async def _run_test() -> None:
+        monitor_task = asyncio.create_task(_monitor_progress())
+        await scheduler.process_retrain_events(store)
+        await asyncio.wait_for(monitor_task, timeout=1)
+
+    asyncio.run(_run_test())
+
+    assert start_event.is_set()
+    assert finish_event.is_set()
+    assert len(progress_markers) >= 1, "event loop stalled while retrain subprocess ran"
+    assert scheduler._failed_retrain_attempts == {}
+    assert scheduler._last_retrain_ts == "2024-03-03T00:00:00"
