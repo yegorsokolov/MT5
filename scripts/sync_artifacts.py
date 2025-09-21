@@ -42,7 +42,122 @@ LOG_DIR = REPO_PATH / "logs"
 CHECKPOINT_DIR = REPO_PATH / "checkpoints"
 CONFIG_FILES = [REPO_PATH / "config.yaml"]
 
+# Additional artefact directories and file types collected alongside logs.
+DEFAULT_ARTIFACT_DIRS = [REPO_PATH / "analytics", REPO_PATH / "reports"]
+DEFAULT_ARTIFACT_SUFFIXES = {
+    ".csv",
+    ".json",
+    ".parquet",
+    ".html",
+    ".md",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".svg",
+    ".pdf",
+    ".feather",
+    ".xlsx",
+}
+
+ENV_ARTIFACT_DIRS = "SYNC_ARTIFACT_DIRS"
+ENV_ARTIFACT_SUFFIXES = "SYNC_ARTIFACT_SUFFIXES"
+
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+
+def _split_env_list(value: str | None) -> list[str]:
+    """Return ``value`` split on common path separators."""
+
+    if not value:
+        return []
+    normalised = value.replace(",", os.pathsep).replace(";", os.pathsep)
+    return [item.strip() for item in normalised.split(os.pathsep) if item.strip()]
+
+
+def _is_within_repo(path: Path) -> bool:
+    """Return ``True`` when ``path`` is inside the repository root."""
+
+    try:
+        path.relative_to(REPO_PATH)
+    except ValueError:
+        return False
+    return True
+
+
+def _configured_suffixes() -> set[str]:
+    """Return the set of file suffixes that should be synchronised."""
+
+    suffixes = {s.lower() for s in DEFAULT_ARTIFACT_SUFFIXES}
+    extra = _split_env_list(os.getenv(ENV_ARTIFACT_SUFFIXES))
+    for suffix in extra:
+        if not suffix:
+            continue
+        suffix = suffix if suffix.startswith(".") else f".{suffix}"
+        suffixes.add(suffix.lower())
+    return suffixes
+
+
+def _configured_artifact_dirs() -> list[Path]:
+    """Return additional directories requested via environment variables."""
+
+    dirs: list[Path] = []
+    for entry in _split_env_list(os.getenv(ENV_ARTIFACT_DIRS)):
+        candidate = (REPO_PATH / entry).resolve()
+        if not _is_within_repo(candidate):
+            logger.warning("Skipping artifact directory outside repository: %s", candidate)
+            continue
+        dirs.append(candidate)
+    return dirs
+
+
+def _iter_additional_artifacts() -> list[Path]:
+    """Collect analytics and report artefacts that should be committed."""
+
+    suffixes = _configured_suffixes()
+    directories = []
+    seen_dirs: set[Path] = set()
+    for directory in [*DEFAULT_ARTIFACT_DIRS, *_configured_artifact_dirs()]:
+        if directory in seen_dirs:
+            continue
+        seen_dirs.add(directory)
+        if directory.exists() and _is_within_repo(directory):
+            directories.append(directory)
+    artefacts: set[Path] = set()
+    for directory in directories:
+        for file_path in directory.rglob("*"):
+            if file_path.is_file() and file_path.suffix.lower() in suffixes:
+                artefacts.add(file_path)
+    return sorted(artefacts)
+
+
+def _gather_artifact_targets() -> list[Path]:
+    """Return directories and files that should be staged for commit."""
+
+    targets: list[Path] = []
+    seen: set[Path] = set()
+    for path in [LOG_DIR, CHECKPOINT_DIR, *CONFIG_FILES]:
+        if path.exists() and path not in seen:
+            targets.append(path)
+            seen.add(path)
+    for path in _iter_additional_artifacts():
+        if path not in seen:
+            targets.append(path)
+            seen.add(path)
+    return targets
+
+
+def _stage_path(repo: Repo, path: Path) -> None:
+    """Stage ``path`` relative to the repository root."""
+
+    try:
+        rel = path.relative_to(REPO_PATH)
+    except ValueError:
+        logger.warning("Skipping path outside repository: %s", path)
+        return
+    repo.git.add(str(rel))
 
 
 def _push_with_token(repo: Repo) -> None:
@@ -67,21 +182,29 @@ def _push_with_token(repo: Repo) -> None:
 
 @log_exceptions
 def sync_artifacts() -> None:
-    """Commit and push logs, checkpoints and configuration files."""
+    """Commit and push logs, checkpoints, analytics and reports."""
 
     init_logging()
     repo = Repo(REPO_PATH)
 
-    paths = [LOG_DIR, CHECKPOINT_DIR, *CONFIG_FILES]
-    for path in paths:
-        if path.exists():
-            repo.git.add(str(path))
+    targets = _gather_artifact_targets()
+    if not targets:
+        logger.info("No artifact paths found to stage")
+        return
+
+    base_targets = {LOG_DIR, CHECKPOINT_DIR, *CONFIG_FILES}
+    extra_targets = [p for p in targets if p not in base_targets]
+    if extra_targets:
+        logger.info("Staging %d analytics/report artefacts", len(extra_targets))
+
+    for path in targets:
+        _stage_path(repo, path)
 
     if not repo.is_dirty():
         logger.info("No new artifacts or configs to commit")
         return
 
-    repo.index.commit("Update logs and checkpoints")
+    repo.index.commit("Update analytics, logs and checkpoints")
     try:
         repo.remote().pull(rebase=True)
     except GitCommandError as exc:

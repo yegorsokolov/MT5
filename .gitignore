@@ -59,8 +59,9 @@ models/*
 !models/symbolic_pattern.py
 __pycache__/
 analysis/news_impact.parquet
-analytics/*.parquet
-reports/**/*.csv
+# Model analytics and generated reports are tracked for auditing so they are
+# intentionally not ignored.
+
 # Documentation build artifacts
 docs/_build/
 site/

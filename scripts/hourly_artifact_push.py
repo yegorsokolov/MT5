@@ -5,6 +5,7 @@ process.  It also registers the shutdown hook so a final upload occurs when the
 process exits.
 """
 
+import os
 import time
 import logging
 
@@ -12,6 +13,7 @@ from log_utils import setup_logging
 from scripts.sync_artifacts import register_shutdown_hook, sync_artifacts
 
 _LOGGING_INITIALIZED = False
+DEFAULT_INTERVAL_SECONDS = 3600
 
 
 def init_logging() -> logging.Logger:
@@ -27,8 +29,29 @@ def init_logging() -> logging.Logger:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_interval() -> int:
+    """Return the configured sync interval, defaulting to hourly."""
+
+    raw = os.getenv("SYNC_INTERVAL_SECONDS")
+    if raw is None:
+        return DEFAULT_INTERVAL_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid SYNC_INTERVAL_SECONDS=%s; using %d seconds", raw, DEFAULT_INTERVAL_SECONDS
+        )
+        return DEFAULT_INTERVAL_SECONDS
+    if value < 60:
+        logger.warning("SYNC_INTERVAL_SECONDS below minimum; clamping to 60 seconds")
+        return 60
+    return value
+
+
 def main() -> None:
     init_logging()
+    interval = _resolve_interval()
+    logger.info("Artifact sync interval set to %d seconds", interval)
     register_shutdown_hook()
     while True:
         logger.info("Uploading artifacts...")
@@ -36,7 +59,7 @@ def main() -> None:
             sync_artifacts()
         except Exception as e:  # pragma: no cover - best effort logging
             logger.error("Upload failed: %s", e)
-        time.sleep(3600)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
