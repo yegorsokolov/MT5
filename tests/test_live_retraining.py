@@ -14,20 +14,26 @@ spec = importlib.util.spec_from_file_location(
 )
 live_mod = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
-pyarrow_mod = types.ModuleType("pyarrow")
+try:
+    import pyarrow as _pyarrow  # type: ignore
+    import pyarrow.parquet as _pyarrow_parquet  # type: ignore
+except Exception:  # pragma: no cover - fallback when pyarrow unavailable
 
+    pyarrow_mod = types.ModuleType("pyarrow")
 
-class _FakeTable:
-    @staticmethod
-    def from_pandas(frame, preserve_index=False):
-        return frame
+    class _FakeTable:
+        @staticmethod
+        def from_pandas(frame, preserve_index=False):
+            return frame
 
-
-pyarrow_mod.Table = _FakeTable
-pyarrow_parquet_mod = types.SimpleNamespace(write_to_dataset=lambda *a, **k: None)
-pyarrow_mod.parquet = pyarrow_parquet_mod
-sys.modules.setdefault("pyarrow", pyarrow_mod)
-sys.modules.setdefault("pyarrow.parquet", pyarrow_parquet_mod)
+    pyarrow_mod.Table = _FakeTable
+    pyarrow_parquet_mod = types.SimpleNamespace(write_to_dataset=lambda *a, **k: None)
+    pyarrow_mod.parquet = pyarrow_parquet_mod
+    sys.modules.setdefault("pyarrow", pyarrow_mod)
+    sys.modules.setdefault("pyarrow.parquet", pyarrow_parquet_mod)
+else:
+    sys.modules.setdefault("pyarrow", _pyarrow)
+    sys.modules.setdefault("pyarrow.parquet", _pyarrow_parquet)
 spec.loader.exec_module(live_mod)
 LiveRecorder = live_mod.LiveRecorder
 if not hasattr(LiveRecorder, "record"):
@@ -99,12 +105,6 @@ utils_stub.__spec__ = spec_utils
 utils_stub.__path__ = []
 sys.modules["utils"] = utils_stub
 
-log_utils_stub = types.ModuleType("log_utils")
-log_utils_stub.setup_logging = lambda: None
-log_utils_stub.log_exceptions = lambda f: f
-log_utils_stub.log_predictions = lambda *a, **k: None
-sys.modules["log_utils"] = log_utils_stub
-
 sklearn_stub = types.ModuleType("sklearn")
 metrics_stub = types.ModuleType("sklearn.metrics")
 
@@ -140,15 +140,52 @@ sys.modules["state_manager"] = state_manager_stub
 for mod in ["scipy", "scipy.stats", "scipy.sparse"]:
     sys.modules.pop(mod, None)
 
-model_registry_stub = sys.modules["model_registry"]
-saved_paths = model_registry_stub.saved_paths
-
 import pandas as pd
 import numpy as np
 import joblib
+import pytest
 import time
 
+model_registry_stub = types.ModuleType("model_registry")
+model_registry_stub.saved_paths: list[Path] = []
+
+
+def _stub_save_model(name, model, metadata, path=None):
+    target = Path(path or name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import joblib as _joblib_mod
+    except Exception:  # pragma: no cover - fallback to pickle
+        import pickle
+
+        with target.open("wb") as fh:
+            pickle.dump(model, fh)
+    else:
+        _joblib_mod.dump(model, target)
+
+    meta_path = target.with_suffix(".json")
+    try:
+        meta_path.write_text(json.dumps(metadata, default=str))
+    except Exception:  # pragma: no cover - ensure file exists for rollback
+        meta_path.write_text(json.dumps({"metadata": str(metadata)}))
+
+    model_registry_stub.saved_paths.append(target)
+    return target
+
+
+model_registry_stub.save_model = _stub_save_model
+sys.modules["model_registry"] = model_registry_stub
+saved_paths = model_registry_stub.saved_paths
+
 import train_online
+
+
+@pytest.fixture
+def train_online_module(log_utils_module, monkeypatch):
+    sys.modules["utils"] = utils_stub
+    reloaded = importlib.reload(train_online)
+    monkeypatch.setattr(reloaded, "setup_logging", lambda: None, raising=False)
+    return reloaded
 
 
 def _make_ticks(ts, n=3):
@@ -162,10 +199,12 @@ def _make_ticks(ts, n=3):
     )
 
 
-def test_live_recording_triggers_retraining(tmp_path, monkeypatch):
+def test_live_recording_triggers_retraining(tmp_path, monkeypatch, train_online_module):
+    train_online = train_online_module
     data_path = tmp_path / "live"
     models = tmp_path / "models"
     batches: list[pd.DataFrame] = []
+    saved_paths.clear()
 
     def _record(self, frame: pd.DataFrame) -> None:
         batches.append(frame.copy())
@@ -262,3 +301,44 @@ def test_live_recording_triggers_retraining(tmp_path, monkeypatch):
     train_online.rollback_model(model_dir=models)
     state = joblib.load(latest)
     assert state["last_train_ts"] == last1
+
+
+def test_train_online_logs_errors(
+    tmp_path, monkeypatch, train_online_module, log_utils_module
+):
+    train_online = train_online_module
+
+    class _Cfg(dict):
+        def __init__(self) -> None:
+            super().__init__(
+                seed=0,
+                pt_mult=0.01,
+                sl_mult=0.01,
+                max_horizon=2,
+                online_feature_window=5,
+                online_validation_window=5,
+            )
+            self.training = types.SimpleNamespace(
+                pt_mult=0.01, sl_mult=0.01, max_horizon=2
+            )
+
+    observer = types.SimpleNamespace(stop=lambda: None, join=lambda: None)
+
+    monkeypatch.setattr(train_online, "load_config", lambda: _Cfg())
+    monkeypatch.setattr(train_online, "watch_config", lambda cfg: observer)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("explode")
+
+    monkeypatch.setattr(train_online, "load_ticks", boom)
+
+    with pytest.raises(RuntimeError):
+        train_online.train_online(
+            data_path=tmp_path / "live",
+            model_dir=tmp_path / "models",
+            run_once=True,
+            min_ticks=1,
+            interval=0,
+        )
+
+    assert log_utils_module.ERROR_COUNT.count == 1

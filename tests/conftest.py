@@ -1,12 +1,18 @@
-import pytest
-import unittest.mock as mock
+import base64
+import contextlib
+import importlib
+import importlib.machinery
+import importlib.util
+import inspect
+import json
+import queue
 import sys
 import types
-import contextlib
-import importlib.machinery
-import inspect
+import unittest.mock as mock
 from copy import deepcopy
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture
@@ -54,56 +60,56 @@ prom_mod.CONTENT_TYPE_LATEST = "text/plain"
 prom_mod.__spec__ = importlib.machinery.ModuleSpec("prometheus_client", loader=None)
 sys.modules.setdefault("prometheus_client", prom_mod)
 
-fastapi_mod = types.ModuleType("fastapi")
+try:
+    import fastapi as fastapi_mod  # type: ignore
+except Exception:  # pragma: no cover - fallback when fastapi unavailable
 
+    fastapi_mod = types.ModuleType("fastapi")
 
-class _StubHTTPException(Exception):
-    def __init__(self, status_code: int, detail: str | None = None) -> None:
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
+    class _StubHTTPException(Exception):
+        def __init__(self, status_code: int, detail: str | None = None) -> None:
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
 
+    class _StubRouter:
+        def __init__(self) -> None:
+            self._shutdown_handlers: list = []
 
-class _StubRouter:
-    def __init__(self) -> None:
-        self._shutdown_handlers: list = []
+        async def shutdown(self) -> None:
+            for handler in list(self._shutdown_handlers):
+                result = handler()
+                if inspect.isawaitable(result):
+                    await result
 
-    async def shutdown(self) -> None:
-        for handler in list(self._shutdown_handlers):
-            result = handler()
-            if inspect.isawaitable(result):
-                await result
+        async def startup(self) -> None:  # pragma: no cover - unused hook
+            return
 
-    async def startup(self) -> None:  # pragma: no cover - unused hook
-        return
+    class _StubFastAPI:
+        def __init__(self, *args, **kwargs) -> None:
+            self.router = _StubRouter()
 
-
-class _StubFastAPI:
-    def __init__(self, *args, **kwargs) -> None:
-        self.router = _StubRouter()
-
-    def _register(self, func):  # type: ignore[no-untyped-def]
-        return func
-
-    def get(self, _path: str):  # type: ignore[no-untyped-def]
-        return self._register
-
-    def post(self, _path: str):  # type: ignore[no-untyped-def]
-        return self._register
-
-    def on_event(self, event: str):  # type: ignore[no-untyped-def]
-        def decorator(func):
-            if event == "shutdown":
-                self.router._shutdown_handlers.append(func)
+        def _register(self, func):  # type: ignore[no-untyped-def]
             return func
 
-        return decorator
+        def get(self, _path: str):  # type: ignore[no-untyped-def]
+            return self._register
 
+        def post(self, _path: str):  # type: ignore[no-untyped-def]
+            return self._register
 
-fastapi_mod.FastAPI = _StubFastAPI
-fastapi_mod.HTTPException = _StubHTTPException
-fastapi_mod.__spec__ = importlib.machinery.ModuleSpec("fastapi", loader=None)
-sys.modules.setdefault("fastapi", fastapi_mod)
+        def on_event(self, event: str):  # type: ignore[no-untyped-def]
+            def decorator(func):
+                if event == "shutdown":
+                    self.router._shutdown_handlers.append(func)
+                return func
+
+            return decorator
+
+    fastapi_mod.FastAPI = _StubFastAPI
+    fastapi_mod.HTTPException = _StubHTTPException
+    fastapi_mod.__spec__ = importlib.machinery.ModuleSpec("fastapi", loader=None)
+    sys.modules.setdefault("fastapi", fastapi_mod)
 
 pydantic_mod = types.ModuleType("pydantic")
 
@@ -216,12 +222,15 @@ scheduler_mod.start_scheduler = lambda *a, **k: None
 scheduler_mod.__spec__ = importlib.machinery.ModuleSpec("scheduler", loader=None)
 sys.modules.setdefault("scheduler", scheduler_mod)
 
-crypto_utils_mod = types.ModuleType("crypto_utils")
-crypto_utils_mod._load_key = lambda *a, **k: b""
-crypto_utils_mod.encrypt = lambda *a, **k: b""
-crypto_utils_mod.decrypt = lambda *a, **k: b""
-crypto_utils_mod.__spec__ = importlib.machinery.ModuleSpec("crypto_utils", loader=None)
-sys.modules.setdefault("crypto_utils", crypto_utils_mod)
+try:
+    import crypto_utils as crypto_utils_mod  # type: ignore
+except Exception:  # pragma: no cover - fallback when crypto_utils unavailable
+    crypto_utils_mod = types.ModuleType("crypto_utils")
+    crypto_utils_mod._load_key = lambda *a, **k: b""
+    crypto_utils_mod.encrypt = lambda *a, **k: b""
+    crypto_utils_mod.decrypt = lambda *a, **k: b""
+    crypto_utils_mod.__spec__ = importlib.machinery.ModuleSpec("crypto_utils", loader=None)
+    sys.modules.setdefault("crypto_utils", crypto_utils_mod)
 
 tail_mod = types.ModuleType("risk.tail_hedger")
 
@@ -268,23 +277,139 @@ if "pandas.api" not in sys.modules:
 try:
     import joblib as _joblib_real
 except Exception:  # pragma: no cover - joblib may not be installed
+    import pickle
+
     _joblib_real = types.ModuleType("joblib")
-    _joblib_real.dump = lambda *a, **k: None
-    _joblib_real.load = lambda *a, **k: None
-    _joblib_real.Parallel = lambda *a, **k: None
-    _joblib_real.delayed = lambda func: func
+
+    def _joblib_dump(value, filename, *args, **kwargs):
+        path = Path(filename)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        protocol = kwargs.get("protocol", pickle.HIGHEST_PROTOCOL)
+        with path.open("wb") as fh:
+            pickle.dump(value, fh, protocol=protocol)
+        return [str(path)]
+
+    def _joblib_load(filename, *args, **kwargs):
+        path = Path(filename)
+        with path.open("rb") as fh:
+            return pickle.load(fh)
+
+    class _JoblibParallel:
+        def __init__(self, *args, **kwargs) -> None:  # pragma: no cover - simple shim
+            self._backend = kwargs
+
+        def __call__(self, tasks):  # pragma: no cover - deterministic stub
+            return [task() for task in tasks]
+
+    def _joblib_delayed(func):  # pragma: no cover - deterministic stub
+        def _wrapper(*args, **kwargs):
+            return lambda: func(*args, **kwargs)
+
+        return _wrapper
+
+    _joblib_real.dump = _joblib_dump
+    _joblib_real.load = _joblib_load
+    _joblib_real.Parallel = _JoblibParallel
+    _joblib_real.delayed = _joblib_delayed
+
 sys.modules.setdefault("joblib", _joblib_real)
 
-log_mod = types.ModuleType("log_utils")
-log_mod.LOG_FILE = Path("/tmp/app.log")
-log_mod.LOG_DIR = Path("/tmp")
-log_mod.setup_logging = lambda: types.SimpleNamespace()
-log_mod.log_exceptions = lambda f: f
-log_mod.TRADE_COUNT = types.SimpleNamespace(inc=lambda: None)
-log_mod.ERROR_COUNT = types.SimpleNamespace(inc=lambda: None)
-log_mod.log_decision = lambda *a, **k: None
-log_mod.__spec__ = importlib.machinery.ModuleSpec("log_utils", loader=None)
-sys.modules.setdefault("log_utils", log_mod)
+@pytest.fixture
+def log_utils_module(tmp_path, monkeypatch):
+    """Load the real ``log_utils`` module inside an isolated temp directory."""
+
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.append(str(root))
+    sys.modules.pop("log_utils", None)
+    spec = importlib.util.spec_from_file_location("log_utils", root / "log_utils.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    original_columns = list(module.TRADE_COLUMNS)
+
+    monkeypatch.setattr(module, "LOG_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(module, "LOG_FILE", tmp_path / "app.log", raising=False)
+    monkeypatch.setattr(module, "TRADE_LOG", tmp_path / "trades.csv", raising=False)
+    monkeypatch.setattr(
+        module, "DECISION_LOG", tmp_path / "decisions.parquet.enc", raising=False
+    )
+    monkeypatch.setattr(
+        module, "TRADE_HISTORY", tmp_path / "trade_history.parquet", raising=False
+    )
+    monkeypatch.setattr(
+        module,
+        "ORDER_ID_INDEX",
+        tmp_path / "trade_history_order_ids.parquet",
+        raising=False,
+    )
+    monkeypatch.setattr(module, "state_sync", None, raising=False)
+
+    module.LOG_QUEUE = queue.Queue()
+    module._worker_thread = None
+    module._trade_handler = None
+    class _DummyHandler:
+        maxBytes = 5 * 1024 * 1024
+        stream = None
+
+        def close(self) -> None:  # pragma: no cover - simple stub
+            return
+
+    module._decision_handler = _DummyHandler()
+    module._order_id_cache = None
+
+    class _Counter:
+        def __init__(self) -> None:
+            self.count = 0
+
+        def inc(self) -> None:  # pragma: no cover - trivial increment
+            self.count += 1
+
+    module.TRADE_COUNT = _Counter()
+    module.ERROR_COUNT = _Counter()
+
+    requests_stub = types.SimpleNamespace(
+        Session=lambda: types.SimpleNamespace(post=lambda *a, **k: None),
+        head=lambda *a, **k: None,
+    )
+    monkeypatch.setattr(module, "requests", requests_stub, raising=False)
+
+    sys.modules.pop("crypto_utils", None)
+    crypto_utils_mod = importlib.import_module("crypto_utils")
+    from crypto_utils import encrypt as _fixture_encrypt
+    import base64
+    import io
+    import os
+
+    def _test_log_decision_sync(df, handler):
+        if module.DECISION_LOG.exists() and module.DECISION_LOG.stat().st_size == 0:
+            module.DECISION_LOG.unlink()
+        buf = io.BytesIO()
+        df.to_parquet(buf, engine="pyarrow")
+        payload = buf.getvalue()
+        module._last_parquet_bytes = payload
+        key = base64.b64decode(os.environ["DECISION_AES_KEY"])
+        data = _fixture_encrypt(payload, key)
+        module._last_decision_bytes = data
+        with open(module.DECISION_LOG, "wb") as f:
+            f.write(data)
+        if module.state_sync:
+            module.state_sync.sync_decisions()
+
+    monkeypatch.setattr(module, "_log_decision_sync", _test_log_decision_sync, raising=False)
+
+    key = base64.b64encode(b"0" * 32).decode()
+    monkeypatch.setenv("DECISION_AES_KEY", key)
+
+    sys.modules["log_utils"] = module
+
+    yield module
+
+    module.shutdown_logging()
+    module.LOG_QUEUE = queue.Queue()
+    module._order_id_cache = None
+    module.TRADE_COLUMNS[:] = original_columns
 
 scipy_mod = types.ModuleType("scipy")
 stats_mod = types.ModuleType("scipy.stats")
