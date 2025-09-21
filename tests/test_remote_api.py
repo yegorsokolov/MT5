@@ -14,7 +14,8 @@ from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-def load_api(tmp_log, monkeypatch):
+
+def load_api(tmp_log, monkeypatch, log_utils_module):
     sm_mod = types.ModuleType('utils.secret_manager')
     class SM:
         def get_secret(self, *a, **k):
@@ -34,14 +35,9 @@ def load_api(tmp_log, monkeypatch):
         error=_log,
         exception=_log,
     )
-    sys.modules['log_utils'] = types.SimpleNamespace(
-        LOG_FILE=tmp_log,
-        setup_logging=lambda: logger,
-        log_exceptions=lambda f: f,
-        TRADE_COUNT=types.SimpleNamespace(inc=lambda: None),
-        ERROR_COUNT=types.SimpleNamespace(inc=lambda: None),
-        log_decision=lambda *a, **k: None,
-    )
+    monkeypatch.setattr(log_utils_module, "LOG_FILE", tmp_log, raising=False)
+    monkeypatch.setattr(log_utils_module, "setup_logging", lambda: logger, raising=False)
+    monkeypatch.setattr(log_utils_module, "log_decision", lambda *a, **k: None, raising=False)
     risk_mod = types.ModuleType('risk_manager')
     risk_mod.risk_manager = types.SimpleNamespace(status=lambda: {})
     risk_mod.ensure_scheduler_started = lambda: None
@@ -140,8 +136,8 @@ class DummyProc:
     def terminate(self):
         self.terminated = True
 
-def setup_api(tmp_path, monkeypatch):
-    api = load_api(tmp_path / "app.log", monkeypatch)
+def setup_api(tmp_path, monkeypatch, log_utils_module):
+    api = load_api(tmp_path / "app.log", monkeypatch, log_utils_module)
     api.bots.clear()
     Path(api.LOG_FILE).write_text("line1\nline2\n")
     sched = sys.modules.get('scheduler')
@@ -152,8 +148,9 @@ def setup_api(tmp_path, monkeypatch):
             sched.retrain_calls.clear()
     return api
 
-def test_health_auth(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+
+def test_health_auth(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     with TestClient(api.app) as client:
         resp = client.get("/health")
         assert resp.status_code == 401
@@ -164,8 +161,8 @@ def test_health_auth(tmp_path, monkeypatch):
         assert "line2" in data["logs"]
         assert isinstance(data["bots"], dict)
 
-def test_bot_status(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_bot_status(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     api.bots["bot1"] = api.BotInfo(proc=DummyProc())
     with TestClient(api.app) as client:
         resp = client.get("/bots/bot1/status", headers={"x-api-key": "token"})
@@ -177,8 +174,8 @@ def test_bot_status(tmp_path, monkeypatch):
         assert resp.status_code == 404
 
 
-def test_bot_logs(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_bot_logs(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     api.bots["bot1"] = api.BotInfo(proc=DummyProc())
     with TestClient(api.app) as client:
         resp = client.get("/bots/bot1/logs", headers={"x-api-key": "token"})
@@ -188,8 +185,8 @@ def test_bot_logs(tmp_path, monkeypatch):
         assert resp.status_code == 404
 
 
-def test_metrics_websocket(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_metrics_websocket(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
 
     with TestClient(api.app) as client:
         with pytest.raises(Exception):
@@ -205,15 +202,15 @@ def test_metrics_websocket(tmp_path, monkeypatch):
             assert data["metrics"]["sharpe"] == 1.0
 
 
-def test_metrics_endpoint(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_metrics_endpoint(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     with TestClient(api.app) as client:
         resp = client.get("/metrics")
         assert resp.status_code == 200
 
 
-def test_shutdown_cancels_background_tasks(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_shutdown_cancels_background_tasks(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     assert not api._background_tasks
 
     api.resource_watchdog.max_rss_mb = 100
@@ -231,8 +228,8 @@ def test_shutdown_cancels_background_tasks(tmp_path, monkeypatch):
     assert not api._background_tasks
 
 
-def test_bot_restart_and_health(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_bot_restart_and_health(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
 
     class CrashProc(DummyProc):
         def __init__(self, code=1):
@@ -274,8 +271,8 @@ def test_bot_restart_and_health(tmp_path, monkeypatch):
     assert any("Bot bot1 exited with code 1" in msg for msg in api._logs)
 
 
-def test_bot_removed_on_restart_failure(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_bot_removed_on_restart_failure(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
 
     class CrashProc(DummyProc):
         def __init__(self):
@@ -307,8 +304,8 @@ def test_bot_removed_on_restart_failure(tmp_path, monkeypatch):
     assert any("bot1" in msg for msg in api._logs)
 
 
-def test_bot_crash_limit_triggers_alert(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_bot_crash_limit_triggers_alert(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     alerts: List[str] = []
 
     def capture_alert(message: str) -> None:
@@ -344,8 +341,8 @@ def test_bot_crash_limit_triggers_alert(tmp_path, monkeypatch):
     assert any("bot-loop" in msg for msg in alerts)
 
 
-def test_controls_list(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_controls_list(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     with TestClient(api.app) as client:
         resp = client.get("/controls", headers={"x-api-key": "token"})
         assert resp.status_code == 200
@@ -354,8 +351,8 @@ def test_controls_list(tmp_path, monkeypatch):
         assert any(task == "cleanup_checkpoints" for task in data["tasks"])
 
 
-def test_controls_run(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_controls_run(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     with TestClient(api.app) as client:
         resp = client.post(
             "/controls/run",
@@ -367,8 +364,8 @@ def test_controls_run(tmp_path, monkeypatch):
     assert ("run_drift_detection", (), {}) in sched.tasks_run
 
 
-def test_controls_run_unknown(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_controls_run_unknown(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     with TestClient(api.app) as client:
         resp = client.post(
             "/controls/run",
@@ -378,8 +375,8 @@ def test_controls_run_unknown(tmp_path, monkeypatch):
         assert resp.status_code == 404
 
 
-def test_controls_retrain(tmp_path, monkeypatch):
-    api = setup_api(tmp_path, monkeypatch)
+def test_controls_retrain(tmp_path, monkeypatch, log_utils_module):
+    api = setup_api(tmp_path, monkeypatch, log_utils_module)
     with TestClient(api.app) as client:
         resp = client.post(
             "/controls/retrain",
