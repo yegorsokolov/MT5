@@ -65,3 +65,6 @@ analysis/news_impact.parquet
 # Documentation build artifacts
 docs/_build/
 site/
+
+# Test log archives
+logs/test_runs/
