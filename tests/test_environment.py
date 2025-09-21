@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
@@ -127,3 +129,52 @@ def test_low_spec_adjustment_validates_with_app_config(tmp_path, monkeypatch):
     assert isinstance(training, dict)
     assert training.get("batch_size") == 32
     assert training.get("n_jobs") == 1
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("requests>=2.31", ("requests", "requests")),
+        ("uvicorn[standard]==0.20.0", ("uvicorn", "uvicorn")),
+        (
+            "some-package[extra1,extra2]; python_version<'3.10'",
+            ("some-package", "some_package"),
+        ),
+        (
+            "rich @ git+https://github.com/Textualize/rich.git",
+            ("rich", "rich"),
+        ),
+        ("numpy>=1.23  # inline comment", ("numpy", "numpy")),
+        ("   # comment line", None),
+        ("", None),
+    ],
+)
+def test_parse_requirement_line_normalises_inputs(line, expected):
+    assert environment._parse_requirement_line(line) == expected
+
+
+def test_check_dependencies_skips_comments_and_normalises(tmp_path, monkeypatch):
+    requirements = [
+        "# global comment",
+        "requests>=2.31",
+        "uvicorn[standard]==0.20.0 ; python_version >= '3.8'",
+        "some-package[extra1]; python_version<'3.10'  # trailing comment",
+        "rich @ git+https://github.com/Textualize/rich.git",
+        "   ",
+    ]
+
+    req_file = tmp_path / "requirements-core.txt"
+    req_file.write_text("\n".join(requirements))
+
+    monkeypatch.setattr(environment, "REQ_FILE", req_file)
+
+    requested: list[str] = []
+
+    def _fake_find_loader(name: str):
+        requested.append(name)
+        return object()
+
+    monkeypatch.setattr(environment.pkgutil, "find_loader", _fake_find_loader)
+
+    assert environment._check_dependencies() == []
+    assert requested == ["requests", "uvicorn", "some_package", "rich"]
