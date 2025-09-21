@@ -31,3 +31,26 @@ def test_embeddings_shape(monkeypatch):
     assert len(emb_cols) == 768
     assert enriched[emb_cols].shape == (2, len(emb_cols))
     assert "news_sentiment" in enriched.columns
+    derived_cols = [
+        "news_sentiment_magnitude",
+        "news_sentiment_length",
+        "news_sentiment_effect_minutes",
+        "news_sentiment_effect_half_life",
+        "news_sentiment_importance",
+        "news_sentiment_market_adjusted",
+        "news_sentiment_risk_weighted",
+        "news_sentiment_severity",
+        "news_sentiment_effect",
+        "news_market_intensity",
+        "news_risk_tolerance",
+    ]
+    for col in derived_cols:
+        assert col in enriched.columns
+        assert pd.api.types.is_numeric_dtype(enriched[col])
+    assert (enriched["news_sentiment_length"] >= 0).all()
+    assert (enriched["news_sentiment_length"] <= 1).all()
+    assert (enriched["news_sentiment_effect_minutes"] > 0).all()
+    assert (enriched["news_sentiment_effect_half_life"] > 0).all()
+    assert (enriched["news_sentiment_importance"] >= 0).all()
+    assert (enriched["news_sentiment_importance"] <= 1).all()
+    assert (enriched["news_sentiment_magnitude"] >= 0).all()
