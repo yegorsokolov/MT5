@@ -7,13 +7,48 @@ from datetime import datetime
 from contextlib import contextmanager
 from typing import Any, Literal, overload
 import os
+import warnings
 import yaml
-import mlflow
 import log_utils
 from pydantic import ValidationError, BaseModel
 from filelock import FileLock
 from config_models import AppConfig, ConfigError
 from .secret_manager import SecretManager
+
+try:
+    import mlflow as _mlflow
+except ImportError:
+    class _MlflowShim:
+        """Lightweight MLflow replacement when the dependency is absent."""
+
+        _warned = False
+
+        def _warn(self) -> None:
+            if not self.__class__._warned:
+                warnings.warn(
+                    "MLflow is not installed; experiment logging is disabled.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self.__class__._warned = True
+
+        def set_tracking_uri(self, *args, **kwargs) -> None:
+            self._warn()
+
+        def set_experiment(self, *args, **kwargs) -> None:
+            self._warn()
+
+        @contextmanager
+        def start_run(self, *args, **kwargs):
+            self._warn()
+            yield None
+
+        def log_dict(self, *args, **kwargs) -> None:
+            self._warn()
+
+    mlflow = _MlflowShim()
+else:
+    mlflow = _mlflow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
