@@ -7,7 +7,33 @@ from typing import Dict, Mapping
 
 import pandas as pd
 from scheduler import schedule_retrain
-from analytics import mlflow_client as mlflow
+
+LOGGER = logging.getLogger(__name__)
+_MLFLOW_AVAILABLE = False
+_WARNED_MLFLOW = False
+
+
+def _log_missing_mlflow_metric(
+    key: str, value: float, step: int | None = None
+) -> None:
+    """Warn that MLflow is unavailable when attempting to log a metric."""
+
+    global _WARNED_MLFLOW
+    if not _WARNED_MLFLOW:
+        LOGGER.warning(
+            "MLflow client unavailable; skipping logging of drift metric '%s' (value=%s).",
+            key,
+            value,
+        )
+        _WARNED_MLFLOW = True
+
+
+try:  # optional dependency
+    from analytics import mlflow_client as mlflow  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    mlflow = None  # type: ignore[assignment]
+else:
+    _MLFLOW_AVAILABLE = True
 
 try:  # optional dependency
     from event_store import EventStore  # type: ignore
@@ -168,10 +194,13 @@ class ConceptDriftMonitor:
         log_path = self.log_dir / f"{ts.replace(':', '-')}_{source}.json"
         with open(log_path, "w") as fh:
             json.dump({"timestamp": ts, "source": source}, fh)
-        try:
-            mlflow.log_metric("concept_drift", 1.0)
-        except Exception:  # pragma: no cover - mlflow optional
-            pass
+        if _MLFLOW_AVAILABLE:
+            try:
+                mlflow.log_metric("concept_drift", 1.0)
+            except Exception:  # pragma: no cover - mlflow optional
+                pass
+        else:
+            _log_missing_mlflow_metric("concept_drift", 1.0)
         try:
             schedule_retrain(model=model, update_hyperparams=True, store=self.store)
         except Exception:
