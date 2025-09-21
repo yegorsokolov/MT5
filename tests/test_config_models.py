@@ -12,6 +12,10 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+sys.modules.pop("config_models", None)
+sys.modules.pop("pydantic", None)
+sys.modules.pop("utils", None)
+
 mlflow_stub = types.ModuleType("mlflow")
 mlflow_stub.set_tracking_uri = lambda *a, **k: None
 mlflow_stub.set_experiment = lambda *a, **k: None
@@ -125,3 +129,17 @@ def test_alerting_recipient_string(tmp_path):
         "ops@example.com",
         "alerts@example.com",
     ]
+
+
+def test_app_config_get_returns_optional_section(tmp_path):
+    cfg_file = write_cfg(
+        tmp_path,
+        {
+            "strategy": {"symbols": ["EURUSD"], "risk_per_trade": 0.1},
+            "alerting": {"slack_webhook": "https://hooks.slack.test/alert"},
+        },
+    )
+    cfg = utils.load_config(cfg_file)
+    alerting_section = cfg.get("alerting")
+    assert alerting_section is cfg.alerting
+    assert alerting_section.slack_webhook == "https://hooks.slack.test/alert"
