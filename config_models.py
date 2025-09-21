@@ -369,10 +369,17 @@ class AppConfig(BaseModel):
     def get(self, key: str, default: Any | None = None) -> Any:
         for section_name in ("training", "features", "strategy", "services"):
             section = getattr(self, section_name, None)
-            if isinstance(section, BaseModel) and key in section.model_fields:
-                return getattr(section, key)
+            if isinstance(section, BaseModel):
+                section_fields = type(section).model_fields
+                if key in section_fields:
+                    return getattr(section, key)
         extras = getattr(self, "__pydantic_extra__", None) or {}
-        return extras.get(key, default)
+        if key in extras:
+            return extras[key]
+        model_fields = type(self).model_fields
+        if key in model_fields:
+            return getattr(self, key, default)
+        return default
 
     def update_from(self, other: "AppConfig") -> None:
         """In-place update from another :class:`AppConfig` instance."""
