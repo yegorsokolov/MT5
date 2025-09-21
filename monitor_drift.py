@@ -27,6 +27,38 @@ DRIFT_METRICS = LOG_DIR / "drift_metrics.parquet"
 BASELINE_METRICS = LOG_DIR / "training_baseline.parquet"
 
 
+def _pyarrow_engine() -> Optional[str]:
+    """Return the configured parquet engine when ``pyarrow`` is available."""
+
+    try:
+        import pyarrow  # type: ignore  # noqa: F401
+    except ImportError:
+        return None
+    return "pyarrow"
+
+
+def _write_parquet_store(df: pd.DataFrame, path: Path) -> None:
+    """Persist ``df`` to ``path`` while safely appending existing batches."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    engine = _pyarrow_engine()
+    read_kwargs: dict[str, str] = {}
+    write_kwargs: dict[str, str] = {}
+    if engine is not None:
+        read_kwargs["engine"] = engine
+        write_kwargs["engine"] = engine
+    if path.exists():
+        try:
+            existing = pd.read_parquet(path, **read_kwargs)
+        except (ImportError, ValueError):
+            existing = pd.read_parquet(path)
+        df = pd.concat([existing, df], sort=False)
+    try:
+        df.to_parquet(path, **write_kwargs)
+    except (ImportError, ValueError):
+        df.to_parquet(path)
+
+
 def population_stability_index(expected: pd.Series, actual: pd.Series, buckets: int = 10) -> float:
     """Compute the Population Stability Index between two samples.
 
@@ -101,10 +133,7 @@ class DriftMonitor:
         """Append feature and prediction samples to the drift store."""
         df = features.copy()
         df["prediction"] = preds
-        if self.store_path.exists():
-            df.to_parquet(self.store_path, engine="pyarrow", append=True)
-        else:
-            df.to_parquet(self.store_path, engine="pyarrow")
+        _write_parquet_store(df, self.store_path)
 
     def compare(self) -> None:
         """Compare current distributions against training baselines."""
