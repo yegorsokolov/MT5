@@ -1011,22 +1011,33 @@ The neural subcommand supports memory-saving options controlled by two flags in
 These options allow larger models or batch sizes to fit in memory; while AMP
 can speed up training, checkpointing may slow it slightly due to recomputation.
 
-## Automatic Log Uploading
+## Automatic Artifact Uploading
 
-`scripts/sync_artifacts.py` commits the contents of `logs/`, `checkpoints/` and `config.yaml` to
-the repository. Set the `GITHUB_TOKEN` environment variable to a token with
-write access before running:
+`scripts/sync_artifacts.py` commits the contents of `logs/`, `checkpoints/`,
+`analytics/` (metrics, regime diagnostics and issue snapshots), generated
+reports under `reports/` and `config.yaml` to the repository. Set the
+`GITHUB_TOKEN` environment variable to a token with write access before
+running:
 
 ```bash
 GITHUB_TOKEN=<token> python scripts/sync_artifacts.py
 ```
 
+The synchroniser searches the analytics and report directories for common data
+formats (`.parquet`, `.csv`, `.json`, `.html`, `.md`, `.yaml`, `.png`, `.pdf`,
+`.feather`, `.xlsx`, etc.). Additional directories can be supplied with
+`SYNC_ARTIFACT_DIRS` (comma, colon or semicolon separated relative paths) and
+extra suffixes with `SYNC_ARTIFACT_SUFFIXES`.
+
 Long-running services can import and call
-`scripts.sync_artifacts.register_shutdown_hook()` to push artifacts when they exit. To
-upload logs periodically, schedule the script with cron, for example:
+`scripts.sync_artifacts.register_shutdown_hook()` to push artifacts when they
+exit. The helper `scripts/hourly_artifact_push.py` also honours the
+`SYNC_INTERVAL_SECONDS` environment variable (default 3600) so you can trigger
+uploads daily by setting it to `86400`. To run the synchronisation once per day
+via cron:
 
 ```cron
-0 * * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/sync_artifacts.py
+0 2 * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/sync_artifacts.py
 ```
 
 ## Docker image
