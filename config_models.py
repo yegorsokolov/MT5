@@ -105,6 +105,31 @@ class TrainingConfig(BaseModel):
         "lgbm",
         description="Primary model architecture to train (lgbm, neural, cross_modal)",
     )
+    batch_size: int | None = Field(
+        None,
+        ge=1,
+        description="Mini-batch size for offline training runs",
+    )
+    eval_batch_size: int | None = Field(
+        None,
+        ge=1,
+        description="Batch size used for evaluation loaders",
+    )
+    min_batch_size: int = Field(
+        8,
+        ge=1,
+        description="Lower bound when auto-tuning training batch size",
+    )
+    online_batch_size: int | None = Field(
+        1000,
+        ge=1,
+        description="Chunk size when replaying historical data online",
+    )
+    n_jobs: int | None = Field(
+        None,
+        ge=1,
+        description="Parallel worker count for tree-based estimators",
+    )
     use_pseudo_labels: bool = False
     use_focal_loss: bool = False
     focal_alpha: float = Field(0.25, ge=0.0)
