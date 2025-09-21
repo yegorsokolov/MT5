@@ -1,6 +1,7 @@
 import csv
-import json
 import asyncio
+import json
+import math
 from datetime import datetime, timezone, timedelta
 from importlib import import_module
 from pathlib import Path
@@ -19,6 +20,7 @@ try:  # pragma: no cover - pandas is optional at runtime
 except Exception:  # pragma: no cover
     pd = None  # type: ignore
 
+from .effect_length import estimate_effect_length
 from .scrapers import (
     cbc,
     cnn,
@@ -34,6 +36,11 @@ try:  # pragma: no cover - optional AI helpers
     from . import ai_enrichment
 except Exception:  # pragma: no cover
     ai_enrichment = None  # type: ignore
+
+try:  # pragma: no cover - optional persistent risk settings
+    from state_manager import load_user_risk  # type: ignore
+except Exception:  # pragma: no cover
+    load_user_risk = None  # type: ignore
 
 
 DEFAULT_SCRAPERS = [
@@ -60,6 +67,25 @@ def _normalise_importance(value: Optional[str]) -> Optional[str]:
         "low": "yellow",
     }
     return mapping.get(val, val)
+
+
+def _importance_weight(value: Any) -> float:
+    """Map raw importance values to ``[0, 1]``."""
+
+    if value is None:
+        return 0.5
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return float(max(0.0, min(1.0, float(value))))
+    val = str(value).strip().lower()
+    mapping = {
+        "red": 1.0,
+        "high": 1.0,
+        "orange": 0.7,
+        "medium": 0.6,
+        "yellow": 0.4,
+        "low": 0.3,
+    }
+    return mapping.get(val, 0.5)
 
 
 _POSITIVE_TERMS = {
@@ -152,6 +178,27 @@ def _load_impact_model() -> Optional[ModuleType]:
     return _IMPACT_MODEL
 
 
+def _risk_scale() -> float:
+    """Return risk scaling based on persisted user limits."""
+
+    if load_user_risk is None:  # pragma: no cover - optional dependency
+        return 1.0
+    try:
+        cfg = load_user_risk()
+        daily = float(cfg.get("daily_drawdown", 0.0))
+        total = float(cfg.get("total_drawdown", 0.0))
+        blackout = float(cfg.get("news_blackout_minutes", 0.0))
+    except Exception:
+        return 1.0
+    if not math.isfinite(daily) or daily < 0:
+        daily = 0.0
+    if not math.isfinite(total) or total <= 0:
+        total = max(daily, 1.0)
+    ratio = max(0.05, min(1.0, daily / total if total else 0.5))
+    blackout_factor = 1.0 - min(max(blackout, 0.0) / 720.0, 0.5)
+    return float(max(0.4, min(1.6, (0.75 + 0.5 * ratio) * blackout_factor)))
+
+
 class NewsAggregator:
     """Aggregate economic and headline news from multiple sources.
 
@@ -205,6 +252,9 @@ class NewsAggregator:
 
         analysed: List[Dict] = []
         rows: List[Dict[str, Any]] = []
+        risk_scale = _risk_scale()
+        event_sentiments: Dict[int, List[float]] = {}
+        event_weights: Dict[int, List[float]] = {}
         for idx, event in enumerate(events):
             ev = dict(event)
             ts = _ensure_datetime(ev.get("timestamp"))
@@ -214,6 +264,11 @@ class NewsAggregator:
             text = " ".join(
                 part.strip() for part in [ev.get("title", ""), ev.get("summary", "")] if part
             )
+            words = [w for w in text.split() if w]
+            word_count = len(words)
+            char_count = len(text)
+            importance_score = _importance_weight(ev.get("importance") or ev.get("impact"))
+
             sentiment = ev.get("sentiment")
             if sentiment is None:
                 sentiment = _headline_sentiment(text)
@@ -227,6 +282,8 @@ class NewsAggregator:
 
             analysis = dict(ev.get("analysis") or {})
             analysis["sentiment"] = sentiment
+            analysis["word_count"] = word_count
+            analysis["char_count"] = char_count
 
             if ai_enrichment is not None:
                 summary_source = ev.get("summary") or text
@@ -251,7 +308,39 @@ class NewsAggregator:
                         sentiment = float(ml_sentiment)
                     sentiment = max(-1.0, min(1.0, sentiment))
                     ev["sentiment"] = sentiment
-                    analysis["sentiment"] = sentiment
+
+            sentiment = float(ev.get("sentiment", sentiment))
+            magnitude = abs(sentiment)
+            effect = estimate_effect_length(
+                text=text,
+                magnitude=magnitude,
+                importance=importance_score,
+                risk_scale=risk_scale,
+            )
+            length_score = effect.score
+            importance_score = max(importance_score, effect.importance)
+            severity = float(
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        magnitude
+                        * (0.55 + 0.25 * length_score + 0.2 * importance_score)
+                        * risk_scale,
+                    ),
+                )
+            )
+            sentiment_effect = sentiment * severity
+            analysis["sentiment"] = sentiment
+            analysis["sentiment_magnitude"] = magnitude
+            analysis["severity"] = severity
+            analysis["sentiment_effect"] = sentiment_effect
+            analysis["risk_scale"] = risk_scale
+            analysis["length_score"] = length_score
+            analysis["importance_score"] = importance_score
+            analysis["effect_minutes"] = effect.minutes
+            analysis["effect_half_life_minutes"] = effect.half_life
+            analysis["effect_hours"] = effect.minutes / 60.0
 
             impact = ev.get("impact")
             if impact is not None:
@@ -279,6 +368,7 @@ class NewsAggregator:
                 if cleaned:
                     cleaned_symbols.append(cleaned)
             ev["symbols"] = cleaned_symbols
+            ev["severity"] = severity
             analysed.append(ev)
 
             if cleaned_symbols and isinstance(ev.get("timestamp"), datetime):
@@ -292,29 +382,51 @@ class NewsAggregator:
                             "surprise": 0.0,
                             "historical_response": 0.0,
                             "text": text or ev.get("title", ""),
+                            "severity": severity,
+                            "length_score": length_score,
+                            "effect_minutes": effect.minutes,
+                            "effect_half_life": effect.half_life,
+                            "risk_scale": risk_scale,
+                            "importance_score": importance_score,
+                            "sentiment_effect": sentiment_effect,
                         }
                     )
 
+            if cleaned_symbols:
+                event_sentiments.setdefault(idx, []).append(sentiment)
+                event_weights.setdefault(idx, []).append(max(severity, 0.1))
+
+            analysis["sentiment"] = sentiment
             ev["analysis"] = analysis
 
         model = _load_impact_model()
         if rows and pd is not None and model is not None and hasattr(model, "score"):
             df = pd.DataFrame(rows)
             try:
-                score_df = model.score(
-                    df[[
-                        "symbol",
-                        "timestamp",
-                        "surprise",
-                        "sentiment",
-                        "historical_response",
-                        "text",
-                    ]]
-                )
+                feature_cols = [
+                    "symbol",
+                    "timestamp",
+                    "surprise",
+                    "sentiment",
+                    "historical_response",
+                    "text",
+                ]
+                for optional_col in (
+                    "severity",
+                    "length_score",
+                    "effect_minutes",
+                    "effect_half_life",
+                    "risk_scale",
+                    "importance_score",
+                    "sentiment_effect",
+                ):
+                    if optional_col in df.columns:
+                        feature_cols.append(optional_col)
+                score_df = model.score(df[feature_cols])
             except Exception:
                 score_df = None
 
-            if score_df is not None and not score_df.empty:
+            if score_df is not None and not score_df.empty and "impact" in score_df.columns:
                 df = df.reset_index(drop=True)
                 score_df = score_df.reset_index(drop=True)
                 df["impact"] = score_df["impact"].astype(float)
@@ -332,14 +444,15 @@ class NewsAggregator:
                     analysis["uncertainty"] = uncert_val
                     analysed[event_idx]["analysis"] = analysis
 
-        event_sentiments: Dict[int, List[float]] = {}
-        for row in rows:
-            event_sentiments.setdefault(row["event_idx"], []).append(float(row["sentiment"]))
         for idx, sentiments in event_sentiments.items():
             if analysed[idx].get("impact") is not None:
                 continue
             if sentiments:
-                impact_val = float(sum(sentiments) / len(sentiments))
+                weights = event_weights.get(idx, [1.0] * len(sentiments))
+                denom = sum(weights) or len(sentiments)
+                impact_val = float(
+                    sum(s * w for s, w in zip(sentiments, weights)) / denom
+                )
                 analysed[idx]["impact"] = impact_val
                 analysed[idx]["impact_uncertainty"] = analysed[idx].get(
                     "impact_uncertainty", 1.0

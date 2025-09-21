@@ -57,3 +57,19 @@ async def test_update_and_cache(tmp_path, monkeypatch):
     titles = set(df["title"])
     assert "Apple beats expectations" in titles
     assert "Apple shares fall on weak guidance" in titles
+    for col in [
+        "severity",
+        "sentiment_effect",
+        "length_score",
+        "risk_scale",
+        "importance_score",
+        "effect_minutes",
+        "effect_half_life",
+    ]:
+        assert col in df.columns
+    assert (df["severity"] >= 0).all()
+    assert (df["severity"] <= 1).all()
+    assert (df["length_score"] >= 0).all()
+    assert (df["length_score"] <= 1).all()
+    assert (df["effect_minutes"] > 0).all()
+    assert (df["effect_half_life"] > 0).all()
