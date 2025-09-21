@@ -389,7 +389,9 @@ def test_train_rl_cli_missing_torch(monkeypatch: pytest.MonkeyPatch):
     train_rl_mod = _load_train_rl(monkeypatch)
 
     args = argparse.Namespace(config=None, seed=None, steps=None, validate=False)
-    monkeypatch.setattr(cli_mod, "_prepare_config", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli_mod, "_prepare_config", lambda *a, **k: (None, None, False)
+    )
     monkeypatch.setattr(train_rl_mod, "_TORCH_AVAILABLE", False, raising=False)
     monkeypatch.setattr(
         train_rl_mod,
