@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
+from collections.abc import Mapping
+from copy import deepcopy
 import logging
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
 
 from utils import load_config
@@ -26,7 +30,25 @@ logger = logging.getLogger(__name__)
 
 # default location for walk forward summary output
 _LOG_PATH = Path(__file__).resolve().parent / "logs" / "walk_forward_summary.csv"
-_LOG_PATH.parent.mkdir(exist_ok=True)
+
+
+def _config_to_dict(cfg: Any) -> dict[str, Any]:
+    """Return a deep-copied mapping representation of ``cfg``.
+
+    When ``cfg`` is a Pydantic model we merge ``__pydantic_extra__`` so the
+    result mirrors :meth:`AppConfig.get` while ensuring nested values are
+    fully copied for each symbol.
+    """
+
+    if hasattr(cfg, "model_dump"):
+        data = cfg.model_dump()
+        extras = getattr(cfg, "__pydantic_extra__", None) or {}
+        if extras:
+            data.update(extras)
+        return deepcopy(data)
+    if isinstance(cfg, Mapping):
+        return deepcopy(dict(cfg))
+    return deepcopy(dict(getattr(cfg, "__dict__", {})))
 
 
 def aggregate_results(results: dict[str, dict]) -> pd.DataFrame:
@@ -121,7 +143,7 @@ def main() -> pd.DataFrame | None:
         symbols = cfg.get("symbols") or [cfg.get("symbol")]
         configs = []
         for sym in symbols:
-            cfg_sym = dict(cfg)
+            cfg_sym = _config_to_dict(cfg)
             cfg_sym["symbol"] = sym
             configs.append(cfg_sym)
 
@@ -139,6 +161,7 @@ def main() -> pd.DataFrame | None:
 
     df = aggregate_results(results)
     header = not _LOG_PATH.exists()
+    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(_LOG_PATH, mode="a", header=header, index=False)
     logger.info("%s", df.to_string(index=False))
     return df
