@@ -1,6 +1,6 @@
 import datetime as dt
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import MetaTrader5 as _mt5
 try:  # allow import to be stubbed in tests
@@ -184,6 +184,55 @@ def _tz_localize_none(series):
     return series.dt.tz_localize(None)
 
 
+def _tick_to_dict(tick: Any) -> Dict[str, Any]:
+    """Return a dictionary representation of ``tick``."""
+
+    if isinstance(tick, dict):
+        return dict(tick)
+
+    data: Dict[str, Any] = {}
+
+    # Named tuples expose ``_asdict`` for conversion.
+    asdict = getattr(tick, "_asdict", None)
+    if callable(asdict):
+        data.update(asdict())
+
+    dtype = getattr(getattr(tick, "dtype", None), "names", None)
+    if dtype:
+        try:
+            data.update({name: tick[name] for name in dtype})
+        except Exception:
+            pass
+
+    for key in ("time_msc", "time", "bid", "ask", "last", "volume", "volume_real", "flags"):
+        if key in data:
+            continue
+        if hasattr(tick, key):
+            try:
+                data[key] = getattr(tick, key)
+            except Exception:
+                continue
+
+    if not data and isinstance(tick, Iterable):
+        keys = ["time", "bid", "ask", "volume"]
+        for idx, key in enumerate(keys):
+            try:
+                data[key] = tick[idx]  # type: ignore[index]
+            except Exception:
+                break
+
+    return data
+
+
+def _ticks_to_dataframe(ticks: Iterable[Any]) -> _pd.DataFrame:
+    """Convert tick structures to a pandas DataFrame."""
+
+    rows = [_tick_to_dict(tick) for tick in ticks]
+    if not rows:
+        return _pd.DataFrame()
+    return _pd.DataFrame(rows)
+
+
 def _find_mt5_symbol(symbol: str):
     info = _mt5.symbol_info(symbol)
     if info:
@@ -322,15 +371,51 @@ def fetch_history(symbol: str, start: dt.datetime, end: dt.datetime):
     if not ticks:
         return pd.DataFrame()
 
-    df = pd.DataFrame(ticks)
-    df["Timestamp"] = _tz_localize_none(
-        _to_datetime(df["time"], unit="s", utc=True)
-    )
-    df.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
-    df = df[["Timestamp", "Bid", "Ask", "Volume"]]
-    df["BidVolume"] = df["Volume"]
-    df["AskVolume"] = df["Volume"]
-    df.drop(columns=["Volume"], inplace=True)
+    df_pd = _ticks_to_dataframe(ticks)
+    if df_pd.empty:
+        return pd.DataFrame()
 
-    logger.info("Loaded %d ticks from MetaTrader5", len(df))
-    return df
+    if "time_msc" in df_pd.columns:
+        time_col = "time_msc"
+        unit = "ms"
+    elif "time" in df_pd.columns:
+        time_col = "time"
+        unit = "s"
+    else:
+        raise KeyError("MetaTrader5 tick data missing 'time'/'time_msc' fields")
+
+    if "bid" not in df_pd.columns and "last" in df_pd.columns:
+        df_pd["bid"] = df_pd["last"]
+    if "ask" not in df_pd.columns and "last" in df_pd.columns:
+        df_pd["ask"] = df_pd["last"]
+    if "volume" not in df_pd.columns and "volume_real" in df_pd.columns:
+        df_pd["volume"] = df_pd["volume_real"]
+
+    for col in ("bid", "ask", "volume"):
+        if col not in df_pd.columns:
+            df_pd[col] = 0
+
+    df_pd["Timestamp"] = _tz_localize_none(
+        _to_datetime(df_pd[time_col], unit=unit, utc=True)
+    )
+    df_pd.rename(columns={"bid": "Bid", "ask": "Ask", "volume": "Volume"}, inplace=True)
+
+    df_pd = df_pd[["Timestamp", "Bid", "Ask", "Volume"]]
+    df_pd["BidVolume"] = df_pd["Volume"]
+    df_pd["AskVolume"] = df_pd["Volume"]
+    df_pd.drop(columns=["Volume"], inplace=True)
+
+    logger.info("Loaded %d ticks from MetaTrader5", len(df_pd))
+
+    if pd is _pd:
+        return df_pd
+
+    try:
+        dataframe_ctor = getattr(pd, "DataFrame", None)
+        if dataframe_ctor is not None and hasattr(dataframe_ctor, "from_pandas"):
+            return dataframe_ctor.from_pandas(df_pd)  # type: ignore[call-arg]
+        if hasattr(pd, "from_pandas"):
+            return pd.from_pandas(df_pd)  # type: ignore[attr-defined]
+        return pd.DataFrame(df_pd)
+    except Exception:
+        return df_pd
