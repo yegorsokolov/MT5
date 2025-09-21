@@ -10,22 +10,23 @@ if str(REPO_ROOT) not in sys.path:
 from utils import environment
 
 
-def _run_low_spec_adjustment(tmp_path, monkeypatch):
+def _run_low_spec_adjustment(tmp_path, monkeypatch, config_data=None):
     config_path = tmp_path / "config.yaml"
-    config_data = {
-        "training": {
-            "batch_size": 128,
-            "n_jobs": 8,
-            "other": "keep",
-        },
-        "strategy": {
-            "symbols": ["EURUSD"],
-            "risk_per_trade": 0.05,
-        },
-        "alerting": {
-            "slack_webhook": "secret://alert-webhook",
-        },
-    }
+    if config_data is None:
+        config_data = {
+            "training": {
+                "batch_size": 128,
+                "n_jobs": 8,
+                "other": "keep",
+            },
+            "strategy": {
+                "symbols": ["EURUSD"],
+                "risk_per_trade": 0.05,
+            },
+            "alerting": {
+                "slack_webhook": "secret://alert-webhook",
+            },
+        }
     config_path.write_text(json.dumps(config_data, indent=2))
 
     monkeypatch.setenv("CONFIG_FILE", str(config_path))
@@ -86,3 +87,43 @@ def test_low_spec_adjustment_updates_training_values(tmp_path, monkeypatch):
     assert config_data["training"]["n_jobs"] == 8
 
     assert saved_data["strategy"] == config_data["strategy"]
+
+
+def test_low_spec_adjustment_updates_flat_keys(tmp_path, monkeypatch):
+    custom_cfg = {
+        "batch_size": 256,
+        "n_jobs": 4,
+        "strategy": {
+            "symbols": ["EURUSD"],
+            "risk_per_trade": 0.05,
+        },
+    }
+
+    original, _, saved = _run_low_spec_adjustment(tmp_path, monkeypatch, custom_cfg)
+
+    assert original["batch_size"] == 256
+    assert original["n_jobs"] == 4
+
+    assert saved["batch_size"] == 32
+    assert saved["n_jobs"] == 1
+    assert saved["training"]["batch_size"] == 32
+    assert saved["training"]["n_jobs"] == 1
+
+
+def test_low_spec_adjustment_validates_with_app_config(tmp_path, monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class _SentinelConfig:
+        def __init__(self, **values):
+            calls.append(values)
+
+    monkeypatch.setattr(environment, "AppConfig", _SentinelConfig)
+
+    _run_low_spec_adjustment(tmp_path, monkeypatch)
+
+    assert calls, "AppConfig validation should be invoked"
+    resolved = calls[-1]
+    training = resolved.get("training")
+    assert isinstance(training, dict)
+    assert training.get("batch_size") == 32
+    assert training.get("n_jobs") == 1

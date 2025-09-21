@@ -75,17 +75,35 @@ def _adjust_config_for_low_spec() -> None:
 
     changed = False
 
-    batch_size = resolved_training.get("batch_size")
-    if batch_size is None or _greater_than(batch_size, 32):
-        raw_training["batch_size"] = 32
-        resolved_training["batch_size"] = 32
-        changed = True
+    def _effective_training_value(key: str) -> Any:
+        value = resolved_training.get(key)
+        if value is None and key in resolved_cfg:
+            return resolved_cfg.get(key)
+        return value
 
-    n_jobs = resolved_training.get("n_jobs")
+    def _set_consistently(key: str, value: Any) -> None:
+        nonlocal changed
+
+        for mapping in (raw_training, resolved_training):
+            if mapping.get(key) != value:
+                mapping[key] = value
+                changed = True
+
+        if key in raw_cfg and raw_cfg.get(key) != value:
+            raw_cfg[key] = value
+            changed = True
+
+        if key in resolved_cfg and resolved_cfg.get(key) != value:
+            resolved_cfg[key] = value
+            changed = True
+
+    batch_size = _effective_training_value("batch_size")
+    if batch_size is None or _greater_than(batch_size, 32):
+        _set_consistently("batch_size", 32)
+
+    n_jobs = _effective_training_value("n_jobs")
     if _greater_than(n_jobs, 1):
-        raw_training["n_jobs"] = 1
-        resolved_training["n_jobs"] = 1
-        changed = True
+        _set_consistently("n_jobs", 1)
 
     if not changed:
         return
