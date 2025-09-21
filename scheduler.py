@@ -8,7 +8,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, NamedTuple
 
 
 try:
@@ -143,7 +143,40 @@ def schedule_retrain(
     logger.info("Scheduled retrain for %s", model)
 
 
-def process_retrain_events(store: EventStore | None = None) -> None:
+class _RetrainExecutionResult(NamedTuple):
+    """Outcome of executing a retraining command."""
+
+    success: bool
+    result: Any
+    error: BaseException | None
+
+
+def _run_retrain_command(
+    cmd: list[str],
+    env: Mapping[str, str],
+    model: str,
+    ts: str,
+    attempt: int,
+) -> _RetrainExecutionResult:
+    """Execute the retraining subprocess in a worker thread."""
+
+    try:
+        result = subprocess.run(cmd, check=True, env=env)
+    except Exception as exc:  # pragma: no cover - logging path validated in tests
+        logger.exception(
+            "Retraining failed for %s",
+            model,
+            extra={
+                "model": model,
+                "event_timestamp": ts,
+                "attempt": attempt,
+            },
+        )
+        return _RetrainExecutionResult(False, None, exc)
+    return _RetrainExecutionResult(True, result, None)
+
+
+async def process_retrain_events(store: EventStore | None = None) -> None:
     """Consume retrain events and launch training scripts."""
     try:
         from analytics.metrics_store import log_retrain_outcome
@@ -171,19 +204,12 @@ def process_retrain_events(store: EventStore | None = None) -> None:
         ckpt = payload.get("checkpoint_dir")
         if ckpt:
             env["CHECKPOINT_DIR"] = ckpt
-        try:
-            subprocess.run(cmd, check=True, env=env)
-        except Exception:
-            attempts = _failed_retrain_attempts.get(attempt_key, 0) + 1
-            _failed_retrain_attempts[attempt_key] = attempts
-            logger.exception(
-                "Retraining failed for %s", model,
-                extra={
-                    "model": model,
-                    "event_timestamp": ts,
-                    "attempt": attempts,
-                },
-            )
+        attempt = _failed_retrain_attempts.get(attempt_key, 0) + 1
+        result = await asyncio.to_thread(
+            _run_retrain_command, cmd, env, model, ts, attempt
+        )
+        if not result.success:
+            _failed_retrain_attempts[attempt_key] = attempt
             try:
                 log_retrain_outcome(model, "failed")
             except Exception:
@@ -197,7 +223,7 @@ def process_retrain_events(store: EventStore | None = None) -> None:
                 extra={
                     "model": model,
                     "event_timestamp": ts,
-                    "attempt": attempts,
+                    "attempt": attempt,
                 },
             )
             continue
@@ -223,7 +249,7 @@ def subscribe_retrain_events(
 
     async def _watch() -> None:
         while True:
-            process_retrain_events(store)
+            await process_retrain_events(store)
             await asyncio.sleep(interval)
 
     global _retrain_watcher

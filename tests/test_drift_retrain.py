@@ -1,3 +1,4 @@
+import asyncio
 import subprocess
 import sys
 from pathlib import Path
@@ -56,7 +57,7 @@ def test_retrain_scheduled_on_drift(tmp_path, monkeypatch):
     logged: list[tuple[str, str]] = []
     monkeypatch.setattr(metrics_store, "log_retrain_outcome", lambda m, s: logged.append((m, s)))
 
-    process_retrain_events(store)
+    asyncio.run(process_retrain_events(store))
 
     assert calls and any("train_cli.py" in part for part in calls[0])
     assert logged and logged[0] == ("nn", "success")

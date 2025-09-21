@@ -52,7 +52,7 @@ def test_retrain_watcher_consumes_events_from_background_thread(
     consumed: list[dict[str, object]] = []
     errors: list[Exception] = []
 
-    def _fake_process(store_obj: EventStore) -> None:
+    async def _fake_process(store_obj: EventStore) -> None:
         try:
             consumed.extend(store_obj.iter_events("retrain"))
         except Exception as exc:  # pragma: no cover - debugging aid
