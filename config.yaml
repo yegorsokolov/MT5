@@ -2,12 +2,23 @@ avoid_news_minutes: 5
 backtest_step_months: 6
 backtest_window_months: 6
 seed: 42
-n_jobs: null
 num_threads: null
 num_workers: null
 pred_cache_size: 256
 pred_cache_policy: lru
 plugin_cache_ttl: 0
+training:
+  model_type: lgbm
+  batch_size: null
+  eval_batch_size: null
+  min_batch_size: 8
+  online_batch_size: 1000
+  n_jobs: null
+  pt_mult: 0.01
+  sl_mult: 0.01
+  max_horizon: 10
+  time_decay_half_life: null  # in bars
+  balance_classes: false
 active_learning:
   k: 10
 drift_method: adwin
@@ -87,18 +98,12 @@ rl_algorithm: PPO
 rsi_buy: 55
 short_vol_period: 10
 symbol: XAUUSD
-model_type: lgbm
 symbols:
 - XAUUSD
 - GBPUSD
 threshold: 0.55
 trailing_stop_pips: 20
 train_rows: 50000
-pt_mult: 0.01
-sl_mult: 0.01
-max_horizon: 10
-time_decay_half_life: null  # in bars
-balance_classes: false
 use_ray: true
 use_dask: true
 dask_cluster_url:
@@ -202,10 +207,7 @@ inner_lr: 0.01
 inner_steps: 1
 finetune_steps: 3
 
-# training batch sizes
-batch_size: null
-eval_batch_size: null
-min_batch_size: 8
+# training batch sizes are configured via the ``training`` section above
 
 # mixed precision training
 use_amp: false
