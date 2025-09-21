@@ -20,10 +20,21 @@ def _prepare_config(
     n_jobs: Optional[int] = None,
     num_threads: Optional[int] = None,
     validate: Optional[bool] = None,
-) -> Optional[str]:
-    """Load config and apply overrides, returning temp file path if needed."""
+) -> tuple[Optional[str], Optional[str], bool]:
+    """Load config and apply overrides.
+
+    Returns a tuple of ``(temporary_path, previous_config, env_modified)`` where
+    ``temporary_path`` is the path to a generated temporary file when overrides
+    were applied, ``previous_config`` is the original ``CONFIG_FILE`` value, and
+    ``env_modified`` indicates whether the environment variable was changed.
+    """
+    previous_config = os.environ.get("CONFIG_FILE")
+    env_modified = False
+    tmp_name: Optional[str] = None
+
     if config is not None:
         os.environ["CONFIG_FILE"] = str(config)
+        env_modified = True
     cfg = load_config()
     if hasattr(cfg, "model_dump"):
         cfg_dict = cfg.model_dump()
@@ -61,15 +72,16 @@ def _prepare_config(
         tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
         yaml.safe_dump(cfg_dict, tmp)
         tmp.close()
-        os.environ["CONFIG_FILE"] = tmp.name
-        return tmp.name
-    return None
+        tmp_name = tmp.name
+        os.environ["CONFIG_FILE"] = tmp_name
+        env_modified = True
+    return tmp_name, previous_config, env_modified
 
 
 def train_cmd(args: argparse.Namespace) -> None:
     from train import main as train_main
 
-    tmp = _prepare_config(
+    tmp, previous_config, env_modified = _prepare_config(
         args.config,
         args.seed,
         None,
@@ -83,12 +95,17 @@ def train_cmd(args: argparse.Namespace) -> None:
     finally:
         if tmp:
             os.unlink(tmp)
+        if env_modified:
+            if previous_config is None:
+                os.environ.pop("CONFIG_FILE", None)
+            else:
+                os.environ["CONFIG_FILE"] = previous_config
 
 
 def train_nn_cmd(args: argparse.Namespace) -> None:
     from train_nn import main as train_nn_main
 
-    tmp = _prepare_config(
+    tmp, previous_config, env_modified = _prepare_config(
         args.config,
         args.seed,
         None,
@@ -102,12 +119,17 @@ def train_nn_cmd(args: argparse.Namespace) -> None:
     finally:
         if tmp:
             os.unlink(tmp)
+        if env_modified:
+            if previous_config is None:
+                os.environ.pop("CONFIG_FILE", None)
+            else:
+                os.environ["CONFIG_FILE"] = previous_config
 
 
 def train_rl_cmd(args: argparse.Namespace) -> None:
     from train_rl import ensure_torch_available, main as train_rl_main
 
-    tmp = _prepare_config(
+    tmp, previous_config, env_modified = _prepare_config(
         args.config,
         args.seed,
         args.steps,
@@ -120,6 +142,11 @@ def train_rl_cmd(args: argparse.Namespace) -> None:
     finally:
         if tmp:
             os.unlink(tmp)
+        if env_modified:
+            if previous_config is None:
+                os.environ.pop("CONFIG_FILE", None)
+            else:
+                os.environ["CONFIG_FILE"] = previous_config
 
 
 def build_parser() -> argparse.ArgumentParser:
