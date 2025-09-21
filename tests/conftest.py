@@ -5,14 +5,38 @@ import types
 import contextlib
 import importlib.machinery
 import inspect
+from copy import deepcopy
 from pathlib import Path
 
-# Pre-stub modules so early imports succeed
-yaml_mod = types.ModuleType("yaml")
-yaml_mod.safe_load = lambda *a, **k: {}
-yaml_mod.safe_dump = lambda *a, **k: ""
-yaml_mod.__spec__ = importlib.machinery.ModuleSpec("yaml", loader=None)
-sys.modules.setdefault("yaml", yaml_mod)
+
+@pytest.fixture
+def dummy_yaml(monkeypatch):
+    """Provide a minimal YAML shim for tests that expect dummy behaviour."""
+
+    import yaml
+
+    class _DummyYaml:
+        def __init__(self) -> None:
+            self.load_result: object = {}
+            self.dump_text: str = ""
+            self.load_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+            self.dump_calls: list[tuple[object, object | None]] = []
+
+        def safe_load(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.load_calls.append((args, kwargs))
+            return deepcopy(self.load_result)
+
+        def safe_dump(self, data, stream=None, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.dump_calls.append((data, stream))
+            if stream is None:
+                return self.dump_text
+            stream.write(self.dump_text)
+            return None
+
+    stub = _DummyYaml()
+    monkeypatch.setattr(yaml, "safe_load", stub.safe_load)
+    monkeypatch.setattr(yaml, "safe_dump", stub.safe_dump)
+    return stub
 
 mlflow_mod = types.ModuleType("mlflow")
 mlflow_mod.set_tracking_uri = lambda *a, **k: None

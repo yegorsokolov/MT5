@@ -64,7 +64,7 @@ core = "features:register_builtin_features"
 baseline = "strategies:register_builtin_strategies"
 
 [project.optional-dependencies]
-test = ["pytest", "pytest-cov"]
+test = ["pytest", "pytest-cov", "pyyaml"]
 gpu = ["tensorflow"]
 heavy = [
     "autogluon==1.4.0",
