@@ -1,0 +1,4 @@
+strategy:
+  symbols:
+    - EURUSD
+  risk_per_trade: 0.1

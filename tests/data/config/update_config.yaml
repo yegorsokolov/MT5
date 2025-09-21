@@ -1,0 +1,9 @@
+strategy:
+  symbols:
+    - EURUSD
+  risk_per_trade: 0.1
+mlflow:
+  password: secret://MLFLOW_PASS
+plugin_cache_ttl: 60
+logging:
+  level: INFO

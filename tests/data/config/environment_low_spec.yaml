@@ -1,0 +1,10 @@
+training:
+  batch_size: 128
+  n_jobs: 8
+  use_pseudo_labels: true
+strategy:
+  symbols:
+    - EURUSD
+  risk_per_trade: 0.05
+alerting:
+  slack_webhook: secret://alert-webhook
