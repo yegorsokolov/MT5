@@ -1,3 +1,5 @@
+pytest_plugins = ["tests.plugins.log_archive"]
+
 import base64
 import contextlib
 import importlib
@@ -13,6 +15,10 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+
+_tests_module = types.ModuleType("tests")
+_tests_module.__path__ = [str(Path(__file__).resolve().parent)]
+sys.modules.setdefault("tests", _tests_module)
 
 
 @pytest.fixture

@@ -74,5 +74,18 @@ jobs:
         - name: Run orchestrator tier e2e tests
           run: pytest -q tests/e2e
 
+        - name: Archive pytest logs
+          if: always()
+          id: archive_logs
+          run: python tools/archive_test_logs.py --scope commit --output logs/test_runs/${{ github.sha }}-logs.tar.gz
+
+        - name: Upload test log artefact
+          if: always() && steps.archive_logs.outputs.archive-path != ''
+          uses: actions/upload-artifact@v3
+          with:
+            name: test-logs-${{ github.sha }}
+            path: ${{ steps.archive_logs.outputs.archive-path }}
+            retention-days: 7
+
         - name: Check data version hashes
           run: python scripts/check_data_versions.py
