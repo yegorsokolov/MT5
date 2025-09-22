@@ -11,7 +11,11 @@ if str(ROOT) not in sys.path:
 
 def _prepare_features(monkeypatch):
     import types
-    import numpy as np
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError:  # pragma: no cover - fallback for minimal envs
+        np = types.SimpleNamespace(zeros=lambda n=None, **_: [0.0] * (n or 0))
 
     stub_utils = types.ModuleType("utils")
     stub_utils.__path__ = []
@@ -53,6 +57,8 @@ def _prepare_features(monkeypatch):
     sys.modules["utils.resource_monitor"] = stub_utils.resource_monitor
     sys.modules["utils.data_backend"] = stub_utils.data_backend
 
+    sys.modules["mt5.config_models"] = types.SimpleNamespace(ConfigError=Exception)
+
     stub_features_pkg = types.ModuleType("features")
     stub_features_pkg.__path__ = []
     stub_features_pkg.get_feature_pipeline = lambda: []
@@ -70,6 +76,12 @@ def _prepare_features(monkeypatch):
     features_validators = types.ModuleType("features.validators")
     features_validators.validate_ge = lambda df, *a, **k: df
     sys.modules["features.validators"] = features_validators
+
+    class _StubMemory:
+        def cache(self, func, **_):
+            return func
+
+    sys.modules["joblib"] = types.SimpleNamespace(Memory=lambda *a, **k: _StubMemory())
 
     alt_loader = types.ModuleType("data.alt_data_loader")
     alt_loader.load_alt_data = lambda symbols: pd.DataFrame()
@@ -156,6 +168,15 @@ def _prepare_features(monkeypatch):
     stub_evolver.FeatureEvolver = _FE
     sys.modules["analysis.feature_evolver"] = stub_evolver
 
+    stub_risk_pkg = types.ModuleType("risk")
+    stub_risk_pkg.__path__ = []
+    sys.modules["risk"] = stub_risk_pkg
+    sys.modules["risk.funding_costs"] = types.SimpleNamespace(
+        fetch_funding_info=lambda symbol: types.SimpleNamespace(
+            swap_rate=0.0, margin_requirement=0.0
+        )
+    )
+
     sys.path.append(str(ROOT))
     sys.modules.pop("data", None)
     sys.modules.pop("data.features", None)
@@ -225,6 +246,30 @@ def test_alt_data_loader_alignment(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
 
+    def _fake_kalshi(symbols, **kwargs):
+        rows = []
+        for sym in symbols:
+            rows.append(
+                {
+                    "Date": pd.Timestamp("2020-01-01", tz="UTC"),
+                    "Symbol": sym,
+                    "kalshi_total_open_interest": 100.0,
+                    "kalshi_total_daily_volume": 50.0,
+                    "kalshi_total_block_volume": 10.0,
+                    "kalshi_total_high": 0.9,
+                    "kalshi_total_low": 0.1,
+                    "kalshi_market_count": 4,
+                    "kalshi_open_interest": 70.0,
+                    "kalshi_daily_volume": 30.0,
+                    "kalshi_block_volume": 5.0,
+                    "kalshi_high": 0.8,
+                    "kalshi_low": 0.2,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    monkeypatch.setattr(alt_loader, "load_kalshi_markets", _fake_kalshi)
+
     alt = alt_loader.load_alt_data(["AAA"])
     assert set(
         [
@@ -235,10 +280,21 @@ def test_alt_data_loader_alignment(tmp_path, monkeypatch):
             "cpi",
             "interest_rate",
             "news_sentiment",
+            "kalshi_total_open_interest",
+            "kalshi_total_daily_volume",
+            "kalshi_total_block_volume",
+            "kalshi_market_count",
+            "kalshi_open_interest",
+            "kalshi_daily_volume",
+            "kalshi_block_volume",
+            "kalshi_high",
+            "kalshi_low",
         ]
     ).issubset(alt.columns)
     assert (alt["Symbol"] == "AAA").all()
     assert alt["Date"].dtype.tz is not None
+    assert alt.loc[0, "kalshi_open_interest"] == 70.0
+    assert alt.loc[0, "kalshi_total_open_interest"] == 100.0
 
     base = pd.DataFrame(
         {
@@ -264,4 +320,18 @@ def test_alt_data_loader_alignment(tmp_path, monkeypatch):
     assert out.loc[0, "cpi"] == 2.0
     assert out.loc[0, "interest_rate"] == 0.5
     assert out.loc[0, "news_sentiment"] == 0.8
+    for col in [
+        "kalshi_total_open_interest",
+        "kalshi_total_daily_volume",
+        "kalshi_total_block_volume",
+        "kalshi_market_count",
+        "kalshi_open_interest",
+        "kalshi_daily_volume",
+        "kalshi_block_volume",
+        "kalshi_high",
+        "kalshi_low",
+    ]:
+        assert col in out.columns
+    assert out.loc[0, "kalshi_open_interest"] == 70.0
+    assert out.loc[0, "kalshi_total_block_volume"] == 10.0
     FEATURE_SCHEMA.validate(out)

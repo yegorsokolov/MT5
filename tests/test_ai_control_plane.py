@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
+from core.context_hub import context_hub
+
 if "mt5.model_registry" not in sys.modules:
     _mr = types.ModuleType("mt5.model_registry")
 
@@ -112,6 +114,9 @@ class _DummyRouter:
 
 
 def test_control_plane_reacts_to_stress() -> None:
+    for key in list(context_hub.snapshot().keys()):
+        context_hub.remove(key)
+
     risk = _DummyRiskManager()
     risk.metrics.daily_loss = -800.0
     risk.metrics.total_drawdown = 600.0
@@ -152,11 +157,17 @@ def test_control_plane_reacts_to_stress() -> None:
     assert "alpha" in router.demoted
     # Retrain scheduled when losses persist
     assert retrain_calls == ["classic"]
-    # Snapshot reflects stress state
+    # Snapshot reflects stress state and big-picture context wiring
     assert snapshot.tail_prob > snapshot.tail_limit
+    assert snapshot.kalshi_market_count == 0
+    assert snapshot.macro_pressure == 0.0
+    assert snapshot.context == {}
 
 
 def test_control_plane_relaxes_after_recovery() -> None:
+    for key in list(context_hub.snapshot().keys()):
+        context_hub.remove(key)
+
     risk = _DummyRiskManager()
     router = _DummyRouter()
     registry = _DummyRegistry()
@@ -199,3 +210,7 @@ def test_control_plane_relaxes_after_recovery() -> None:
     assert risk.allow_hedging is False
     assert router.consensus_threshold == pytest.approx(plane._base_consensus or 0.6, rel=1e-3)
     assert retrain_calls == []
+    snapshot = plane._last_snapshot
+    assert snapshot is not None
+    assert snapshot.macro_pressure == 0.0
+    assert isinstance(snapshot.context, dict)

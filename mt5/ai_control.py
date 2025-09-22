@@ -26,6 +26,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 from mt5.model_registry import ModelRegistry
 from mt5.risk_manager import RiskManager, risk_manager as _DEFAULT_RISK_MANAGER
 from mt5.scheduler import schedule_retrain as _schedule_retrain
+from core.context_hub import context_hub
 
 try:  # pragma: no cover - optional import during tests
     from strategy.router import StrategyRouter
@@ -86,6 +87,15 @@ class ControlSnapshot:
     router_losses: Dict[str, float] = field(default_factory=dict)
     consensus_threshold: Optional[float] = None
     router_champion: Optional[str] = None
+    kalshi_total_open_interest: float = 0.0
+    kalshi_total_daily_volume: float = 0.0
+    kalshi_total_block_volume: float = 0.0
+    kalshi_market_count: int = 0
+    macro_pressure: float = 0.0
+    resource_latency: float = 0.0
+    selected_models: Dict[str, Any] = field(default_factory=dict)
+    quiet_windows: List[Mapping[str, Any]] = field(default_factory=list)
+    context: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -205,6 +215,75 @@ class AIControlPlane:
                 mean = rewards.get(name, 0.0) / float(count)
                 router_losses[name] = mean
 
+        hub_snapshot = context_hub.snapshot()
+        kalshi_state = hub_snapshot.get("kalshi", {}) if isinstance(hub_snapshot, dict) else {}
+
+        def _as_float(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _as_int(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        kalshi_total_open_interest = _as_float(
+            kalshi_state.get("kalshi_total_open_interest")
+        )
+        kalshi_total_daily_volume = _as_float(
+            kalshi_state.get("kalshi_total_daily_volume")
+        )
+        kalshi_total_block_volume = _as_float(
+            kalshi_state.get("kalshi_total_block_volume")
+        )
+        kalshi_market_count = _as_int(kalshi_state.get("kalshi_market_count"))
+        liquidity_base = kalshi_total_open_interest + kalshi_total_block_volume
+        macro_pressure = 0.0
+        if liquidity_base > 0:
+            macro_pressure = float(
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        math.tanh(
+                            (kalshi_total_daily_volume + kalshi_total_block_volume)
+                            / max(liquidity_base, 1.0)
+                        ),
+                    ),
+                )
+            )
+        elif kalshi_total_daily_volume > 0:
+            macro_pressure = float(
+                max(0.0, min(1.0, math.tanh(kalshi_total_daily_volume / 1_000_000.0)))
+            )
+
+        resource_state = hub_snapshot.get("resources", {}) if isinstance(hub_snapshot, dict) else {}
+        resource_latency = _as_float(resource_state.get("latency"))
+        monitor_latency = getattr(self.monitor, "latency", None)
+        if resource_latency <= 0:
+            try:
+                if callable(monitor_latency):
+                    resource_latency = float(monitor_latency())
+                elif monitor_latency is not None:
+                    resource_latency = float(monitor_latency)
+            except Exception:
+                resource_latency = 0.0
+
+        orchestrator_state = (
+            hub_snapshot.get("orchestrator", {}) if isinstance(hub_snapshot, dict) else {}
+        )
+        selected_models = orchestrator_state.get("selected_models", {})
+        if not isinstance(selected_models, dict):
+            selected_models = {}
+
+        risk_state = hub_snapshot.get("risk", {}) if isinstance(hub_snapshot, dict) else {}
+        quiet_windows = risk_state.get("quiet_windows", [])
+        if not isinstance(quiet_windows, list):
+            quiet_windows = []
+
         snapshot = ControlSnapshot(
             timestamp=time.time(),
             capability_tier=str(getattr(self.monitor, "capability_tier", "unknown")),
@@ -224,6 +303,15 @@ class AIControlPlane:
             router_losses=router_losses,
             consensus_threshold=consensus,
             router_champion=champion,
+            kalshi_total_open_interest=kalshi_total_open_interest,
+            kalshi_total_daily_volume=kalshi_total_daily_volume,
+            kalshi_total_block_volume=kalshi_total_block_volume,
+            kalshi_market_count=kalshi_market_count,
+            macro_pressure=macro_pressure,
+            resource_latency=resource_latency,
+            selected_models=selected_models,
+            quiet_windows=quiet_windows,
+            context=hub_snapshot if isinstance(hub_snapshot, dict) else {},
         )
         return snapshot
 
@@ -249,7 +337,7 @@ class AIControlPlane:
         if snapshot.risk_limit > 0:
             ruin_ratio = snapshot.risk_of_ruin / snapshot.risk_limit
 
-        stress_score = max(loss_ratio, tail_ratio, ruin_ratio)
+        stress_score = max(loss_ratio, tail_ratio, ruin_ratio, snapshot.macro_pressure)
         if stress_score >= self.loss_ratio_threshold:
             new_daily = snapshot.max_drawdown * 0.8
             new_total = snapshot.max_total_drawdown * 0.8
@@ -299,12 +387,14 @@ class AIControlPlane:
                 )
             )
 
-        if snapshot.tail_prob > snapshot.tail_limit and not snapshot.allows_hedging:
+        macro_requires_hedge = snapshot.macro_pressure >= 0.8
+        if (snapshot.tail_prob > snapshot.tail_limit or macro_requires_hedge) and not snapshot.allows_hedging:
             decisions.append(ControlDecision("set_hedging", {"allow": True}))
         elif (
             snapshot.allows_hedging
             and snapshot.tail_limit > 0
             and snapshot.tail_prob < snapshot.tail_limit * 0.25
+            and snapshot.macro_pressure < 0.3
         ):
             decisions.append(ControlDecision("set_hedging", {"allow": False}))
 
@@ -312,6 +402,7 @@ class AIControlPlane:
             snapshot.history_depth >= self.min_history
             and snapshot.pnl_trend < -abs(self.retrain_trend_threshold)
             and self._cooldown_elapsed()
+            and snapshot.resource_latency < 1.0
         ):
             decisions.append(
                 ControlDecision(
@@ -332,6 +423,13 @@ class AIControlPlane:
                 target = min(0.9, base_consensus + 0.1)
             elif snapshot.tail_limit > 0 and snapshot.tail_prob < snapshot.tail_limit * 0.5:
                 target = base_consensus
+
+            if snapshot.macro_pressure >= 0.8:
+                target = min(0.95, max(target, base_consensus + 0.15))
+            elif snapshot.macro_pressure >= 0.6:
+                target = min(0.9, max(target, base_consensus + 0.1))
+            elif snapshot.macro_pressure < 0.2 and snapshot.tail_prob < snapshot.tail_limit * 0.3:
+                target = min(target, base_consensus)
             if abs(target - snapshot.consensus_threshold) > 0.01:
                 decisions.append(
                     ControlDecision(
