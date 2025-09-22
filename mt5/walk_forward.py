@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import mt5.log_utils as log_utils
+
 import pandas as pd
 
 from utils import load_config
@@ -30,7 +32,9 @@ def init_logging() -> logging.Logger:
 logger = logging.getLogger(__name__)
 
 # default location for walk forward summary output
-_LOG_PATH = Path(__file__).resolve().parent / "logs" / "walk_forward_summary.csv"
+LOG_DIR = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parents[1] / "logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+_LOG_PATH = LOG_DIR / "walk_forward_summary.csv"
 
 
 def _config_to_dict(cfg: Any) -> dict[str, Any]:

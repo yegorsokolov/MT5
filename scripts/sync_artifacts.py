@@ -22,6 +22,7 @@ from git.exc import GitCommandError
 from mt5.log_utils import setup_logging, log_exceptions
 
 _LOGGING_INITIALIZED = False
+_HOOK_REGISTERED = False
 
 
 def init_logging() -> logging.Logger:
@@ -63,6 +64,7 @@ DEFAULT_ARTIFACT_SUFFIXES = {
 
 ENV_ARTIFACT_DIRS = "SYNC_ARTIFACT_DIRS"
 ENV_ARTIFACT_SUFFIXES = "SYNC_ARTIFACT_SUFFIXES"
+AUTO_SYNC_ENV = "AUTO_SYNC_ARTIFACTS"
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
@@ -74,6 +76,15 @@ def _split_env_list(value: str | None) -> list[str]:
         return []
     normalised = value.replace(",", os.pathsep).replace(";", os.pathsep)
     return [item.strip() for item in normalised.split(os.pathsep) if item.strip()]
+
+
+def _auto_sync_enabled() -> bool:
+    """Return ``True`` when automatic artifact syncing is enabled."""
+
+    flag = os.getenv(AUTO_SYNC_ENV)
+    if flag is not None:
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(GITHUB_TOKEN)
 
 
 def _is_within_repo(path: Path) -> bool:
@@ -218,6 +229,10 @@ def sync_artifacts() -> None:
 def register_shutdown_hook() -> None:
     """Trigger :func:`sync_artifacts` when the process terminates."""
 
+    global _HOOK_REGISTERED
+    if _HOOK_REGISTERED or not _auto_sync_enabled():
+        return
+
     def _handler(*_: object) -> None:
         try:
             sync_artifacts()
@@ -227,6 +242,8 @@ def register_shutdown_hook() -> None:
     atexit.register(sync_artifacts)
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, _handler)
+    logger.info("Registered automatic artifact sync on shutdown")
+    _HOOK_REGISTERED = True
 
 
 if __name__ == "__main__":

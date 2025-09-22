@@ -27,8 +27,9 @@ except Exception:  # pragma: no cover - optional dependency
     state_sync = None
 from mt5.crypto_utils import _load_key, encrypt, decrypt
 
-LOG_DIR = Path(__file__).resolve().parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LOG_DIR = PROJECT_ROOT / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 LOG_FILE = LOG_DIR / "app.log"
 TRADE_LOG = LOG_DIR / "trades.csv"
@@ -360,6 +361,13 @@ def setup_logging() -> logging.Logger:
         jh = JournalHandler(SYSLOG_IDENTIFIER="mt5bot")
         jh.setFormatter(fmt)
         logger.addHandler(jh)
+    except Exception:
+        pass
+
+    try:
+        from scripts.sync_artifacts import register_shutdown_hook
+
+        register_shutdown_hook()
     except Exception:
         pass
 

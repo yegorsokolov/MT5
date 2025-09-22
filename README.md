@@ -1170,12 +1170,15 @@ formats (`.parquet`, `.csv`, `.json`, `.html`, `.md`, `.yaml`, `.png`, `.pdf`,
 `SYNC_ARTIFACT_DIRS` (comma, colon or semicolon separated relative paths) and
 extra suffixes with `SYNC_ARTIFACT_SUFFIXES`.
 
-Long-running services can import and call
-`scripts.sync_artifacts.register_shutdown_hook()` to push artifacts when they
-exit. The helper `scripts/hourly_artifact_push.py` also honours the
-`SYNC_INTERVAL_SECONDS` environment variable (default 3600) so you can trigger
-uploads daily by setting it to `86400`. To run the synchronisation once per day
-via cron:
+Any component that initialises logging through `mt5.log_utils.setup_logging()`
+now registers the shutdown hook automatically when either `GITHUB_TOKEN` is set
+or `AUTO_SYNC_ARTIFACTS=1`. This ensures training runs, auto optimisation jobs
+and drift monitors push the latest logs, checkpoints and diagnostics without
+extra boilerplate. Set `AUTO_SYNC_ARTIFACTS=1` when relying on Git credential
+helpers instead of a token. The helper `scripts/hourly_artifact_push.py` also
+honours the `SYNC_INTERVAL_SECONDS` environment variable (default 3600) so you
+can trigger uploads daily by setting it to `86400`. To run the synchronisation
+once per day via cron:
 
 ```cron
 0 2 * * * GITHUB_TOKEN=<token> /usr/bin/python /path/to/scripts/sync_artifacts.py
