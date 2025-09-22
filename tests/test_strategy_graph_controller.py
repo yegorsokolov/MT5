@@ -3,7 +3,8 @@ import sys
 from pathlib import Path
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch")
 
 # Ensure project root on path for direct execution
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -47,15 +48,39 @@ def test_graph_execution_and_serialisation():
 def test_policy_gradient_training():
     data = build_sample_data()
     model = train_strategy_graph_controller(data, episodes=200, lr=0.1, seed=0)
-    x = torch.zeros((2, 1))
-    edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
-    logits = model(x, edge_index)
+    x, summary = model.prepare_graph_inputs(data)
+    logits = model(x)
     probs = torch.softmax(logits, dim=-1)
     assert float(probs[0]) > 0.8  # model should strongly prefer action 0
     action = int(torch.argmax(probs).item())
-    graph = model.build_graph(action)
+    macro = summary["macro"] if summary.get("has_macro") else None
+    risk = max(0.0, min(1.0, 0.5 + 0.25 * abs(summary.get("signal", 0.0))))
+    graph = model.build_graph(action, risk=risk, macro=macro)
     pnl = graph.run(data)
     assert pnl > 0
+
+
+def test_generate_respects_features_and_risk():
+    data = build_sample_data()
+    model = train_strategy_graph_controller(data, episodes=200, lr=0.1, seed=0)
+    bullish = [
+        {"price": 1.5, "ma": 1.0},
+        {"price": 1.6, "ma": 1.2},
+    ]
+    bearish = [
+        {"price": 0.9, "ma": 1.1},
+        {"price": 0.8, "ma": 1.0},
+    ]
+    long_graph, long_info = model.generate(bullish, risk_profile=0.9, return_info=True)
+    short_graph, short_info = model.generate(bearish, risk_profile=0.1, return_info=True)
+
+    assert isinstance(long_graph.nodes[0], Indicator)
+    assert long_graph.nodes[0].op == ">"
+    assert isinstance(short_graph.nodes[0], Indicator)
+    assert short_graph.nodes[0].op == "<"
+    assert long_graph.nodes[2].size > short_graph.nodes[2].size
+    assert long_info["summary"]["signal"] > 0
+    assert short_info["summary"]["signal"] < 0
 
 
 def test_graph_search_cli_executes():
