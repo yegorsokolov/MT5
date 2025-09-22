@@ -30,6 +30,7 @@ from deployment.canary import CanaryManager
 from news.aggregator import NewsAggregator
 from strategy.shadow_runner import ShadowRunner
 from strategy.evolution_lab import EvolutionLab
+from mt5.ai_control import AIControlPlane
 
 
 DEFAULT_SERVICE_CMDS: dict[str, list[str]] = {
@@ -98,6 +99,11 @@ class Orchestrator:
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
         self._shadow_tasks: dict[str, asyncio.Task] = {}
         self.lab = EvolutionLab(self._base_strategy(), register=self.register_strategy)
+        self.control_plane = AIControlPlane(
+            registry=self.registry,
+            risk_manager=risk_manager,
+            monitor=self.monitor,
+        )
 
     def _base_strategy(self) -> Callable[[dict], float]:
         """Return a default strategy used as seed for variant generation."""
@@ -192,11 +198,15 @@ class Orchestrator:
         loop.create_task(self._daily_summary())
         loop.create_task(self._watch_services())
         loop.create_task(self._update_quiet_windows())
+        loop.create_task(self.control_plane.run())
         try:  # start shadow runners for existing strategies
             from mt5 import signal_queue
 
-            for name, algo in getattr(signal_queue, "_ROUTER").algorithms.items():
-                self.register_strategy(name, algo)
+            router = getattr(signal_queue, "_ROUTER", None)
+            if router is not None:
+                self.control_plane.bind_router(router)
+                for name, algo in getattr(router, "algorithms", {}).items():
+                    self.register_strategy(name, algo)
         except Exception:
             pass
 
