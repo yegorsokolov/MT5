@@ -1,0 +1,46 @@
+{
+  "observations": [
+    {
+      "dimensions": {
+        "geography": {
+          "id": "K02000001",
+          "label": "United Kingdom",
+          "option": {
+            "id": "K02000001",
+            "label": "United Kingdom"
+          }
+        },
+        "time": {
+          "id": "time",
+          "label": "2023 JAN",
+          "option": {
+            "id": "2023-01",
+            "label": "January 2023"
+          }
+        }
+      },
+      "observation": "105.4"
+    },
+    {
+      "dimensions": {
+        "geography": {
+          "id": "K02000001",
+          "label": "United Kingdom",
+          "option": {
+            "id": "K02000001",
+            "label": "United Kingdom"
+          }
+        },
+        "time": {
+          "id": "time",
+          "label": "2023 FEB",
+          "option": {
+            "id": "2023-02",
+            "label": "February 2023"
+          }
+        }
+      },
+      "observation": "105.8"
+    }
+  ]
+}

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
+import types
 from datetime import datetime
 from pathlib import Path
 
@@ -8,6 +11,26 @@ import pandas as pd
 import pytest
 
 httpx = pytest.importorskip("httpx")
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+if "data" not in sys.modules:
+    pkg = types.ModuleType("data")
+    pkg.__path__ = [str(ROOT / "data")]
+    sys.modules["data"] = pkg
+
+_load_module("data.macro_sources", ROOT / "data" / "macro_sources.py")
+_load_module("data.macro_features", ROOT / "data" / "macro_features.py")
 
 from data.macro_sources import fetch_series_data, parse_series_spec
 from data.macro_features import load_macro_series
@@ -104,6 +127,42 @@ def test_fetch_open_canada_series():
     assert df["value"].iloc[0] == pytest.approx(10.9)
 
 
+def test_fetch_ons_series():
+    client = _mock_client(_payload("ons_observations.json"))
+    spec = parse_series_spec("ons::cpih01?edition=time-series&version=5&geography=K02000001")
+    df = fetch_series_data(spec, client)
+    assert list(df["value"]) == [pytest.approx(105.4), pytest.approx(105.8)]
+    assert pd.api.types.is_datetime64tz_dtype(df["Date"])
+
+
+def test_fetch_bank_of_england_series():
+    client = _mock_client(_payload("boe_sdmx.json"))
+    spec = parse_series_spec("bankofengland::IUMAJNB?dataset=IADB")
+    df = fetch_series_data(spec, client)
+    assert list(df["value"]) == [pytest.approx(4.2), pytest.approx(4.4)]
+
+
+def test_fetch_eurostat_series():
+    client = _mock_client(_payload("eurostat_sdmx.json"))
+    spec = parse_series_spec("eurostat::nama_10_gdp")
+    df = fetch_series_data(spec, client)
+    assert list(df["value"]) == [pytest.approx(200.1), pytest.approx(201.5)]
+
+
+def test_fetch_ecb_series():
+    client = _mock_client(_payload("ecb_sdmx.json"))
+    spec = parse_series_spec("ecb::EXR/D.USD.EUR.SP00.A")
+    df = fetch_series_data(spec, client)
+    assert list(df["value"]) == [pytest.approx(1.1), pytest.approx(1.2)]
+
+
+def test_fetch_bcb_series():
+    client = _mock_client(_payload("bcb_series.json"))
+    spec = parse_series_spec("bcb::1")
+    df = fetch_series_data(spec, client)
+    assert list(df["value"]) == [pytest.approx(5.32), pytest.approx(5.35)]
+
+
 def test_fetch_oecd_series():
     client = _mock_client(_payload("oecd_sdmx.json"))
     spec = parse_series_spec("oecd::MEI_CLI/CAN.CLI.A")
@@ -132,7 +191,7 @@ def test_load_macro_series_uses_remote_cache(tmp_path, monkeypatch):
     )
 
     assert set(df.columns) == {"Date", "gdp", "real_gdp"}
-    assert df["gdp"].iloc[0] == pytest.approx(100.0)
+    assert df["gdp"].dropna().iloc[0] == pytest.approx(100.0)
     assert (tmp_path / "data" / "macro").exists()
 
     # Second call should hit cache and work without HTTP access

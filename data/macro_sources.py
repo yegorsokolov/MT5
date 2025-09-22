@@ -732,6 +732,359 @@ def _fetch_open_canada(spec: SeriesSpec, client: "httpx.Client", start: Optional
     return df.reset_index(drop=True)
 
 
+def _sdmx_time_labels(structure: Any) -> list[str]:
+    return _oecd_time_labels(structure)
+
+
+def _sdmx_parse_observations(observations: Dict[str, Any], structure: Any) -> Iterable[Dict[str, object]]:
+    return _parse_oecd_observations(observations, structure)
+
+
+def _sdmx_collect_records(payload: Any) -> Iterable[Dict[str, object]]:
+    if not isinstance(payload, dict):
+        return []
+
+    data_sets = payload.get("dataSets")
+    dataset = None
+    if isinstance(data_sets, list) and data_sets:
+        dataset = data_sets[0]
+    elif isinstance(data_sets, dict):
+        dataset = data_sets.get("0") or next(iter(data_sets.values()), None)
+    if not isinstance(dataset, dict):
+        dataset = payload.get("dataSet")
+    if not isinstance(dataset, dict):
+        return []
+
+    structure = payload.get("structure") if isinstance(payload, dict) else None
+
+    records: list[Dict[str, object]] = []
+    observations = dataset.get("observations")
+    if isinstance(observations, dict):
+        records.extend(_sdmx_parse_observations(observations, structure))
+
+    series_map = dataset.get("series")
+    if isinstance(series_map, dict):
+        for series in series_map.values():
+            if isinstance(series, dict) and isinstance(series.get("observations"), dict):
+                records.extend(_sdmx_parse_observations(series["observations"], structure))
+
+    if not records and isinstance(dataset.get("data"), dict):
+        for series in dataset["data"].values():
+            if isinstance(series, dict) and isinstance(series.get("observations"), dict):
+                records.extend(_sdmx_parse_observations(series["observations"], structure))
+
+    return records
+
+
+def _ons_latest_version(
+    client: "httpx.Client", base_url: str, dataset: str, edition: str
+) -> Optional[str]:
+    url = f"{base_url}/datasets/{dataset}/editions/{edition}/versions"
+    try:
+        resp = client.get(url, timeout=20.0)
+        resp.raise_for_status()
+    except Exception:  # pragma: no cover - depends on remote availability
+        return None
+
+    payload = resp.json()
+    items = []
+    if isinstance(payload, dict):
+        candidates = payload.get("items") or payload.get("versions") or payload.get("results")
+        if isinstance(candidates, list):
+            items = [item for item in candidates if isinstance(item, dict)]
+
+    best_version: Optional[str] = None
+    best_numeric = -1
+    for item in items:
+        value = item.get("version") or item.get("id") or item.get("number")
+        if value is None:
+            continue
+        text = str(value)
+        try:
+            numeric = int(text)
+        except ValueError:
+            numeric = best_numeric
+        if numeric >= best_numeric:
+            best_numeric = numeric
+            best_version = text
+    return best_version
+
+
+def _ons_extract_dimension(option: Any) -> Optional[str]:
+    if isinstance(option, dict):
+        for key in ("id", "label", "value"):
+            val = option.get(key)
+            if val not in (None, ""):
+                return str(val)
+    if isinstance(option, str):
+        return option
+    return None
+
+
+def _ons_extract_date(obs: Dict[str, Any], time_dimension: Optional[str]) -> Optional[str]:
+    dimensions = obs.get("dimensions")
+    if isinstance(dimensions, dict):
+        if time_dimension:
+            dim_meta = dimensions.get(time_dimension)
+            if isinstance(dim_meta, dict):
+                option = dim_meta.get("option")
+                candidate = _ons_extract_dimension(option)
+                if candidate:
+                    return candidate
+                candidate = dim_meta.get("label") or dim_meta.get("id")
+                if candidate:
+                    return str(candidate)
+        for key, meta in dimensions.items():
+            if not isinstance(meta, dict):
+                continue
+            key_lower = key.lower()
+            meta_id = str(meta.get("id", "")).lower()
+            if key_lower in {"time", "period", "date"} or meta_id in {"time", "period", "date"}:
+                option = meta.get("option")
+                candidate = _ons_extract_dimension(option)
+                if candidate:
+                    return candidate
+                candidate = meta.get("label") or meta.get("name") or meta.get("id")
+                if candidate:
+                    return str(candidate)
+        for meta in dimensions.values():
+            if not isinstance(meta, dict):
+                continue
+            option = meta.get("option")
+            candidate = _ons_extract_dimension(option)
+            if candidate:
+                return candidate
+    for key in ("time", "date", "period", "referencePeriod", "ref_period", "observation_date"):
+        value = obs.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _fetch_ons(spec: SeriesSpec, client: "httpx.Client", start: Optional[str], end: Optional[str]) -> pd.DataFrame:
+    params = dict(spec.params)
+    base_url = params.pop("base_url", "https://api.beta.ons.gov.uk/v1").rstrip("/")
+    dataset = params.pop("dataset", params.pop("dataset_id", None)) or spec.identifier
+    dataset = dataset.strip("/")
+    if not dataset:
+        return pd.DataFrame(columns=["Date", "value"])
+
+    edition = params.pop("edition", params.pop("edition_id", "time-series"))
+    edition = edition.strip("/") or "time-series"
+    version = params.pop("version", params.pop("dataset_version", None))
+    time_dimension = params.pop("time_dimension", params.pop("time_dim", None))
+    value_field = params.pop("value_field", None)
+
+    if not version or str(version).lower() == "latest":
+        detected = _ons_latest_version(client, base_url, dataset, edition)
+        if detected:
+            version = detected
+
+    version = str(version or "1").strip()
+    endpoint = f"{base_url}/datasets/{dataset}/editions/{edition}/versions/{version}/observations"
+    query = {k: v for k, v in params.items() if v not in (None, "")}
+
+    try:
+        resp = client.get(endpoint, params=query or None, timeout=20.0)
+        resp.raise_for_status()
+    except Exception as exc:  # pragma: no cover - network failure is environment specific
+        logger.warning("ONS request failed for %s: %s", dataset, exc)
+        return pd.DataFrame(columns=["Date", "value"])
+
+    payload = resp.json()
+    observations = []
+    if isinstance(payload, dict):
+        observations = payload.get("observations") or payload.get("items") or []
+    records = []
+    for obs in observations:
+        if not isinstance(obs, dict):
+            continue
+        date_value = _ons_extract_date(obs, time_dimension)
+        if not date_value:
+            continue
+        value_obj = obs.get(value_field) if value_field else None
+        if value_obj in (None, ""):
+            value_obj = obs.get("observation")
+        if value_obj in (None, ""):
+            value_obj = obs.get("value")
+        if isinstance(value_obj, dict):
+            value_obj = value_obj.get("value") or value_obj.get("obs")
+        if value_obj in (None, "", "."):
+            continue
+        try:
+            numeric = float(str(value_obj).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        records.append({"Date": date_value, "value": numeric})
+
+    df = _records_to_frame(records)
+    if df.empty:
+        return df
+    if start:
+        start_ts = pd.to_datetime(start, utc=True, errors="coerce")
+        if pd.notna(start_ts):
+            df = df[df["Date"] >= start_ts]
+    if end:
+        end_ts = pd.to_datetime(end, utc=True, errors="coerce")
+        if pd.notna(end_ts):
+            df = df[df["Date"] <= end_ts]
+    return df.reset_index(drop=True)
+
+
+def _fetch_bank_of_england(
+    spec: SeriesSpec, client: "httpx.Client", start: Optional[str], end: Optional[str]
+) -> pd.DataFrame:
+    params = dict(spec.params)
+    base_url = params.pop(
+        "base_url", "https://www.bankofengland.co.uk/boeapps/iadb/v1/data"
+    ).rstrip("/")
+    dataset = params.pop("dataset", params.pop("dataflow", None))
+    identifier = spec.identifier.strip("/")
+    if not identifier and not dataset:
+        return pd.DataFrame(columns=["Date", "value"])
+
+    if dataset and "/" not in identifier:
+        path = f"{dataset.strip('/')}/{identifier}" if identifier else dataset.strip("/")
+    else:
+        path = identifier or dataset.strip("/")
+
+    if not path:
+        return pd.DataFrame(columns=["Date", "value"])
+
+    query: Dict[str, Any] = {k: v for k, v in params.items() if v is not None}
+    if start:
+        query.setdefault("startPeriod", start)
+        query.setdefault("startTime", start)
+    if end:
+        query.setdefault("endPeriod", end)
+        query.setdefault("endTime", end)
+    query.setdefault("format", query.get("format", "sdmx-json"))
+
+    endpoint = f"{base_url}/{path}"
+    try:
+        resp = client.get(endpoint, params=query or None, timeout=20.0)
+        resp.raise_for_status()
+    except Exception as exc:  # pragma: no cover - network failure is environment specific
+        logger.warning("Bank of England request failed for %s: %s", path, exc)
+        return pd.DataFrame(columns=["Date", "value"])
+
+    records = list(_sdmx_collect_records(resp.json()))
+    return _records_to_frame(records)
+
+
+def _fetch_eurostat(
+    spec: SeriesSpec, client: "httpx.Client", start: Optional[str], end: Optional[str]
+) -> pd.DataFrame:
+    params = dict(spec.params)
+    base_url = params.pop(
+        "base_url", "https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/data"
+    ).rstrip("/")
+    identifier = spec.identifier.strip("/")
+    if not identifier:
+        return pd.DataFrame(columns=["Date", "value"])
+
+    query: Dict[str, Any] = {k: v for k, v in params.items() if v is not None}
+    if start:
+        query.setdefault("startPeriod", start)
+        query.setdefault("startTime", start)
+    if end:
+        query.setdefault("endPeriod", end)
+        query.setdefault("endTime", end)
+    query.setdefault("format", query.get("format", "SDMX-JSON"))
+
+    endpoint = f"{base_url}/{identifier}"
+    try:
+        resp = client.get(endpoint, params=query or None, timeout=20.0)
+        resp.raise_for_status()
+    except Exception as exc:  # pragma: no cover - network failure is environment specific
+        logger.warning("Eurostat request failed for %s: %s", identifier, exc)
+        return pd.DataFrame(columns=["Date", "value"])
+
+    records = list(_sdmx_collect_records(resp.json()))
+    return _records_to_frame(records)
+
+
+def _fetch_ecb(spec: SeriesSpec, client: "httpx.Client", start: Optional[str], end: Optional[str]) -> pd.DataFrame:
+    params = dict(spec.params)
+    base_url = params.pop("base_url", "https://sdw-wsrest.ecb.europa.eu/service/data").rstrip("/")
+    identifier = spec.identifier.strip("/")
+    if not identifier:
+        return pd.DataFrame(columns=["Date", "value"])
+
+    query: Dict[str, Any] = {k: v for k, v in params.items() if v is not None}
+    if start:
+        query.setdefault("startPeriod", start)
+        query.setdefault("startTime", start)
+    if end:
+        query.setdefault("endPeriod", end)
+        query.setdefault("endTime", end)
+    query.setdefault("format", query.get("format", "sdmx-json"))
+
+    endpoint = f"{base_url}/{identifier}"
+    try:
+        resp = client.get(endpoint, params=query or None, timeout=20.0)
+        resp.raise_for_status()
+    except Exception as exc:  # pragma: no cover - network failure is environment specific
+        logger.warning("ECB request failed for %s: %s", identifier, exc)
+        return pd.DataFrame(columns=["Date", "value"])
+
+    records = list(_sdmx_collect_records(resp.json()))
+    return _records_to_frame(records)
+
+
+def _fetch_bcb(spec: SeriesSpec, client: "httpx.Client", start: Optional[str], end: Optional[str]) -> pd.DataFrame:
+    params = dict(spec.params)
+    base_url = params.pop(
+        "base_url", "https://api.bcb.gov.br/dados/serie/bcdata.sgs"
+    ).rstrip("/")
+    series = params.pop("series", params.pop("serie", None)) or spec.identifier
+    series = str(series).strip("/")
+    if not series:
+        return pd.DataFrame(columns=["Date", "value"])
+
+    endpoint = f"{base_url}/{series}/dados"
+    query: Dict[str, Any] = {k: v for k, v in params.items() if v is not None}
+    query.setdefault("formato", query.get("formato", "json"))
+    if start:
+        query.setdefault("dataInicial", start)
+    if end:
+        query.setdefault("dataFinal", end)
+
+    try:
+        resp = client.get(endpoint, params=query or None, timeout=20.0)
+        resp.raise_for_status()
+    except Exception as exc:  # pragma: no cover - network failure is environment specific
+        logger.warning("Banco Central do Brasil request failed for %s: %s", series, exc)
+        return pd.DataFrame(columns=["Date", "value"])
+
+    payload = resp.json()
+    if not isinstance(payload, list):
+        return pd.DataFrame(columns=["Date", "value"])
+
+    records = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        date_value = item.get("data") or item.get("date")
+        value = item.get("valor") or item.get("value")
+        if not date_value or value in (None, "", "."):
+            continue
+        date_text = str(date_value)
+        if "/" in date_text and len(date_text.split("/")) == 3:
+            day, month, year = date_text.split("/")
+            date_text = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+        try:
+            numeric = float(str(value).replace(",", "."))
+        except (TypeError, ValueError):
+            try:
+                numeric = float(str(value))
+            except (TypeError, ValueError):
+                continue
+        records.append({"Date": date_text, "value": numeric})
+
+    return _records_to_frame(records)
+
+
 def _oecd_time_labels(structure: Any) -> list[str]:
     if not isinstance(structure, dict):
         return []
@@ -853,6 +1206,17 @@ PROVIDERS = {
     "boc": _fetch_bank_of_canada,
     "open_canada": _fetch_open_canada,
     "opencanada": _fetch_open_canada,
+    "ons": _fetch_ons,
+    "office_for_national_statistics": _fetch_ons,
+    "bankofengland": _fetch_bank_of_england,
+    "bank_of_england": _fetch_bank_of_england,
+    "boe": _fetch_bank_of_england,
+    "eurostat": _fetch_eurostat,
+    "ecb": _fetch_ecb,
+    "european_central_bank": _fetch_ecb,
+    "bcb": _fetch_bcb,
+    "banco_central_do_brasil": _fetch_bcb,
+    "banco_central_brasil": _fetch_bcb,
     "oecd": _fetch_oecd,
 }
 

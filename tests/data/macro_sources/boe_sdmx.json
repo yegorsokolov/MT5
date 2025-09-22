@@ -1,0 +1,35 @@
+{
+  "dataSets": [
+    {
+      "series": {
+        "0:0:0": {
+          "observations": {
+            "0": [4.2],
+            "1": [4.4]
+          }
+        }
+      }
+    }
+  ],
+  "structure": {
+    "dimensions": {
+      "series": [
+        {
+          "id": "FREQ",
+          "values": [
+            {"id": "M"}
+          ]
+        }
+      ],
+      "observation": [
+        {
+          "id": "TIME_PERIOD",
+          "values": [
+            {"id": "2023-01"},
+            {"id": "2023-02"}
+          ]
+        }
+      ]
+    }
+  }
+}
