@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import logging
+import mt5.log_utils as log_utils
 import pandas as pd
 from scipy.stats import ttest_ind
 import optuna
@@ -88,8 +89,9 @@ def init_logging() -> logging.Logger:
     return logging.getLogger(__name__)
 
 
-_LOG_PATH = Path(__file__).resolve().parent / "logs" / "optuna_history.csv"
-_LOG_PATH.parent.mkdir(exist_ok=True)
+LOG_DIR = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parents[1] / "logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+_LOG_PATH = LOG_DIR / "optuna_history.csv"
 
 
 def _config_to_dict(cfg) -> dict:
