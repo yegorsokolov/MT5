@@ -14,7 +14,7 @@ try:  # pragma: no cover - ``ray`` is optional
     from ray import tune
     from ray.tune.search.optuna import OptunaSearch
 except Exception:  # pragma: no cover - fallback to light stub
-    from ray_stub import tune  # type: ignore
+from mt5.ray_stub import tune  # type: ignore
 
     OptunaSearch = tune.search.optuna.OptunaSearch  # type: ignore
 

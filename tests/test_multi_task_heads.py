@@ -9,7 +9,7 @@ from sklearn.pipeline import Pipeline
 from lightgbm import LGBMClassifier
 
 from data.feature_scaler import FeatureScaler
-import train
+from mt5 import train
 
 
 def _train_single_task_baseline(X: pd.DataFrame, y: pd.DataFrame) -> dict[str, float]:

@@ -84,7 +84,7 @@ def test_ensemble_cli_logs_metrics(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "train_ensemble", te_stub)
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    import train_cli
+    from mt5 import train_cli
 
     env_calls: list[None] = []
 

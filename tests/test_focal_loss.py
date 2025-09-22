@@ -9,7 +9,7 @@ sys.modules.pop("scipy", None)
 sys.modules.pop("scipy.stats", None)
 import scipy  # noqa: F401  # ensure real scipy is available
 from lightgbm import LGBMClassifier
-from focal_loss import make_focal_loss, make_focal_loss_metric
+from mt5.focal_loss import make_focal_loss, make_focal_loss_metric
 from sklearn.datasets import make_classification
 from sklearn.metrics import recall_score
 from sklearn.model_selection import train_test_split

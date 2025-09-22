@@ -4,7 +4,7 @@ import types
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-import metrics
+from mt5 import metrics
 
 
 class _Counter:
@@ -27,9 +27,8 @@ class _Gauge:
 
 metrics.PRED_CACHE_HIT = _Counter()
 metrics.PRED_CACHE_HIT_RATIO = _Gauge()
-
-from prediction_cache import PredictionCache
-from metrics import PRED_CACHE_HIT, PRED_CACHE_HIT_RATIO
+from mt5.prediction_cache import PredictionCache
+from mt5.metrics import PRED_CACHE_HIT, PRED_CACHE_HIT_RATIO
 
 
 def test_prediction_cache_lru_eviction():

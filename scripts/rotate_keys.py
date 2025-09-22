@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-
-from crypto_utils import encrypt, decrypt, _load_key
+from mt5.crypto_utils import encrypt, decrypt, _load_key
 
 
 def rotate_keys(

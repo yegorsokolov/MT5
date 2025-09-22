@@ -72,7 +72,7 @@ def compare_model_outcomes(path: str | Path, model_loader: Any | None = None) ->
         return pd.DataFrame()
     if model_loader is None:
         try:  # lazy import to avoid heavy dependency if unused
-            from generate_signals import load_models
+from mt5.generate_signals import load_models
 
             models, _ = load_models([])
             model = next(iter(models.values())) if models else None

@@ -23,7 +23,7 @@ joblib_stub = types.SimpleNamespace(
 )
 sys.modules["joblib"] = joblib_stub
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import state_manager as sm
+from mt5 import state_manager as sm
 
 
 def _setup_env(tmp_path, monkeypatch):

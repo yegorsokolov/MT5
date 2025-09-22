@@ -2,8 +2,7 @@ import os
 from typing import Tuple
 
 import pandas as pd
-
-from metrics import TICK_ANOMALIES
+from mt5.metrics import TICK_ANOMALIES
 
 PRICE_JUMP_THRESHOLD = float(os.getenv("PRICE_JUMP_THRESHOLD", "0.01"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.05"))

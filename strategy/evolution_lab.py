@@ -95,10 +95,10 @@ def _shutdown_background_loop() -> None:
         _BACKGROUND_THREAD = None
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from model_registry import ModelRegistry
+from mt5.model_registry import ModelRegistry
 
 try:  # pragma: no cover - optional dependency during tests
-    from signal_queue import _ROUTER
+from mt5.signal_queue import _ROUTER
 except Exception:  # pragma: no cover - defensive fallback
     _ROUTER = None  # type: ignore
 

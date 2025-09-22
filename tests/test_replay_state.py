@@ -34,9 +34,9 @@ sys.modules.setdefault(
     types.SimpleNamespace(get_tracer=lambda *a, **k: _DummyTracer(), get_meter=lambda *a, **k: _DummyMeter()),
 )
 
-import state_manager
+from mt5 import state_manager
 from analysis import replay
-import model_registry
+from mt5 import model_registry
 import importlib.util
 
 rm_spec = importlib.util.spec_from_file_location(

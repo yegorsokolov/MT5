@@ -55,7 +55,7 @@ dependencies = [
 mt5-train = "mt5.cli:train_entry"
 mt5-train-nn = "mt5.cli:train_nn_entry"
 mt5-train-rl = "mt5.cli:train_rl_entry"
-mt5-train-strategy = "train_strategy:main"
+mt5-train-strategy = "mt5.train_strategy:main"
 
 [project.entry-points."mt5.features"]
 core = "features:register_builtin_features"
@@ -83,33 +83,8 @@ nlp = [
 ]
 uvloop = ["uvloop==0.21.0"]
 
+
 [tool.setuptools]
-py-modules = [
-    "auto_optimize",
-    "backtest",
-    "dataset",
-    "eval_rl",
-    "generate_signals",
-    "grpc_api",
-    "log_utils",
-    "metrics",
-    "meta_train_nn",
-    "regime",
-    "realtime_train",
-    "remote_api",
-    "signal_queue",
-    "train", 
-    "train_autogluon",
-    "train_combined",
-    "train_meta",
-    "train_nn",
-    "train_online",
-    "train_strategy",
-    "train_parallel",
-    "train_rl",
-    "cli",
-    "walk_forward",
-]
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from portfolio.factor_risk import FactorRisk
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
 
 def test_factor_exposure_regression():

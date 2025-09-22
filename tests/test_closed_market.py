@@ -57,7 +57,7 @@ def test_generate_signals_closed_market(monkeypatch):
 
     sys.modules['backtest'] = types.SimpleNamespace(run_rolling_backtest=fake_backtest)
 
-    import generate_signals
+    from mt5 import generate_signals
 
     assert not log_calls
 
@@ -68,7 +68,7 @@ def test_generate_signals_closed_market(monkeypatch):
         raise SystemExit
 
     monkeypatch.setattr(generate_signals, 'load_models', stop)
-    monkeypatch.setattr(sys, 'argv', ['generate_signals.py'])
+    monkeypatch.setattr(sys, 'argv', ['mt5.generate_signals'])
 
     with pytest.raises(SystemExit):
         generate_signals.main()

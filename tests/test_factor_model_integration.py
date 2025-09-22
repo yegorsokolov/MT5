@@ -13,9 +13,9 @@ np = importlib.import_module("numpy")
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from analysis.factor_model import FactorModel
-import risk_manager as rm_module
+from mt5 import risk_manager as rm_module
 rm_module.risk_of_ruin = lambda *a, **k: 0.0
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
 
 def max_drawdown(returns: pd.Series) -> float:

@@ -6,7 +6,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from risk import risk_of_ruin
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
 
 def test_risk_of_ruin_zero_with_positive_returns():

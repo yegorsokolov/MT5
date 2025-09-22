@@ -9,8 +9,7 @@ except Exception:  # pragma: no cover - optional dependency may be stubbed in te
     def query_metrics(*a, **k):  # type: ignore
         import pandas as _pd
         return _pd.DataFrame()
-
-from metrics import BROKER_FAILURES, BROKER_LATENCY_MS
+from mt5.metrics import BROKER_FAILURES, BROKER_LATENCY_MS
 
 logger = logging.getLogger(__name__)
 

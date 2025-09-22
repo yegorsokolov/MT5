@@ -3,7 +3,7 @@
 This guide shows how to launch a basic training run.
 
 ```bash
-python train.py --config config.yaml
+python -m mt5.train --config config.yaml
 ```
 
 ```{doctest}
@@ -17,7 +17,7 @@ Run sequential train/test windows and log metrics to MLflow using the
 ``walk-forward`` subcommand:
 
 ```bash
-python train_cli.py walk-forward --data prices.csv --window-length 100 --step-size 10 --model-type mean
+python -m mt5.train_cli walk-forward --data prices.csv --window-length 100 --step-size 10 --model-type mean
 ```
 
 Each window trains on the preceding ``window-length`` rows and evaluates on
@@ -34,7 +34,7 @@ bars vary, such as event-driven tick streams.
 
 ## Feature selection and families
 
-``train_parallel.py`` and ``train_nn.py`` derive candidate feature columns
+``mt5.train_parallel`` and ``mt5.train_nn`` derive candidate feature columns
 directly from the dataframe returned by :func:`data.features.make_features`.
 The training CLI now seeds this candidate list using
 ``training.feature_includes`` (with sensible defaults when unspecified), prunes

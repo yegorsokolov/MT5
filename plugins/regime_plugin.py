@@ -11,7 +11,7 @@ REQUIRES_GPU = False
 
 from . import register_feature
 from utils import load_config
-from regime import label_regimes
+from mt5.regime import label_regimes
 import pandas as pd
 
 

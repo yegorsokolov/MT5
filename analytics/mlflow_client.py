@@ -8,7 +8,7 @@ import os
 from contextlib import contextmanager
 
 import mlflow
-import log_utils
+from mt5 import log_utils
 from utils import PROJECT_ROOT, sanitize_config
 
 

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from stable_baselines3 import PPO
-from train_rl import PositionClosePolicy
+from mt5.train_rl import PositionClosePolicy
 from rl.trading_env import TradingEnv
 from rl.multi_agent_env import MultiAgentTradingEnv
 

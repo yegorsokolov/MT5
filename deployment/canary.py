@@ -8,8 +8,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - fallback when pandas is missing
     def record_metric(*args: Any, **kwargs: Any) -> None:  # type: ignore
         pass
-
-from model_registry import ModelRegistry
+from mt5.model_registry import ModelRegistry
 
 
 class CanaryManager:

@@ -17,7 +17,7 @@ from . import impact_model
 from .effect_length import estimate_effect_length
 
 try:  # pragma: no cover - optional persistent risk settings
-    from state_manager import load_user_risk  # type: ignore
+from mt5.state_manager import load_user_risk  # type: ignore
 except Exception:  # pragma: no cover
     load_user_risk = None  # type: ignore
 

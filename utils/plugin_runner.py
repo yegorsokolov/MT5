@@ -27,8 +27,7 @@ try:  # pragma: no cover - optional dependency guard
 except Exception:  # pragma: no cover - watchdog not installed
     FileSystemEventHandler = object  # type: ignore
     PollingObserver = None  # type: ignore
-
-from metrics import PLUGIN_RELOADS
+from mt5.metrics import PLUGIN_RELOADS
 
 
 logger = logging.getLogger(__name__)

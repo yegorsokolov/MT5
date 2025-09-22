@@ -3,8 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-import risk_manager as rm_mod
-from risk_manager import RiskManager
+from mt5 import risk_manager as rm_mod
+from mt5.risk_manager import RiskManager
 
 
 def _stub_metric(logged):

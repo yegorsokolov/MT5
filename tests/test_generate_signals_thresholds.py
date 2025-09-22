@@ -70,6 +70,7 @@ sys.modules["utils.market_hours"] = _make_module(
 sys.modules["backtest"] = _make_module(
     "backtest", run_rolling_backtest=lambda *a, **k: None
 )
+sys.modules["mt5.backtest"] = sys.modules["backtest"]
 
 river_stub = _make_module("river", compose=_make_module("compose"))
 sys.modules["river"] = river_stub
@@ -181,7 +182,7 @@ conformal_stub = _make_module(
 )
 sys.modules.setdefault("models.conformal", conformal_stub)
 
-import generate_signals  # type: ignore  # noqa: E402
+from mt5 import generate_signals  # type: ignore  # noqa: E402
 
 assert not LOG_CALLS
 
@@ -361,7 +362,7 @@ def test_training_regime_thresholds_align_with_application():
     sys.modules["scipy"] = scipy
     sys.modules["scipy.sparse"] = importlib.import_module("scipy.sparse")
     sys.modules["scipy.stats"] = importlib.import_module("scipy.stats")
-    import train_parallel
+    from mt5 import train_parallel
     import warnings
 
     warnings.filterwarnings(

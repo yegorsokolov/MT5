@@ -76,7 +76,7 @@ def test_eval_reports_tradeoffs(monkeypatch, caplog):
     monkeypatch.setitem(sys.modules, "log_utils", log_utils_stub)
     monkeypatch.setitem(sys.modules, "metrics", metrics_stub)
 
-    import eval_rl
+    from mt5 import eval_rl
 
     assert not log_calls
 

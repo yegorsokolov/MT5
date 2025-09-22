@@ -17,7 +17,7 @@ from typing import List, Dict, TYPE_CHECKING
 import logging
 
 if TYPE_CHECKING:  # pragma: no cover - used only for type checking
-    from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
 

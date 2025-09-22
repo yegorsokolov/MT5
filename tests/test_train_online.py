@@ -122,6 +122,7 @@ train_utils_stub.resolve_training_features = (
 )
 train_utils_stub.prepare_modal_arrays = lambda *a, **k: None
 sys.modules["train_utils"] = train_utils_stub
+sys.modules["mt5.train_utils"] = train_utils_stub
 
 sys.modules.pop("model_registry", None)
 model_registry_stub = types.ModuleType("model_registry")
@@ -142,8 +143,9 @@ def _stub_save_model(name, model, metadata, path=None):
 
 model_registry_stub.save_model = _stub_save_model
 sys.modules["model_registry"] = model_registry_stub
+sys.modules["mt5.model_registry"] = model_registry_stub
 
-import train_online
+from mt5 import train_online
 
 train_online.init_logging = lambda: None
 

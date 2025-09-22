@@ -2,10 +2,9 @@ import copy
 from pathlib import Path
 import csv
 import logging
-
-from log_utils import setup_logging, log_exceptions
+from mt5.log_utils import setup_logging, log_exceptions
 from utils import load_config, update_config
-from backtest import run_rolling_backtest
+from mt5.backtest import run_rolling_backtest
 
 _LOGGING_INITIALIZED = False
 

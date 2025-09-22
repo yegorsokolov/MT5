@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
 
 def test_exposure_matrix_updates_and_limits(tmp_path):

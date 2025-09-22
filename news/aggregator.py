@@ -38,7 +38,7 @@ except Exception:  # pragma: no cover
     ai_enrichment = None  # type: ignore
 
 try:  # pragma: no cover - optional persistent risk settings
-    from state_manager import load_user_risk  # type: ignore
+from mt5.state_manager import load_user_risk  # type: ignore
 except Exception:  # pragma: no cover
     load_user_risk = None  # type: ignore
 

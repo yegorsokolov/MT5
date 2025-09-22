@@ -35,7 +35,7 @@ Pass the configuration file to the RL training script to inject these
 parameters into generated strategy prompts:
 
 ```bash
-python train_rl.py --strategy-config my_strategy.yaml
+python -m mt5.train_rl --strategy-config my_strategy.yaml
 ```
 
 When provided, the values from the configuration are embedded into the

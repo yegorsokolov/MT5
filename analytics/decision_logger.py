@@ -9,8 +9,7 @@ stores them via :func:`log_utils.log_decision` in the encrypted decision log.
 from typing import Dict
 
 import pandas as pd
-
-from log_utils import log_decision
+from mt5.log_utils import log_decision
 
 
 def log(

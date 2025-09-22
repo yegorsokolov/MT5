@@ -56,8 +56,8 @@ def _prepare_cli(monkeypatch):
     utils_env_stub.ensure_environment = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "utils.environment", utils_env_stub)
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    import train_cli
-    import walk_forward
+    from mt5 import train_cli
+    from mt5 import walk_forward
 
     monkeypatch.setattr(
         walk_forward,

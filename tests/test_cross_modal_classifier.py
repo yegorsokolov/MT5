@@ -12,7 +12,7 @@ torch = pytest.importorskip("torch")
 
 from models.cross_modal_classifier import CrossModalClassifier
 from models import model_store
-from generate_signals import load_models
+from mt5.generate_signals import load_models
 
 
 def _make_modal_frame(n_samples: int = 240, window: int = 5, news_dim: int = 4) -> pd.DataFrame:
