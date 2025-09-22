@@ -584,20 +584,31 @@ version.
 
 ## Deployment Guide
 
-Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS:
+The live system spans three applications: MetaTrader 5 executes orders, GitHub
+stores artefacts and Python runs the automation scripts. Follow the steps below
+to prepare a clean Windows PC or VPS.
 
 1. **Provision a system** – If running remotely, create a Windows VPS with at
    least 2 GB of RAM. On a local Windows desktop you can skip this step.
 2. **Install MetaTrader 5** –
-   1. Open your browser on the VPS and download MetaTrader 5 from your broker or the official website.
-   2. Run the installer and click **Next** until the installation completes.
-3. **Install Git and Python** –
-   1. Download Git from [git-scm.com](https://git-scm.com/) and install using the default options (click **Next** on each screen).
-   2. Download Python 3.10 or newer from [python.org](https://www.python.org/downloads/).
+   1. Download MetaTrader 5 from your broker or the official website and run the installer with the default options.
+   2. Launch the terminal once so it creates the `MQL5` data directory and log in with your trading or demo account.
+   3. Verify **Algo Trading** is visible on the toolbar—it will be enabled later when attaching the EA.
+3. **Install Git, GitHub tooling and Python** –
+   1. Download Git from [git-scm.com](https://git-scm.com/) and install using the default options. Ensure the “Git from the command line” option is selected so scheduled scripts can commit changes.
+   2. (Optional) Install [GitHub Desktop](https://desktop.github.com/) or the [GitHub CLI](https://cli.github.com/) to simplify authentication. Sign in with your GitHub account and grant access to the repository the bot will push to.
+   3. Configure Git’s identity so automated commits carry the correct metadata:
+
+      ```bash
+      git config --global user.name "<Your Name>"
+      git config --global user.email "<you@example.com>"
+      ```
+
+   4. Download Python 3.10 or newer from [python.org](https://www.python.org/downloads/).
       During installation tick the **Add Python to PATH** checkbox and click **Install Now**.
 4. **Clone this repository** –
-   1. Launch **Git Bash** from the Start menu.
-   2. Run `git clone <repo-url>` and press **Enter**.
+   1. Launch **Git Bash** or **GitHub Desktop**.
+   2. In GitHub Desktop choose **File → Clone repository…**; otherwise run `git clone <repo-url>` and press **Enter**.
 5. **Install dependencies** –
    1. Open **Command Prompt** and `cd` into the cloned folder.
    2. Run `pip install -r requirements-core.txt`. After verifying any updates, refresh the pinned versions with `pip freeze | sort > requirements-core.txt`.
@@ -681,16 +692,19 @@ mlflow:
    2. Run `python scripts/setup_terminal.py "<path-to-terminal>"` to automatically place `AdaptiveEA.mq5` and `RealtimeEA.mq5` inside `MQL5/Experts`.
    3. Restart MetaTrader 5 and compile the EA inside the MetaEditor by pressing **F7**.
 10. **Attach the EA** –
-   1. In MetaTrader 5 open the **Navigator** panel (Ctrl+N).
-   2. Drag the EA onto a chart of either XAUUSD or GBPUSD and click **OK**.
+    1. In MetaTrader 5 open the **Navigator** panel (Ctrl+N).
+    2. Drag the EA onto a chart of either XAUUSD or GBPUSD and click **OK**.
+    3. Enable **Algo Trading** on the toolbar and, if prompted, allow automated trading under **Tools → Options → Expert Advisors**.
 11. **Publish signals** –
-   1. In the command prompt run `python -m mt5.generate_signals`.
+    1. In the command prompt run `python -m mt5.generate_signals`.
       This publishes prediction messages to `tcp://localhost:5555` which the EA subscribes to.
-   2. Set the environment variable `SIGNAL_QUEUE_BIND` or `SIGNAL_QUEUE_URL` to change the port if needed.
-   3. Messages are sent as Protobuf by default.  Set `SIGNAL_FORMAT=json` to
+    2. Set the environment variable `SIGNAL_QUEUE_BIND` or `SIGNAL_QUEUE_URL` to change the port if needed.
+    3. Confirm the EA input `ZmqAddress` matches the publisher URL (default `tcp://localhost:5555`).
+    4. Messages are sent as Protobuf by default.  Set `SIGNAL_FORMAT=json` to
       publish plain JSON instead.  The Expert Advisors read from this queue via
       the `ZmqAddress` input and no longer require a `signals.csv` file.
-   4. The script checks market hours using `exchange_calendars`; if the market
+    5. Check the **Experts** tab in MetaTrader 5 for “Connected to signal socket” to confirm the bot is linked to the publisher.
+    6. The script checks market hours using `exchange_calendars`; if the market
       is closed it runs a rolling backtest or falls back to historical data so
       analysis can continue. Pass `--simulate-closed-market` to manually test
       this behaviour.
@@ -709,12 +723,13 @@ mlflow:
       written back to `config.yaml` and logged under `logs/config_changes.csv`.
    2. To view experiment history run `scripts/mlflow_ui.sh` and open `http://localhost:5000`.
 14. **Upload artifacts** –
-   1. Start `python scripts/hourly_artifact_push.py` in a separate window. This
+    1. Start `python scripts/hourly_artifact_push.py` in a separate window. This
       script commits `logs/` and `checkpoints/` every hour so history is archived automatically. Use Windows Task
       Scheduler to launch it at logon for unattended operation.
+    2. If pushes fail interactively, run `git credential-manager configure` or `gh auth login` once to cache GitHub credentials for the service account.
 
 15. **Keep it running** –
-   1. Create scheduled tasks that start both `python -m mt5.realtime_train` and the
+    1. Create scheduled tasks that start both `python -m mt5.realtime_train` and the
       hourly artifact uploader whenever the VPS boots or a user logs in. With these
       tasks enabled the bot and artifact push service run indefinitely.
 
