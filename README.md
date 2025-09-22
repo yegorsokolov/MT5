@@ -76,7 +76,8 @@ the `mt5/` package so they can be invoked as Python modules (for example,
 
 | Location | Description |
 | -------- | ----------- |
-| `mt5/` | Entry points such as `train`, `realtime_train`, `remote_api`, orchestration helpers, and utility CLIs. |
+| `mt5/` | Entry points such as `train`, `realtime_train`, orchestration helpers, and compatibility wrappers for legacy API imports. |
+| `bot_apis/` | FastAPI services owned by the bot (remote management, feature retrieval, federated coordinator/clients) secured with API keys. |
 | `analysis/` | Offline diagnostics, feature audits, anomaly detectors and reporting utilities. |
 | `core/` | Orchestrator, scheduling logic, and background service coordination. |
 | `training/` | Core machine learning pipeline, feature builders and curriculum logic. |
@@ -1044,7 +1045,8 @@ can be overridden via environment variables defined in the deployment manifest.
 
 ## Remote Management API
 
-A small FastAPI application defined in `mt5.remote_api` exposes REST endpoints for
+A small FastAPI application implemented in `bot_apis.remote_api` (exposed via the
+`mt5.remote_api` compatibility wrapper) exposes REST endpoints for
 starting and stopping multiple bots. Launch the server with TLS enabled:
 
 ```bash
@@ -1135,6 +1137,22 @@ distributions, consider the following responses:
   conditions.
 * **Rollback** – revert to a previously stable model version while the cause of
   drift is investigated.
+
+## Feature Retrieval Service
+
+The optional feature API now lives in `bot_apis.feature_service`. It must be
+served over HTTPS using certificates supplied via the `FEATURE_SERVICE_CERT` and
+`FEATURE_SERVICE_KEY` environment variables. The service reads a token from the
+`FEATURE_SERVICE_API_KEY` secret and rejects requests that do not include the
+matching `X-API-Key` header. When the remote store is unavailable the training
+pipeline falls back to building features locally.
+
+## Federated Learning API
+
+Federated coordination helpers were moved under `bot_apis.federated`. Both the
+coordinator and client components require HTTPS and an API key delivered via the
+`X-API-KEY` header to exchange model updates. The classes continue to be
+re-exported through the legacy `federated` package for backwards compatibility.
 
 ---
 
