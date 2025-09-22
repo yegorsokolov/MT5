@@ -379,3 +379,120 @@ def test_auto_optimize_uses_single_mlflow_run(monkeypatch, tmp_path):
     assert MLFLOW_STATE["start_calls"] == 1
     assert MLFLOW_STATE["end_calls"] == 1
 
+
+def test_auto_optimize_warns_when_mlflow_missing(monkeypatch, tmp_path, caplog):
+    ensure_real_yaml()
+    _reset_mlflow_state()
+
+    mlflow_module = sys.modules.pop("mlflow", None)
+    analytics_pkg = sys.modules.get("analytics")
+    analytics_attr_present = False
+    analytics_mlflow_attr = None
+    if analytics_pkg is not None and hasattr(analytics_pkg, "mlflow_client"):
+        analytics_attr_present = True
+        analytics_mlflow_attr = getattr(analytics_pkg, "mlflow_client")
+        delattr(analytics_pkg, "mlflow_client")
+    mlflow_client_module = sys.modules.pop("analytics.mlflow_client", None)
+
+    try:
+        module = importlib.reload(auto_optimize)
+        assert not getattr(module, "MLFLOW_AVAILABLE", True)
+
+        monkeypatch.setattr(
+            module,
+            "init_logging",
+            lambda: logging.getLogger("test_auto_optimize_missing_mlflow"),
+        )
+
+        log_path = tmp_path / "hist.csv"
+        monkeypatch.setattr(module, "_LOG_PATH", log_path, raising=False)
+
+        base_cfg = {
+            "threshold": 0.55,
+            "trailing_stop_pips": 20,
+            "rsi_buy": 55,
+            "rl_max_position": 1.0,
+            "rl_risk_penalty": 0.1,
+            "rl_transaction_cost": 0.0001,
+            "rl_max_kl": 0.01,
+            "backtest_window_months": 6,
+        }
+
+        monkeypatch.setattr(module, "load_config", lambda: dict(base_cfg))
+        monkeypatch.setattr(module, "train_model", lambda: None)
+        monkeypatch.setattr(module, "update_config", lambda *a, **k: None)
+
+        base_metrics = {"sharpe": 0.1}
+        base_returns = pd.Series([0.0, 0.0])
+        best_metrics = {"sharpe": 0.2}
+        best_returns = pd.Series([0.2, 0.2])
+
+        def fake_backtest(cfg, return_returns=False):
+            if cfg.get("threshold") == base_cfg["threshold"]:
+                if return_returns:
+                    return base_metrics, base_returns
+                return base_metrics
+            if return_returns:
+                return best_metrics, best_returns
+            return best_metrics
+
+        monkeypatch.setattr(module, "run_backtest", fake_backtest)
+
+        def fake_cv(cfg):
+            if cfg.get("threshold") == base_cfg["threshold"]:
+                return {"avg_sharpe": 0.5}
+            return {"avg_sharpe": 1.5}
+
+        monkeypatch.setattr(module, "run_rolling_backtest", fake_cv)
+        monkeypatch.setattr(
+            module,
+            "ttest_ind",
+            lambda *a, **k: types.SimpleNamespace(pvalue=0.01),
+        )
+
+        class DummyTrial:
+            params = {
+                "threshold": 0.6,
+                "trailing_stop_pips": 15,
+                "rsi_buy": 60,
+                "rl_max_position": 1.5,
+                "rl_risk_penalty": 0.15,
+                "rl_transaction_cost": 0.0002,
+                "rl_max_kl": 0.02,
+                "backtest_window_months": 6,
+            }
+
+            def suggest_float(self, name, low, high):
+                return self.params[name]
+
+            def suggest_int(self, name, low, high):
+                return self.params[name]
+
+        class DummyStudy:
+            def optimize(self, func, n_trials, **kwargs):
+                for _ in range(n_trials):
+                    func(DummyTrial())
+
+        monkeypatch.setattr(module.optuna, "create_study", lambda **_: DummyStudy())
+
+        with caplog.at_level(logging.WARNING):
+            module.main()
+
+        assert log_path.exists()
+        assert any(
+            "MLflow is not installed" in record.getMessage()
+            for record in caplog.records
+        )
+    finally:
+        sys.modules["mlflow"] = mlflow_module or mlflow_stub
+        if mlflow_client_module is not None:
+            sys.modules["analytics.mlflow_client"] = mlflow_client_module
+        else:
+            sys.modules.setdefault("analytics.mlflow_client", mlflow_client)
+        if analytics_pkg is not None:
+            if analytics_attr_present:
+                setattr(analytics_pkg, "mlflow_client", analytics_mlflow_attr)
+            elif not hasattr(analytics_pkg, "mlflow_client"):
+                setattr(analytics_pkg, "mlflow_client", mlflow_client)
+        importlib.reload(auto_optimize)
+
