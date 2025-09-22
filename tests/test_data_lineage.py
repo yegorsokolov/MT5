@@ -29,3 +29,17 @@ def test_data_lineage_hash_changes(tmp_path):
         assert first["features"] != second["features"]
     finally:
         VERSIONS_PATH.write_text(json.dumps(original, indent=2, sort_keys=True))
+
+
+def test_data_lineage_env_fallback(monkeypatch, tmp_path):
+    from analysis import data_lineage
+
+    store_path = tmp_path / "lineage.parquet"
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(data_lineage, "STORE_PATH", store_path)
+    monkeypatch.setenv("MT5_RUN_ID", "env-run")
+
+    data_lineage.log_lineage("unknown", "raw.csv", "transform", "feature")
+    df = data_lineage.get_lineage("env-run")
+    assert not df.empty
+    assert df.iloc[0]["run_id"] == "env-run"
