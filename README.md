@@ -404,12 +404,13 @@ Key risk parameters in `config.yaml` include `max_daily_loss`, `max_drawdown`, `
 ### Alerting
 
 Alerts are raised for resource watchdog breaches, risk limit violations and data
-drift. Configure a Slack webhook URL or SMTP credentials in `config.yaml` under
-the `alerting` key:
+drift. Configure a Telegram bot token/chat identifier or SMTP credentials in
+`config.yaml` under the `alerting` key:
 
 ```yaml
 alerting:
-  slack_webhook: https://hooks.slack.com/services/...
+  telegram_bot_token: 123456:ABCDEF
+  telegram_chat_id: -100112233
   smtp:
     host: smtp.example.com
     port: 587
@@ -1095,7 +1096,7 @@ configured) a Vault-compatible backend. To provide secrets:
 
 1. Populate the required environment variables or store the values in Vault.
 2. Update `config.yaml` with `secret://<NAME>` entries, for example
-   `alerting.slack_webhook: "secret://SLACK_WEBHOOK"`.
+   `alerting.telegram_bot_token: "secret://TELEGRAM_BOT_TOKEN"`.
 3. Ensure unit tests patch `SecretManager.get_secret` when they require specific
    values.
 

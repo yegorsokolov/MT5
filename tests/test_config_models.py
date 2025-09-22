@@ -134,11 +134,13 @@ def test_alerting_recipient_string(tmp_path: Path) -> None:
 def test_app_config_get_returns_optional_section(tmp_path: Path) -> None:
     cfg_data = load_config_fixture("minimal.yaml")
     cfg_data["alerting"] = {
-        "slack_webhook": "https://hooks.slack.test/alert",
+        "telegram_bot_token": "12345:ABC",
+        "telegram_chat_id": 98765,
     }
     cfg_file = write_cfg(tmp_path, cfg_data)
 
     cfg = utils.load_config(cfg_file)
     alerting_section = cfg.get("alerting")
     assert alerting_section is cfg.alerting
-    assert alerting_section.slack_webhook == "https://hooks.slack.test/alert"
+    assert alerting_section.telegram_bot_token == "12345:ABC"
+    assert alerting_section.telegram_chat_id == "98765"
