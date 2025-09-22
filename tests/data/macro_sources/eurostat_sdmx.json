@@ -1,0 +1,41 @@
+{
+  "dataSets": [
+    {
+      "observations": {
+        "0:0:0:0": [200.1],
+        "0:0:0:1": [201.5]
+      }
+    }
+  ],
+  "structure": {
+    "dimensions": {
+      "observation": [
+        {
+          "id": "geo",
+          "values": [
+            {"id": "UK"}
+          ]
+        },
+        {
+          "id": "unit",
+          "values": [
+            {"id": "EUR"}
+          ]
+        },
+        {
+          "id": "na_item",
+          "values": [
+            {"id": "B1GQ"}
+          ]
+        },
+        {
+          "id": "TIME_PERIOD",
+          "values": [
+            {"id": "2022"},
+            {"id": "2023"}
+          ]
+        }
+      ]
+    }
+  }
+}
