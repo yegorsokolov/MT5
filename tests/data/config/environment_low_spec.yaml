@@ -7,4 +7,5 @@ strategy:
     - EURUSD
   risk_per_trade: 0.05
 alerting:
-  slack_webhook: secret://alert-webhook
+  telegram_bot_token: secret://alert-bot-token
+  telegram_chat_id: secret://alert-chat

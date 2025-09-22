@@ -73,8 +73,9 @@ def _run_low_spec_adjustment(tmp_path, monkeypatch, config_name="environment_low
 def test_low_spec_adjustment_preserves_secret_placeholders(tmp_path, monkeypatch):
     _, saved_text, saved_data = _run_low_spec_adjustment(tmp_path, monkeypatch)
 
-    assert "secret://alert-webhook" in saved_text
-    assert saved_data["alerting"]["slack_webhook"] == "secret://alert-webhook"
+    assert "secret://alert-bot-token" in saved_text
+    assert saved_data["alerting"]["telegram_bot_token"] == "secret://alert-bot-token"
+    assert saved_data["alerting"]["telegram_chat_id"] == "secret://alert-chat"
 
 
 def test_low_spec_adjustment_updates_training_values(tmp_path, monkeypatch, caplog):

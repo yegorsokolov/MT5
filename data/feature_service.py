@@ -21,7 +21,9 @@ from .feature_store import FeatureStore
 from utils.secret_manager import SecretManager
 
 API_KEY_NAME = "X-API-Key"
-API_KEY = SecretManager().get_secret("FEATURE_SERVICE_API_KEY", "")
+API_KEY = SecretManager().get_secret("FEATURE_SERVICE_API_KEY") or ""
+if not API_KEY:
+    raise RuntimeError("FEATURE_SERVICE_API_KEY secret is required")
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 
@@ -78,6 +80,8 @@ if __name__ == "__main__":  # pragma: no cover - service entrypoint
 
     cert = os.getenv("FEATURE_SERVICE_CERT")
     key = os.getenv("FEATURE_SERVICE_KEY")
+    if not cert or not key:
+        raise RuntimeError("TLS certificates must be provided via FEATURE_SERVICE_CERT and FEATURE_SERVICE_KEY")
     uvicorn.run(
         app,
         host="0.0.0.0",

@@ -41,7 +41,8 @@ mlflow:
   username: ""
   password: ""
 alerting:
-  slack_webhook: "secret://SLACK_WEBHOOK"
+  telegram_bot_token: "secret://TELEGRAM_BOT_TOKEN"
+  telegram_chat_id: "secret://TELEGRAM_CHAT_ID"
   smtp:
     host: ""
     port: 587
