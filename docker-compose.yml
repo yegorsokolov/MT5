@@ -4,7 +4,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.cpu
-    command: ["python", "remote_api.py"]
+    command: ["python", "-m", "mt5.remote_api"]
     environment:
       - RESOURCE_TIER=${RESOURCE_TIER:-cpu}
     ports:
@@ -33,7 +33,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.cpu
-    command: ["python", "risk_manager.py"]
+    command: ["python", "-m", "mt5.risk_manager"]
     environment:
       - RESOURCE_TIER=${RESOURCE_TIER:-cpu}
     volumes:

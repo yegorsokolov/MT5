@@ -7,8 +7,8 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from analysis.feature_selector import select_features
-from config_models import AppConfig
-from train_utils import resolve_training_features
+from mt5.config_models import AppConfig
+from mt5.train_utils import resolve_training_features
 
 
 def _make_cfg(training: dict | None = None) -> AppConfig:

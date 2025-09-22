@@ -14,7 +14,7 @@ from analysis.risk_loss import RiskBudget
 from training.data_loader import StreamingTrainingFrame
 
 if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
-    from config_models import AppConfig, TrainingConfig
+from mt5.config_models import AppConfig, TrainingConfig
 
 __all__ = [
     "apply_domain_adaptation",

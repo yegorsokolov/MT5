@@ -28,10 +28,12 @@ drift_cooldown: 3600
 service_cmds:
   signal_queue:
     - python
-    - signal_queue.py
+    - -m
+    - mt5.signal_queue
   realtime_train:
     - python
-    - realtime_train.py
+    - -m
+    - mt5.realtime_train
 log_forward:
   url: ""
 mlflow:

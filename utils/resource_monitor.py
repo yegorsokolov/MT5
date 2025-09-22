@@ -264,13 +264,13 @@ class ResourceMonitor:
             except Exception:
                 self.logger.debug("Plugin purge failed", exc_info=True)
         try:
-            from risk_manager import risk_manager
+            from mt5.risk_manager import risk_manager
 
             risk_manager.rebalance_budgets()
         except Exception:
             self.logger.debug("Risk budget rebalance failed", exc_info=True)
         try:
-            from model_registry import TIERS, select_models
+            from mt5.model_registry import TIERS, select_models
             from analysis import replay
 
             if TIERS.get(new_tier, 0) > TIERS.get(old_tier, 0):

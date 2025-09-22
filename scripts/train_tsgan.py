@@ -18,7 +18,7 @@ from data.features import (
     make_features,
     make_sequence_arrays,
 )
-from log_utils import setup_logging, log_exceptions
+from mt5.log_utils import setup_logging, log_exceptions
 
 _LOGGING_INITIALIZED = False
 

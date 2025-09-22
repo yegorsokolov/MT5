@@ -10,8 +10,7 @@ except Exception:  # pragma: no cover - fallback when FastAPI lacks testclient
 import contextlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
 
 def test_combined_drawdown_triggers_global_stop():
@@ -92,7 +91,7 @@ def setup_client(tmp_path, monkeypatch):
 
 def test_risk_status_endpoint(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_PORTFOLIO_DRAWDOWN", "100")
-    import risk_manager as rm_mod
+    from mt5 import risk_manager as rm_mod
     importlib.reload(rm_mod)
     api, client = setup_client(tmp_path, monkeypatch)
     rm = rm_mod.risk_manager

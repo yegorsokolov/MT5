@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from analysis.scenario_mc import generate_correlated_shocks
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
 
 def test_generate_correlated_shocks_shape():

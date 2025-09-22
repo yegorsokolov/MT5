@@ -5,8 +5,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 from risk.tail_hedger import TailHedger
 
 

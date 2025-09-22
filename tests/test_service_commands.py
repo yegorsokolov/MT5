@@ -59,5 +59,5 @@ def test_service_commands_env(monkeypatch):
 
     o = orch.Orchestrator(mon=monitor)
     assert o._service_cmds["signal_queue"] == ["echo", "hi"]
-    assert o._service_cmds["realtime_train"] == ["python", "realtime_train.py"]
+    assert o._service_cmds["realtime_train"] == ["python", "-m", "mt5.realtime_train"]
     assert o._service_cmds["extra"] == ["python", "extra.py"]

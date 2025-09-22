@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from analysis.performance_monitor import PerformanceMonitor
-from scheduler import process_retrain_events
+from mt5.scheduler import process_retrain_events
 import importlib.util
 
 spec = importlib.util.spec_from_file_location(
@@ -59,5 +59,5 @@ def test_retrain_scheduled_on_drift(tmp_path, monkeypatch):
 
     asyncio.run(process_retrain_events(store))
 
-    assert calls and any("train_cli.py" in part for part in calls[0])
+    assert calls and any("mt5.train_cli" in part for part in calls[0])
     assert logged and logged[0] == ("nn", "success")

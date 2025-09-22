@@ -151,10 +151,10 @@ telemetry_mod = types.SimpleNamespace(
     get_meter=lambda *a, **k: _DummyMeter(),
 )
 sys.modules.setdefault("telemetry", telemetry_mod)
-from state_manager import load_latest_checkpoint
+from mt5.state_manager import load_latest_checkpoint
 
 os.environ.setdefault("CHECKPOINT_AES_KEY", base64.b64encode(b"0" * 32).decode())
-import train_nn
+from mt5 import train_nn
 
 
 FEATURES = [
@@ -179,7 +179,7 @@ def _make_df(n: int) -> pd.DataFrame:
 
 
 def test_lightgbm_resume_online(tmp_path):
-    import train
+    from mt5 import train
 
     cfg = {"checkpoint_dir": str(tmp_path), "online_batch_size": 5}
     df_full = _make_df(10)

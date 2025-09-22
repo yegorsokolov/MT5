@@ -50,7 +50,7 @@ except Exception:  # pragma: no cover - environments without numba
 
 from indicators.common import atr as calc_atr, bollinger, rsi as calc_rsi, sma
 from utils import load_config
-from config_models import ConfigError
+from mt5.config_models import ConfigError
 from analysis.kalman_filter import KalmanState, smooth_price
 
 
@@ -1378,8 +1378,7 @@ def run_backtest(
     slippage_model=None,
 ):
     """Run a backtest of the baseline strategy with execution settings."""
-
-    from backtest import run_backtest as _run_backtest
+from mt5.backtest import run_backtest as _run_backtest
 
     return _run_backtest(
         cfg,

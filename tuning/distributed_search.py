@@ -103,9 +103,8 @@ def run_search(
 
 
 def tune_lgbm(cfg: dict, n_trials: int = 20) -> dict:
-    """Tune LightGBM parameters used by :mod:`train.py`."""
-
-    from train import main as train_main
+    """Tune LightGBM parameters used by :mod:`mt5.train`."""
+from mt5.train import main as train_main
 
     space = {
         "learning_rate": lambda t: t.loguniform("learning_rate", 1e-4, 2e-1),
@@ -124,9 +123,8 @@ def tune_lgbm(cfg: dict, n_trials: int = 20) -> dict:
 
 
 def tune_transformer(cfg: dict, n_trials: int = 20) -> dict:
-    """Tune Transformer parameters used by :mod:`train_nn.py`."""
-
-    from train_nn import launch as nn_launch
+    """Tune Transformer parameters used by :mod:`mt5.train_nn`."""
+from mt5.train_nn import launch as nn_launch
 
     space = {
         "learning_rate": lambda t: t.loguniform("learning_rate", 1e-5, 1e-2),
@@ -146,9 +144,8 @@ def tune_transformer(cfg: dict, n_trials: int = 20) -> dict:
 
 
 def tune_rl(cfg: dict, n_trials: int = 20) -> dict:
-    """Tune reinforcement learning parameters used by :mod:`train_rl.py`."""
-
-    from train_rl import launch as rl_launch
+    """Tune reinforcement learning parameters used by :mod:`mt5.train_rl`."""
+from mt5.train_rl import launch as rl_launch
 
     space = {
         "rl_learning_rate": lambda t: t.loguniform("rl_learning_rate", 1e-5, 1e-2),

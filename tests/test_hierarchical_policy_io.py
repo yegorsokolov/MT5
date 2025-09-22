@@ -217,10 +217,9 @@ sys.modules.setdefault(
     "cryptography.hazmat.primitives.ciphers.aead",
     crypto_module,
 )
-
-from train_rl import train_hierarchical, eval_hierarchical, HierarchicalTradingEnv
+from mt5.train_rl import train_hierarchical, eval_hierarchical, HierarchicalTradingEnv
 from rl.hierarchical_agent import HierarchicalAgent
-from model_registry import get_policy_path
+from mt5.model_registry import get_policy_path
 import joblib
 
 

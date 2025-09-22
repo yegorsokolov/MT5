@@ -46,8 +46,7 @@ features_stub = types.SimpleNamespace(make_features=lambda df: df)
 sys.modules.setdefault("data", types.SimpleNamespace())
 sys.modules.setdefault("data.history", history_stub)
 sys.modules.setdefault("data.features", features_stub)
-
-from train_rl import TradingEnv
+from mt5.train_rl import TradingEnv
 
 
 def make_env_with_returns(returns):

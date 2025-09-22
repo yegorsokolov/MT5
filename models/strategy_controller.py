@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 from typing import List
-
-from strategy_dsl import Buy, Sell, Wait, StrategyInterpreter
+from mt5.strategy_dsl import Buy, Sell, Wait, StrategyInterpreter
 
 TOKENS = [Buy, Sell, Wait]
 

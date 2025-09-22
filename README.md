@@ -54,6 +54,25 @@ activity metrics and ESG scores when available.  These datasets reside
 under `data/` or `dataset/` and are merged into the main feature table via
 backward ``asof`` joins.
 
+## Repository layout
+
+The repository root now only contains top-level folders. All executable
+scripts that previously lived beside the configuration files have moved into
+the `mt5/` package so they can be invoked as Python modules (for example,
+`python -m mt5.train`). The most frequently accessed areas are:
+
+| Location | Description |
+| -------- | ----------- |
+| `mt5/` | Entry points such as `train`, `realtime_train`, `remote_api`, orchestration helpers, and utility CLIs. |
+| `analysis/` | Offline diagnostics, feature audits, anomaly detectors and reporting utilities. |
+| `core/` | Orchestrator, scheduling logic, and background service coordination. |
+| `training/` | Core machine learning pipeline, feature builders and curriculum logic. |
+| `deploy/` / `debian/` | Systemd unit files, cloud-init snippets and packaging scripts for production deployment. |
+| `docs/` | MkDocs site and usage guides. |
+
+This structure keeps the root directory readable while maintaining import
+compatibility through the `mt5` namespace package.
+
 ## Deployment and Environment Checks
 
 The toolkit attempts to run even on minimal virtual machines. An environment
@@ -97,7 +116,7 @@ cd MT5
 ./scripts/setup_ubuntu.sh  # install system packages and core Python deps
 dvc pull  # fetch raw/history data
 python -m utils.environment  # verify deps and adjust config
-python train.py
+python -m mt5.train
 ```
 
 Set `WITH_CUDA=1` before running the script to install CUDA drivers when an
@@ -116,7 +135,7 @@ cd MT5
 pip install -r requirements-core.txt
 dvc pull  # fetch raw/history data
 python -m utils.environment  # verify deps and adjust config
-python train.py
+python -m mt5.train
 ```
 
 Windows PowerShell:
@@ -127,13 +146,36 @@ Set-Location MT5
 pip install -r requirements-core.txt
 dvc pull  # fetch raw/history data
 python -m utils.environment
-python train.py
+python -m mt5.train
 ```
 
 These commands download the repository, install required packages, verify the
 environment and start a training run. Adjust the final command for backtesting
 or signal generation as needed. Optional components can be installed via
 extras, for example `pip install .[rl]` or `pip install .[heavy]`.
+
+After the initial training run you can expose the REST API locally:
+
+```bash
+python -m mt5.remote_api --config config.yaml
+```
+
+### Background services
+
+Copy `deploy/mt5bot.service` (or the Debian-specific unit under `debian/`) to
+your init directory to run the bot as a persistent service. The unit file uses
+the new module-based entry points out of the box:
+
+```bash
+sudo cp deploy/mt5bot.service /etc/systemd/system/mt5bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now mt5bot.service
+```
+
+You can override helper commands through the `service_cmds` block in
+`config.yaml` or by setting the `SERVICE_COMMANDS` environment variable. Each
+command should now be expressed in `python -m mt5.<module>` form to match the
+repository layout.
 
 ### Pre-commit hooks
 
@@ -171,7 +213,7 @@ Application logs are also written to `logs/app.log` within the repository:
 tail -f logs/app.log
 ```
 
-Edit `deploy/mt5bot.service` to run `remote_api.py` instead of `realtime_train.py` if desired.
+Edit `deploy/mt5bot.service` to run `mt5.remote_api` instead of `mt5.realtime_train` if desired.
 
 ### Reproducibility
 
@@ -184,7 +226,7 @@ seed: 123
 ```
 
 ```bash
-python train.py  # uses the seed from config.yaml
+python -m mt5.train  # uses the seed from config.yaml
 ```
 
 ### Hyperparameter tuning
@@ -194,9 +236,9 @@ over core parameters and logs the best trial to MLflow. Recommended ranges:
 
 | Script | Parameters |
 | ------ | ---------- |
-| `train.py` | `learning_rate` 1e-4–0.2, `num_leaves` 16–255, `max_depth` 3–12 |
-| `train_cli.py neural` | `learning_rate` 1e-5–1e-2, `d_model` 32–256, `num_layers` 1–4 |
-| `train_rl.py` | `rl_learning_rate` 1e-5–1e-2, `rl_gamma` 0.90–0.999 |
+| `mt5.train` | `learning_rate` 1e-4–0.2, `num_leaves` 16–255, `max_depth` 3–12 |
+| `mt5.train_cli neural` | `learning_rate` 1e-5–1e-2, `d_model` 32–256, `num_layers` 1–4 |
+| `mt5.train_rl` | `rl_learning_rate` 1e-5–1e-2, `rl_gamma` 0.90–0.999 |
 
 ### Masked time-series encoder pretraining
 
@@ -204,7 +246,7 @@ A compact GRU encoder can be pre-trained on historical windows to speed up
 adaptation to new regimes. Run the helper script to populate the model store:
 
 ```bash
-python pretrain_ts_encoder.py --config config.yaml
+python -m mt5.pretrain_ts_encoder --config config.yaml
 ```
 
 Training scripts will automatically load these weights when
@@ -239,7 +281,7 @@ A lightweight contrastive encoder can also be trained on unlabeled windows to
 provide a useful initialization. Populate the model store with:
 
 ```bash
-python pretrain_contrastive.py --config config.yaml
+python -m mt5.pretrain_contrastive --config config.yaml
 ```
 
 Training scripts load these weights automatically when
@@ -362,14 +404,14 @@ capture more market behaviour than simple MAs and RSI alone.
 
 The project can be adapted to any symbol by changing the configuration
 parameters and retraining the model on the corresponding historical data.
-`train.py` now supports training on multiple symbols at once.  By default both
+`mt5.train` now supports training on multiple symbols at once.  By default both
 `XAUUSD` and `GBPUSD` history files will be downloaded and combined.
-The `neural` subcommand in `train_cli.py` now uses a lightweight Transformer network on sliding
+The `neural` subcommand in `mt5.train_cli` now uses a lightweight Transformer network on sliding
 windows of features for those wanting to explore deep learning models.
-`train_meta.py` demonstrates a simple meta-learning approach where a global
+`mt5.train_meta` demonstrates a simple meta-learning approach where a global
 model is fitted on all symbols and lightweight adapters are fine-tuned for each
 instrument.  The per-symbol models are saved under the `models/` folder.
-Another option `train_rl.py` trains a reinforcement learning agent that
+Another option `mt5.train_rl` trains a reinforcement learning agent that
 optimises risk-adjusted profit.  The PPO environment now supports trading
 multiple symbols at once using a vector of position sizes.  Per-symbol returns
 and transaction costs are tracked while a portfolio variance penalty discourages
@@ -377,7 +419,7 @@ excess risk.  Key parameters such as `rl_max_position`, `rl_transaction_cost`,
 `rl_risk_penalty` and `rl_var_window` can be adjusted in `config.yaml`.  Set
 `rl_algorithm: RLlib` together with `rllib_algorithm: PPO` or `DDPG` to train
 using RLlib instead of Stable-Baselines.  The resulting checkpoint is stored
-under `model_rllib/` and is automatically used by `generate_signals.py` when
+under `model_rllib/` and is automatically used by `mt5.generate_signals` when
 `rl_algorithm` is set to `RLlib`.  Alternatively set `rl_algorithm: SAC` to
 train a Soft Actor-Critic agent with Stable-Baselines3:
 
@@ -411,7 +453,7 @@ rl_steps: 10000
 `rl_algorithm` can also be set to `A2C` or `A3C` to train Advantage Actor-Critic
 agents with Stable-Baselines3.  `A3C` launches multiple parallel environments
 with the number controlled by `rl_num_envs` (default `4`).
-For a full pipeline combining all of these approaches run `train_combined.py`.
+For a full pipeline combining all of these approaches run `mt5.train_combined`.
 
 ## Installation
 
@@ -460,11 +502,11 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
 7. Train the model and run a backtest:
 
    ```bash
-   python train.py
+   python -m mt5.train
    # run the transformer-based neural network
-   python train_cli.py neural
+   python -m mt5.train_cli neural
    # train the stacking ensemble and optional mixture-of-experts gate
-   python train_cli.py ensemble \
+   python -m mt5.train_cli ensemble \
      --data data/ensemble_features.csv \
      --target signal \
      --feature feat_a --feature feat_b \
@@ -472,13 +514,13 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
      --expert-weight 1.0 --expert-weight 0.8 --expert-weight 1.2 \
      --gating-sharpness 7.5
    # train symbol-specific adapters
-   python train_meta.py
+   python -m mt5.train_meta
    # train an AutoGluon TabularPredictor
-   python train_autogluon.py
-   python train_rl.py
+   python -m mt5.train_autogluon
+   python -m mt5.train_rl
    # end-to-end training of all components
-   python train_combined.py
-   python backtest.py
+   python -m mt5.train_combined
+   python -m mt5.backtest
    ```
 
    The ensemble CLI starts an MLflow run via `setup_training`, prints the
@@ -502,7 +544,7 @@ For a full pipeline combining all of these approaches run `train_combined.py`.
    A small p-value (e.g. below 0.05) suggests the Sharpe ratio is unlikely to
    have occurred by chance.
 
-   If `data_urls` are provided, `train.py` will download the file(s) for the configured symbols via `gdown` before training.
+   If `data_urls` are provided, `mt5.train` will download the file(s) for the configured symbols via `gdown` before training.
    When `api_history` entries are present, the data will instead be pulled directly from the MetaTrader&nbsp;5 history center.
 
 To generate additional synthetic training sequences you can train either a GAN or diffusion model:
@@ -517,24 +559,24 @@ blend in the diffusion sequences during model training. The number of diffusion 
 is controlled by the `diffusion_epochs` configuration key.
 
 The resulting model file (`model.joblib`) can be loaded by the EA. When
-training with `train_autogluon.py` the best predictor is stored under
+training with `mt5.train_autogluon` the best predictor is stored under
 `models/autogluon` and will be used when `model_type: autogluon` is set in
 `config.yaml`.
 
 To run live training and keep the repository in sync:
 
 ```bash
-python realtime_train.py
+python -m mt5.realtime_train
 ```
 This script continuously pulls ticks from the terminal, retrains the model and
 pushes the updated dataset and model back to the repository.
 
 ```
-python train_online.py
+python -m mt5.train_online
 ```
-This optional script reads the features produced by `realtime_train.py` and
+This optional script reads the features produced by `mt5.realtime_train` and
 incrementally updates a lightweight river model stored under `models/online.joblib`.
-When `realtime_train.py` is running the trainer is triggered after each batch
+When `mt5.realtime_train` is running the trainer is triggered after each batch
 to pick up newly recorded ticks.  Each training step produces a timestamped
 artifact registered in the `model_registry` along with provenance metadata.  If
 a retrain performs poorly, `train_online.rollback_model()` restores the previous
@@ -561,8 +603,8 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
    2. Run `pip install -r requirements-core.txt`. After verifying any updates, refresh the pinned versions with `pip freeze | sort > requirements-core.txt`.
    3. Install extras as needed, e.g. `pip install .[heavy]` or `pip install .[rl]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
-      When the config option `feature_importance: true` is set, `train.py` and
-      `train_cli.py neural` also write SHAP bar plots under `reports/` and a ranked
+      When the config option `feature_importance: true` is set, `mt5.train` and
+      `mt5.train_cli neural` also write SHAP bar plots under `reports/` and a ranked
       `feature_importance.csv` file. For ad-hoc interpretation of an existing
       model run `python analysis/interpret_model.py` which produces a similar
       report for the most recent dataset.
@@ -581,12 +623,12 @@ Follow these steps to run the EA and the realtime trainer on a Windows PC or VPS
 7. **Build Protobuf classes** –
    1. Make sure the `protoc` compiler is installed and on your `PATH`.
    2. Run `protoc --python_out=. proto/signals.proto` from the repository root.
-      This generates `proto/signals_pb2.py` which is imported by `signal_queue.py`.
+      This generates `proto/signals_pb2.py` which is imported by `mt5.signal_queue`.
 8. **Initial training** –
-   1. Still inside the command prompt run `python train.py`.
+   1. Still inside the command prompt run `python -m mt5.train`.
       The script downloads the backtesting files `XAUUSD.csv` and `GBPUSD.csv`
       from Google Drive and trains a LightGBM model.
-   2. To experiment with the transformer-based neural network instead run `python train_cli.py neural`.
+   2. To experiment with the transformer-based neural network instead run `python -m mt5.train_cli neural`.
       This trains a small transformer on sequences of the same features and saves `model_transformer.pt`.
    3. After either script finishes you will see the resulting model file under the project folder.
    4. To browse logged runs start `scripts/mlflow_ui.sh` and open `http://localhost:5000` in your browser.
@@ -642,7 +684,7 @@ mlflow:
    1. In MetaTrader 5 open the **Navigator** panel (Ctrl+N).
    2. Drag the EA onto a chart of either XAUUSD or GBPUSD and click **OK**.
 11. **Publish signals** –
-   1. In the command prompt run `python generate_signals.py`.
+   1. In the command prompt run `python -m mt5.generate_signals`.
       This publishes prediction messages to `tcp://localhost:5555` which the EA subscribes to.
    2. Set the environment variable `SIGNAL_QUEUE_BIND` or `SIGNAL_QUEUE_URL` to change the port if needed.
    3. Messages are sent as Protobuf by default.  Set `SIGNAL_FORMAT=json` to
@@ -653,10 +695,10 @@ mlflow:
       analysis can continue. Pass `--simulate-closed-market` to manually test
       this behaviour.
 12. **Run realtime training** –
-   1. Back in the command prompt run `python realtime_train.py`.
+   1. Back in the command prompt run `python -m mt5.realtime_train`.
    2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
 13. **Optimise parameters** –
-   1. Periodically run `python auto_optimize.py`.
+   1. Periodically run `python -m mt5.auto_optimize`.
       When `use_ray` is enabled the script leverages Ray Tune with
       `OptunaSearch` to distribute trials. Configure resource limits under
       `ray_resources` in `config.yaml`.
@@ -672,7 +714,7 @@ mlflow:
       Scheduler to launch it at logon for unattended operation.
 
 15. **Keep it running** –
-   1. Create scheduled tasks that start both `python realtime_train.py` and the
+   1. Create scheduled tasks that start both `python -m mt5.realtime_train` and the
       hourly artifact uploader whenever the VPS boots or a user logs in. With these
       tasks enabled the bot and artifact push service run indefinitely.
 
@@ -687,7 +729,7 @@ stop. Trading no longer relies on MQL Expert Advisors; signals are transmitted
 directly from Python to MetaTrader5 via the ``mt5_direct`` broker module.
 This removes the external messaging bridge and simplifies deployment.
 
-`generate_signals.py` merges ML probabilities with a moving average
+`mt5.generate_signals` merges ML probabilities with a moving average
 crossover and RSI filter so trades are only taken when multiple conditions
 confirm the direction.  Additional optional filters check for Bollinger band
 breakouts, volume spikes and even macro indicators when a `macro.csv` file is
@@ -720,13 +762,13 @@ entries.
 
 ## Performance Reports
 
-`backtest.py` outputs statistics including win rate, Sharpe ratio and maximum
+`mt5.backtest` outputs statistics including win rate, Sharpe ratio and maximum
 drawdown. These metrics can be used to iteratively optimise the strategy.
 
 ## Parallelized Training / HPC
 
 For multiple symbols and large tick datasets, fitting models sequentially can
-be slow. The script `train_parallel.py` and the hyper‑parameter optimiser use
+be slow. The script `mt5.train_parallel` and the hyper‑parameter optimiser use
 Ray to distribute work across CPU cores or even a cluster. Enable this by
 setting `use_ray: true` in `config.yaml` and optionally adjust the new
 `ray_resources` section to control the CPUs and GPUs allocated per trial.
@@ -738,7 +780,7 @@ ray start --head
 ray start --address='<head-ip>:6379'
 ```
 
-Once running, any call to `python auto_optimize.py` or `train_parallel.py` will
+Once running, any call to `python -m mt5.auto_optimize` or `python -m mt5.train_parallel` will
 automatically utilise the cluster.
 The Docker setup remains unchanged so experiments stay reproducible.
 
@@ -770,7 +812,7 @@ Risk checks for spread limits and slippage detection are provided by the
 `spread` and `slippage` modules.  A reinforcement learning based sizing policy
 is implemented in `plugins/rl_risk.py`; it outputs a position size multiplier
 given recent returns and risk metrics.  The policy is trained by
-`train_rl.py` and saved under `models/` for use during live trading.
+`mt5.train_rl` and saved under `models/` for use during live trading.
 
 ## Strategy Templates
 
@@ -791,7 +833,7 @@ pip install backtrader freqtrade ta-lib
 Run a strategy using the new CLI flag:
 
 ```bash
-python backtest.py --external-strategy strategies/freqtrade_template.py
+python -m mt5.backtest --external-strategy strategies/freqtrade_template.py
 ```
 
 The adapter automatically detects the framework and feeds the existing feature
@@ -826,8 +868,8 @@ trivial.  Containers start via `scripts/run_bot.sh` which performs an initial
 training pass when no `model.joblib` is present, launches the terminal and then
 enters the realtime training loop while uploading logs in the background.
 
-The workflow `.github/workflows/train.yml` retrains both `train.py` and
-`train_cli.py neural` whenever new data is pushed or on a daily schedule. Generated
+The workflow `.github/workflows/train.yml` retrains both `mt5.train` and
+`mt5.train_cli neural` whenever new data is pushed or on a daily schedule. Generated
 models are committed back to the repository ensuring the EA always uses the
 most recent versions.
 
@@ -857,11 +899,11 @@ can be overridden via environment variables defined in the deployment manifest.
 
 ## Remote Management API
 
-A small FastAPI application defined in `remote_api.py` exposes REST endpoints for
+A small FastAPI application defined in `mt5.remote_api` exposes REST endpoints for
 starting and stopping multiple bots. Launch the server with TLS enabled:
 
 ```bash
-python remote_api.py
+python -m mt5.remote_api
 ```
 
 The process reads `certs/api.crt` and `certs/api.key` and **fails to start** if
@@ -887,10 +929,10 @@ curl -k -H "X-API-Key: <token>" https://localhost:8000/health
 ```
 
 Set `MAX_PORTFOLIO_DRAWDOWN` (and optional `MAX_VAR`) before launching
-`remote_api.py` to enable the portfolio level risk manager:
+`mt5.remote_api` to enable the portfolio level risk manager:
 
 ```bash
-MAX_PORTFOLIO_DRAWDOWN=1000 python remote_api.py
+MAX_PORTFOLIO_DRAWDOWN=1000 python -m mt5.remote_api
 ```
 
 ### API Key Rotation
@@ -957,10 +999,10 @@ testing within MetaTrader 5 before deploying to a live environment.
 
 ## Meta-learning with MAML
 
-`meta_train_nn.py` trains the transformer model across multiple symbols using
+`mt5.meta_train_nn` trains the transformer model across multiple symbols using
 Model-Agnostic Meta-Learning (MAML). The resulting initialisation is saved to
 `models/meta_transformer.pth`. Enable it by setting `use_meta_model: true` in
-`config.yaml`; `generate_signals.py` will load the weights and blend the
+`config.yaml`; `mt5.generate_signals` will load the weights and blend the
 meta-model's probabilities with any other ensemble members. During evaluation on
 an unseen symbol the script fine-tunes the meta-trained weights on a small
 subset before producing signals, controlled by `finetune_steps`.
@@ -992,8 +1034,8 @@ In practice the benefit of scaling will depend on the underlying market data
 and features.
 
 The live signal generator can also blend in predictions from an incremental
-model trained with `train_online.py`. Set `use_online_model: true` in
-`config.yaml` and run the trainer alongside `realtime_train.py` to enable this
+model trained with `mt5.train_online`. Set `use_online_model: true` in
+`config.yaml` and run the trainer alongside `mt5.realtime_train` to enable this
 behaviour.
 
 ## Mixed Precision and Checkpointing

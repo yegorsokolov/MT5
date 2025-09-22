@@ -23,7 +23,7 @@ multi_horizon_labels = labels_mod.multi_horizon_labels
 
 def test_multi_horizon_labels_and_training():
     # confirm helper exists in train.py
-    train_source = (root / "train.py").read_text()
+    train_source = (root / "mt5" / "train.py").read_text()
     assert "train_multi_output_model" in train_source
 
     np.random.seed(0)

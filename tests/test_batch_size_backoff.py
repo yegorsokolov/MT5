@@ -12,7 +12,7 @@ spec = importlib.util.spec_from_file_location("resource_monitor", ROOT / "utils"
 rm_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rm_mod)  # type: ignore
 monitor = rm_mod.monitor
-source = (ROOT / "train_nn.py").read_text()
+source = (ROOT / "mt5" / "train_nn.py").read_text()
 module = ast.parse(source)
 func_src = None
 for node in module.body:

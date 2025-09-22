@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from strategy.strategy_lab import StrategyLab
 from strategy.router import StrategyRouter
 from services import message_bus
-from model_registry import save_model
+from mt5.model_registry import save_model
 
 
 def test_init_from_registry(tmp_path):

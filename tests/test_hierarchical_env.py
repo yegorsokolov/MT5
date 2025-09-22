@@ -99,8 +99,7 @@ spaces_mod.__spec__ = importlib.machinery.ModuleSpec("gym.spaces", loader=None)
 gym_stub.spaces = spaces_mod
 sys.modules.setdefault("gym", gym_stub)
 sys.modules.setdefault("gym.spaces", spaces_mod)
-
-from train_rl import HierarchicalTradingEnv
+from mt5.train_rl import HierarchicalTradingEnv
 
 
 def test_hierarchical_step():

@@ -19,8 +19,7 @@ import logging
 
 from git import Repo
 from git.exc import GitCommandError
-
-from log_utils import setup_logging, log_exceptions
+from mt5.log_utils import setup_logging, log_exceptions
 
 _LOGGING_INITIALIZED = False
 

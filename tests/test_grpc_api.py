@@ -150,7 +150,7 @@ async def test_status_and_logs(tmp_path, monkeypatch):
 async def test_get_risk_status(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_PORTFOLIO_DRAWDOWN", "100")
     ra, grpc_mod, _ = load_grpc(tmp_path / "app.log", monkeypatch)
-    import risk_manager as rm_mod
+    from mt5 import risk_manager as rm_mod
     rm_mod.risk_manager.reset()
     rm_mod.risk_manager.update("b1", -60)
     rm_mod.risk_manager.update("b2", -50)

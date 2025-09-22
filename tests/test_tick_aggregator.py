@@ -31,7 +31,7 @@ ta = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = ta
 spec.loader.exec_module(ta)
 
-import risk_manager as rm_mod
+from mt5 import risk_manager as rm_mod
 
 
 class FastBroker:

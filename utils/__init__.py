@@ -9,10 +9,10 @@ from typing import Any, Literal, overload
 import os
 import warnings
 import yaml
-import log_utils
+from mt5 import log_utils
 from pydantic import ValidationError, BaseModel
 from filelock import FileLock
-from config_models import AppConfig, ConfigError
+from mt5.config_models import AppConfig, ConfigError
 from .secret_manager import SecretManager
 
 try:

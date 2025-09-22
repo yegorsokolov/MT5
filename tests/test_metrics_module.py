@@ -51,7 +51,7 @@ except ModuleNotFoundError:
     from prometheus_client import Counter, Gauge, CollectorRegistry
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-import metrics
+from mt5 import metrics
 
 
 def test_metrics_counters(monkeypatch):

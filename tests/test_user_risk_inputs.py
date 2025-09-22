@@ -129,7 +129,7 @@ alert_mod.send_alert = lambda *a, **k: None
 alert_mod.__spec__ = importlib.machinery.ModuleSpec("utils.alerting", loader=None)
 sys.modules.setdefault("utils.alerting", alert_mod)
 
-import state_manager
+from mt5 import state_manager
 
 
 def _compute_quiet_windows(agg, minutes: int) -> list[dict]:
@@ -166,8 +166,8 @@ def test_default_limits_persist(monkeypatch, tmp_path):
     monkeypatch.setattr(state_manager, "_STATE_DIR", tmp_path)
     monkeypatch.setattr(state_manager, "_RISK_FILE", tmp_path / "user_risk.pkl")
     monkeypatch.setenv("INITIAL_CAPITAL", "100000")
-    import user_risk_inputs as uri
-    import risk_manager as rm_mod
+    from mt5 import user_risk_inputs as uri
+    from mt5 import risk_manager as rm_mod
     rm_mod.risk_manager = rm_mod.RiskManager(
         max_drawdown=1e9, max_total_drawdown=1e9, initial_capital=100000
     )
@@ -188,8 +188,8 @@ def test_cli_override_persist(monkeypatch, tmp_path):
     monkeypatch.setattr(state_manager, "_STATE_DIR", tmp_path)
     monkeypatch.setattr(state_manager, "_RISK_FILE", tmp_path / "user_risk.pkl")
     monkeypatch.setenv("INITIAL_CAPITAL", "50000")
-    import user_risk_inputs as uri
-    import risk_manager as rm_mod
+    from mt5 import user_risk_inputs as uri
+    from mt5 import risk_manager as rm_mod
     rm_mod.risk_manager = rm_mod.RiskManager(
         max_drawdown=1e9, max_total_drawdown=1e9, initial_capital=50000
     )
@@ -215,7 +215,7 @@ def test_cli_override_persist(monkeypatch, tmp_path):
 
 
 def test_drawdown_enforcement():
-    from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
     rm = RiskManager(max_drawdown=5, max_total_drawdown=8, initial_capital=100)
     rm.update("bot", -6)
@@ -229,7 +229,7 @@ def test_drawdown_enforcement():
 
 
 def test_runtime_limit_update_enforced():
-    from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
     rm = RiskManager(max_drawdown=1000, max_total_drawdown=2000, initial_capital=100000)
     rm.update("bot", -200)
@@ -241,7 +241,7 @@ def test_runtime_limit_update_enforced():
 
 
 def test_quiet_window_minutes():
-    from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
     class DummyAgg:
         def fetch(self):
             return None

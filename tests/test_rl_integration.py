@@ -123,7 +123,7 @@ sys.modules.setdefault(
 # ---------------------------------------------------------------------------
 from execution.engine import ExecutionEngine
 from execution.rl_executor import RLExecutor, LOBExecutionEnv
-from model_registry import ModelRegistry
+from mt5.model_registry import ModelRegistry
 import features
 LOBExecutionEnv.step = _safe_step
 
