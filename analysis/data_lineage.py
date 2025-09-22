@@ -8,6 +8,7 @@ information for a particular model run.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
@@ -42,7 +43,10 @@ def log_lineage(
     Parameters
     ----------
     run_id:
-        Identifier for the current model run.
+        Identifier for the current model run. When ``run_id`` is empty or
+        ``"unknown"`` the function falls back to the ``MT5_RUN_ID`` environment
+        variable so lineage entries remain associated with the active training
+        run.
     raw_file:
         Path or identifier of the raw data file used.
     transformation:
@@ -51,9 +55,13 @@ def log_lineage(
         Name of the resulting feature/column.
     """
 
+    resolved_run_id = run_id or os.environ.get("MT5_RUN_ID", "unknown")
+    if resolved_run_id == "unknown":
+        resolved_run_id = os.environ.get("MT5_RUN_ID", "unknown")
+
     df = _load_store()
     record = {
-        "run_id": run_id,
+        "run_id": resolved_run_id,
         "raw_file": raw_file,
         "transformation": transformation,
         "output_feature": output_feature,

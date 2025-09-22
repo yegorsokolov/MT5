@@ -5,6 +5,7 @@ with symbol identifiers as *groups* so that observations from the same
 instrument never appear in both the training and validation folds.
 """
 
+import os
 from pathlib import Path
 import random
 import json
@@ -87,6 +88,7 @@ from analysis.prob_calibration import (
 )
 from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
+from reports.run_history import RunHistoryRecorder
 from analysis.domain_adapter import DomainAdapter
 from models.conformal import (
     ConformalIntervalParams,
@@ -846,10 +848,39 @@ def _run_training(
     cfg.training.model_type = model_type
     if cfg.training.use_pseudo_labels:
         use_pseudo_labels = True
+
+    config_payload = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg
+    recorder_extra = {
+        "resume_online": bool(resume_online),
+        "export": bool(export),
+        "transfer_from": transfer_from,
+        "risk_target": risk_target,
+    }
+    recorder = RunHistoryRecorder(
+        component="training.pipeline",
+        config=config_payload,
+        tags={
+            "model_type": model_type,
+            "use_pseudo_labels": bool(use_pseudo_labels),
+        },
+        extra={k: v for k, v in recorder_extra.items() if v is not None},
+    )
+    recorder.add_artifact(LOG_DIR / "app.log", dest_name="logs/app.log", optional=True)
+    recorder.add_artifact(
+        LOG_DIR / "trades.csv", dest_name="logs/trades.csv", optional=True
+    )
+    recorder.start()
+    previous_run_id = os.environ.get("MT5_RUN_ID")
+    os.environ["MT5_RUN_ID"] = recorder.run_id
+    status = "failed"
+    result_value: float | None = None
+    error: Exception | None = None
+
     _subscribe_cpu_updates(cfg)
     seed = cfg.training.seed
     random.seed(seed)
     np.random.seed(seed)
+    recorder.update_context(seed=seed)
     root = Path(__file__).resolve().parent
     root.joinpath("data").mkdir(exist_ok=True)
     scaler_path = root / "scaler.pkl"
@@ -893,6 +924,13 @@ def _run_training(
             feature_lookback=feature_lookback,
             validate=validate_flag,
         )
+        recorder.update_context(
+            validate=bool(validate_flag),
+            stream_enabled=bool(stream),
+            stream_chunk_size=chunk_size,
+            stream_feature_lookback=feature_lookback,
+            data_source=str(data_source),
+        )
 
         stream_metadata: dict[str, object] | None = None
         if isinstance(training_data, StreamingTrainingFrame):
@@ -909,6 +947,8 @@ def _run_training(
                     )
             except Exception:
                 pass
+        if stream_metadata:
+            recorder.update_context(stream_metadata=stream_metadata)
 
         adapter_path = root / "domain_adapter.pkl"
         df = apply_domain_adaptation(
@@ -1792,10 +1832,14 @@ from mt5.train_price_distribution import train_price_distribution
         if calibrator is not None and calibrator.cv is None and calibrated_probs_all is not None:
             pred_df["prob_calibrated"] = calibrated_probs_all
         pred_df.to_csv(pred_path, index=False)
+        recorder.add_artifact(
+            pred_path, dest_name="reports/val_predictions.csv", optional=True
+        )
         mlflow.log_artifact(str(pred_path))
 
         aggregate_report = classification_report(all_true, all_preds, output_dict=True)
         logger.info("\n%s", classification_report(all_true, all_preds))
+        recorder.update_context(aggregate_report=aggregate_report)
 
         # Evaluate risk metrics on realised returns and apply optional penalties
         base_f1 = float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
@@ -1812,6 +1856,12 @@ from mt5.train_price_distribution import train_price_distribution
             mdd = float(max_drawdown(returns))
             logger.info("CVaR@%.2f: %.4f", alpha, cvar_val)
             logger.info("Max drawdown: %.4f", mdd)
+            recorder.set_metrics(
+                {
+                    "cvar": cvar_val,
+                    "max_drawdown": mdd,
+                }
+            )
             try:  # pragma: no cover - mlflow optional
                 mlflow.log_metric("cvar", cvar_val)
                 mlflow.log_metric("max_drawdown", mdd)
@@ -1820,7 +1870,21 @@ from mt5.train_price_distribution import train_price_distribution
             penalty = risk_penalty(returns, risk_budget, level=alpha)
             if penalty > 0:
                 logger.warning("Risk constraints violated: penalty %.4f", float(penalty))
-                return base_f1 - float(penalty)
+                penalty_val = float(penalty)
+                penalised = base_f1 - penalty_val
+                recorder.set_metrics(
+                    {
+                        "f1_weighted": base_f1,
+                        "risk_penalty": penalty_val,
+                        "final_score": penalised,
+                    }
+                )
+                recorder.add_note(
+                    "Risk constraints triggered a penalty; returning penalised score."
+                )
+                status = "completed"
+                result_value = penalised
+                return penalised
 
         # Bootstrap confidence intervals for metrics
         boot_metrics = bootstrap_classification_metrics(all_true, all_preds)
@@ -1845,6 +1909,28 @@ from mt5.train_price_distribution import train_price_distribution
             f1_ci[0],
             f1_ci[1],
         )
+        recorder.set_metrics(
+            {
+                "f1_weighted": boot_metrics["f1"],
+                "precision_weighted": boot_metrics["precision"],
+                "recall_weighted": boot_metrics["recall"],
+                "f1_ci": [float(f1_ci[0]), float(f1_ci[1])],
+                "precision_ci": [float(prec_ci[0]), float(prec_ci[1])],
+                "recall_ci": [float(rec_ci[0]), float(rec_ci[1])],
+                "final_score": base_f1,
+            }
+        )
+        recorder.update_context(
+            features=list(features),
+            label_columns=list(label_cols),
+            regime_thresholds=regime_thresholds,
+        )
+        if overall_params is not None:
+            recorder.update_context(
+                interval_alpha=interval_alpha,
+                interval_coverage=overall_cov,
+            )
+        result_value = float(base_f1)
 
         model_metadata = build_model_metadata(
             regime_thresholds,
@@ -2034,6 +2120,9 @@ from mt5.train_price_distribution import train_price_distribution
         with out.open("w") as f:
             json.dump(aggregate_report, f, indent=2)
         mlflow.log_artifact(str(out))
+        recorder.add_artifact(
+            out, dest_name="reports/classification_report.json", optional=True
+        )
 
         if (
             final_pipe is not None
@@ -2059,17 +2148,25 @@ from mt5.train_price_distribution import train_price_distribution
             export_lightgbm(clf, sample)
 
         logger.info("Active learning queue size: %d", len(al_queue))
-        model_card.generate(
+        card_md, card_json = model_card.generate(
             cfg,
             [root / "data" / "history.parquet"],
             features,
             aggregate_report,
             root / "reports" / "model_cards",
         )
+        recorder.add_artifact(card_md, dest_name="reports/model_card.md", optional=True)
+        recorder.add_artifact(
+            card_json, dest_name="reports/model_card.json", optional=True
+        )
         mlflow.log_metric(
             "runtime",
             (datetime.now() - start_time).total_seconds(),
         )
+    except Exception as exc:
+        error = exc
+        recorder.add_error(str(exc))
+        raise
     finally:
         if mlflow_run_active:
             try:
@@ -2077,6 +2174,13 @@ from mt5.train_price_distribution import train_price_distribution
             except Exception:
                 pass
         _prune_finished_classifiers()
+        if previous_run_id is not None:
+            os.environ["MT5_RUN_ID"] = previous_run_id
+        else:
+            os.environ.pop("MT5_RUN_ID", None)
+        if error is None and status == "failed":
+            status = "completed"
+        recorder.finish(status=status, error=error, result=result_value)
     return float(base_f1)
 
 
