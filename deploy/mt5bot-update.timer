@@ -1,0 +1,12 @@
+[Unit]
+Description=Check MT5 repository for updates
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=15m
+RandomizedDelaySec=120
+Unit=mt5bot-update.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
