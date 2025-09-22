@@ -108,24 +108,85 @@ to the standard code paths.
 
 ### Example deployment
 
-Ubuntu:
+Ubuntu (step-by-step):
 
-```bash
-git clone https://github.com/USERNAME/MT5.git
-cd MT5
-./scripts/setup_ubuntu.sh  # install system packages and core Python deps
-dvc pull  # fetch raw/history data
-python -m utils.environment  # verify deps and adjust config
-python -m mt5.train
-```
+The following walkthrough assumes a fresh Ubuntu 22.04/24.04 machine and
+explains every keystroke. Adjust usernames, hostnames and repository URLs to
+match your environment.
 
-Set `WITH_CUDA=1` before running the script to install CUDA drivers when an
-NVIDIA GPU is present.
+1. **Open a terminal session.**
+   * On a local Ubuntu desktop press `Ctrl`+`Alt`+`T` at the same time. A black
+     terminal window opens.
+   * To work on a remote server, open a terminal on your local machine and type
+     `ssh your-user-name@SERVER_IP_ADDRESS`, then press `Enter`. When prompted
+     for the password, type it and press `Enter` again (no characters appear on
+     the screen while you type).
+2. **Update the system package lists.**
+   * Type `sudo apt update` and press `Enter`.
+   * The terminal may ask for your password—type it and press `Enter`. The
+     characters remain hidden for security.
+   * Wait for the command to finish. When the prompt (for example
+     `yourname@hostname:~$`) returns, continue.
+   * To install the latest security updates, type `sudo apt upgrade -y` and
+     press `Enter`. If you see a prompt that says `Do you want to continue?`,
+     press `Y` and then `Enter`.
+3. **Install the base tools that Ubuntu does not always include by default.**
+   * Type the following command on a single line and press `Enter`:
+
+     ```bash
+     sudo apt install -y git python3 python3-venv python3-pip python3-dev build-essential curl
+     ```
+
+   * If a prompt asks to continue, press `Y` and then `Enter`.
+4. **Choose where to store the project.** You can keep it in your home
+   directory. If you would like to store it elsewhere, navigate there now. To
+   use the home directory type `cd ~` and press `Enter`.
+5. **Download the repository.**
+   * Type `git clone https://github.com/USERNAME/MT5.git` and press `Enter`.
+   * Wait until you see the prompt again; the repository is now saved in a new
+     `MT5` folder.
+6. **Enter the project directory.** Type `cd MT5` and press `Enter`.
+7. **Create an isolated Python environment (recommended).**
+   * Type `python3 -m venv .venv` and press `Enter`. This creates a `.venv`
+     folder that keeps dependencies separate from the rest of the system.
+   * Activate the environment by typing `source .venv/bin/activate` and
+     pressing `Enter`. The prompt changes to show `(.venv)` on the left.
+   * Whenever you open a new terminal in the future, repeat the activation step
+     before running project commands.
+8. **Install system packages and core Python dependencies.**
+   * Ensure you are still inside the repository and the virtual environment is
+     active.
+   * Run `./scripts/setup_ubuntu.sh` and press `Enter`. This command:
+     - Updates apt packages required by MetaTrader integration.
+     - Upgrades `pip` inside the virtual environment.
+     - Installs the Python dependencies from `requirements-core.txt`.
+   * If the script reports a permission error, run `chmod +x scripts/setup_ubuntu.sh`
+     once and re-run the command.
+   * If you have an NVIDIA GPU and want CUDA support, run the script with
+     `WITH_CUDA=1 ./scripts/setup_ubuntu.sh` instead. The script automatically
+     installs the CUDA toolkit when the flag is set.
+9. **Fetch the required data files.**
+   * Type `dvc pull` and press `Enter`.
+   * If this is the first time you are using DVC, it may ask you to authenticate
+     with or configure the remote storage. Follow the on-screen instructions or
+     contact your administrator for the credentials.
+10. **Verify the environment.**
+    * Type `python -m utils.environment` and press `Enter`.
+    * The command checks that all dependencies are available and prints the
+      detected hardware. If something is missing it explains how to fix it.
+11. **Start a training run.**
+    * Type `python -m mt5.train` and press `Enter`.
+    * The training process logs progress to the terminal. Leave the window open
+      until the run completes. Press `Ctrl`+`C` if you need to stop it early.
+12. **(Optional) Expose the REST API locally.** When you are ready to interact
+    with the bot programmatically, type `python -m mt5.remote_api --config config.yaml`
+    and press `Enter`.
 
 For cloud deployments (EC2, Proxmox or other Ubuntu instances) supply
-`deploy/cloud-init.yaml` as the user-data script. It installs apt
-dependencies, runs `pip install -r requirements-core.txt` and enables the
-`mt5bot.service` on first boot.
+`deploy/cloud-init.yaml` as the user-data script. It installs apt dependencies,
+runs `pip install -r requirements-core.txt` and enables the `mt5bot.service` on
+first boot so the service starts automatically after the VM finishes
+provisioning.
 
 macOS:
 
@@ -162,20 +223,35 @@ python -m mt5.remote_api --config config.yaml
 
 ### Background services
 
-Copy `deploy/mt5bot.service` (or the Debian-specific unit under `debian/`) to
-your init directory to run the bot as a persistent service. The unit file uses
-the new module-based entry points out of the box:
+Run the bot as a systemd service to keep it alive after you log out. Perform
+the following steps on the Ubuntu machine after completing the deployment
+instructions above:
 
-```bash
-sudo cp deploy/mt5bot.service /etc/systemd/system/mt5bot.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now mt5bot.service
-```
+1. **Copy the service definition into place.**
+   * In the terminal, type `sudo cp deploy/mt5bot.service /etc/systemd/system/mt5bot.service`
+     and press `Enter`.
+   * If asked for your password, type it and press `Enter` again. No characters
+     appear while you type.
+2. **Reload the systemd daemon so it notices the new file.**
+   * Type `sudo systemctl daemon-reload` and press `Enter`.
+3. **Enable and start the service immediately.**
+   * Type `sudo systemctl enable --now mt5bot` and press `Enter`.
+   * This command both enables the service on boot and starts it right away.
+4. **Verify that the service is running.**
+   * Type `sudo systemctl status mt5bot` and press `Enter`.
+   * Review the output; you should see `Active: active (running)`. Press `q` to
+     exit the status viewer and return to the prompt.
+5. **Watch the live logs (optional).**
+   * Type `journalctl -u mt5bot -f` and press `Enter` to follow the
+     service logs in real time. Press `Ctrl`+`C` to stop following the log.
 
 You can override helper commands through the `service_cmds` block in
 `config.yaml` or by setting the `SERVICE_COMMANDS` environment variable. Each
 command should now be expressed in `python -m mt5.<module>` form to match the
-repository layout.
+repository layout. To edit the systemd unit file later, run
+`sudo nano /etc/systemd/system/mt5bot.service`, make your changes, press
+`Ctrl`+`O` then `Enter` to save, `Ctrl`+`X` to exit, and repeat steps 2 and 3 to
+reload the updated unit.
 
 ### Pre-commit hooks
 
@@ -188,26 +264,34 @@ pip install pre-commit && pre-commit install
 After adding new data, track it with `dvc add` and upload it to the configured
 remote using `dvc push`.
 
-### Systemd service
+### Systemd service helper script
 
-To run the realtime trainer on boot, install the systemd unit:
+The repository also ships with a helper script that performs the steps above
+automatically.
 
-```bash
-sudo ./scripts/install_service.sh
-```
+1. Ensure you are inside the repository directory and (optionally) inside the
+   Python virtual environment.
+2. Type `sudo ./scripts/install_service.sh` and press `Enter`.
+   * If prompted for your password, type it and press `Enter`.
+   * If you see a `Permission denied` message, run `chmod +x scripts/install_service.sh`
+     once and rerun the previous command.
+3. When the script finishes, run `sudo systemctl status mt5bot` and press
+   `Enter` to confirm that it reports `Active: active (running)`. Press `q` to
+   exit the status viewer.
 
-This copies the service file to `/etc/systemd/system` and enables the service.
-Common `systemctl` commands:
+This script copies the service file to `/etc/systemd/system`, reloads systemd
+and enables the service so it starts on each boot. Useful follow-up commands:
 
 ```bash
 sudo systemctl start mt5bot     # start the service
 sudo systemctl stop mt5bot      # stop the service
 sudo systemctl restart mt5bot   # restart after updates
-sudo systemctl status mt5bot    # check service status
-journalctl -u mt5bot -f         # follow service logs
+sudo systemctl status mt5bot    # check service status (press q to exit)
+journalctl -u mt5bot -f         # follow service logs (press Ctrl+C to stop)
 ```
 
-Application logs are also written to `logs/app.log` within the repository:
+Application logs are also written to `logs/app.log` within the repository. Run
+the following command and press `Ctrl`+`C` when you want to stop watching:
 
 ```bash
 tail -f logs/app.log
