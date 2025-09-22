@@ -1,0 +1,47 @@
+{
+  "dataSets": [
+    {
+      "series": {
+        "0:0:0": {
+          "observations": {
+            "0": [1.1],
+            "1": [1.2]
+          }
+        }
+      }
+    }
+  ],
+  "structure": {
+    "dimensions": {
+      "series": [
+        {
+          "id": "FREQ",
+          "values": [
+            {"id": "D"}
+          ]
+        },
+        {
+          "id": "CURRENCY",
+          "values": [
+            {"id": "USD"}
+          ]
+        },
+        {
+          "id": "CURRENCY_DENOM",
+          "values": [
+            {"id": "EUR"}
+          ]
+        }
+      ],
+      "observation": [
+        {
+          "id": "TIME_PERIOD",
+          "values": [
+            {"id": "2023-01-02"},
+            {"id": "2023-01-03"}
+          ]
+        }
+      ]
+    }
+  }
+}
