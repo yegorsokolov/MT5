@@ -817,6 +817,38 @@ mlflow:
       hourly artifact uploader whenever the VPS boots or a user logs in. With these
       tasks enabled the bot and artifact push service run indefinitely.
 
+### Automatic self-updates
+
+The repository now includes an unattended updater that pulls the latest GitHub
+commits and restarts `mt5.remote_api` without manual intervention. The behaviour
+is driven by the new `auto_update` section in `config.yaml` which controls the
+tracked branch, how aggressively updates are deferred while markets are open and
+which symbols map to which exchange calendars. Markets that trade 24/7 (for
+example cryptocurrencies) can be marked with `24/7`, ensuring the updater waits
+at most `max_defer_minutes` before applying the new release.
+
+Important runtime directories such as `logs/`, `checkpoints/`, `reports/` and
+`models/` are recreated after every pull so locally produced artifacts are not
+overwritten by files from the remote repository.
+
+Install the updater alongside the main service using `scripts/install_service.sh`
+or manually enable the timer:
+
+```bash
+sudo systemctl enable --now mt5bot-update.timer
+```
+
+The timer calls `python -m services.auto_updater` roughly every
+`auto_update.check_interval_minutes` (15 minutes by default). Progress is written
+to `logs/auto_update.log` and also visible via `journalctl -u
+mt5bot-update.service`. To force an immediate update outside the schedule run:
+
+```bash
+python -m services.auto_updater --force
+```
+
+Setting `auto_update.enabled` to `false` cleanly disables the behaviour.
+
 With the EA running on your VPS and the training script collecting realtime data,
 the bot will continually adapt to market conditions.
 

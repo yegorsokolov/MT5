@@ -227,3 +227,22 @@ scheduler:
   checkpoint_cleanup: true
   diagnostics: true
   backups: true
+
+auto_update:
+  enabled: true
+  remote: origin
+  branch: main
+  service_name: mt5bot
+  prefer_quiet_hours: true
+  max_open_fraction: 0.3
+  max_defer_minutes: 360
+  check_interval_minutes: 15
+  fallback_exchange: "24/5"
+  exchanges:
+    XAUUSD: "24/5"
+    GBPUSD: "24/5"
+  protected_paths:
+    - logs
+    - checkpoints
+    - reports
+    - models
