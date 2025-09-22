@@ -67,6 +67,21 @@ subscriptions.  The datasets are merged into the main feature table via
 backward ``asof`` joins so that every feature row carries the latest
 available alternative signals.
 
+The macro-economic loader now ships with dedicated integrations for key
+Canadian open-data sources alongside global datasets.  You can reference the
+providers directly from configuration or the CLI using the ``provider::``
+syntax:
+
+* ``statcan::`` and ``statistics_canada::`` resolve vectors from Statistics
+  Canada's Web Data Service (WDS), delivering GDP, CPI, labour and other
+  aggregate tables without needing pre-exported CSVs.
+* ``bankofcanada::``/``boc::`` query the Bank of Canada's Valet API for daily
+  exchange rates, policy rates and benchmark yields.
+* ``open_canada::`` taps into the Open Government CKAN datastore so any
+  dataset with an active resource can be streamed straight into features.
+* ``oecd::`` fetches cross-country series from the OECD SDMX API whenever you
+  need internationally comparable macro indicators.
+
 ## Repository layout
 
 The repository root now only contains top-level folders. All executable

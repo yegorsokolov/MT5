@@ -1,0 +1,18 @@
+{
+  "seriesDetail": {
+    "FXUSDCAD": {
+      "label": "USD/CAD",
+      "description": "Mock series"
+    }
+  },
+  "observations": [
+    {
+      "d": "2024-04-01",
+      "FXUSDCAD": {"v": "1.35"}
+    },
+    {
+      "d": "2024-04-02",
+      "FXUSDCAD": {"v": "1.34"}
+    }
+  ]
+}
