@@ -9,6 +9,11 @@ import pandas as pd
 import requests
 import streamlit as st
 
+try:
+    import psutil
+except Exception:  # pragma: no cover - psutil optional in some deployments
+    psutil = None  # type: ignore[assignment]
+
 
 from analytics.metrics_aggregator import query_metrics
 from analytics.metrics_store import query_metrics as query_local_metrics
@@ -65,6 +70,123 @@ def schema_table(current: Dict[str, Any]):
             }
         )
     return rows
+
+
+def _format_bytes(num_bytes: float) -> str:
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    value = float(num_bytes)
+    for unit in units:
+        if abs(value) < 1024 or unit == units[-1]:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} EB"
+
+
+def render_vps_health_section() -> None:
+    """Display storage and hardware pressure alerts for the VPS."""
+
+    st.subheader("VPS Resource Alerts")
+    if psutil is None:
+        st.info("System metrics are unavailable because psutil is not installed.")
+        return
+
+    try:
+        disk = psutil.disk_usage("/")
+        memory = psutil.virtual_memory()
+        cpu_load = psutil.cpu_percent(interval=0.1)
+        logical_cores = psutil.cpu_count(logical=True) or 0
+        physical_cores = psutil.cpu_count(logical=False) or 0
+    except Exception as exc:  # pragma: no cover - runtime environment dependent
+        st.info(f"Unable to read system metrics: {exc}")
+        return
+
+    col_disk, col_mem, col_cpu = st.columns(3)
+    col_disk.metric(
+        "Disk Usage",
+        f"{disk.percent:.1f}%",
+        f"{_format_bytes(disk.free)} free of {_format_bytes(disk.total)}",
+    )
+    col_mem.metric(
+        "Memory Usage",
+        f"{memory.percent:.1f}%",
+        f"{_format_bytes(memory.available)} free of {_format_bytes(memory.total)}",
+    )
+    col_cpu.metric(
+        "CPU Load",
+        f"{cpu_load:.1f}%",
+        f"{physical_cores} physical / {logical_cores} logical cores",
+    )
+
+    alerts: list[tuple[str, str]] = []
+
+    if disk.percent >= 95:
+        alerts.append(
+            (
+                "error",
+                "Disk usage above 95%. Free up space or extend storage to avoid outages.",
+            )
+        )
+    elif disk.percent >= 85:
+        alerts.append(
+            (
+                "warning",
+                "Disk usage above 85%. Consider expanding the VPS storage or pruning data.",
+            )
+        )
+
+    if memory.percent >= 95:
+        alerts.append(
+            (
+                "error",
+                "Memory usage above 95%. Restart services or upgrade RAM to restore headroom.",
+            )
+        )
+    elif memory.percent >= 85:
+        alerts.append(
+            (
+                "warning",
+                "Memory usage above 85%. Plan a RAM upgrade or reduce concurrent workloads.",
+            )
+        )
+
+    if cpu_load >= 95:
+        alerts.append(
+            (
+                "error",
+                "CPU load is saturated (above 95%). Scale up CPU resources or pause heavy tasks.",
+            )
+        )
+    elif cpu_load >= 85:
+        alerts.append(
+            (
+                "warning",
+                "CPU load above 85%. Sustained pressure may warrant a larger VPS tier.",
+            )
+        )
+
+    total_mem_gb = memory.total / (1024**3)
+    if total_mem_gb < 4:
+        alerts.append(
+            (
+                "info",
+                f"Detected only {total_mem_gb:.1f} GB of RAM. Upgrading memory will improve stability.",
+            )
+        )
+
+    if physical_cores and physical_cores < 2:
+        alerts.append(
+            (
+                "info",
+                "Fewer than 2 physical CPU cores detected. Consider upgrading for production workloads.",
+            )
+        )
+
+    if alerts:
+        for level, message in alerts:
+            notify = getattr(st, level, st.warning)
+            notify(message)
+    else:
+        st.success("VPS resources look healthy.")
 
 
 def _auth_headers(api_key: str) -> Dict[str, str]:
@@ -215,6 +337,8 @@ def main() -> None:
         col5.metric("Funding Cost", fund_val)
         col6.metric("Margin Req.", margin_req_val)
         col7.metric("Free Margin", margin_avail_val)
+
+        render_vps_health_section()
 
         # Show per-broker performance metrics
         lat_df = query_local_metrics("broker_fill_latency_ms")
