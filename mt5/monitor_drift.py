@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import mt5.log_utils as log_utils
+
 import pandas as pd
 import numpy as np
 
@@ -20,8 +22,8 @@ except Exception:  # pragma: no cover - utils may be stubbed in tests
     def send_alert(msg: str) -> None:  # type: ignore
         return
 
-LOG_DIR = Path(__file__).resolve().parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parents[1] / "logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 DRIFT_METRICS = LOG_DIR / "drift_metrics.parquet"
 BASELINE_METRICS = LOG_DIR / "training_baseline.parquet"

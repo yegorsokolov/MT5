@@ -2,9 +2,9 @@
 
 import logging
 import asyncio
-from mt5.log_utils import setup_logging, log_exceptions
-
 from pathlib import Path
+import mt5.log_utils as log_utils
+from mt5.log_utils import setup_logging, log_exceptions
 import joblib
 import pandas as pd
 import numpy as np
@@ -51,8 +51,8 @@ def init_logging() -> logging.Logger:
 logger = logging.getLogger(__name__)
 
 
-LOG_DIR = Path(__file__).resolve().parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parents[1] / "logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 BACKTEST_STATS = LOG_DIR / "backtest_stats.csv"
 
 
