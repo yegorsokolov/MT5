@@ -82,6 +82,35 @@ def test_fetch_eodhd_series():
     assert list(df["value"]) == [pytest.approx(1.2), pytest.approx(1.3)]
 
 
+def test_fetch_statcan_series():
+    client = _mock_client(_payload("statcan_wds.json"))
+    spec = parse_series_spec("statcan::v123456?latestN=2")
+    df = fetch_series_data(spec, client)
+    assert list(df["value"]) == [pytest.approx(100.1), pytest.approx(101.3)]
+
+
+def test_fetch_bank_of_canada_series():
+    client = _mock_client(_payload("bankofcanada_valet.json"))
+    spec = parse_series_spec("bankofcanada::FXUSDCAD")
+    df = fetch_series_data(spec, client)
+    assert list(df["value"]) == [pytest.approx(1.35), pytest.approx(1.34)]
+
+
+def test_fetch_open_canada_series():
+    client = _mock_client(_payload("open_canada_datastore.json"))
+    spec = parse_series_spec("open_canada::resource?date_field=REF_DATE&value_field=VALUE")
+    df = fetch_series_data(spec, client, start="2023-02-01", end="2023-02-15")
+    assert len(df) == 1
+    assert df["value"].iloc[0] == pytest.approx(10.9)
+
+
+def test_fetch_oecd_series():
+    client = _mock_client(_payload("oecd_sdmx.json"))
+    spec = parse_series_spec("oecd::MEI_CLI/CAN.CLI.A")
+    df = fetch_series_data(spec, client)
+    assert list(df["value"]) == [pytest.approx(98.1), pytest.approx(99.3)]
+
+
 def test_load_macro_series_uses_remote_cache(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "data").mkdir()

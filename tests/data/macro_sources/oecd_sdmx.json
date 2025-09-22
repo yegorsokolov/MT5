@@ -1,0 +1,33 @@
+{
+  "dataSets": [
+    {
+      "series": {
+        "0:0:0:0": {
+          "observations": {
+            "0": [98.1],
+            "1": [99.3]
+          }
+        }
+      }
+    }
+  ],
+  "structure": {
+    "dimensions": {
+      "series": [
+        {"id": "LOCATION", "values": [{"id": "CAN"}]},
+        {"id": "SUBJECT", "values": [{"id": "CPI"}]},
+        {"id": "MEASURE", "values": [{"id": "IXOB"}]},
+        {"id": "FREQUENCY", "values": [{"id": "M"}]}
+      ],
+      "observation": [
+        {
+          "id": "TIME_PERIOD",
+          "values": [
+            {"id": "2023-01"},
+            {"id": "2023-02"}
+          ]
+        }
+      ]
+    }
+  }
+}
