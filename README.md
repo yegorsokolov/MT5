@@ -46,13 +46,26 @@ The solution is split into two components:
 ## Data sources
 
 The feature engineering pipeline supports a range of optional external
-datasets.  Fundamental loaders ingest company financial statements and
-valuation ratios from local CSV files or lightweight APIs and merge them
-with macroeconomic series such as GDP, CPI and interest rates.  A separate
-alternative data loader integrates options‑implied volatility, blockchain
-activity metrics and ESG scores when available.  These datasets reside
-under `data/` or `dataset/` and are merged into the main feature table via
-backward ``asof`` joins.
+datasets without requiring any paid subscriptions:
+
+* **Fundamentals and macro data** – company filings, valuation ratios and
+  macroeconomic series (GDP, CPI, interest rates) loaded from local CSV
+  exports or user-provided fetchers.
+* **Alternative data** – options-implied volatility, blockchain activity,
+  ESG scores, shipping and retail metrics, weather observations and daily
+  Kalshi prediction market aggregates downloaded from Kalshi's public S3
+  bucket.  The Kalshi loader caches snapshots under `data/kalshi/` for
+  offline reuse and enriches the feature matrix with market-wide open
+  interest and volume signals.
+* **News** – FinViz scraping is bundled by default and additional feeds such
+  as FinancialModelingPrep can be enabled via environment variables.
+
+All built-in connectors rely on open data sources or anonymous/public APIs.
+If you have access to premium providers you can inject custom fetchers, but
+the default configuration keeps the project fully functional without
+subscriptions.  The datasets are merged into the main feature table via
+backward ``asof`` joins so that every feature row carries the latest
+available alternative signals.
 
 ## Repository layout
 

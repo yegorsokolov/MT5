@@ -31,6 +31,7 @@ from news.aggregator import NewsAggregator
 from strategy.shadow_runner import ShadowRunner
 from strategy.evolution_lab import EvolutionLab
 from mt5.ai_control import AIControlPlane
+from core.context_hub import context_hub
 
 
 DEFAULT_SERVICE_CMDS: dict[str, list[str]] = {
@@ -105,6 +106,34 @@ class Orchestrator:
             monitor=self.monitor,
         )
 
+    def _publish_context(self) -> None:
+        """Broadcast a consolidated snapshot to the context hub."""
+
+        caps = self.monitor.capabilities
+        resource_payload = {
+            "capability_tier": self.monitor.capability_tier,
+            "cpus": getattr(caps, "cpus", 0),
+            "memory_gb": getattr(caps, "memory_gb", 0.0),
+            "has_gpu": getattr(caps, "has_gpu", False),
+            "gpu_count": getattr(caps, "gpu_count", 0),
+            "latency": getattr(self.monitor, "latency", lambda: 0.0)(),
+            "usage": getattr(self.monitor, "latest_usage", {}),
+        }
+        try:
+            selected = {
+                task: variant.name
+                for task, variant in self.registry.selected.items()
+            }
+        except Exception:
+            selected = {}
+        orchestrator_payload = {
+            "selected_models": selected,
+            "shadow_strategies": list(self._shadow_tasks.keys()),
+            "quiet_windows": getattr(risk_manager, "quiet_windows", []),
+        }
+        context_hub.update("resources", resource_payload)
+        context_hub.update("orchestrator", orchestrator_payload)
+
     def _base_strategy(self) -> Callable[[dict], float]:
         """Return a default strategy used as seed for variant generation."""
 
@@ -135,6 +164,7 @@ class Orchestrator:
                 except RuntimeError:  # pragma: no cover - event loop not running
                     loop = asyncio.get_event_loop()
                 loop.create_task(self._run_reprocess())
+                self._publish_context()
             previous = tier
 
     async def _run_reprocess(self) -> None:
@@ -188,6 +218,7 @@ class Orchestrator:
         self.registry.refresh()
         state_sync.pull_event_store()
         self._resume()
+        self._publish_context()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -198,6 +229,7 @@ class Orchestrator:
         loop.create_task(self._daily_summary())
         loop.create_task(self._watch_services())
         loop.create_task(self._update_quiet_windows())
+        loop.create_task(self._sync_context())
         loop.create_task(self.control_plane.run())
         try:  # start shadow runners for existing strategies
             from mt5 import signal_queue
@@ -225,7 +257,19 @@ class Orchestrator:
         while True:
             if not state_sync.check_health(max_lag):
                 self.logger.warning("State replication lag exceeds %s seconds", max_lag)
+            self._publish_context()
             await asyncio.sleep(interval)
+
+    async def _sync_context(self) -> None:
+        """Push orchestrator context snapshots at a fixed cadence."""
+
+        interval = int(os.getenv("CONTEXT_SYNC_INTERVAL", "60"))
+        while True:
+            try:
+                self._publish_context()
+            except Exception:
+                self.logger.exception("Failed to publish orchestrator context")
+            await asyncio.sleep(max(interval, 1))
 
     # Shadow strategy management ---------------------------------------------
     def register_strategy(self, name: str, handler: Callable[[dict], float]) -> None:

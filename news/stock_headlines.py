@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,7 @@ from . import impact_model
 from .effect_length import estimate_effect_length
 
 try:  # pragma: no cover - optional persistent risk settings
-from mt5.state_manager import load_user_risk  # type: ignore
+    from mt5.state_manager import load_user_risk  # type: ignore
 except Exception:  # pragma: no cover
     load_user_risk = None  # type: ignore
 
@@ -277,15 +278,26 @@ def _score_headlines(headlines: List[Dict[str, Any]]) -> pd.DataFrame:
 # Public API
 
 async def update_headlines(
-    symbols: Iterable[str], cache_dir: Path | None = None
+    symbols: Iterable[str],
+    cache_dir: Path | None = None,
+    include_fmp: bool | None = None,
 ) -> List[Dict[str, Any]]:
     """Fetch headlines for ``symbols`` and persist deduped, scored cache."""
+
     cache_dir = Path(cache_dir) if cache_dir else _CACHE_DIR
+    if include_fmp is None:
+        flag = os.getenv("ENABLE_FMP_NEWS", "").lower()
+        include_fmp = bool(os.getenv("FINANCIALMODELINGPREP_API_KEY")) or flag in {
+            "1",
+            "true",
+            "yes",
+        }
     async with aiohttp.ClientSession() as session:
         tasks = []
         for sym in symbols:
             tasks.append(fetch_finviz(session, sym))
-            tasks.append(fetch_fmp(session, sym))
+            if include_fmp:
+                tasks.append(fetch_fmp(session, sym))
         results = await asyncio.gather(*tasks, return_exceptions=True)
     headlines: List[Dict[str, Any]] = []
     for res in results:
