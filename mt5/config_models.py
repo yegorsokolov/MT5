@@ -90,11 +90,21 @@ class SMTPConfig(BaseModel):
 class AlertingConfig(BaseModel):
     """Configuration for alert routing."""
 
-    slack_webhook: str | None = Field(
-        None, description="Slack webhook URL used for alert delivery"
+    telegram_bot_token: str | None = Field(
+        None, description="Telegram bot token used for alert delivery"
+    )
+    telegram_chat_id: str | None = Field(
+        None, description="Telegram chat identifier receiving alerts"
     )
     smtp: SMTPConfig | None = None
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("telegram_chat_id", mode="before")
+    @classmethod
+    def _coerce_chat_id(cls, value: Any) -> str | None:
+        if value is None or value == "":
+            return None
+        return str(value)
 
 
 class AutoUpdateConfig(BaseModel):

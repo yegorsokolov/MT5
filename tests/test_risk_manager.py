@@ -98,7 +98,7 @@ def test_risk_status_endpoint(tmp_path, monkeypatch):
     rm.reset()
     rm.update("b1", -60)
     rm.update("b2", -50)
-    resp = client.get("/risk/status", headers={"x-api-key": "token"})
+    resp = client.get("/risk/status", headers={"X-API-Key": "token"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["trading_halted"] is True

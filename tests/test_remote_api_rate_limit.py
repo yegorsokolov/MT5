@@ -134,11 +134,11 @@ def test_rate_limiting_and_logging(tmp_path, monkeypatch):
         assert client.get("/health").status_code == 401
 
         # Within rate limit
-        assert client.get("/health", headers={"x-api-key": "token"}).status_code == 200
-        assert client.get("/health", headers={"x-api-key": "token"}).status_code == 200
+        assert client.get("/health", headers={"X-API-Key": "token"}).status_code == 200
+        assert client.get("/health", headers={"X-API-Key": "token"}).status_code == 200
 
         # Exceed rate limit
-        resp = client.get("/health", headers={"x-api-key": "token"})
+        resp = client.get("/health", headers={"X-API-Key": "token"})
         assert resp.status_code == 429
 
     lines = (tmp_path / "audit.csv").read_text().strip().splitlines()

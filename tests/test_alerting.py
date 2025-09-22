@@ -15,11 +15,15 @@ from mt5.config_models import AlertingConfig, AppConfig, StrategyConfig  # noqa:
 from utils import alerting as alert_mod  # noqa: E402
 
 
-def test_send_alert_uses_configured_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
-    webhook = "https://hooks.slack.test/alert"
+def test_send_alert_uses_configured_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = "123456:ABCDEF"
+    chat_id = "987654321"
     cfg = AppConfig(
         strategy=StrategyConfig(symbols=["EURUSD"], risk_per_trade=0.1),
-        alerting=AlertingConfig(slack_webhook=webhook),
+        alerting=AlertingConfig(
+            telegram_bot_token=token,
+            telegram_chat_id=chat_id,
+        ),
     )
 
     monkeypatch.setattr(alert_mod, "load_config", lambda: cfg)
@@ -40,6 +44,8 @@ def test_send_alert_uses_configured_webhook(monkeypatch: pytest.MonkeyPatch) -> 
 
     alert_mod.send_alert("Alert message")
 
-    assert calls and calls[0][0] == webhook
-    assert calls[0][1]["json"] == {"text": "Alert message"}
+    assert calls
+    url, kwargs = calls[0]
+    assert url == f"https://api.telegram.org/bot{token}/sendMessage"
+    assert kwargs["json"] == {"chat_id": chat_id, "text": "Alert message"}
     assert calls[0][1]["timeout"] == 5

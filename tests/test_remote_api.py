@@ -154,7 +154,7 @@ def test_health_auth(tmp_path, monkeypatch, log_utils_module):
     with TestClient(api.app) as client:
         resp = client.get("/health")
         assert resp.status_code == 401
-        resp = client.get("/health", headers={"x-api-key": "token"})
+        resp = client.get("/health", headers={"X-API-Key": "token"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["running"] is True
@@ -165,12 +165,12 @@ def test_bot_status(tmp_path, monkeypatch, log_utils_module):
     api = setup_api(tmp_path, monkeypatch, log_utils_module)
     api.bots["bot1"] = api.BotInfo(proc=DummyProc())
     with TestClient(api.app) as client:
-        resp = client.get("/bots/bot1/status", headers={"x-api-key": "token"})
+        resp = client.get("/bots/bot1/status", headers={"X-API-Key": "token"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["running"] is True
         assert "pid" in data and "returncode" in data
-        resp = client.get("/bots/none/status", headers={"x-api-key": "token"})
+        resp = client.get("/bots/none/status", headers={"X-API-Key": "token"})
         assert resp.status_code == 404
 
 
@@ -178,10 +178,10 @@ def test_bot_logs(tmp_path, monkeypatch, log_utils_module):
     api = setup_api(tmp_path, monkeypatch, log_utils_module)
     api.bots["bot1"] = api.BotInfo(proc=DummyProc())
     with TestClient(api.app) as client:
-        resp = client.get("/bots/bot1/logs", headers={"x-api-key": "token"})
+        resp = client.get("/bots/bot1/logs", headers={"X-API-Key": "token"})
         assert resp.status_code == 200
         assert "line2" in resp.json()["logs"]
-        resp = client.get("/bots/none/logs", headers={"x-api-key": "token"})
+        resp = client.get("/bots/none/logs", headers={"X-API-Key": "token"})
         assert resp.status_code == 404
 
 
@@ -262,7 +262,7 @@ def test_bot_restart_and_health(tmp_path, monkeypatch, log_utils_module):
     loop.run_until_complete(api._check_bots_once())
 
     with TestClient(api.app) as client:
-        resp = client.get("/bots", headers={"x-api-key": "token"})
+        resp = client.get("/bots", headers={"X-API-Key": "token"})
         data = resp.json()["bot1"]
         assert data["restart_count"] == 1
         assert data["exit_code"] == 1
@@ -344,7 +344,7 @@ def test_bot_crash_limit_triggers_alert(tmp_path, monkeypatch, log_utils_module)
 def test_controls_list(tmp_path, monkeypatch, log_utils_module):
     api = setup_api(tmp_path, monkeypatch, log_utils_module)
     with TestClient(api.app) as client:
-        resp = client.get("/controls", headers={"x-api-key": "token"})
+        resp = client.get("/controls", headers={"X-API-Key": "token"})
         assert resp.status_code == 200
         data = resp.json()
         assert "tasks" in data and "retrain_models" in data
@@ -356,7 +356,7 @@ def test_controls_run(tmp_path, monkeypatch, log_utils_module):
     with TestClient(api.app) as client:
         resp = client.post(
             "/controls/run",
-            headers={"x-api-key": "token"},
+            headers={"X-API-Key": "token"},
             json={"task": "run_drift_detection"},
         )
         assert resp.status_code == 200
@@ -369,7 +369,7 @@ def test_controls_run_unknown(tmp_path, monkeypatch, log_utils_module):
     with TestClient(api.app) as client:
         resp = client.post(
             "/controls/run",
-            headers={"x-api-key": "token"},
+            headers={"X-API-Key": "token"},
             json={"task": "unknown"},
         )
         assert resp.status_code == 404
@@ -380,7 +380,7 @@ def test_controls_retrain(tmp_path, monkeypatch, log_utils_module):
     with TestClient(api.app) as client:
         resp = client.post(
             "/controls/retrain",
-            headers={"x-api-key": "token"},
+            headers={"X-API-Key": "token"},
             json={"model": "nn", "update_hyperparams": True},
         )
         assert resp.status_code == 200
