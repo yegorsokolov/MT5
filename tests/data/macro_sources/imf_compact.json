@@ -1,0 +1,12 @@
+{
+  "CompactData": {
+    "DataSet": {
+      "Series": {
+        "Obs": [
+          {"@TIME_PERIOD": "2022", "@OBS_VALUE": "98.1"},
+          {"@TIME_PERIOD": "2023", "@OBS_VALUE": "102.4"}
+        ]
+      }
+    }
+  }
+}

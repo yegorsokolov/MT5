@@ -12,15 +12,30 @@ discovered and merged using a backward ``merge_asof`` join.
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 import pandas as pd
 
+try:  # pragma: no cover - optional dependency at runtime
+    import httpx
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
+
+from .macro_sources import SeriesSpec, fetch_series_data, parse_series_spec
+
 logger = logging.getLogger(__name__)
 
 
-def _read_local_csv(symbol: str) -> pd.DataFrame:
+def _sanitise_symbol(symbol: str) -> str:
+    """Return a filesystem friendly version of ``symbol``."""
+
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
+
+
+def _read_local_csv(symbol: str, alias: Optional[str] = None) -> pd.DataFrame:
     """Attempt to read a macro series from common local paths.
 
     Parameters
@@ -36,14 +51,36 @@ def _read_local_csv(symbol: str) -> pd.DataFrame:
         empty dataframe if the file is not found or cannot be read.
     """
 
-    paths = [Path("data") / f"{symbol}.csv", Path("dataset") / f"{symbol}.csv"]
-    for path in paths:
-        if path.exists():
-            try:
-                return pd.read_csv(path)
-            except Exception:  # pragma: no cover - local file read failure
-                logger.warning("Failed to load macro series %s from %s", symbol, path)
-                return pd.DataFrame()
+    names = [symbol]
+    if alias and alias not in names:
+        names.append(alias)
+    sanitised = _sanitise_symbol(symbol)
+    if sanitised not in names:
+        names.append(sanitised)
+    if alias:
+        sanitised_alias = _sanitise_symbol(alias)
+        if sanitised_alias not in names:
+            names.append(sanitised_alias)
+
+    bases = [
+        Path("data"),
+        Path("dataset"),
+        Path("data") / "macro",
+        Path("dataset") / "macro",
+    ]
+    seen = set()
+    for base in bases:
+        for name in names:
+            path = base / f"{name}.csv"
+            if path in seen:
+                continue
+            seen.add(path)
+            if path.exists():
+                try:
+                    return pd.read_csv(path)
+                except Exception:  # pragma: no cover - local file read failure
+                    logger.warning("Failed to load macro series %s from %s", symbol, path)
+                    return pd.DataFrame()
     return pd.DataFrame()
 
 
@@ -82,13 +119,47 @@ def _load_all_local() -> pd.DataFrame:
     return out.sort_values(["Region", "Date"])
 
 
-def load_macro_series(symbols: List[str]) -> pd.DataFrame:
+def _cache_remote_series(spec: SeriesSpec, df: pd.DataFrame) -> None:
+    if df.empty:
+        return
+    out_dir = Path("data") / "macro"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cache_name = _sanitise_symbol(spec.raw)
+    try:  # pragma: no cover - filesystem race conditions
+        df.to_csv(out_dir / f"{cache_name}.csv", index=False)
+    except Exception:
+        logger.debug("Failed to cache macro series %s", spec.raw, exc_info=True)
+
+
+def _date_to_str(value: Optional[object]) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, pd.Timestamp):
+        dt = value.to_pydatetime()
+    elif isinstance(value, datetime):
+        dt = value
+    else:
+        return str(value)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%d")
+
+
+def load_macro_series(
+    symbols: List[str],
+    *,
+    session: "httpx.Client | None" = None,
+    start: Optional[object] = None,
+    end: Optional[object] = None,
+) -> pd.DataFrame:
     """Load macroeconomic time series for the given symbols.
 
-    The function first searches for local CSV files.  If a series is not
-    available locally it attempts to fetch the data via ``pandas_datareader``
-    from public APIs such as FRED.  Any series that cannot be retrieved is
-    skipped.
+    The loader first searches for locally cached CSV files.  When a symbol is
+    prefixed by ``provider::`` the relevant API integration from
+    :mod:`data.macro_sources` is used.  Successful remote fetches are cached for
+    subsequent offline runs.
 
     Parameters
     ----------
@@ -103,35 +174,57 @@ def load_macro_series(symbols: List[str]) -> pd.DataFrame:
         result in an empty column.
     """
 
-    frames: list[pd.DataFrame] = []
-    for sym in symbols:
-        df = _read_local_csv(sym)
-        if df.empty:
-            try:  # pragma: no cover - network access may not be available
-                from pandas_datareader import data as web  # type: ignore
+    specs = [parse_series_spec(sym) for sym in symbols]
+    frames: List[pd.DataFrame] = []
+    start_str = _date_to_str(start)
+    end_str = _date_to_str(end)
 
-                fetched = web.DataReader(sym, "fred")
-                fetched = fetched.rename_axis("Date").reset_index()
-                df = fetched
-                # Cache fetched series for offline reuse
-                out_dir = Path("data") / "macro"
-                out_dir.mkdir(parents=True, exist_ok=True)
-                try:  # pragma: no cover - file system edge cases
-                    df.to_csv(out_dir / f"{sym}.csv", index=False)
-                except Exception:
-                    logger.warning("Failed to cache macro series %s", sym)
-            except Exception:
-                logger.debug("Unable to fetch macro series %s", sym)
+    client = session
+    created_client = False
+    if client is None and any(spec.provider not in {"", "local", "csv"} for spec in specs):
+        if httpx is None:  # pragma: no cover - exercised when httpx missing
+            logger.debug("httpx unavailable – remote macro series disabled")
+        else:
+            client = httpx.Client(timeout=20.0)
+            created_client = True
+
+    for spec in specs:
+        df = _read_local_csv(spec.raw, spec.column_name())
+        if df.empty and spec.provider not in {"", "local", "csv"}:
+            if client is None:
+                logger.debug("Skipping remote fetch for %s – no HTTP client", spec.raw)
                 continue
+            remote = fetch_series_data(spec, client, start=start_str, end=end_str)
+            if remote.empty:
+                continue
+            _cache_remote_series(spec, remote)
+            df = remote
+        if df.empty:
+            continue
         if "Date" not in df.columns:
             df = df.rename(columns={df.columns[0]: "Date"})
-        df["Date"] = pd.to_datetime(df["Date"], utc=True)
-        value_col = [c for c in df.columns if c != "Date"][0]
-        frames.append(df[["Date", value_col]].rename(columns={value_col: sym}))
+        df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce")
+        df = df.dropna(subset=["Date"]).sort_values("Date")
+        value_cols = [c for c in df.columns if c != "Date"]
+        if not value_cols:
+            continue
+        value_col = value_cols[0]
+        col_name = spec.column_name()
+        if value_col != col_name:
+            df = df[["Date", value_col]].rename(columns={value_col: col_name})
+        else:
+            df = df[["Date", value_col]]
+        frames.append(df)
+
+    if created_client and client is not None:
+        try:  # pragma: no cover - cleanup path only
+            client.close()
+        except Exception:
+            logger.debug("Failed closing httpx client", exc_info=True)
 
     if not frames:
-        # Return empty dataframe with expected columns for downstream merging
-        return pd.DataFrame(columns=["Date"] + list(symbols))
+        expected_cols = ["Date"] + [spec.column_name() for spec in specs]
+        return pd.DataFrame(columns=expected_cols)
 
     out = frames[0]
     for extra in frames[1:]:
