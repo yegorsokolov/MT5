@@ -1,0 +1,17 @@
+{
+  "status": "SUCCESS",
+  "vectorDataPoints": [
+    {
+      "vectorId": "v123456",
+      "refPer": "2024-01",
+      "refPer2": "2024-01-01",
+      "value": "100.1"
+    },
+    {
+      "vectorId": "v123456",
+      "refPer": "2024-02",
+      "refPer2": "2024-02-01",
+      "value": "101.3"
+    }
+  ]
+}
