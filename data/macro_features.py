@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Union
 
 import pandas as pd
 
@@ -25,6 +26,8 @@ except Exception:  # pragma: no cover
     httpx = None  # type: ignore
 
 from .macro_sources import SeriesSpec, fetch_series_data, parse_series_spec
+
+DEFAULT_DATA_DELAY = pd.Timedelta(hours=1)
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +134,68 @@ def _cache_remote_series(spec: SeriesSpec, df: pd.DataFrame) -> None:
         logger.debug("Failed to cache macro series %s", spec.raw, exc_info=True)
 
 
+DelayValue = Union[pd.Timedelta, str, int, float, None]
+
+
+def _normalise_delay(value: DelayValue) -> pd.Timedelta:
+    """Return a non-negative :class:`~pandas.Timedelta` from ``value``."""
+
+    if value is None:
+        return pd.Timedelta(0)
+    if isinstance(value, pd.Timedelta):
+        return value if value >= pd.Timedelta(0) else pd.Timedelta(0)
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            return pd.Timedelta(0)
+        return pd.to_timedelta(value, unit="s")
+    try:
+        delay = pd.Timedelta(value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid macro data delay %s; defaulting to 0", value)
+        return pd.Timedelta(0)
+    if delay < pd.Timedelta(0):
+        logger.warning("Negative macro data delay %s; defaulting to 0", value)
+        return pd.Timedelta(0)
+    return delay
+
+
+def _normalise_delay_config(
+    value: Union[DelayValue, Mapping[str, DelayValue]]
+) -> tuple[pd.Timedelta, dict[str, pd.Timedelta]]:
+    """Return a base delay and per-column overrides."""
+
+    if isinstance(value, Mapping):
+        default_delay = DEFAULT_DATA_DELAY
+        overrides: dict[str, pd.Timedelta] = {}
+        for key, delay_value in value.items():
+            normalised = _normalise_delay(delay_value)
+            key_str = str(key)
+            if key_str.lower() in {"*", "default", "__default__"}:
+                default_delay = normalised
+            else:
+                overrides[key_str] = normalised
+        return default_delay, overrides
+
+    return _normalise_delay(value), {}
+
+
+def _delay_for_column(
+    column: str, overrides: Mapping[str, pd.Timedelta], default_delay: pd.Timedelta
+) -> pd.Timedelta:
+    """Resolve the effective delay for ``column``."""
+
+    if column in overrides:
+        return overrides[column]
+    prefixed = f"macro_{column}"
+    if prefixed in overrides:
+        return overrides[prefixed]
+    if column.startswith("macro_"):
+        bare = column[len("macro_") :]
+        if bare in overrides:
+            return overrides[bare]
+    return default_delay
+
+
 def _date_to_str(value: Optional[object]) -> Optional[str]:
     if value is None:
         return None
@@ -233,7 +298,9 @@ def load_macro_series(
 
 
 def load_macro_features(
-    df: pd.DataFrame, macro_df: Optional[pd.DataFrame] = None
+    df: pd.DataFrame,
+    macro_df: Optional[pd.DataFrame] = None,
+    data_delay: Union[DelayValue, Mapping[str, DelayValue]] = DEFAULT_DATA_DELAY,
 ) -> pd.DataFrame:
     """Merge macroeconomic indicators into ``df``.
 
@@ -247,6 +314,13 @@ def load_macro_features(
         Optional dataframe containing macro series.  When ``None`` all
         available CSV files from ``dataset/macro`` and ``data/macro`` are
         loaded.
+    data_delay:
+        Expected publication delay for the macro data.  Observations are only
+        considered available once ``Timestamp`` exceeds their ``Date`` by at
+        least this delay.  Numeric values are interpreted as seconds.  When a
+        mapping is provided, delays can be configured per macro column with the
+        special keys ``"*"``/``"default"`` overriding the base delay.  Defaults
+        to one hour to reflect the latency of the newly integrated APIs.
 
     Returns
     -------
@@ -255,6 +329,8 @@ def load_macro_features(
         forward filled then remaining gaps are set to ``0`` so downstream
         models can rely on their presence.
     """
+
+    base_delay, delay_overrides = _normalise_delay_config(data_delay)
 
     if macro_df is None:
         macro_df = _load_all_local()
@@ -266,29 +342,51 @@ def load_macro_features(
         return df
 
     macro_df = macro_df.rename(columns={"Date": "macro_date"})
-    macro_df = macro_df.sort_values(["Region", "macro_date"])
+    sort_cols = ["macro_date"]
+    if "Region" in macro_df.columns:
+        sort_cols.insert(0, "Region")
+    macro_df = macro_df.sort_values(sort_cols)
 
-    merge_kwargs = {
-        "left_on": "Timestamp",
-        "right_on": "macro_date",
-        "direction": "backward",
-    }
-    if "Region" in df.columns and "Region" in macro_df.columns:
-        merge_kwargs["by"] = "Region"
-
-    merged = pd.merge_asof(
-        df.sort_values("Timestamp"), macro_df, **merge_kwargs
-    ).drop(columns=["macro_date"])
+    df_sorted = df.sort_values("Timestamp").copy()
+    region_key: Optional[str] = None
+    if "Region" in df_sorted.columns and "Region" in macro_df.columns:
+        region_key = "Region"
 
     value_cols = [c for c in macro_df.columns if c not in {"macro_date", "Region"}]
-    for col in value_cols:
-        if col in merged.columns:
-            merged[col] = merged[col].ffill().fillna(0.0)
-            merged.rename(columns={col: f"macro_{col}"}, inplace=True)
-        else:
-            merged[f"macro_{col}"] = 0.0
+    result = df_sorted
 
-    return merged
+    for col in value_cols:
+        delay = _delay_for_column(col, delay_overrides, base_delay)
+        macro_cols = ["macro_date", col]
+        if region_key:
+            macro_cols.append(region_key)
+        col_macro = macro_df[macro_cols].dropna(subset=[col]).copy()
+        if col_macro.empty:
+            result[f"macro_{col}"] = 0.0
+            continue
+        available_col = "_macro_available_ts"
+        if delay > pd.Timedelta(0):
+            col_macro[available_col] = col_macro["macro_date"] + delay
+        else:
+            col_macro[available_col] = col_macro["macro_date"]
+        sort_keys = [available_col]
+        if region_key:
+            sort_keys.insert(0, region_key)
+        col_macro = col_macro.sort_values(sort_keys)
+
+        merge_kwargs = {
+            "left_on": "Timestamp",
+            "right_on": available_col,
+            "direction": "backward",
+        }
+        if region_key:
+            merge_kwargs["by"] = region_key
+
+        merged = pd.merge_asof(result, col_macro, **merge_kwargs)
+        merged[f"macro_{col}"] = merged[col].ffill().fillna(0.0)
+        result = merged.drop(columns=[col, "macro_date", available_col], errors="ignore")
+
+    return result
 
 
 __all__ = ["load_macro_series", "load_macro_features"]
