@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import (
     BaseModel,
@@ -95,6 +95,91 @@ class AlertingConfig(BaseModel):
     )
     smtp: SMTPConfig | None = None
     model_config = ConfigDict(extra="forbid")
+
+
+class AutoUpdateConfig(BaseModel):
+    """Settings controlling the Git auto-update process."""
+
+    enabled: bool = True
+    remote: str = Field(
+        "origin", description="Git remote name that should be tracked"
+    )
+    branch: str = Field(
+        "main", description="Branch name that should be deployed on the VPS"
+    )
+    service_name: Optional[str] = Field(
+        "mt5bot",
+        description="systemd service restarted after a successful update",
+    )
+    restart_command: Optional[List[str]] = Field(
+        default=None,
+        description="Explicit command executed after pulling new code. Overrides service_name when provided.",
+    )
+    prefer_quiet_hours: bool = Field(
+        True,
+        description="Delay updates until markets are mostly closed when possible",
+    )
+    max_open_fraction: float = Field(
+        0.5,
+        ge=0.0,
+        le=1.0,
+        description="Maximum fraction of tracked symbols that may be open before deferring an update",
+    )
+    max_defer_minutes: float = Field(
+        240.0,
+        ge=0.0,
+        description="Upper bound on how long an update can be deferred even if markets stay open",
+    )
+    check_interval_minutes: float = Field(
+        15.0,
+        ge=1.0,
+        description="Recommended cadence for the auto-update timer",
+    )
+    fallback_exchange: str = Field(
+        "24/5",
+        description="Exchange identifier assumed when a symbol is missing from the explicit map",
+    )
+    exchanges: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Mapping from trading symbol to exchange calendar identifier",
+    )
+    protected_paths: List[str] = Field(
+        default_factory=lambda: ["logs", "reports", "checkpoints", "models"],
+        description="Directories preserved across updates",
+    )
+    state_file: Optional[str] = Field(
+        None,
+        description="Override path used to persist auto-update state",
+    )
+    lock_file: Optional[str] = Field(
+        None,
+        description="Optional path of the advisory auto-update lock file",
+    )
+    dry_run: bool = Field(
+        False,
+        description="When true, only log actions without applying updates",
+    )
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("restart_command", mode="before")
+    @classmethod
+    def _validate_restart_command(cls, value: Any) -> Optional[List[str]]:
+        if value is None:
+            return None
+        if isinstance(value, (str, bytes)):
+            raise TypeError("restart_command must be provided as a sequence of strings")
+        if isinstance(value, Sequence):
+            return [str(v) for v in value]
+        raise TypeError("restart_command must be a sequence of strings")
+
+    @field_validator("protected_paths", mode="before")
+    @classmethod
+    def _normalise_paths(cls, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return [str(v).strip() for v in value if str(v).strip()]
+        raise TypeError("protected_paths must be a list of directory names")
 
 
 class TrainingConfig(BaseModel):
@@ -330,6 +415,7 @@ class AppConfig(BaseModel):
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     strategy: StrategyConfig
     services: ServicesConfig = Field(default_factory=ServicesConfig)
+    auto_update: AutoUpdateConfig = Field(default_factory=AutoUpdateConfig)
     active_learning: ActiveLearningConfig | None = None
     mlflow: MLflowConfig | None = None
     alerting: AlertingConfig | None = None

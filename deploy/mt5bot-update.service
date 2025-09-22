@@ -1,0 +1,10 @@
+[Unit]
+Description=MT5 Git auto updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO_PATH}}
+Environment=CONFIG_FILE={{REPO_PATH}}/config.yaml
+ExecStart=/usr/bin/env python3 -m services.auto_updater
