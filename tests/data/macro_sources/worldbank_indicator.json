@@ -1,0 +1,22 @@
+[
+  {
+    "page": 1,
+    "pages": 1,
+    "per_page": "50",
+    "total": 2
+  },
+  [
+    {
+      "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+      "country": {"id": "US", "value": "United States"},
+      "date": "2022",
+      "value": 25000000
+    },
+    {
+      "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+      "country": {"id": "US", "value": "United States"},
+      "date": "2023",
+      "value": 25500000
+    }
+  ]
+]

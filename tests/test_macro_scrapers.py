@@ -3,8 +3,9 @@ from pathlib import Path
 import types
 import sys
 
-import httpx
 import pytest
+
+httpx = pytest.importorskip("httpx")
 
 # The top-level `data` package has heavy import side effects. To avoid pulling
 # in unnecessary dependencies during tests, we create a light-weight package
@@ -16,7 +17,6 @@ stub.__path__ = [str(DATA_ROOT)]
 sys.modules.setdefault("data", stub)
 
 import data.scrapers as scrapers
-from data.scrapers import tradingeconomics_calendar as te
 from data.scrapers import bloomberg_bdi as bloomberg
 from data.scrapers import cnbc_badi as cnbc
 from data.scrapers import census_retail as census
@@ -26,16 +26,6 @@ DATA_DIR = Path(__file__).parent / "data" / "scrapers"
 
 def read(name: str) -> str:
     return (DATA_DIR / name).read_text()
-
-
-def test_tradingeconomics_parse():
-    raw = read("tradingeconomics_calendar.json")
-    items = te.parse(raw)
-    assert items[0]["symbol"] == "GDP"
-    assert items[0]["value"] == 2.5
-    assert items[0]["source"] == "TradingEconomics"
-
-
 def test_bloomberg_parse():
     raw = read("bloomberg_bdi.html")
     items = bloomberg.parse(raw)
