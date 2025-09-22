@@ -12,7 +12,7 @@ sys.modules.setdefault("mlflow", types.SimpleNamespace())
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-import signal_queue
+from mt5 import signal_queue
 import risk.position_sizer as ps
 from analysis.entry_value import EntryValueScorer, log_entry_value
 

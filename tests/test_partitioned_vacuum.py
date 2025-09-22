@@ -20,7 +20,7 @@ sys.modules.setdefault("duckdb", types.SimpleNamespace(connect=lambda *a, **k: N
 sys.modules.setdefault("networkx", types.SimpleNamespace())
 
 from data.history import save_history_parquet, load_history_iter
-from scheduler import vacuum_history
+from mt5.scheduler import vacuum_history
 
 
 def _make_df(start, periods):

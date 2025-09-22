@@ -23,9 +23,9 @@ from .algorithms import (
 from .rl_executor import RLExecutor
 from .execution_optimizer import ExecutionOptimizer, OptimizationLoopHandle
 from .fill_history import record_fill
-from metrics import SLIPPAGE_BPS, REALIZED_SLIPPAGE_BPS
+from mt5.metrics import SLIPPAGE_BPS, REALIZED_SLIPPAGE_BPS
 from event_store.event_writer import record as record_event
-from model_registry import ModelRegistry
+from mt5.model_registry import ModelRegistry
 
 try:  # optional dependency
     from utils.resource_monitor import monitor

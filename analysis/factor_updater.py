@@ -19,7 +19,7 @@ import pandas as pd
 import numpy as np
 
 from analysis.factor_model import FactorModel
-from risk_manager import risk_manager
+from mt5.risk_manager import risk_manager
 
 try:  # optional dependency – macro based model only
     from data.macro_features import load_macro_series
@@ -122,7 +122,7 @@ class FactorUpdater:
 
     def _refresh_router(self, factor_names: Iterable[str]) -> None:
         try:
-            from signal_queue import _ROUTER
+            from mt5.signal_queue import _ROUTER
 
             _ROUTER.set_factor_names(list(factor_names))
             logger.info("Strategy router factor names refreshed: %s", list(factor_names))

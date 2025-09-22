@@ -7,7 +7,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location(
-    "train_price_distribution", ROOT / "train_price_distribution.py"
+    "train_price_distribution", ROOT / "mt5" / "train_price_distribution.py"
 )
 train_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(train_mod)  # type: ignore

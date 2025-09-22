@@ -75,8 +75,7 @@ def run_backtest(
     slippage_model=None,
 ):
     """Convenience wrapper to backtest with execution settings."""
-
-    from backtest import run_backtest as _run_backtest
+from mt5.backtest import run_backtest as _run_backtest
 
     return _run_backtest(
         cfg,

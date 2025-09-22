@@ -37,8 +37,7 @@ def test_net_exposure_limits_and_logging(tmp_path, monkeypatch):
         ms, "record_metric", lambda name, value, tags=None, path=None: logged.append((name, value, tags))
     )
     monkeypatch.chdir(tmp_path)
-
-    from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
     rm = RiskManager(
         max_drawdown=1e9,

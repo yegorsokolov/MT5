@@ -44,9 +44,9 @@ NEWS_REPLAY_DIR.mkdir(parents=True, exist_ok=True)
 
 def reprocess_trades() -> None:
     """Re-run logged decisions through currently selected models."""
-    from log_utils import read_decisions
-    from state_manager import load_replay_timestamp, save_replay_timestamp
-    from model_registry import select_models
+from mt5.log_utils import read_decisions
+from mt5.state_manager import load_replay_timestamp, save_replay_timestamp
+from mt5.model_registry import select_models
     from analysis.replay_trades import replay_trades
     decisions = read_decisions()
     if decisions.empty:
@@ -114,8 +114,7 @@ def replay_strategies(strategy_ids: List[str]) -> pd.DataFrame:
 
     if not strategy_ids:
         return pd.DataFrame()
-
-    from log_utils import read_decisions
+from mt5.log_utils import read_decisions
 
     decisions = read_decisions()
     if decisions.empty or "return" not in decisions.columns:
@@ -404,8 +403,7 @@ def _flag_discrepancies(threshold: float = 0.05) -> Dict[str, float]:
 
 async def watch_upgrades(threshold: float = 0.05) -> None:
     """Monitor capability tier events and trigger decision/strategy replays."""
-
-    from model_registry import ModelRegistry
+from mt5.model_registry import ModelRegistry
     from utils.resource_monitor import monitor
     from features import report_status, start_capability_watch
 

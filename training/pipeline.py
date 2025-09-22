@@ -58,12 +58,11 @@ except Exception:  # pragma: no cover - optional dependency
 
         def save(self, path):  # pragma: no cover - compatibility shim
             return path
-from train_utils import prepare_modal_arrays
-
-from log_utils import setup_logging, log_exceptions, LOG_DIR
+from mt5.train_utils import prepare_modal_arrays
+from mt5.log_utils import setup_logging, log_exceptions, LOG_DIR
 import numpy as np
 from risk.position_sizer import PositionSizer
-from ray_utils import (
+from mt5.ray_utils import (
     init as ray_init,
     shutdown as ray_shutdown,
     cluster_available,
@@ -77,9 +76,9 @@ except Exception:  # noqa: E722
 
 from utils import ensure_environment, load_config
 from features import start_capability_watch
-from config_models import AppConfig
+from mt5.config_models import AppConfig
 from utils.resource_monitor import monitor
-from state_manager import save_checkpoint, load_latest_checkpoint
+from mt5.state_manager import save_checkpoint, load_latest_checkpoint
 from models import model_store
 from analysis.prob_calibration import (
     ProbabilityCalibrator,
@@ -1691,7 +1690,7 @@ def _run_training(
                 coverage_by_regime=coverage_by_regime or None,
             )
         if cfg.get("use_price_distribution") and last_split is not None:
-            from train_price_distribution import train_price_distribution
+from mt5.train_price_distribution import train_price_distribution
 
             train_idx, val_idx = last_split
             X_arr = X.values

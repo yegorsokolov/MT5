@@ -81,6 +81,7 @@ def _resolve_features(df, target, cfg, **kwargs):
 
 train_utils_mod.resolve_training_features = _resolve_features
 sys.modules.setdefault("train_utils", train_utils_mod)
+sys.modules.setdefault("mt5.train_utils", train_utils_mod)
 
 
 class DummyModel:
@@ -175,9 +176,10 @@ def _stub_save_model(name, model, metadata, path=None):
 
 model_registry_stub.save_model = _stub_save_model
 sys.modules["model_registry"] = model_registry_stub
+sys.modules["mt5.model_registry"] = model_registry_stub
 saved_paths = model_registry_stub.saved_paths
 
-import train_online
+from mt5 import train_online
 
 
 @pytest.fixture

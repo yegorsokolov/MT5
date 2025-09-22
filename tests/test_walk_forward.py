@@ -13,6 +13,7 @@ sys.modules["log_utils"] = types.SimpleNamespace(
     log_exceptions=lambda f: f,
 )
 sys.modules["backtest"] = types.SimpleNamespace(run_rolling_backtest=lambda cfg: {})
+sys.modules["mt5.backtest"] = sys.modules["backtest"]
 sys.modules["mlflow"] = types.SimpleNamespace(
     set_experiment=lambda *a, **k: None,
     set_tracking_uri=lambda *a, **k: None,
@@ -20,7 +21,7 @@ sys.modules["mlflow"] = types.SimpleNamespace(
     log_dict=lambda *a, **k: None,
 )
 
-import walk_forward
+from mt5 import walk_forward
 
 walk_forward.init_logging = lambda: logging.getLogger("test_walk_forward")
 

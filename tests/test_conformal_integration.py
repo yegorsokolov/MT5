@@ -33,7 +33,7 @@ sys.modules.setdefault("event_store.event_writer", event_writer_stub)
 sys.modules.setdefault("event_store", types.SimpleNamespace(event_writer=event_writer_stub))
 
 from models import conformal
-from signal_queue import _wrap_ci
+from mt5.signal_queue import _wrap_ci
 
 
 def test_conformal_interval_coverage():

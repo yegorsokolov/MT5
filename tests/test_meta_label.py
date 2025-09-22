@@ -8,7 +8,7 @@ import importlib.util
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-import signal_queue
+from mt5 import signal_queue
 
 spec = importlib.util.spec_from_file_location(
     "meta_label", Path(__file__).resolve().parents[1] / "models" / "meta_label.py"

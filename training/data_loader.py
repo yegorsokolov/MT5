@@ -14,8 +14,7 @@ from pathlib import Path
 from typing import Tuple
 
 import pandas as pd
-
-from config_models import AppConfig
+from mt5.config_models import AppConfig
 
 __all__ = ["load_training_frame", "StreamingTrainingFrame"]
 

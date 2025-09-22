@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover - handled later
     save_config = None  # type: ignore
 
 try:
-    from config_models import AppConfig
+    from mt5.config_models import AppConfig
 except Exception:  # pragma: no cover - handled later
     AppConfig = None  # type: ignore
 

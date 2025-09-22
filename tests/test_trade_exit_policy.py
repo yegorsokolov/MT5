@@ -10,7 +10,7 @@ sys.modules["utils.environment"] = types.SimpleNamespace(ensure_environment=lamb
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-import signal_queue
+from mt5 import signal_queue
 import risk.position_sizer as ps
 from strategies.trade_exit_policy import TradeExitPolicy
 

@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import requests
 import torch
-
-from state_manager import load_latest_checkpoint, save_checkpoint
+from mt5.state_manager import load_latest_checkpoint, save_checkpoint
 from .utils import encode_state_dict, decode_state_dict
 
 

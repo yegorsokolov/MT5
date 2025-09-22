@@ -30,7 +30,7 @@ def test_cross_asset_gnn_beats_independent():
     spec_ca.loader.exec_module(ca)  # type: ignore
 
     spec_tg = importlib.util.spec_from_file_location(
-        "train_graphnet", Path(__file__).resolve().parents[1] / "train_graphnet.py"
+        "train_graphnet", Path(__file__).resolve().parents[1] / "mt5" / "train_graphnet.py"
     )
     tg = importlib.util.module_from_spec(spec_tg)
     sys.path.append(str(Path(__file__).resolve().parents[1]))

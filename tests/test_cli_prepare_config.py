@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import yaml
 
-import cli
+from mt5 import cli
 from tests.yaml_helpers import ensure_real_yaml
 
 

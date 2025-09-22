@@ -139,7 +139,7 @@ def test_order_book_feature_computation():
 
 
 def test_liquidity_adjustments_and_metrics(tmp_path):
-    from realtime_train import apply_liquidity_adjustment
+from mt5.realtime_train import apply_liquidity_adjustment
 
     df = pd.DataFrame(
         {
@@ -153,7 +153,7 @@ def test_liquidity_adjustments_and_metrics(tmp_path):
     def fake_metric(name, value, **k):
         calls.append((name, value))
     metrics_store.record_metric = fake_metric
-    import realtime_train as rt
+    from mt5 import realtime_train as rt
     rt.record_metric = fake_metric
     out = apply_liquidity_adjustment(df)
     assert np.isclose(out["buy_fill"].iloc[0], 100.0 + 0.1 + 0.05)
@@ -161,9 +161,9 @@ def test_liquidity_adjustments_and_metrics(tmp_path):
 
 
 def test_trading_env_uses_liquidity_metrics(tmp_path):
-    from train_rl import TradingEnv
+from mt5.train_rl import TradingEnv
     metrics_store.TS_PATH = tmp_path / "env_metrics.parquet"
-    import train_rl
+    from mt5 import train_rl
     train_rl.TS_PATH = metrics_store.TS_PATH
     metrics_store.record_metric = lambda *a, **k: None
     train_rl.record_metric = metrics_store.record_metric

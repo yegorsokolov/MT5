@@ -133,7 +133,7 @@ sys.modules.pop('pandas', None)
 import pandas  # type: ignore  # noqa: F401
 
 from brokers import connection_manager as cm
-import realtime_train as rt
+from mt5 import realtime_train as rt
 
 
 class EmptyBroker:

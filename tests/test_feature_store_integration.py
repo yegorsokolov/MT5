@@ -96,7 +96,7 @@ sys.modules["river.compose"] = river_module.compose
 sys.modules["river.preprocessing"] = river_module.preprocessing
 sys.modules["river.linear_model"] = river_module.linear_model
 
-import train_online
+from mt5 import train_online
 
 
 def test_offline_online_equivalence(tmp_path, monkeypatch):

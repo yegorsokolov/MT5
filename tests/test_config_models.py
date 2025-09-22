@@ -30,7 +30,7 @@ mlflow_stub.__spec__ = importlib.machinery.ModuleSpec("mlflow", loader=None)
 sys.modules.setdefault("mlflow", mlflow_stub)
 
 import utils
-from config_models import ConfigError
+from mt5.config_models import ConfigError
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "data" / "config"
 

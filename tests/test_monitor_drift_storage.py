@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-import monitor_drift
+from mt5 import monitor_drift
 
 
 def _make_batch(start: int) -> tuple[pd.DataFrame, pd.Series]:

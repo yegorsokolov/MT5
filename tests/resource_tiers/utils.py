@@ -8,6 +8,7 @@ import importlib.machinery
 import importlib.util
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
+REPO_ROOT = Path(__file__).resolve().parents[2]
 mlflow_stub = types.ModuleType("mlflow")
 mlflow_stub.set_tracking_uri = lambda *a, **kw: None
 mlflow_stub.set_experiment = lambda *a, **kw: None
@@ -85,8 +86,7 @@ def _import_plugins(reload: bool = False) -> None:
 
 
 plugins._import_plugins = _import_plugins
-
-from model_registry import ModelRegistry, monitor, ResourceCapabilities  # type: ignore
+from mt5.model_registry import ModelRegistry, monitor, ResourceCapabilities  # type: ignore
 
 __all__ = ["run_smoke", "ResourceCapabilities"]
 
@@ -122,4 +122,13 @@ def run_smoke(caps: ResourceCapabilities, tier: str, expected: Dict[str, str]) -
     for task, model in expected.items():
         assert registry.get(task) == model, f"Expected {model} for {task}"
 
-    subprocess.run([sys.executable, "-m", "py_compile", "train.py", "train_rl.py"], check=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "py_compile",
+            str(REPO_ROOT / "mt5" / "train.py"),
+            str(REPO_ROOT / "mt5" / "train_rl.py"),
+        ],
+        check=True,
+    )

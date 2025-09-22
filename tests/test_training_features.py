@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from config_models import AppConfig
+from mt5.config_models import AppConfig
 from training.features import (
     append_risk_profile_features,
     build_feature_candidates,

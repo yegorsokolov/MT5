@@ -120,6 +120,7 @@ sys.modules["optuna"] = optuna_stub
 train_stub = types.ModuleType("train")
 train_stub.main = lambda *a, **k: None
 sys.modules["train"] = train_stub
+sys.modules["mt5.train"] = train_stub
 
 utils_stub = types.ModuleType("utils")
 utils_stub.load_config = lambda: {}
@@ -132,11 +133,13 @@ backtest_stub = types.ModuleType("backtest")
 backtest_stub.run_backtest = lambda *a, **k: {}
 backtest_stub.run_rolling_backtest = lambda *a, **k: {}
 sys.modules["backtest"] = backtest_stub
+sys.modules["mt5.backtest"] = backtest_stub
 
 log_utils_stub = types.ModuleType("log_utils")
 log_utils_stub.setup_logging = lambda *a, **k: None
 log_utils_stub.log_exceptions = lambda func: func
 sys.modules["log_utils"] = log_utils_stub
+sys.modules["mt5.log_utils"] = log_utils_stub
 
 sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=object)
 
@@ -144,7 +147,7 @@ import analytics.mlflow_client as mlflow_client
 
 importlib.reload(mlflow_client)
 
-import auto_optimize
+from mt5 import auto_optimize
 
 
 def test_auto_optimize_updates_config(monkeypatch, tmp_path):

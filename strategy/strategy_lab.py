@@ -24,8 +24,8 @@ import pandas as pd
 import joblib
 
 from analytics.metrics_aggregator import record_metric
-from risk_manager import RiskManager
-from model_registry import get_policy_path
+from mt5.risk_manager import RiskManager
+from mt5.model_registry import get_policy_path
 from .shadow_runner import ShadowRunner
 from .router import StrategyRouter, Algorithm
 

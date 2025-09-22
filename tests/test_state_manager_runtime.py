@@ -63,7 +63,7 @@ def reload_state_manager(tmp_path):
     sys.modules['joblib'] = joblib_stub
 
     sys.modules.pop('state_manager', None)
-    import state_manager
+    from mt5 import state_manager
     importlib.reload(state_manager)
     return state_manager
 

@@ -99,7 +99,7 @@ sys.modules.setdefault(
 )
 
 spec = importlib.util.spec_from_file_location(
-    "backtest", Path(__file__).resolve().parents[1] / "backtest.py"
+    "backtest", Path(__file__).resolve().parents[1] / "mt5" / "backtest.py"
 )
 sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=object)
 sys.modules["log_utils"] = types.SimpleNamespace(

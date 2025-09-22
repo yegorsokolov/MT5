@@ -152,7 +152,7 @@ def _load_train_rl(monkeypatch, metrics):
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     spec = importlib.util.spec_from_file_location(
-        "train_rl", Path(__file__).resolve().parents[1] / "train_rl.py"
+        "train_rl", Path(__file__).resolve().parents[1] / "mt5" / "train_rl.py"
     )
     train_rl = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(train_rl)

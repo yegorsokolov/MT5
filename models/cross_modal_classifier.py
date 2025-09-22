@@ -15,8 +15,7 @@ except Exception:  # pragma: no cover - torch is optional in some environments
     TensorDataset = DataLoader = None  # type: ignore[assignment]
 
 from sklearn.base import BaseEstimator, ClassifierMixin
-
-from train_utils import prepare_modal_arrays
+from mt5.train_utils import prepare_modal_arrays
 
 if torch is not None:  # pragma: no cover - torch may be unavailable during docs
     from .cross_modal_transformer import CrossModalTransformer

@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import List
 
 import pandas as pd
-
-from log_utils import read_decisions
+from mt5.log_utils import read_decisions
 from utils import load_config
 
 REPLAY_DIR = Path(__file__).resolve().parent.parent / "reports" / "replays"
@@ -40,7 +39,7 @@ def replay_trades(model_versions: List[str]) -> None:
 
     cfg = load_config()
     # Import inside function to avoid circular dependency during import time
-    from generate_signals import load_models
+from mt5.generate_signals import load_models
 
     models = load_models([], model_versions)
     if not models:

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from risk.budget_allocator import BudgetAllocator
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 
 if not hasattr(pytest.MonkeyPatch, "patch"):
     from unittest.mock import patch as _mpatch

@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-src = (ROOT / "train.py").read_text()
+src = (ROOT / "mt5" / "train.py").read_text()
 module = ast.parse(src)
 func = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "_maybe_evolve_on_degradation")
 code = compile(ast.Module(body=[func], type_ignores=[]), "extracted", "exec")

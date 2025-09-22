@@ -3,9 +3,11 @@ from pathlib import Path
 
 import types
 
+ROOT = Path(__file__).resolve().parents[1] / "mt5"
 
-def _load_launch(path: str):
-    src = Path(path).read_text()
+
+def _load_launch(path: Path):
+    src = path.read_text()
     mod = ast.parse(src)
     for node in mod.body:
         if isinstance(node, ast.FunctionDef) and node.name == "launch":
@@ -18,7 +20,7 @@ def _load_launch(path: str):
 
 
 def _run_launch(file: str) -> int:
-    launch = _load_launch(file)
+    launch = _load_launch(ROOT / file)
     calls = []
 
     def fake_submit(fn, *args, **kwargs):

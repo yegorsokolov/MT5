@@ -100,7 +100,7 @@ def _market_adjustment() -> Tuple[float, float]:
     """Return market adjustment factor and intensity in ``[0, 1]``."""
 
     try:  # pragma: no cover - optional dependency
-        from market_condition import MarketConditionAssessor  # type: ignore
+from mt5.market_condition import MarketConditionAssessor  # type: ignore
 
         assessor = MarketConditionAssessor()
         state = assessor.assess()
@@ -119,7 +119,7 @@ def _risk_adjustment() -> Tuple[float, float]:
     """Return risk scaling factor and risk tolerance ratio."""
 
     try:  # pragma: no cover - optional persistence dependency
-        from state_manager import load_user_risk  # type: ignore
+from mt5.state_manager import load_user_risk  # type: ignore
 
         cfg = load_user_risk()
     except Exception:

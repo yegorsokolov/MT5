@@ -12,8 +12,7 @@ from sklearn.preprocessing import StandardScaler
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
-
-from generate_signals import compute_regression_estimates
+from mt5.generate_signals import compute_regression_estimates
 from models.multi_task_heads import MultiTaskHeadEstimator
 
 

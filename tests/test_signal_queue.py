@@ -95,11 +95,11 @@ class _RiskManagerStub:
 _risk_manager_stub.RiskManager = _RiskManagerStub  # type: ignore[attr-defined]
 sys.modules.setdefault("risk_manager", _risk_manager_stub)
 
-import signal_queue
-import scheduler as scheduler_mod
+from mt5 import signal_queue
+from mt5 import scheduler as scheduler_mod
 
 scheduler_mod.start_scheduler = lambda: None
-import risk_manager
+from mt5 import risk_manager
 
 
 @pytest.fixture(autouse=True)
