@@ -81,6 +81,19 @@ syntax:
   dataset with an active resource can be streamed straight into features.
 * ``oecd::`` fetches cross-country series from the OECD SDMX API whenever you
   need internationally comparable macro indicators.
+* ``ons::`` resolves United Kingdom releases from the Office for National
+  Statistics JSON API without authentication, covering CPI, GDP and labour
+  market aggregates.
+* ``bankofengland::`` (or ``boe::``) streams policy rates, balance sheet and
+  exchange rate series directly from the Bank of England Statistical Interactive
+  Database SDMX service.
+* ``eurostat::`` taps into the EU-wide Eurostat SDMX API to retrieve regional
+  economic indicators across the euro area and EU member states.
+* ``ecb::`` integrates with the European Central Bank Statistical Data
+  Warehouse for monetary statistics, financial conditions and exchange rates.
+* ``bcb::`` queries the Banco Central do Brasil SGS service for Brazilian
+  macroeconomic data without requiring API keys, filling coverage gaps for
+  Latin America.
 
 ## Repository layout
 
