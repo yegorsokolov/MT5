@@ -227,7 +227,7 @@ from data.labels import triple_barrier
 sys.modules.pop("scipy", None)
 sys.modules.pop("scipy.sparse", None)
 sys.modules.pop("scipy.stats", None)
-import train
+from mt5 import train
 
 
 @pytest.fixture(autouse=True)
@@ -257,7 +257,7 @@ def stub_dependencies(monkeypatch):
     monkeypatch.setattr(f, "log_lineage", lambda *a, **k: None)
     import data.labels as labels_mod
     monkeypatch.setattr(labels_mod, "log_lineage", lambda *a, **k: None)
-    import train as train_mod
+    from mt5 import train as train_mod
     monkeypatch.setattr(train_mod, "_lgbm_params", lambda cfg: {})
 
 

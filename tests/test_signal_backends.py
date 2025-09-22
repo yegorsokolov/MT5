@@ -1,6 +1,6 @@
 
 import pandas as pd
-from signal_queue import KafkaSignalQueue, RedisSignalQueue
+from mt5.signal_queue import KafkaSignalQueue, RedisSignalQueue
 from testcontainers.kafka import KafkaContainer
 from testcontainers.redis import RedisContainer
 

@@ -16,9 +16,8 @@ sys.modules["telemetry"] = types.SimpleNamespace(
 )
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-
-from model_registry import ModelRegistry, ResourceCapabilities
-import model_registry as mr
+from mt5.model_registry import ModelRegistry, ResourceCapabilities
+from mt5 import model_registry as mr
 import time
 from analysis.inference_latency import InferenceLatency
 import numpy as np

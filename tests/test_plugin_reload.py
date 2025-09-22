@@ -35,7 +35,7 @@ sys.modules.setdefault("mlflow", mlflow_stub)
 
 # Minimal stubs for optional dependencies
 
-import metrics
+from mt5 import metrics
 metrics.PLUGIN_RELOADS = _DummyMetric()
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

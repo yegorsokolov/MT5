@@ -367,7 +367,7 @@ def _load_train_rl(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "event_store", event_store_stub)
 
     spec = importlib.util.spec_from_file_location(
-        "train_rl", Path(__file__).resolve().parents[1] / "train_rl.py"
+        "train_rl", Path(__file__).resolve().parents[1] / "mt5" / "train_rl.py"
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

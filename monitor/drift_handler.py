@@ -4,7 +4,7 @@ import time
 from typing import Callable, Mapping
 
 from analysis.concept_drift import ConceptDriftMonitor
-from scheduler import schedule_retrain
+from mt5.scheduler import schedule_retrain
 
 
 class DriftHandler:

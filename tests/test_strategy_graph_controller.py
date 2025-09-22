@@ -62,7 +62,7 @@ def test_graph_search_cli_executes():
     root = Path(__file__).resolve().parents[1]
     cmd = [
         sys.executable,
-        str(root / "train_strategy.py"),
+        str(root / "mt5" / "train_strategy.py"),
         "--graph-search",
         "--episodes",
         "200",

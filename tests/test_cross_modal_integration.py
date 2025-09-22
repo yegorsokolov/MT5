@@ -5,7 +5,7 @@ pd = pytest.importorskip("pandas")
 torch = pytest.importorskip("torch")
 
 from models.cross_modal_transformer import CrossModalTransformer
-from train_utils import prepare_modal_arrays
+from mt5.train_utils import prepare_modal_arrays
 
 
 def _train_linear(x_train: torch.Tensor, y_train: torch.Tensor, x_val: torch.Tensor, y_val: torch.Tensor, epochs: int = 200) -> float:

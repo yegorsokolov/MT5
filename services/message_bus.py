@@ -167,7 +167,7 @@ class MessageBus:
         """Close backend connections and flush async logs."""
 
         try:
-            from log_utils import shutdown_logging
+            from mt5.log_utils import shutdown_logging
 
             shutdown_logging()
         except Exception:

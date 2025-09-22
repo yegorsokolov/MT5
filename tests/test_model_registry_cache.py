@@ -18,8 +18,8 @@ sys.modules["telemetry"] = types.SimpleNamespace(
 # Ensure repository root on path before importing the registry module
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-import model_registry as mr
-from model_registry import ModelRegistry, ResourceCapabilities
+from mt5 import model_registry as mr
+from mt5.model_registry import ModelRegistry, ResourceCapabilities
 
 
 # Capture metric names recorded by the registry

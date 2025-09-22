@@ -16,8 +16,7 @@ sys.modules["telemetry"] = types.SimpleNamespace(
         create_counter=lambda *a, **k: types.SimpleNamespace(add=lambda *a, **k: None)
     ),
 )
-
-from model_registry import ModelRegistry, ResourceCapabilities
+from mt5.model_registry import ModelRegistry, ResourceCapabilities
 from services.inference_server import app
 import importlib.util
 import requests

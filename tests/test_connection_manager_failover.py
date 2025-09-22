@@ -130,7 +130,7 @@ sys.modules['MetaTrader5'] = types.SimpleNamespace(
 )
 
 from brokers import connection_manager as cm
-import realtime_train as rt
+from mt5 import realtime_train as rt
 
 
 class FailingBroker:

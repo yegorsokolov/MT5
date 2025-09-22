@@ -18,14 +18,14 @@ except Exception:  # pragma: no cover - fallback stub
 from utils import load_config
 from utils.resource_monitor import ResourceMonitor, monitor
 from features import start_capability_watch
-import model_registry
+from mt5 import model_registry
 import plugins  # noqa: F401 - imported for side effects
-import state_manager
+from mt5 import state_manager
 from analysis import replay
 from . import state_sync
 from analytics.metrics_store import record_metric
-import risk_manager as risk_manager_module
-from risk_manager import risk_manager, subscribe_to_broker_alerts
+from mt5 import risk_manager as risk_manager_module
+from mt5.risk_manager import risk_manager, subscribe_to_broker_alerts
 from deployment.canary import CanaryManager
 from news.aggregator import NewsAggregator
 from strategy.shadow_runner import ShadowRunner
@@ -33,8 +33,8 @@ from strategy.evolution_lab import EvolutionLab
 
 
 DEFAULT_SERVICE_CMDS: dict[str, list[str]] = {
-    "signal_queue": ["python", "signal_queue.py"],
-    "realtime_train": ["python", "realtime_train.py"],
+    "signal_queue": ["python", "-m", "mt5.signal_queue"],
+    "realtime_train": ["python", "-m", "mt5.realtime_train"],
 }
 
 
@@ -103,7 +103,7 @@ class Orchestrator:
         """Return a default strategy used as seed for variant generation."""
 
         try:
-            import signal_queue  # local import to avoid heavy dependency
+            from mt5 import signal_queue  # local import to avoid heavy dependency
 
             router = getattr(signal_queue, "_ROUTER", None)
             algorithms = getattr(router, "algorithms", {}) if router else {}
@@ -172,7 +172,7 @@ class Orchestrator:
                 )
         if not started:
             try:
-                import scheduler
+                from mt5 import scheduler
 
                 scheduler.start_scheduler()
             except Exception:
@@ -193,7 +193,7 @@ class Orchestrator:
         loop.create_task(self._watch_services())
         loop.create_task(self._update_quiet_windows())
         try:  # start shadow runners for existing strategies
-            import signal_queue
+            from mt5 import signal_queue
 
             for name, algo in getattr(signal_queue, "_ROUTER").algorithms.items():
                 self.register_strategy(name, algo)
@@ -278,7 +278,7 @@ class Orchestrator:
         while True:
             # Ensure scheduler thread is alive
             try:
-                import scheduler  # local import to avoid heavy dependency at import time
+                from mt5 import scheduler  # local import to avoid heavy dependency at import time
 
                 if not getattr(scheduler, "_started", False):
                     scheduler.start_scheduler()

@@ -19,7 +19,7 @@ sys.modules.pop("scheduler", None)
 sys.modules.pop("config_models", None)
 sys.modules.pop("event_store", None)
 try:
-    from config_models import AppConfig
+    from mt5.config_models import AppConfig
 except Exception:
     class _AppConfigDict(dict):
         def model_dump(self) -> dict[str, object]:
@@ -33,8 +33,8 @@ except Exception:
     config_models_stub = types.ModuleType("config_models")
     config_models_stub.AppConfig = _AppConfig
     sys.modules["config_models"] = config_models_stub
-    from config_models import AppConfig
-import scheduler
+from mt5.config_models import AppConfig
+from mt5 import scheduler
 
 
 def test_stop_scheduler_cancels_tasks_and_stops_loop():

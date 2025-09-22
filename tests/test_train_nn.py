@@ -3,8 +3,7 @@ import importlib.util
 from types import SimpleNamespace
 
 import pytest
-
-from config_models import AppConfig
+from mt5.config_models import AppConfig
 
 
 @pytest.mark.skipif(

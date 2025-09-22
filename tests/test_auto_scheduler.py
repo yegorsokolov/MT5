@@ -24,7 +24,7 @@ import contextlib
 
 from tuning.auto_scheduler import AutoScheduler
 import tuning.auto_scheduler as auto
-from model_registry import ModelRegistry, ResourceCapabilities
+from mt5.model_registry import ModelRegistry, ResourceCapabilities
 from models import model_store
 import models.hot_reload as hot
 

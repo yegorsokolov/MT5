@@ -9,7 +9,7 @@ sys.modules.pop("yaml", None)
 yaml = importlib.import_module("yaml")
 
 from utils import load_config
-from state_manager import watch_config
+from mt5.state_manager import watch_config
 
 
 def test_config_hot_reload(tmp_path):

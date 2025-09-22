@@ -8,8 +8,7 @@ sys.modules["prometheus_client"] = types.SimpleNamespace(
     Counter=lambda *a, **k: None,
     Gauge=lambda *a, **k: None,
 )
-
-from risk_manager import RiskManager
+from mt5.risk_manager import RiskManager
 from risk.tail_hedger import TailHedger
 
 

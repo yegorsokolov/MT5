@@ -33,7 +33,7 @@ def _mlflow_run(cfg: dict, run_name: str = "tuning") -> None:
 
 
 def tune_lgbm(cfg: dict, n_trials: int = 20) -> None:
-    """Tune LightGBM parameters used by ``train.py``.
+    """Tune LightGBM parameters used by ``mt5.train``.
 
     Parameters
     ----------
@@ -42,8 +42,7 @@ def tune_lgbm(cfg: dict, n_trials: int = 20) -> None:
     n_trials:
         Number of Optuna trials to run.
     """
-
-    from train import main as train_main
+from mt5.train import main as train_main
 
     storage = Path(__file__).resolve().with_name("lgbm_tuning.db")
     study = _study(storage, "lgbm")
@@ -65,9 +64,8 @@ def tune_lgbm(cfg: dict, n_trials: int = 20) -> None:
 
 
 def tune_transformer(cfg: dict, n_trials: int = 20) -> None:
-    """Tune Transformer parameters used by ``train_nn.py``."""
-
-    from train_nn import launch as nn_launch
+    """Tune Transformer parameters used by ``mt5.train_nn``."""
+from mt5.train_nn import launch as nn_launch
 
     storage = Path(__file__).resolve().with_name("nn_tuning.db")
     study = _study(storage, "transformer")
@@ -90,9 +88,8 @@ def tune_transformer(cfg: dict, n_trials: int = 20) -> None:
 
 
 def tune_rl(cfg: dict, n_trials: int = 20) -> None:
-    """Tune reinforcement learning parameters used by ``train_rl.py``."""
-
-    from train_rl import launch as rl_launch
+    """Tune reinforcement learning parameters used by ``mt5.train_rl``."""
+from mt5.train_rl import launch as rl_launch
 
     storage = Path(__file__).resolve().with_name("rl_tuning.db")
     study = _study(storage, "rl")

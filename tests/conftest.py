@@ -229,7 +229,7 @@ scheduler_mod.__spec__ = importlib.machinery.ModuleSpec("scheduler", loader=None
 sys.modules.setdefault("scheduler", scheduler_mod)
 
 try:
-    import crypto_utils as crypto_utils_mod  # type: ignore
+    from mt5 import crypto_utils as crypto_utils_mod  # type: ignore
 except Exception:  # pragma: no cover - fallback when crypto_utils unavailable
     crypto_utils_mod = types.ModuleType("crypto_utils")
     crypto_utils_mod._load_key = lambda *a, **k: b""
@@ -383,7 +383,7 @@ def log_utils_module(tmp_path, monkeypatch):
 
     sys.modules.pop("crypto_utils", None)
     crypto_utils_mod = importlib.import_module("crypto_utils")
-    from crypto_utils import encrypt as _fixture_encrypt
+    from mt5.crypto_utils import encrypt as _fixture_encrypt
     import base64
     import io
     import os
@@ -409,6 +409,7 @@ def log_utils_module(tmp_path, monkeypatch):
     monkeypatch.setenv("DECISION_AES_KEY", key)
 
     sys.modules["log_utils"] = module
+    sys.modules["mt5.log_utils"] = module
 
     yield module
 

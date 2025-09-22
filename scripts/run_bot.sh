@@ -12,7 +12,7 @@ export CONFIG_FILE="${CONFIG_FILE:-$REPO_ROOT/config.yaml}"
 # train if model missing or TRAIN_ALWAYS=1
 if [ ! -f "$MODEL_PATH" ] || [ "${TRAIN_ALWAYS}" = "1" ]; then
   echo "Starting initial training..."
-  python train.py
+  python -m mt5.train
 else
   echo "Existing model found: $MODEL_PATH"
 fi
@@ -30,4 +30,4 @@ fi
 python scripts/hourly_artifact_push.py &
 
 # Run realtime training loop
-exec python realtime_train.py
+exec python -m mt5.realtime_train

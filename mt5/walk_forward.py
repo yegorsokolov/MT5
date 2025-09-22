@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from contextlib import nullcontext
+from copy import deepcopy
+import logging
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from utils import load_config
+from mt5.backtest import run_rolling_backtest
+from backtesting.walk_forward import rolling_windows
+from mt5.log_utils import setup_logging, log_exceptions
+
+_LOGGING_INITIALIZED = False
+
+
+def init_logging() -> logging.Logger:
+    """Initialise structured logging for walk-forward utilities."""
+
+    global _LOGGING_INITIALIZED
+    if not _LOGGING_INITIALIZED:
+        setup_logging()
+        _LOGGING_INITIALIZED = True
+    return logging.getLogger(__name__)
+
+
+logger = logging.getLogger(__name__)
+
+# default location for walk forward summary output
+_LOG_PATH = Path(__file__).resolve().parent / "logs" / "walk_forward_summary.csv"
+
+
+def _config_to_dict(cfg: Any) -> dict[str, Any]:
+    """Return a deep-copied mapping representation of ``cfg``.
+
+    When ``cfg`` is a Pydantic model we merge ``__pydantic_extra__`` so the
+    result mirrors :meth:`AppConfig.get` while ensuring nested values are
+    fully copied for each symbol.
+    """
+
+    if hasattr(cfg, "model_dump"):
+        data = cfg.model_dump()
+        extras = getattr(cfg, "__pydantic_extra__", None) or {}
+        if extras:
+            data.update(extras)
+        return deepcopy(data)
+    if isinstance(cfg, Mapping):
+        return deepcopy(dict(cfg))
+    return deepcopy(dict(getattr(cfg, "__dict__", {})))
+
+
+def aggregate_results(results: dict[str, dict]) -> pd.DataFrame:
+    """Convert a ``symbol -> metrics`` mapping into a DataFrame."""
+
+    records = []
+    for symbol, metrics in results.items():
+        records.append(
+            {
+                "symbol": symbol,
+                "avg_sharpe": metrics.get("avg_sharpe"),
+                "worst_drawdown": metrics.get("worst_drawdown"),
+            }
+        )
+
+    return pd.DataFrame.from_records(
+        records, columns=["symbol", "avg_sharpe", "worst_drawdown"]
+    )
+
+
+def walk_forward_train(
+    data: Path,
+    window_length: int,
+    step_size: int,
+    model_type: str = "mean",
+) -> pd.DataFrame:
+    """Run a simple walk-forward training loop.
+
+    Parameters
+    ----------
+    data:
+        Path to a CSV or parquet file containing a ``return`` column.
+    window_length:
+        Number of rows to use for the training window.
+    step_size:
+        Size of the forward evaluation window and stride between windows.
+    model_type:
+        Which toy model to train.  Currently only ``"mean"`` is supported.
+
+    Returns
+    -------
+    DataFrame
+        Metrics for each window including the train/test split positions.
+    """
+
+    if data.suffix == ".csv":
+        df = pd.read_csv(data)
+    else:
+        df = pd.read_parquet(data)
+
+    windows = rolling_windows(df, window_length, step_size, step_size)
+    records = []
+
+    # import mlflow lazily so tests can stub it easily
+    try:
+        import mlflow
+    except ImportError:
+        mlflow = None
+        logger.warning(
+            "MLflow is not installed; skipping tracking for walk_forward_train."
+        )
+
+    for i, (train, test) in enumerate(windows):
+        run_context = (
+            mlflow.start_run(run_name=f"window_{i}") if mlflow else nullcontext()
+        )
+        with run_context:
+            if model_type == "mean":
+                pred = train["return"].mean()
+            else:
+                raise ValueError(f"Unsupported model type: {model_type}")
+
+            rmse = float(((test["return"] - pred) ** 2).mean() ** 0.5)
+            if mlflow:
+                mlflow.log_metric("rmse", rmse)
+
+            records.append(
+                {
+                    "window": i,
+                    "train_end": int(train.index.max()),
+                    "test_start": int(test.index.min()),
+                    "rmse": rmse,
+                }
+            )
+
+    return pd.DataFrame.from_records(records)
+
+
+@log_exceptions
+def main() -> pd.DataFrame | None:
+    init_logging()
+    """Run rolling backtests for all configured symbols and log summary."""
+    cfg = load_config()
+
+    # ``walk_forward_configs`` allows supplying explicit configuration
+    # dictionaries for each symbol.  If not provided we simply iterate over
+    # the symbol list in the base config.
+    cfgs = cfg.get("walk_forward_configs")
+    if cfgs:
+        configs = cfgs
+    else:
+        symbols = cfg.get("symbols") or [cfg.get("symbol")]
+        configs = []
+        for sym in symbols:
+            cfg_sym = _config_to_dict(cfg)
+            cfg_sym["symbol"] = sym
+            configs.append(cfg_sym)
+
+    results: dict[str, dict] = {}
+    for cfg_sym in configs:
+        sym = cfg_sym.get("symbol")
+        logger.info("Running rolling backtest for %s", sym)
+        metrics = run_rolling_backtest(cfg_sym)
+        if metrics:
+            results[sym] = metrics
+
+    if not results:
+        logger.info("No backtest results")
+        return None
+
+    df = aggregate_results(results)
+    header = not _LOG_PATH.exists()
+    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(_LOG_PATH, mode="a", header=header, index=False)
+    logger.info("%s", df.to_string(index=False))
+    return df
+
+
+if __name__ == "__main__":
+    main()

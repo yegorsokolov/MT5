@@ -8,7 +8,7 @@ import joblib
 repo = Path(__file__).resolve().parent.parent
 model_path = repo / "models" / "online.joblib"
 if not model_path.exists():
-    raise SystemExit("Run train_online.py first to create online.joblib")
+    raise SystemExit("Run 'python -m mt5.train_online' first to create online.joblib")
 
 model, _ = joblib.load(model_path)
 

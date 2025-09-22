@@ -46,7 +46,7 @@ from analysis.knowledge_graph import (
 from analysis.regime_detection import periodic_reclassification
 from utils.resource_monitor import monitor, ResourceCapabilities
 from utils import load_config
-from config_models import ConfigError
+from mt5.config_models import ConfigError
 from analysis import feature_gate
 from analysis.data_lineage import log_lineage
 from analysis.fractal_features import rolling_fractal_features

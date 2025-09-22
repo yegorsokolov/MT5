@@ -31,8 +31,7 @@ import json
 import os
 
 import pandas as pd
-
-from log_utils import read_decisions
+from mt5.log_utils import read_decisions
 
 # Directory for generated review reports
 REVIEW_DIR = Path(__file__).resolve().parent.parent / "reports" / "decision_reviews"

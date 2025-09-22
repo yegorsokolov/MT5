@@ -27,8 +27,7 @@ from collections import deque
 
 import numpy as np
 import pandas as pd
-
-from metrics import PIPELINE_ANOMALY_TOTAL, PIPELINE_ANOMALY_RATE
+from mt5.metrics import PIPELINE_ANOMALY_TOTAL, PIPELINE_ANOMALY_RATE
 
 try:  # pragma: no cover - analytics optional
     from analytics.metrics_store import record_metric

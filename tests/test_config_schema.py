@@ -1,8 +1,7 @@
 import pytest
 from pydantic import ValidationError
-
-from config_models import AppConfig
-from config_schema import iter_config_fields
+from mt5.config_models import AppConfig
+from mt5.config_schema import iter_config_fields
 
 
 def test_invalid_risk_per_trade():

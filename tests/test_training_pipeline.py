@@ -8,8 +8,7 @@ import pandas as pd
 import pytest
 import types
 import numpy as np
-
-from config_models import AppConfig
+from mt5.config_models import AppConfig
 
 if "data.labels" not in sys.modules:
     def _label_fn(series, horizons):

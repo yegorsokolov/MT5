@@ -3,7 +3,7 @@
 This tutorial demonstrates how to run a simple training loop.
 
 ```bash
-python train.py --config config.yaml
+python -m mt5.train --config config.yaml
 ```
 
 ## Validating Results with Property Tests

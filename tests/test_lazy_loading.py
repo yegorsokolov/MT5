@@ -37,8 +37,7 @@ sys.modules.setdefault(
 )
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-
-from model_registry import ModelRegistry, ModelVariant, ResourceCapabilities, MODEL_REGISTRY
+from mt5.model_registry import ModelRegistry, ModelVariant, ResourceCapabilities, MODEL_REGISTRY
 
 
 @dataclass

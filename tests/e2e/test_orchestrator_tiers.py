@@ -76,7 +76,7 @@ def test_orchestrator_tiers(monkeypatch, tier, caps, expected_models, expected_f
     monkeypatch.setattr(orch, "record_metric", lambda *a, **k: None)
     monkeypatch.setattr(orch, "send_alert", lambda msg: None)
     monkeypatch.setattr(orch, "risk_manager", types.SimpleNamespace(status=lambda: {}))
-    import scheduler
+    from mt5 import scheduler
     monkeypatch.setattr(scheduler, "subscribe_retrain_events", lambda *a, **k: None)
 
     # Avoid background coroutines

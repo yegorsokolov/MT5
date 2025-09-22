@@ -8,8 +8,7 @@ process exits.
 import os
 import time
 import logging
-
-from log_utils import setup_logging
+from mt5.log_utils import setup_logging
 from scripts.sync_artifacts import register_shutdown_hook, sync_artifacts
 
 _LOGGING_INITIALIZED = False

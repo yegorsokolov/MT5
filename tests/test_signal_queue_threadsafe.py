@@ -4,7 +4,7 @@ import threading
 import pandas as pd
 import pytest
 
-import signal_queue
+from mt5 import signal_queue
 
 
 class _ThreadSafeBus:

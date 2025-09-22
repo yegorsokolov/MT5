@@ -17,11 +17,10 @@ sys.modules["telemetry"] = types.SimpleNamespace(
         create_counter=lambda *a, **k: types.SimpleNamespace(add=lambda *a, **k: None)
     ),
 )
-
-from model_registry import ModelRegistry, ResourceCapabilities
-from prediction_cache import PredictionCache
+from mt5.model_registry import ModelRegistry, ResourceCapabilities
+from mt5.prediction_cache import PredictionCache
 from services.inference_server import app
-import metrics
+from mt5 import metrics
 
 # Ensure prediction cache metrics are available without requiring the full
 # prometheus client implementation.

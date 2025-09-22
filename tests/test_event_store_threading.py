@@ -24,7 +24,7 @@ sys.modules.pop("config_models", None)
 sys.modules.pop("event_store", None)
 
 from event_store import EventStore
-import scheduler
+from mt5 import scheduler
 
 
 def _reset_scheduler_state() -> None:

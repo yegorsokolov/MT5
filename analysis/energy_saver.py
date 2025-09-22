@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from utils.resource_monitor import monitor, FutureLike
-from model_registry import select_models
+from mt5.model_registry import select_models
 from features import get_feature_pipeline
 
 

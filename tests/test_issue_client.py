@@ -34,7 +34,7 @@ def test_decision_logger_with_issue(monkeypatch):
 
 def test_replay_strategies_issue(monkeypatch, tmp_path):
     from analysis import replay
-    import log_utils
+    from mt5 import log_utils
     import types, sys
 
     decisions = pd.DataFrame({

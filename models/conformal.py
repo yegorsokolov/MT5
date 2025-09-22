@@ -9,7 +9,7 @@ import logging
 import types
 
 try:
-    import telemetry  # type: ignore
+    from mt5 import telemetry  # type: ignore
 except Exception:  # pragma: no cover - telemetry optional in tests
     telemetry = types.SimpleNamespace()  # type: ignore
 

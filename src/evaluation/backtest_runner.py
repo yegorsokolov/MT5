@@ -4,8 +4,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any, Dict
-
-from backtest import run_backtest
+from mt5.backtest import run_backtest
 from utils import load_config
 
 METADATA_FILE = Path(__file__).resolve().parents[2] / "strategies" / "metadata.json"

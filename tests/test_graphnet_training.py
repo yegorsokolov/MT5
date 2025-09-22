@@ -3,8 +3,7 @@ import pandas as pd
 import pytest
 
 torch = pytest.importorskip("torch")
-
-from train_graphnet import build_graph_examples, train_graphnet
+from mt5.train_graphnet import build_graph_examples, train_graphnet
 
 
 def _make_dataset(n_steps: int = 40, n_symbols: int = 3) -> pd.DataFrame:

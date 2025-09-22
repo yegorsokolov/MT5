@@ -20,7 +20,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.inspection import permutation_importance
 
 from analytics.metrics_store import record_metric
-from monitor_drift import DRIFT_METRICS
+from mt5.monitor_drift import DRIFT_METRICS
 
 try:  # pragma: no cover - optional dependency
     import shap  # type: ignore

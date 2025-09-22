@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover - missing optional dependencies
         return None
 
 try:  # pragma: no cover - optional during tests
-    from log_utils import setup_logging
+from mt5.log_utils import setup_logging
 except Exception:  # pragma: no cover - fallback if heavy deps missing
     def setup_logging() -> logging.Logger:  # type: ignore
         logging.basicConfig(level=logging.INFO)

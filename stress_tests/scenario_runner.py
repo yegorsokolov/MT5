@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 
 from analytics.metrics_store import record_metric
-from risk_manager import risk_manager
+from mt5.risk_manager import risk_manager
 
 
 # Historical crisis periods to replay

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, Mapping
 
 import pandas as pd
-from scheduler import schedule_retrain
+from mt5.scheduler import schedule_retrain
 
 LOGGER = logging.getLogger(__name__)
 _MLFLOW_AVAILABLE = False

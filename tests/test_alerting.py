@@ -11,7 +11,7 @@ sys.modules.pop("pydantic", None)
 sys.modules.pop("utils", None)
 
 import utils  # noqa: E402  # pylint: disable=wrong-import-position
-from config_models import AlertingConfig, AppConfig, StrategyConfig  # noqa: E402
+from mt5.config_models import AlertingConfig, AppConfig, StrategyConfig  # noqa: E402
 from utils import alerting as alert_mod  # noqa: E402
 
 

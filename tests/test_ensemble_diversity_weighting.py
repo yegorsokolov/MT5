@@ -23,11 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 _spec = importlib.util.spec_from_file_location(
-    "train_ensemble", Path(__file__).resolve().parents[1] / "train_ensemble.py"
+    "train_ensemble", Path(__file__).resolve().parents[1] / "mt5" / "train_ensemble.py"
 )
 _te = importlib.util.module_from_spec(_spec)
 assert _spec and _spec.loader
 sys.modules["train_ensemble"] = _te
+sys.modules["mt5.train_ensemble"] = _te
 _spec.loader.exec_module(_te)  # type: ignore
 main = _te.main
 

@@ -85,11 +85,15 @@ sys.modules["model_registry"] = types.SimpleNamespace(
     save_model=lambda *a, **k: None,
     ModelRegistry=types.SimpleNamespace,
 )
+sys.modules["mt5.model_registry"] = sys.modules["model_registry"]
 sys.modules["train_online"] = types.SimpleNamespace(train_online=lambda *a, **k: None)
+sys.modules["mt5.train_online"] = sys.modules["train_online"]
 sys.modules["train_rl"] = types.SimpleNamespace(launch=lambda *a, **k: 0)
+sys.modules["mt5.train_rl"] = sys.modules["train_rl"]
 sys.modules["user_risk_inputs"] = types.SimpleNamespace(
     configure_user_risk=lambda *a, **k: None
 )
+sys.modules["mt5.user_risk_inputs"] = sys.modules["user_risk_inputs"]
 import importlib.machinery
 
 sys.modules["mlflow"] = types.SimpleNamespace(
@@ -135,7 +139,7 @@ conn_mgr_stub.get_active_broker = lambda: fake_mt5
 conn_mgr_stub.failover = lambda: None
 sys.modules["brokers.connection_manager"] = conn_mgr_stub
 
-import realtime_train as rt
+from mt5 import realtime_train as rt
 
 
 class FakeQueue:

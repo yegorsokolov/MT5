@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from stress_tests.scenario_runner import StressScenarioRunner
-from risk_manager import risk_manager
+from mt5.risk_manager import risk_manager
 
 
 def test_stress_scenario_runner_creates_report(tmp_path):
