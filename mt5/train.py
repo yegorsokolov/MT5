@@ -93,17 +93,16 @@ def _run_strategy_controller(risk_target: dict | None) -> None:
 
 def _run_strategy_graph(risk_target: dict | None) -> None:
     from models.strategy_graph_controller import StrategyGraphController
-    import numpy as np
 
-    features = np.array([[1.0, 2.0]])
-    risk_profile = (risk_target or {}).get("risk", 0.5)
-    controller = StrategyGraphController(input_dim=features.shape[1])
-    graph = controller.generate(features, risk_profile)
-    data = [
-        {"price": 1.0, "ma": 0.0},
-        {"price": 2.0, "ma": 3.0},
+    market_data = [
+        {"price": 1.0, "ma": 0.9},
+        {"price": 1.1, "ma": 1.0},
+        {"price": 1.2, "ma": 1.1},
     ]
-    pnl = graph.run(data)
+    risk_profile = (risk_target or {}).get("risk", 0.5)
+    controller = StrategyGraphController()
+    graph = controller.generate(market_data, risk_profile=risk_profile)
+    pnl = graph.run(market_data)
     print(f"Strategy graph PnL: {pnl:.2f}")
 
 
