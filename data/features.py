@@ -280,8 +280,8 @@ def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
     """Merge alternative datasets into ``df``.
 
     This function loads shipping metrics, retail transactions, macro
-    indicators, news sentiment and weather series (as well as legacy
-    options/on-chain/ESG metrics) using
+    indicators, news sentiment, Kalshi prediction market aggregates and
+    weather series (as well as legacy options/on-chain/ESG metrics) using
     :func:`data.alt_data_loader.load_alt_data` and performs a
     ``merge_asof`` on ``Timestamp`` and ``Symbol``.  Missing columns are
     forward filled and remaining gaps replaced with ``0`` so downstream
@@ -316,6 +316,17 @@ def add_alt_features(df: pd.DataFrame) -> pd.DataFrame:
         "cpi",
         "interest_rate",
         "news_sentiment",
+        "kalshi_total_open_interest",
+        "kalshi_total_daily_volume",
+        "kalshi_total_block_volume",
+        "kalshi_total_high",
+        "kalshi_total_low",
+        "kalshi_market_count",
+        "kalshi_open_interest",
+        "kalshi_daily_volume",
+        "kalshi_block_volume",
+        "kalshi_high",
+        "kalshi_low",
     ]:
         if col not in df.columns:
             df[col] = 0.0

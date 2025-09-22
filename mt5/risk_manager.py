@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, TYPE_CHECKING
 import asyncio
 import os
@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from mt5.scheduler import start_scheduler
+from core.context_hub import context_hub
 from risk import risk_of_ruin
 from risk.budget_allocator import BudgetAllocator
 from risk.net_exposure import NetExposure
@@ -135,6 +136,18 @@ class RiskManager:
         self.equity = initial_capital
         self.peak_equity = self.equity
 
+        context_hub.update(
+            "risk",
+            {
+                "metrics": asdict(self.metrics),
+                "max_drawdown": self.max_drawdown,
+                "max_total_drawdown": self.max_total_drawdown,
+                "max_var": self.max_var,
+                "allow_hedging": self.allow_hedging,
+                "quiet_windows": list(self.quiet_windows),
+            },
+        )
+
     def update_drawdown_limits(self, daily: float, total: float) -> None:
         """Update drawdown limits and reset session statistics.
 
@@ -153,12 +166,21 @@ class RiskManager:
         self.metrics.daily_loss = 0.0
         self.metrics.trading_halted = False
         self.peak_equity = self.equity
+        context_hub.update(
+            "risk",
+            {
+                "max_drawdown": self.max_drawdown,
+                "max_total_drawdown": self.max_total_drawdown,
+                "metrics": asdict(self.metrics),
+            },
+        )
 
     def set_allow_hedging(self, allow: bool) -> None:
         """Toggle ability to hold offsetting long/short positions."""
 
         self.allow_hedging = allow
         self.net_exposure.allow_hedging = allow
+        context_hub.update("risk", {"allow_hedging": self.allow_hedging})
 
     def check_drawdown(self, pnl: float) -> bool:
         """Update PnL and return whether drawdown limits are breached.
@@ -392,6 +414,7 @@ class RiskManager:
         affected instruments.
         """
         self.quiet_windows = windows
+        context_hub.update("risk", {"quiet_windows": list(self.quiet_windows)})
 
     def update(
         self,
@@ -523,6 +546,17 @@ class RiskManager:
         self.currency_exposure.snapshot(net)
         self.exposure_matrix.snapshot(net)
         self._snapshot_risk()
+        context_hub.update(
+            "risk",
+            {
+                "metrics": asdict(self.metrics),
+                "max_drawdown": self.max_drawdown,
+                "max_total_drawdown": self.max_total_drawdown,
+                "max_var": self.max_var,
+                "allow_hedging": self.allow_hedging,
+                "quiet_windows": list(self.quiet_windows),
+            },
+        )
 
     def _snapshot_risk(self, path: str = "reports/risk") -> None:
         """Persist latest risk metrics for dashboard consumption."""
