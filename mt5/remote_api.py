@@ -218,7 +218,7 @@ async def _handle_resource_breach(reason: str) -> None:
 
 CERT_FILE = Path("certs/api.crt")
 KEY_FILE = Path("certs/api.key")
-api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 API_KEY: Optional[str] = None
 AUDIT_SECRET: Optional[str] = None
@@ -342,7 +342,11 @@ def _audit_log(key: str, action: str, status: int) -> None:
 @app.middleware("http")
 async def _rate_limiter(request: Request, call_next):
     client = request.client.host if request.client else "unknown"
-    key = request.headers.get("x-api-key") or client
+    key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("x-api-key")
+        or client
+    )
     action = request.url.path
     if not _allow_request(key):
         _audit_log(key, action, 429)
@@ -760,7 +764,7 @@ async def bot_logs(bot_id: str, lines: int = 50, _: None = Depends(authorize)):
 
 
 if __name__ == "__main__":
-    init_logging()
+    init_remote_api()
     if not CERT_FILE.exists() or not KEY_FILE.exists():
         raise RuntimeError("SSL certificate or key file missing")
     uvicorn.run(

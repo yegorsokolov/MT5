@@ -44,7 +44,8 @@
 | mlflow.tracking_uri | Remote MLflow tracking URI; empty string keeps local logging | **** |  |
 | mlflow.username | MLflow username when basic auth is enabled | **** |  |
 | mlflow.password | MLflow password for basic auth | **** |  |
-| alerting.slack_webhook | Slack webhook URL used for alert delivery | **None** |  |
+| alerting.telegram_bot_token | Telegram bot token used for alert delivery | **None** |  |
+| alerting.telegram_chat_id | Telegram chat identifier receiving alerts | **None** |  |
 | alerting.smtp.host |  | **** |  |
 | alerting.smtp.port |  | **587** | **>= 0, <= 65535** |
 | alerting.smtp.username |  | **** |  |
