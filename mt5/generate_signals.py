@@ -980,6 +980,9 @@ def main():
         models, online_model, cfg
     )
     hist_path_pq = Path(__file__).resolve().parent / "data" / "history.parquet"
+    symbols = cfg.get("symbols") or (
+        [cfg.get("symbol")] if cfg.get("symbol") else None
+    )
     if hist_path_pq.exists():
         df = load_history_parquet(hist_path_pq)
     else:
@@ -987,7 +990,10 @@ def main():
         sym = cfg.get("symbol")
         df = load_history_config(sym, cfg, cfg_root)
         df.to_parquet(hist_path_pq, index=False)
-    df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+    if isinstance(symbols, str):
+        symbols = [symbols]
+    if symbols and "Symbol" in df.columns:
+        df = df[df["Symbol"].isin(symbols)]
 
     # Catch up on any missed ticks since last processed timestamp
     if last_ts is not None and "Timestamp" in df.columns:
