@@ -1,5 +1,6 @@
 """Generate per-tick probability signals for the EA."""
 from mt5.log_utils import setup_logging, log_exceptions, log_predictions
+import mt5.log_utils as log_utils
 
 from pathlib import Path
 import os
@@ -45,6 +46,12 @@ from models.conformal import (
 
 _LOGGING_INITIALIZED = False
 
+_CACHE_ENV_VAR = "MT5_CACHE_DIR"
+_CACHE_CFG_KEY = "cache_dir"
+_CACHE_SUBDIR = "cache"
+_HISTORY_CACHE_FILENAME = "history.parquet"
+_MACRO_CACHE_FILENAME = "macro.csv"
+
 
 def init_logging() -> logging.Logger:
     """Initialise structured logging for signal generation."""
@@ -60,6 +67,44 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_THRESHOLD_KEY = "default"
+
+
+def _resolve_cache_dir(cfg: Mapping[str, Any] | None = None) -> Path:
+    """Return the directory used for local caches.
+
+    Configuration overrides via ``cache_dir`` take precedence, followed by the
+    ``MT5_CACHE_DIR`` environment variable.  When no overrides are supplied the
+    helper falls back to ``LOG_DIR / "cache"``.
+    """
+
+    override: Path | None = None
+    if isinstance(cfg, Mapping):
+        raw_override = cfg.get(_CACHE_CFG_KEY)
+        if raw_override:
+            try:
+                override = Path(raw_override)
+            except TypeError:  # pragma: no cover - defensive conversion
+                try:
+                    override = Path(str(raw_override))
+                except Exception:  # pragma: no cover - defensive conversion
+                    override = None
+    if override is None:
+        env_override = os.getenv(_CACHE_ENV_VAR)
+        if env_override:
+            try:
+                override = Path(env_override)
+            except TypeError:  # pragma: no cover - defensive conversion
+                override = None
+
+    if override is not None:
+        return override.expanduser()
+
+    base_dir = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parents[1] / "logs")
+    try:
+        base_path = Path(base_dir)
+    except TypeError:  # pragma: no cover - defensive conversion
+        base_path = Path(__file__).resolve().parents[1] / "logs"
+    return base_path.expanduser() / _CACHE_SUBDIR
 
 
 def _normalise_thresholds(
@@ -840,6 +885,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config()
+    cache_dir = _resolve_cache_dir(cfg)
     account_id = _validate_account_id(
         os.getenv("MT5_ACCOUNT_ID") or cfg.get("account_id")
     )
@@ -979,7 +1025,7 @@ def main():
     regime_thresholds, default_threshold = _resolve_threshold_metadata(
         models, online_model, cfg
     )
-    hist_path_pq = Path(__file__).resolve().parent / "data" / "history.parquet"
+    hist_path_pq = cache_dir / _HISTORY_CACHE_FILENAME
     symbols = cfg.get("symbols") or (
         [cfg.get("symbol")] if cfg.get("symbol") else None
     )
@@ -989,6 +1035,7 @@ def main():
         cfg_root = Path(__file__).resolve().parent
         sym = cfg.get("symbol")
         df = load_history_config(sym, cfg, cfg_root)
+        hist_path_pq.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(hist_path_pq, index=False)
     if isinstance(symbols, str):
         symbols = [symbols]
@@ -1005,7 +1052,7 @@ def main():
     df = make_features(df)
 
     # optional macro indicators merged on timestamp
-    macro_path = Path(__file__).resolve().parent / "data" / "macro.csv"
+    macro_path = cache_dir / _MACRO_CACHE_FILENAME
     if macro_path.exists():
         macro = pd.read_csv(macro_path)
         macro["Timestamp"] = pd.to_datetime(macro["Timestamp"])

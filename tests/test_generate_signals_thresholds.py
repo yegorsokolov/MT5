@@ -36,7 +36,9 @@ log_utils_stub = _make_module(
     log_predictions=lambda *args, **kwargs: None,
     log_exceptions=_identity,
 )
+log_utils_stub.LOG_DIR = Path.cwd() / "logs"
 sys.modules["log_utils"] = log_utils_stub
+sys.modules.setdefault("mt5.log_utils", log_utils_stub)
 
 state_manager_stub = _make_module(
     "state_manager",
@@ -185,6 +187,29 @@ sys.modules.setdefault("models.conformal", conformal_stub)
 from mt5 import generate_signals  # type: ignore  # noqa: E402
 
 assert not LOG_CALLS
+
+
+def test_resolve_cache_dir_defaults_to_logs(tmp_path, monkeypatch):
+    monkeypatch.delenv("MT5_CACHE_DIR", raising=False)
+    monkeypatch.setattr(generate_signals.log_utils, "LOG_DIR", tmp_path, raising=False)
+    result = generate_signals._resolve_cache_dir({})
+    assert result == tmp_path / "cache"
+
+
+def test_resolve_cache_dir_honours_env_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(generate_signals.log_utils, "LOG_DIR", tmp_path, raising=False)
+    override = tmp_path / "alt"
+    monkeypatch.setenv("MT5_CACHE_DIR", str(override))
+    result = generate_signals._resolve_cache_dir({})
+    assert result == override
+
+
+def test_resolve_cache_dir_prefers_config_over_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(generate_signals.log_utils, "LOG_DIR", tmp_path, raising=False)
+    monkeypatch.setenv("MT5_CACHE_DIR", str(tmp_path / "ignored"))
+    cfg_override = tmp_path / "cfg"
+    result = generate_signals._resolve_cache_dir({"cache_dir": str(cfg_override)})
+    assert result == cfg_override
 
 
 def test_init_logging_configures_once():

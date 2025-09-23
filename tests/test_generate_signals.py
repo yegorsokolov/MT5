@@ -21,7 +21,9 @@ log_utils_stub.setup_logging = lambda *a, **k: logging.getLogger(
 )
 log_utils_stub.log_predictions = lambda *a, **k: None
 log_utils_stub.log_exceptions = lambda func: func
+log_utils_stub.LOG_DIR = Path.cwd() / "logs"
 sys.modules.setdefault("mt5.log_utils", log_utils_stub)
+sys.modules.setdefault("log_utils", log_utils_stub)
 
 state_manager_stub = types.ModuleType("mt5.state_manager")
 state_manager_stub.load_runtime_state = lambda *a, **k: None
@@ -182,7 +184,13 @@ def run_generate_signals(monkeypatch):
     trade_log_stub.TradeLog = _TradeLog
     monkeypatch.setitem(sys.modules, "data.trade_log", trade_log_stub)
 
-    def _runner(df: pd.DataFrame, config: dict[str, object]):
+    def _runner(
+        df: pd.DataFrame,
+        config: dict[str, object],
+        *,
+        history_exists: bool = True,
+        macro_exists: bool = False,
+    ):
         observed: list[pd.DataFrame] = []
 
         def _capture_make_features(data: pd.DataFrame) -> pd.DataFrame:
@@ -191,12 +199,19 @@ def run_generate_signals(monkeypatch):
 
         monkeypatch.setattr(generate_signals, "make_features", _capture_make_features)
         monkeypatch.setattr(generate_signals, "load_config", lambda: config)
-        monkeypatch.setattr(generate_signals, "load_history_parquet", lambda path: df.copy())
+        monkeypatch.setattr(
+            generate_signals, "load_history_parquet", lambda path: df.copy()
+        )
+        monkeypatch.setattr(
+            generate_signals, "load_history_config", lambda *a, **k: df.copy()
+        )
         original_exists = generate_signals.Path.exists
 
         def _fake_exists(self):
             if self.name == "history.parquet":
-                return True
+                return history_exists
+            if self.name == "macro.csv":
+                return macro_exists
             return original_exists(self)
 
         monkeypatch.setattr(generate_signals.Path, "exists", _fake_exists, raising=False)
@@ -254,3 +269,82 @@ def test_main_uses_symbols_list_when_primary_symbol_missing(run_generate_signals
     filtered = observed[0]
     assert len(filtered) == len(df)
     assert filtered["Symbol"].tolist() == df["Symbol"].tolist()
+
+
+def test_main_caches_history_under_log_dir(run_generate_signals, tmp_path, monkeypatch):
+    """History parquet should be written beneath the configured cache dir."""
+
+    monkeypatch.delenv("MT5_CACHE_DIR", raising=False)
+    monkeypatch.setattr(generate_signals.log_utils, "LOG_DIR", tmp_path, raising=False)
+
+    df = pd.DataFrame(
+        {
+            "Timestamp": pd.to_datetime(["2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z"]),
+            "Symbol": ["EURUSD", "EURUSD"],
+            "ma_cross": [1, 1],
+            "rsi_14": [60.0, 62.0],
+        }
+    )
+    config = {
+        "account_id": "123",
+        "symbol": "EURUSD",
+        "ensemble_models": [],
+        "model_versions": [],
+    }
+
+    writes: list[Path] = []
+
+    def _capture_to_parquet(self, path, *args, **kwargs):
+        writes.append(Path(path))
+        return None
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _capture_to_parquet)
+
+    run_generate_signals(df, config, history_exists=False)
+
+    assert writes, "history parquet was not written"
+    history_path = writes[0]
+    expected_dir = tmp_path / "cache"
+    assert history_path.parent == expected_dir
+    assert expected_dir.exists()
+
+
+def test_main_loads_macro_from_cache_dir(run_generate_signals, tmp_path, monkeypatch):
+    """Macro CSV lookups should resolve through the cache helper."""
+
+    monkeypatch.delenv("MT5_CACHE_DIR", raising=False)
+    monkeypatch.setattr(generate_signals.log_utils, "LOG_DIR", tmp_path, raising=False)
+
+    df = pd.DataFrame(
+        {
+            "Timestamp": pd.to_datetime(["2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z"]),
+            "Symbol": ["EURUSD", "EURUSD"],
+            "ma_cross": [1, 1],
+            "rsi_14": [60.0, 62.0],
+        }
+    )
+    config = {
+        "account_id": "123",
+        "symbol": "EURUSD",
+        "ensemble_models": [],
+        "model_versions": [],
+    }
+
+    macro_calls: list[Path] = []
+
+    def _fake_read_csv(path, *args, **kwargs):
+        macro_calls.append(Path(path))
+        return pd.DataFrame(
+            {
+                "Timestamp": ["2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z"],
+                "macro_signal": [1.0, 1.0],
+            }
+        )
+
+    monkeypatch.setattr(pd, "read_csv", _fake_read_csv)
+
+    run_generate_signals(df, config, macro_exists=True)
+
+    assert macro_calls, "macro CSV was not read"
+    expected_path = tmp_path / "cache" / "macro.csv"
+    assert macro_calls[0] == expected_path
