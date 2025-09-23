@@ -8,6 +8,19 @@ UPDATE_SERVICE_NAME=mt5bot-update
 UPDATE_SERVICE_FILE="/etc/systemd/system/${UPDATE_SERVICE_NAME}.service"
 UPDATE_TIMER_FILE="/etc/systemd/system/${UPDATE_SERVICE_NAME}.timer"
 
+# Ensure a placeholder environment file exists for operators to populate.
+ENV_FILE="${REPO_DIR}/.env"
+if [[ ! -e "${ENV_FILE}" ]]; then
+    echo "Creating ${ENV_FILE} (populate it using .env.template)"
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        sudo -u "${SUDO_USER}" touch "${ENV_FILE}"
+    else
+        : > "${ENV_FILE}"
+    fi
+else
+    echo "Found existing ${ENV_FILE}"
+fi
+
 # Ensure runtime controller/config secrets exist for the services.
 if [[ "${RUNTIME_SECRETS_SKIP:-0}" == "1" ]]; then
     echo "Skipping runtime secret generation (RUNTIME_SECRETS_SKIP=1)"

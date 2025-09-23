@@ -66,5 +66,8 @@ analysis/news_impact.parquet
 docs/_build/
 site/
 
+# Local environment overrides
+.env
+
 # Test log archives
 logs/test_runs/
