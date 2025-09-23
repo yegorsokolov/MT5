@@ -317,6 +317,11 @@ automatically.
    * If prompted for your password, type it and press `Enter`.
    * If you see a `Permission denied` message, run `chmod +x scripts/install_service.sh`
      once and rerun the previous command.
+   * During installation the script runs `deploy/bootstrap_influxdb.sh` to
+     initialise a local InfluxDB instance. The generated URL, organisation,
+     bucket and token are written to `deploy/secrets/influx.env`, which the
+     systemd unit consumes automatically. Set `SKIP_INFLUX_BOOTSTRAP=1` when
+     invoking the installer if you prefer to manage these credentials yourself.
 3. When the script finishes, run `sudo systemctl status mt5bot` and press
    `Enter` to confirm that it reports `Active: active (running)`. Press `q` to
    exit the status viewer.

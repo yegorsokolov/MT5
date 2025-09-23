@@ -7,6 +7,7 @@ Type=simple
 WorkingDirectory={{REPO_PATH}}
 ExecStartPre={{REPO_PATH}}/deploy/prestart.sh
 ExecStart=/usr/bin/env python3 -m mt5.remote_api
+EnvironmentFile=-{{REPO_PATH}}/deploy/secrets/influx.env
 Restart=on-failure
 RestartSec=5
 WatchdogSec=30
