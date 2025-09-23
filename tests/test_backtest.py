@@ -33,7 +33,7 @@ sys.modules.setdefault("utils", types.SimpleNamespace(load_config=lambda: {}))
 sys.modules.setdefault(
     "utils.resource_monitor",
     types.SimpleNamespace(
-        monitor=types.SimpleNamespace(capability_tier=lambda: "lite")
+        monitor=types.SimpleNamespace(capability_tier="lite")
     ),
 )
 sys.modules.setdefault(
@@ -44,13 +44,21 @@ sys.modules.setdefault(
 
 class _DummyExecutionEngine:
     def __init__(self, *args, **kwargs):
-        pass
+        self.volumes = []
 
     def start_optimizer(self):
         return None
 
     def stop_optimizer(self):
         return None
+
+    def record_volume(self, value):
+        self.volumes.append(value)
+
+    async def place_order(self, *args, **kwargs):
+        quantity = kwargs.get("quantity", 0.0)
+        mid = kwargs.get("mid", 1.0)
+        return {"filled": quantity, "avg_price": mid}
 
     def execute(self, *args, **kwargs):
         return types.SimpleNamespace(status="filled", price=1.0)
@@ -97,14 +105,13 @@ sys.modules["data"] = data_mod
 sys.modules["data.history"] = data_history
 sys.modules["data.features"] = data_features
 sys.modules["data.feature_scaler"] = data_feature_scaler
-sys.modules.setdefault(
-    "crypto_utils",
-    types.SimpleNamespace(
-        _load_key=lambda *a, **k: None,
-        encrypt=lambda *a, **k: b"",
-        decrypt=lambda *a, **k: b"",
-    ),
+crypto_utils_stub = types.SimpleNamespace(
+    _load_key=lambda *a, **k: None,
+    encrypt=lambda *a, **k: b"",
+    decrypt=lambda *a, **k: b"",
 )
+sys.modules.setdefault("crypto_utils", crypto_utils_stub)
+sys.modules.setdefault("mt5.crypto_utils", crypto_utils_stub)
 sys.modules.setdefault(
     "state_manager",
     types.SimpleNamespace(
@@ -139,9 +146,16 @@ sys.modules.setdefault(
     types.SimpleNamespace(ray=ray_stub, init=lambda **k: None, shutdown=lambda: None),
 )
 
+tuning_module = types.ModuleType("tuning")
+sys.modules.setdefault("tuning", tuning_module)
+sys.modules.setdefault(
+    "tuning.evolutionary_search",
+    types.SimpleNamespace(run_evolutionary_search=lambda *a, **k: None),
+)
+
 # Load backtest module with dummy logging to avoid import side effects
 spec = importlib.util.spec_from_file_location(
-    "backtest", Path(__file__).resolve().parents[1] / "backtest.py"
+    "backtest", Path(__file__).resolve().parents[1] / "mt5" / "backtest.py"
 )
 sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=object)
 backtest = importlib.util.module_from_spec(spec)
@@ -152,6 +166,8 @@ sys.modules["log_utils"] = types.SimpleNamespace(
 spec.loader.exec_module(backtest)
 
 backtest.init_logging = lambda: logging.getLogger("test_backtest")
+backtest.log_backtest_stats = lambda metrics: None
+sys.modules.setdefault("mt5.backtest", backtest)
 
 trailing_stop = backtest.trailing_stop
 
@@ -181,3 +197,66 @@ def test_compute_metrics_near_constant_positive_returns():
     metrics = backtest.compute_metrics(returns)
     assert metrics["sharpe"] == 0.0
     assert all(np.isfinite(list(metrics.values())))
+
+
+def test_compute_metrics_no_trades():
+    returns = pd.Series(dtype=float)
+    metrics = backtest.compute_metrics(returns)
+    assert metrics == {
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "total_return": 0.0,
+        "return": 0.0,
+        "win_rate": 0.0,
+    }
+
+
+def test_backtest_on_df_no_trades():
+    class ZeroModel:
+        def predict_proba(self, X):
+            return np.column_stack([np.ones(len(X)), np.zeros(len(X))])
+
+    df = pd.DataFrame(
+        {
+            "return": [0.0, 0.0, 0.0],
+            "mid": [1.0, 1.0, 1.0],
+            "Bid": [1.0, 1.0, 1.0],
+            "Ask": [1.0, 1.0, 1.0],
+            "BidVolume": [1.0, 1.0, 1.0],
+            "AskVolume": [1.0, 1.0, 1.0],
+        }
+    )
+    metrics = backtest.backtest_on_df(df, ZeroModel(), {})
+    assert metrics["trade_count"] == 0
+    assert metrics["total_return"] == 0.0
+    assert metrics["return"] == 0.0
+    assert metrics["max_drawdown"] == 0.0
+    assert metrics["win_rate"] == 0.0
+
+
+def test_backtest_cli_eval_fn_uses_total_return(monkeypatch):
+    captured = {}
+
+    def fake_run_backtest(cfg, external_strategy=None):
+        captured["cfg"] = cfg
+        return {
+            "total_return": 0.123,
+            "return": 9.0,
+            "max_drawdown": -4.5,
+            "trade_count": 7,
+        }
+
+    def fake_run_search(eval_fn, space):
+        captured["space"] = space
+        captured["result"] = eval_fn({"alpha": 1.0})
+
+    monkeypatch.setattr(backtest, "run_backtest", fake_run_backtest)
+    monkeypatch.setattr(
+        sys.modules["tuning.evolutionary_search"], "run_evolutionary_search", fake_run_search
+    )
+    monkeypatch.setattr(sys, "argv", ["backtest", "--evo-search"])
+
+    backtest.main()
+
+    assert captured["result"] == (-0.123, -4.5, -7.0)
+    assert "alpha" in captured["cfg"]

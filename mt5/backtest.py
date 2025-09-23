@@ -97,20 +97,39 @@ def trailing_stop(
 
 
 def compute_metrics(returns: pd.Series) -> dict:
+    if returns.empty:
+        return {
+            "sharpe": 0.0,
+            "max_drawdown": 0.0,
+            "total_return": 0.0,
+            "return": 0.0,
+            "win_rate": 0.0,
+        }
+
     cumulative = (1 + returns).cumprod()
     peak = cumulative.cummax()
     drawdown = (cumulative - peak) / peak
+    drawdown_min = drawdown.min()
     std = returns.std(ddof=0)
     if not np.isfinite(std) or std < 1e-12:
         sharpe = 0.0
     else:
-        sharpe = np.sqrt(252) * returns.mean() / std
-    return {
-        "sharpe": sharpe,
-        "max_drawdown": drawdown.min() * 100,
-        "total_return": cumulative.iloc[-1] - 1,
-        "win_rate": (returns > 0).mean() * 100,
+        sharpe = float(np.sqrt(252) * returns.mean() / std)
+
+    max_drawdown = float(drawdown_min) if np.isfinite(drawdown_min) else 0.0
+    total_return = float(cumulative.iloc[-1] - 1)
+    win_rate = float((returns > 0).mean()) * 100
+    if not np.isfinite(win_rate):
+        win_rate = 0.0
+
+    metrics = {
+        "sharpe": float(sharpe),
+        "max_drawdown": max_drawdown * 100,
+        "total_return": total_return,
+        "win_rate": win_rate,
     }
+    metrics["return"] = metrics["total_return"]
+    return metrics
 
 
 def bootstrap_sharpe_pvalue(
@@ -280,6 +299,8 @@ def backtest_on_df(
         returns, skipped_trades, partial_fills = asyncio.run(_run_backtest())
         series = pd.Series(returns)
         metrics = compute_metrics(series)
+        metrics["trade_count"] = int(len(series))
+        metrics.setdefault("return", metrics.get("total_return", 0.0))
         metrics["skipped_trades"] = skipped_trades
         metrics["partial_fills"] = partial_fills
         metrics["sharpe_p_value"] = bootstrap_sharpe_pvalue(series)
@@ -540,8 +561,13 @@ def main():
             trial_cfg = deepcopy(cfg)
             trial_cfg.update(params)
             metrics = run_backtest(trial_cfg, external_strategy=args.external_strategy)
+            total_return = metrics.get("total_return")
             return (
-                -float(metrics.get("return", 0.0)),
+                -float(
+                    total_return
+                    if total_return is not None
+                    else metrics.get("return", 0.0)
+                ),
                 float(metrics.get("max_drawdown", 0.0)),
                 -float(metrics.get("trade_count", metrics.get("trades", 0.0))),
             )
