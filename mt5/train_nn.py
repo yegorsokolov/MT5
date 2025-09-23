@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from mt5.log_utils import log_exceptions
+from mt5.log_utils import log_exceptions, LOG_DIR
 
 from pathlib import Path
 import random
@@ -13,6 +13,7 @@ import joblib
 import math
 import contextlib
 import types
+import shutil
 try:  # pragma: no cover - optional dependency
     from analytics import mlflow_client as mlflow
 except Exception:  # pragma: no cover - fallback for tests
@@ -102,6 +103,20 @@ logger = logging.getLogger(__name__)
 _ORCHESTRATOR_LOCK = threading.Lock()
 _ORCHESTRATOR_STARTED = False
 _ORCHESTRATOR_INSTANCE: Orchestrator | None = None
+
+
+def _artifact_dir(cfg: dict | None = None) -> Path:
+    """Return the directory where training artifacts are stored."""
+
+    override = None
+    if cfg is not None:
+        override = cfg.get("artifact_dir")
+    if override:
+        path = Path(override)
+    else:
+        path = LOG_DIR / "nn_artifacts"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def ensure_orchestrator_started() -> Orchestrator | None:
@@ -349,8 +364,41 @@ def main(
             torch.cuda.set_device(rank)
         dist.init_process_group(backend, rank=rank, world_size=world_size)
     device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
-    root = Path(__file__).resolve().parent
-    root.joinpath("data").mkdir(exist_ok=True)
+    module_root = Path(__file__).resolve().parent
+    root = _artifact_dir(cfg)
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    fallback_roots: list[Path] = []
+    data_override = cfg.get("data_dir")
+    if data_override:
+        try:
+            override_path = Path(data_override)
+        except TypeError:
+            override_path = Path(str(data_override))
+        fallback_roots.append(override_path)
+    for candidate in (module_root / "data", module_root.parent / "data", Path.cwd() / "data"):
+        if candidate.exists() and candidate != data_dir:
+            fallback_roots.append(candidate)
+
+    def _ensure_history(symbol: str) -> None:
+        pq_name = f"{symbol}_history.parquet"
+        csv_name = f"{symbol}_history.csv"
+        dest_parquet = data_dir / pq_name
+        dest_csv = data_dir / csv_name
+        if dest_parquet.exists() or dest_csv.exists():
+            return
+        for base in fallback_roots:
+            src_parquet = base / pq_name
+            if src_parquet.exists():
+                dest_parquet.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_parquet, dest_parquet)
+                return
+            src_csv = base / csv_name
+            if src_csv.exists():
+                dest_csv.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_csv, dest_csv)
+                return
+
     start_time = datetime.now()
 
     try:  # avoid starting nested runs
@@ -369,6 +417,7 @@ def main(
     chunk_size = cfg.get("stream_chunk_size", 100_000)
     stream = cfg.get("stream_history", False)
     for sym in symbols:
+        _ensure_history(sym)
         if stream:
             # Stream history in chunks to avoid loading the full dataset into memory
             pq_path = root / "data" / f"{sym}_history.parquet"

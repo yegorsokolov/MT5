@@ -30,7 +30,7 @@ except Exception:  # pragma: no cover - utils may be stubbed in tests
 
 
 from data.features import make_features
-from mt5.log_utils import setup_logging, log_exceptions
+from mt5.log_utils import setup_logging, log_exceptions, LOG_DIR
 from mt5.signal_queue import get_signal_backend, publish_dataframe_async
 from data.sanitize import sanitize_ticks
 from data.feature_scaler import FeatureScaler
@@ -618,7 +618,13 @@ async def tick_worker(
 async def train_realtime():
     init_logging()
     cfg = load_config()
-    root = Path(__file__).resolve().parent
+    artifact_override = cfg.get("artifact_dir")
+    if artifact_override:
+        root = Path(artifact_override)
+    else:
+        root = LOG_DIR / "nn_artifacts"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "data").mkdir(parents=True, exist_ok=True)
     recorder = LiveRecorder(
         root / "data" / "live",
         batch_size=cfg.get("recorder_batch_size", 500),

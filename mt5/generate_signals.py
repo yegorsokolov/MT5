@@ -564,7 +564,13 @@ def meta_transformer_signals(df, features, cfg):
     from models.multi_head import MultiHeadTransformer
     from utils.resource_monitor import monitor
 
-    model_path = Path(__file__).resolve().parent / "model_transformer.pt"
+    artifact_root = cfg.get("artifact_dir") if isinstance(cfg, Mapping) else None
+    if artifact_root:
+        model_dir = Path(artifact_root)
+    else:
+        base_dir = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parents[1] / "logs")
+        model_dir = Path(base_dir) / "nn_artifacts"
+    model_path = model_dir / "model_transformer.pt"
     if not model_path.exists():
         return np.zeros(len(df))
 
