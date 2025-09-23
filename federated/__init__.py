@@ -2,5 +2,5 @@
 
 raise ImportError(
     "Federated learning helpers have been removed from the installable package. "
-    "Refer to archive/bot_apis/federated for the preserved implementation."
+    "The HTTP endpoints have been retired and are no longer distributed."
 )
