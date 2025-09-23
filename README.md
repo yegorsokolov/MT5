@@ -188,14 +188,20 @@ match your environment.
    * Wait until you see the prompt again; the repository is now saved in a new
      `MT5` folder.
 6. **Enter the project directory.** Type `cd MT5` and press `Enter`.
-7. **Create an isolated Python environment (recommended).**
+7. **Create the environment file.**
+   * Type `touch .env` and press `Enter` to create an empty environment file.
+     The repository ignores this file so secrets stay local to the machine.
+   * Open `.env.template` in a text editor to review the available keys. Copy
+     the entries your deployment needs into `.env` and replace the placeholder
+     values with your secrets before starting background services.
+8. **Create an isolated Python environment (recommended).**
    * Type `python3 -m venv .venv` and press `Enter`. This creates a `.venv`
      folder that keeps dependencies separate from the rest of the system.
    * Activate the environment by typing `source .venv/bin/activate` and
      pressing `Enter`. The prompt changes to show `(.venv)` on the left.
    * Whenever you open a new terminal in the future, repeat the activation step
      before running project commands.
-8. **Install system packages and core Python dependencies.**
+9. **Install system packages and core Python dependencies.**
    * Ensure you are still inside the repository and the virtual environment is
      active.
    * Run `./scripts/setup_ubuntu.sh` and press `Enter`. This command:
@@ -207,20 +213,20 @@ match your environment.
    * If you have an NVIDIA GPU and want CUDA support, run the script with
      `WITH_CUDA=1 ./scripts/setup_ubuntu.sh` instead. The script automatically
      installs the CUDA toolkit when the flag is set.
-9. **Fetch the required data files.**
+10. **Fetch the required data files.**
    * Type `dvc pull` and press `Enter`.
    * If this is the first time you are using DVC, it may ask you to authenticate
      with or configure the remote storage. Follow the on-screen instructions or
      contact your administrator for the credentials.
-10. **Verify the environment.**
+11. **Verify the environment.**
     * Type `python -m utils.environment` and press `Enter`.
     * The command checks that all dependencies are available and prints the
       detected hardware. If something is missing it explains how to fix it.
-11. **Start a training run.**
+12. **Start a training run.**
     * Type `python -m mt5.train` and press `Enter`.
     * The training process logs progress to the terminal. Leave the window open
       until the run completes. Press `Ctrl`+`C` if you need to stop it early.
-12. **(Optional) Local management.** The `mt5.remote_api` module now exposes
+13. **(Optional) Local management.** The `mt5.remote_api` module now exposes
     asynchronous helpers for starting or stopping realtime bots, tailing logs
     and triggering maintenance tasks without hosting the archived FastAPI
     service. Configure `API_KEY` and `AUDIT_LOG_SECRET` in your environment and
@@ -233,11 +239,16 @@ runs `pip install -r requirements-core.txt` and enables the `mt5bot.service` on
 first boot so the service starts automatically after the VM finishes
 provisioning.
 
+On every platform the `.env` file starts empty. Populate it with the secrets
+your deployment requires using `.env.template` as a guide before enabling
+background services or running automation scripts.
+
 macOS:
 
 ```bash
 git clone https://github.com/USERNAME/MT5.git
 cd MT5
+touch .env  # create blank environment file and fill it using .env.template
 pip install -r requirements-core.txt
 dvc pull  # fetch raw/history data
 python -m utils.environment  # verify deps and adjust config
@@ -249,6 +260,7 @@ Windows PowerShell:
 ```powershell
 git clone https://github.com/USERNAME/MT5.git
 Set-Location MT5
+New-Item -Path . -Name .env -ItemType File -Force | Out-Null  # blank env file, fill from .env.template
 pip install -r requirements-core.txt
 dvc pull  # fetch raw/history data
 python -m utils.environment
