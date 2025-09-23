@@ -8,6 +8,7 @@ from pathlib import Path
 import random
 import threading
 from typing import Callable, TypeVar, Any
+import sys
 
 import joblib
 import math
@@ -103,6 +104,53 @@ logger = logging.getLogger(__name__)
 _ORCHESTRATOR_LOCK = threading.Lock()
 _ORCHESTRATOR_STARTED = False
 _ORCHESTRATOR_INSTANCE: Orchestrator | None = None
+
+
+class _MlflowRunGuard:
+    """Manage MLflow run lifecycle around ``main``."""
+
+    def __init__(self, cfg: dict | None):
+        self._cm = None
+        self._started = False
+        try:  # pragma: no cover - optional dependency
+            import mlflow as _mlflow  # type: ignore
+
+            active = getattr(_mlflow, "active_run", None)
+            if callable(active):
+                active = active()
+            else:
+                active = None
+        except Exception:  # noqa: BLE001
+            active = None
+
+        if active is not None:
+            return
+
+        try:  # pragma: no cover - mlflow optional
+            result = mlflow.start_run("training_nn", cfg)
+        except Exception:  # noqa: BLE001
+            return
+
+        if hasattr(result, "__enter__") and hasattr(result, "__exit__"):
+            try:
+                result.__enter__()
+            except Exception:  # noqa: BLE001
+                return
+            self._cm = result
+        elif result:
+            self._started = True
+
+    def close(self, exc_type=None, exc=None, tb=None) -> None:
+        if self._cm is not None:
+            try:  # pragma: no cover - mlflow optional
+                self._cm.__exit__(exc_type, exc, tb)
+            except Exception:  # noqa: BLE001
+                pass
+        elif self._started:
+            try:  # pragma: no cover - mlflow optional
+                mlflow.end_run()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _artifact_dir(cfg: dict | None = None) -> Path:
@@ -329,18 +377,13 @@ def log_shap_importance(
 
 
 @log_exceptions
-def main(
-    rank: int = 0,
-    world_size: int | None = None,
-    cfg: dict | None = None,
+def _main_impl(
+    rank: int,
+    world_size: int,
+    cfg: dict,
     resume_online: bool = False,
     transfer_from: str | None = None,
 ) -> float:
-    ensure_orchestrator_started()
-    if cfg is None:
-        cfg = load_config()
-    if world_size is None:
-        world_size = 1
     tier = cfg.get("capability_tier", "auto")
     if tier == "auto":
         tier = monitor.capabilities.capability_tier()
@@ -400,18 +443,6 @@ def main(
                 return
 
     start_time = datetime.now()
-
-    try:  # avoid starting nested runs
-        import mlflow as _mlflow  # type: ignore
-
-        active = _mlflow.active_run()
-    except Exception:  # pragma: no cover - mlflow optional
-        active = None
-    if active is None:
-        try:
-            mlflow.start_run("training_nn", cfg)
-        except Exception:  # pragma: no cover - mlflow optional
-            pass
     symbols = cfg.get("symbols") or [cfg.get("symbol")]
     dfs = []
     chunk_size = cfg.get("stream_chunk_size", 100_000)
@@ -1645,6 +1676,33 @@ def main(
     return acc
 
 
+def main(
+    rank: int = 0,
+    world_size: int | None = None,
+    cfg: dict | None = None,
+    resume_online: bool = False,
+    transfer_from: str | None = None,
+) -> float:
+    ensure_orchestrator_started()
+    if cfg is None:
+        cfg = load_config()
+    if world_size is None:
+        world_size = 1
+
+    guard = _MlflowRunGuard(cfg)
+    try:
+        return _main_impl(
+            rank,
+            world_size,
+            cfg,
+            resume_online=resume_online,
+            transfer_from=transfer_from,
+        )
+    finally:
+        exc_type, exc, tb = sys.exc_info()
+        guard.close(exc_type, exc, tb)
+
+
 def launch(cfg: dict | None = None) -> float:
     ensure_orchestrator_started()
     if cfg is None:
@@ -1772,7 +1830,7 @@ if __name__ == "__main__":
     elif args.evo_search:
         from copy import deepcopy
         from tuning.evolutionary_search import run_evolutionary_search
-from mt5.backtest import run_backtest
+        from mt5.backtest import run_backtest
 
         def eval_fn(params: dict) -> tuple[float, float, float]:
             trial_cfg = deepcopy(cfg)
