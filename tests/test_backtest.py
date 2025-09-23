@@ -161,7 +161,9 @@ sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=object)
 backtest = importlib.util.module_from_spec(spec)
 backtest.setup_logging = lambda: None
 sys.modules["log_utils"] = types.SimpleNamespace(
-    setup_logging=lambda: None, log_exceptions=lambda f: f
+    setup_logging=lambda: None,
+    log_exceptions=lambda f: f,
+    LOG_DIR=Path.cwd() / "logs",
 )
 spec.loader.exec_module(backtest)
 
@@ -337,3 +339,108 @@ def test_run_backtest_handles_missing_symbol_column(monkeypatch):
     assert captured["rows"] == len(df)
     assert "Symbol" not in captured["columns"]
     assert captured["returns"] == df["return"].tolist()
+
+
+def _sample_history(symbol: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Timestamp": pd.date_range("2024-01-01", periods=2, freq="D"),
+            "return": [0.01, -0.02],
+            "mid": [1.0, 1.01],
+            "Bid": [0.99, 1.0],
+            "Ask": [1.01, 1.02],
+            "BidVolume": [100.0, 110.0],
+            "AskVolume": [95.0, 90.0],
+        }
+    )
+
+
+def _stub_backtest_execution(monkeypatch):
+    monkeypatch.setattr(backtest, "make_features", lambda frame: frame)
+    monkeypatch.setattr(backtest.joblib, "load", lambda path: object())
+    monkeypatch.setattr(
+        backtest,
+        "backtest_on_df",
+        lambda df, model, cfg, **kwargs: {"return": 0.0},
+    )
+
+
+def test_run_backtest_caches_history_in_default_log_dir(tmp_path, monkeypatch):
+    symbol = "AAA"
+    base_df = _sample_history(symbol)
+    loaded_df = base_df.copy()
+    loaded_df["Symbol"] = symbol
+    log_dir = tmp_path / "logs"
+
+    monkeypatch.setattr(backtest, "LOG_DIR", log_dir)
+    monkeypatch.setattr(backtest.log_utils, "LOG_DIR", log_dir, raising=False)
+    monkeypatch.setattr(
+        backtest,
+        "load_history_config",
+        lambda sym, cfg, cfg_root: base_df.copy(),
+    )
+
+    load_calls: list[Path] = []
+
+    def fake_load_history_parquet(path):
+        load_calls.append(Path(path))
+        return loaded_df.copy()
+
+    monkeypatch.setattr(backtest, "load_history_parquet", fake_load_history_parquet)
+
+    writes: list[Path] = []
+
+    def fake_to_parquet(self, path, *args, **kwargs):
+        writes.append(Path(path))
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+
+    _stub_backtest_execution(monkeypatch)
+
+    metrics = backtest.run_backtest({"symbol": symbol})
+
+    expected_path = log_dir / "cache" / "history.parquet"
+    assert metrics["return"] == 0.0
+    assert writes == [expected_path]
+    assert load_calls == [expected_path]
+    assert expected_path.parent.exists()
+
+
+def test_run_backtest_honours_history_cache_override(tmp_path, monkeypatch):
+    symbol = "BBB"
+    base_df = _sample_history(symbol)
+    loaded_df = base_df.copy()
+    loaded_df["Symbol"] = symbol
+    override_path = tmp_path / "custom" / "history_override.parquet"
+
+    monkeypatch.setattr(
+        backtest,
+        "load_history_config",
+        lambda sym, cfg, cfg_root: base_df.copy(),
+    )
+
+    load_calls: list[Path] = []
+
+    def fake_load_history_parquet(path):
+        load_calls.append(Path(path))
+        return loaded_df.copy()
+
+    monkeypatch.setattr(backtest, "load_history_parquet", fake_load_history_parquet)
+
+    writes: list[Path] = []
+
+    def fake_to_parquet(self, path, *args, **kwargs):
+        writes.append(Path(path))
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+
+    _stub_backtest_execution(monkeypatch)
+
+    metrics = backtest.run_backtest(
+        {"symbol": symbol, "history_cache_path": str(override_path)}
+    )
+
+    assert metrics["return"] == 0.0
+    assert writes == [override_path]
+    assert load_calls == [override_path]
+    assert override_path.parent.exists()

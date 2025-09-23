@@ -55,6 +55,33 @@ LOG_DIR = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parents[1] / "l
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 BACKTEST_STATS = LOG_DIR / "backtest_stats.csv"
 
+CACHE_SUBDIR = "cache"
+HISTORY_CACHE_FILENAME = "history.parquet"
+
+
+def _default_history_cache_dir() -> Path:
+    """Return the default directory for cached history parquet files."""
+
+    base_dir = Path(getattr(log_utils, "LOG_DIR", LOG_DIR))
+    return base_dir / CACHE_SUBDIR
+
+
+def _resolve_history_cache_path(cfg: dict) -> Path:
+    """Determine the cache path for historical data based on ``cfg``."""
+
+    cache_override = cfg.get("history_cache_path")
+    if cache_override:
+        path = Path(cache_override).expanduser()
+        if path.suffix:
+            return path
+        return path / HISTORY_CACHE_FILENAME
+
+    cache_dir_override = cfg.get("history_cache_dir")
+    if cache_dir_override:
+        return Path(cache_dir_override).expanduser() / HISTORY_CACHE_FILENAME
+
+    return _default_history_cache_dir() / HISTORY_CACHE_FILENAME
+
 
 BASE_FEATURES = [
     "return",
@@ -334,7 +361,7 @@ def run_backtest(
         df = sim.to_history_df(book)
         df["Symbol"] = cfg.get("symbol", "SIM")
     else:
-        data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
+        data_path = _resolve_history_cache_path(cfg)
         symbols = cfg.get("symbols") or (
             [cfg.get("symbol")] if cfg.get("symbol") else None
         )
@@ -349,7 +376,7 @@ def run_backtest(
                 dfs.append(df_sym)
             df_all = pd.concat(dfs, ignore_index=True)
             save_path = data_path
-            save_path.parent.mkdir(exist_ok=True)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
             save_path.unlink(missing_ok=True)
             df_all.to_parquet(save_path, index=False)
 
@@ -419,7 +446,7 @@ def run_rolling_backtest(
         df = sim.to_history_df(book)
         df["Symbol"] = cfg.get("symbol", "SIM")
     else:
-        data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
+        data_path = _resolve_history_cache_path(cfg)
         symbols = cfg.get("symbols") or (
             [cfg.get("symbol")] if cfg.get("symbol") else None
         )
@@ -433,7 +460,7 @@ def run_rolling_backtest(
                 df_sym["Symbol"] = sym
                 dfs.append(df_sym)
             df_all = pd.concat(dfs, ignore_index=True)
-            data_path.parent.mkdir(exist_ok=True)
+            data_path.parent.mkdir(parents=True, exist_ok=True)
             df_all.to_parquet(data_path, index=False)
 
         df = load_history_parquet(data_path)
