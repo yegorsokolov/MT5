@@ -32,6 +32,7 @@ from mt5.train_rl import (
     DiscreteTradingEnv,
     RLLibTradingEnv,
     HierarchicalTradingEnv,
+    artifact_dir,
 )
 import asyncio
 from mt5.signal_queue import publish_dataframe_async, get_signal_backend
@@ -669,15 +670,12 @@ def _require_sb3_qrdqn(algo: str):
 
 def rl_signals(df, features, cfg):
     """Return probability-like signals from a trained RL agent."""
-    model_path = Path(__file__).resolve().parent / "model_rl.zip"
-    model_rllib = Path(__file__).resolve().parent / "model_rllib"
-    model_recurrent = (
-        Path(__file__).resolve().parent
-        / "models"
-        / "recurrent_rl"
-        / "recurrent_model.zip"
-    )
-    model_hierarchical = Path(__file__).resolve().parent / "model_hierarchical.zip"
+    artifact_root = artifact_dir(cfg)
+    models_dir = artifact_root / "models"
+    model_path = models_dir / "model_rl.zip"
+    model_rllib = models_dir / "model_rllib"
+    model_recurrent = models_dir / "recurrent_rl" / "recurrent_model.zip"
+    model_hierarchical = models_dir / "model_hierarchical.zip"
     algo = cfg.get("rl_algorithm", "PPO").upper()
     if algo == "RLLIB":
         if not model_rllib.exists():

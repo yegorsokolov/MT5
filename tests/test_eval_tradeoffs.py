@@ -77,10 +77,14 @@ def test_eval_reports_tradeoffs(monkeypatch, caplog):
     monkeypatch.setitem(sys.modules, "metrics", metrics_stub)
 
     from mt5 import eval_rl
+    from mt5.train_rl import artifact_dir
 
     assert not log_calls
 
-    model_path = Path(eval_rl.__file__).resolve().parent / "model_rl.zip"
+    cfg = utils_stub.load_config()
+    artifact_root = artifact_dir(cfg)
+    model_path = artifact_root / "models" / "model_rl.zip"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
     model_path.touch()
 
     with caplog.at_level("INFO"):

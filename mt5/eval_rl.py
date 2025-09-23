@@ -16,7 +16,7 @@ from data.history import (
     load_history_config,
 )
 from data.features import make_features
-from mt5.train_rl import TradingEnv, DiscreteTradingEnv
+from mt5.train_rl import TradingEnv, DiscreteTradingEnv, artifact_dir
 from rl.multi_objective import pareto_frontier
 from mt5.log_utils import setup_logging, log_exceptions
 
@@ -93,7 +93,9 @@ def feature_list(df: pd.DataFrame) -> List[str]:
 def main() -> None:
     init_logging()
     cfg = load_config()
-    root = Path(__file__).resolve().parent
+    root = artifact_dir(cfg)
+    models_dir = root / "models"
+    reports_dir = root / "reports"
     df = load_dataset(cfg, root)
     features = feature_list(df)
 
@@ -137,7 +139,7 @@ def main() -> None:
     else:
         raise ValueError(f"Unknown rl_algorithm {algo}")
 
-    model_path = root / "model_rl.zip"
+    model_path = models_dir / "model_rl.zip"
     if not model_path.exists():
         raise FileNotFoundError("model_rl.zip not found, please train the agent first")
     model = model_cls.load(model_path, env=env)
@@ -161,7 +163,8 @@ def main() -> None:
             reward_vectors.append([obj.get(k, 0.0) for k in env.objectives])
 
     curve = pd.DataFrame({"step": range(len(equities)), "equity": equities})
-    curve.to_csv(root / "equity_curve_rl.csv", index=False)
+    equity_curve_path = reports_dir / "equity_curve_rl.csv"
+    curve.to_csv(equity_curve_path, index=False)
     metrics = compute_metrics(pd.Series(returns))
 
     logger.info("Evaluation metrics:")
@@ -170,7 +173,7 @@ def main() -> None:
             logger.info("%s: %.2f%%", k, v)
         else:
             logger.info("%s: %.4f", k, v)
-    logger.info("Equity curve saved to %s", root / "equity_curve_rl.csv")
+    logger.info("Equity curve saved to %s", equity_curve_path)
     if objective_sums:
         logger.info("Objective trade-offs:")
         for k, v in objective_sums.items():
