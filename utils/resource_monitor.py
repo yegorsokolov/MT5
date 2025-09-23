@@ -254,6 +254,12 @@ class ResourceMonitor:
             self.capabilities,
             self.capability_tier,
         )
+        try:
+            from mt5.controller_settings import auto_tune_controller_settings
+
+            auto_tune_controller_settings(self)
+        except Exception:
+            self.logger.debug("Controller auto-tune failed", exc_info=True)
         ttl = _plugin_cache_ttl()
         if ttl > 0:
             try:

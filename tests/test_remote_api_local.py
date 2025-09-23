@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import importlib.machinery as machinery
+from dataclasses import asdict
 from pathlib import Path
 import sys
 import types
@@ -32,8 +33,6 @@ class DummyProc:
 def remote_api(tmp_path, monkeypatch):
     monkeypatch.setenv("API_KEY", "token")
     monkeypatch.setenv("AUDIT_LOG_SECRET", "audit")
-    monkeypatch.setenv("MAX_RSS_MB", "0")
-    monkeypatch.setenv("MAX_CPU_PCT", "0")
 
     logger = types.SimpleNamespace(
         info=lambda *a, **k: None,
@@ -107,6 +106,10 @@ def remote_api(tmp_path, monkeypatch):
     sys.modules["prometheus_client"] = prometheus_stub
 
     mt5_pkg = importlib.import_module("mt5")
+    from mt5.controller_settings import get_controller_settings, update_controller_settings
+
+    original_settings = get_controller_settings()
+    update_controller_settings(max_rss_mb=None, max_cpu_pct=None, watchdog_usec=0)
 
     risk_manager_stub = types.ModuleType("mt5.risk_manager")
     risk_manager_stub.risk_manager = types.SimpleNamespace(
@@ -238,6 +241,7 @@ def remote_api(tmp_path, monkeypatch):
 
     asyncio.get_event_loop().run_until_complete(ra.shutdown())
     ra.bots.clear()
+    update_controller_settings(**asdict(original_settings))
 
 
 def test_start_stop_and_status(remote_api):

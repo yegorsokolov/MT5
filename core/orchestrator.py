@@ -32,6 +32,12 @@ from strategy.shadow_runner import ShadowRunner
 from strategy.evolution_lab import EvolutionLab
 from mt5.ai_control import AIControlPlane
 from core.context_hub import context_hub
+from mt5.controller_settings import (
+    ControllerSettings,
+    auto_tune_controller_settings,
+    get_controller_settings,
+    subscribe_controller_settings,
+)
 
 
 DEFAULT_SERVICE_CMDS: dict[str, list[str]] = {
@@ -77,6 +83,12 @@ class Orchestrator:
     def __init__(self, mon: ResourceMonitor = monitor) -> None:
         self.logger = logging.getLogger(__name__)
         self.monitor = mon
+        auto_tune_controller_settings(self.monitor)
+        self._controller_settings: ControllerSettings = get_controller_settings()
+        self._apply_controller_settings(self._controller_settings)
+        self._settings_unsub = subscribe_controller_settings(
+            self._apply_controller_settings
+        )
         # Disable automatic refresh; orchestrator controls timing
         self.registry = model_registry.ModelRegistry(
             monitor=self.monitor, auto_refresh=False
@@ -105,6 +117,19 @@ class Orchestrator:
             risk_manager=risk_manager,
             monitor=self.monitor,
         )
+
+    def _apply_controller_settings(self, settings: ControllerSettings) -> None:
+        """Apply controller limits to the resource monitor."""
+
+        self._controller_settings = settings
+        try:
+            self.monitor.max_rss_mb = settings.max_rss_mb
+        except Exception:
+            pass
+        try:
+            self.monitor.max_cpu_pct = settings.max_cpu_pct
+        except Exception:
+            pass
 
     def _publish_context(self) -> None:
         """Broadcast a consolidated snapshot to the context hub."""
@@ -190,12 +215,7 @@ class Orchestrator:
                 self.checkpoint = loader()
 
     def _start(self) -> None:
-        max_rss = float(os.getenv("MAX_RSS_MB", "0") or 0) or None
-        max_cpu = float(os.getenv("MAX_CPU_PCT", "0") or 0) or None
-        if max_rss is not None:
-            self.monitor.max_rss_mb = max_rss
-        if max_cpu is not None:
-            self.monitor.max_cpu_pct = max_cpu
+        auto_tune_controller_settings(self.monitor)
         starter = getattr(risk_manager_module, "ensure_scheduler_started", None)
         started = False
         if callable(starter):
