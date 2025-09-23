@@ -6,6 +6,13 @@ This guide shows how to launch a basic training run.
 python -m mt5.train --config config.yaml
 ```
 
+## Training artifacts
+
+The neural trainer (`mt5.train_nn`) persists checkpoints, feature caches and
+inference exports under `logs/nn_artifacts` by default. Set the top-level
+`artifact_dir` key in your configuration when you need to place these outputs
+elsewhere (for example on a shared volume for automated uploads).
+
 ```{doctest}
 >>> 1 + 1
 2
