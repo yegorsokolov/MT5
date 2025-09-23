@@ -382,6 +382,48 @@ def _load_train_rl(monkeypatch: pytest.MonkeyPatch):
     return module
 
 
+def test_train_rl_main_lazily_starts_orchestrator(monkeypatch: pytest.MonkeyPatch):
+    class _Stop(Exception):
+        pass
+
+    orchestrator_calls = {"count": 0}
+    orch_module = types.ModuleType("core.orchestrator")
+
+    class _StubOrchestrator:
+        @staticmethod
+        def start():
+            orchestrator_calls["count"] += 1
+            return object()
+
+    orch_module.Orchestrator = _StubOrchestrator
+    orch_module.__spec__ = importlib.machinery.ModuleSpec(
+        "core.orchestrator", loader=None
+    )
+    monkeypatch.setitem(sys.modules, "core.orchestrator", orch_module)
+    monkeypatch.delitem(sys.modules, "train_rl", raising=False)
+
+    module = _load_train_rl(monkeypatch)
+
+    assert orchestrator_calls["count"] == 0
+
+    def _raise_history(*_a, **_k):
+        raise _Stop()
+
+    monkeypatch.setattr(module, "load_history_config", _raise_history, raising=False)
+    cfg = {"symbols": ["SYM"]}
+
+    with pytest.raises(_Stop):
+        module.main(0, 1, cfg)
+
+    assert orchestrator_calls["count"] == 1
+
+    with pytest.raises(_Stop):
+        module.main(0, 1, cfg)
+
+    assert orchestrator_calls["count"] == 1
+    module._ORCHESTRATOR_STARTED = False
+    module._ORCHESTRATOR_INSTANCE = None
+    monkeypatch.delitem(sys.modules, "train_rl", raising=False)
 def test_train_rl_cli_missing_torch(monkeypatch: pytest.MonkeyPatch):
     """CLI should surface a helpful error when PyTorch is unavailable."""
 
