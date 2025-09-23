@@ -1,2 +1,6 @@
-"""Compatibility wrapper for :mod:`bot_apis.federated.client`."""
-from bot_apis.federated.client import *  # noqa: F401,F403
+"""Stub entry point for the detached federated client helpers."""
+
+raise ImportError(
+    "Federated client utilities are no longer shipped. Consult "
+    "archive/bot_apis/federated/client.py for the archived implementation."
+)
