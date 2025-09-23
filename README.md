@@ -934,7 +934,10 @@ This removes the external messaging bridge and simplifies deployment.
 crossover and RSI filter so trades are only taken when multiple conditions
 confirm the direction.  Additional optional filters check for Bollinger band
 breakouts, volume spikes and even macro indicators when a `macro.csv` file is
-present. Configuration values for these filters live in `config.yaml`.  The
+present within the writable cache directory. Configuration values for these
+filters live in `config.yaml`.  By default cached histories and macro data are
+stored under `logs/cache`; set `cache_dir` in the configuration or the
+`MT5_CACHE_DIR` environment variable to relocate them. The
 pipeline now also considers news sentiment scores and cross-asset momentum
 to further refine entries. Set `enable_news_trading` to `false` to automatically
 block trades within a few minutes of scheduled high impact events pulled from
