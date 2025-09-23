@@ -79,7 +79,7 @@ def _prepare_config(
 
 
 def train_cmd(args: argparse.Namespace) -> None:
-from mt5.train import main as train_main
+    from mt5.train import main as train_main
 
     tmp, previous_config, env_modified = _prepare_config(
         args.config,
@@ -103,7 +103,7 @@ from mt5.train import main as train_main
 
 
 def train_nn_cmd(args: argparse.Namespace) -> None:
-from mt5.train_nn import main as train_nn_main
+    from mt5.train_nn import main as train_nn_main
 
     tmp, previous_config, env_modified = _prepare_config(
         args.config,
@@ -127,7 +127,7 @@ from mt5.train_nn import main as train_nn_main
 
 
 def train_rl_cmd(args: argparse.Namespace) -> None:
-from mt5.train_rl import ensure_torch_available, main as train_rl_main
+    from mt5.train_rl import ensure_torch_available, main as train_rl_main
 
     tmp, previous_config, env_modified = _prepare_config(
         args.config,
