@@ -260,3 +260,80 @@ def test_backtest_cli_eval_fn_uses_total_return(monkeypatch):
 
     assert captured["result"] == (-0.123, -4.5, -7.0)
     assert "alpha" in captured["cfg"]
+
+
+def test_run_backtest_retains_multi_symbol_data(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Symbol": ["AAA", "BBB"],
+            "Timestamp": pd.date_range("2024-01-01", periods=2, freq="D"),
+            "return": [0.01, -0.02],
+        }
+    )
+
+    original_exists = backtest.Path.exists
+
+    def fake_exists(path_self):
+        if str(path_self).endswith("history.parquet"):
+            return True
+        return original_exists(path_self)
+
+    monkeypatch.setattr(backtest.Path, "exists", fake_exists)
+    monkeypatch.setattr(backtest, "load_history_parquet", lambda path: df.copy())
+    monkeypatch.setattr(backtest, "make_features", lambda frame: frame)
+    monkeypatch.setattr(backtest.joblib, "load", lambda path: object())
+
+    captured = {}
+
+    def fake_backtest_on_df(dataframe, model, cfg, **kwargs):
+        captured["symbols"] = dataframe["Symbol"].tolist()
+        captured["rows"] = len(dataframe)
+        return {"return": 0.0}
+
+    monkeypatch.setattr(backtest, "backtest_on_df", fake_backtest_on_df)
+
+    cfg = {"symbols": ["AAA", "BBB"], "symbol": None}
+    metrics = backtest.run_backtest(cfg)
+
+    assert metrics["return"] == 0.0
+    assert captured["symbols"] == ["AAA", "BBB"]
+    assert captured["rows"] == 2
+
+
+def test_run_backtest_handles_missing_symbol_column(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Timestamp": pd.date_range("2024-02-01", periods=3, freq="D"),
+            "return": [0.0, 0.1, -0.05],
+        }
+    )
+
+    original_exists = backtest.Path.exists
+
+    def fake_exists(path_self):
+        if str(path_self).endswith("history.parquet"):
+            return True
+        return original_exists(path_self)
+
+    monkeypatch.setattr(backtest.Path, "exists", fake_exists)
+    monkeypatch.setattr(backtest, "load_history_parquet", lambda path: df.copy())
+    monkeypatch.setattr(backtest, "make_features", lambda frame: frame)
+    monkeypatch.setattr(backtest.joblib, "load", lambda path: object())
+
+    captured = {}
+
+    def fake_backtest_on_df(dataframe, model, cfg, **kwargs):
+        captured["rows"] = len(dataframe)
+        captured["columns"] = list(dataframe.columns)
+        captured["returns"] = dataframe["return"].tolist()
+        return {"return": 0.0}
+
+    monkeypatch.setattr(backtest, "backtest_on_df", fake_backtest_on_df)
+
+    cfg = {"symbol": "EURUSD"}
+    metrics = backtest.run_backtest(cfg)
+
+    assert metrics["return"] == 0.0
+    assert captured["rows"] == len(df)
+    assert "Symbol" not in captured["columns"]
+    assert captured["returns"] == df["return"].tolist()
