@@ -119,7 +119,7 @@ def _run_tuning(risk_target: dict | None) -> None:
 
 def _run_evolutionary_search(risk_target: dict | None) -> None:
     from copy import deepcopy
-from mt5.backtest import run_backtest
+    from mt5.backtest import run_backtest
     from tuning.evolutionary_search import run_evolutionary_search
 
     cfg = load_config().model_dump()
