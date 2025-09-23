@@ -220,10 +220,12 @@ match your environment.
     * Type `python -m mt5.train` and press `Enter`.
     * The training process logs progress to the terminal. Leave the window open
       until the run completes. Press `Ctrl`+`C` if you need to stop it early.
-12. **(Optional) Remote management.** The FastAPI control surface that used to
-    ship as `mt5.remote_api` is no longer part of the supported toolkit. If you
-    still require it, run the archived app under
-    `archive/bot_apis/remote_api.py` as a standalone service.
+12. **(Optional) Local management.** The `mt5.remote_api` module now exposes
+    asynchronous helpers for starting or stopping realtime bots, tailing logs
+    and triggering maintenance tasks without hosting the archived FastAPI
+    service. Configure `API_KEY` and `AUDIT_LOG_SECRET` in your environment and
+    call the helpers directly (or through the gRPC bridge) from your
+    orchestration scripts.
 
 For cloud deployments (EC2, Proxmox or other Ubuntu instances) supply
 `deploy/cloud-init.yaml` as the user-data script. It installs apt dependencies,
@@ -259,10 +261,10 @@ or signal generation as needed. Optional components can be installed via
 extras, for example `pip install .[rl]` or `pip install .[heavy]`.
 
 After the initial training run you can expose monitoring dashboards or other
-services as needed. The management API that previously launched via
-`python -m mt5.remote_api` has been detached from the supported
-distribution; consult `archive/bot_apis` if you plan to host it
-independently.
+services as needed. The FastAPI management surface that previously launched via
+`python -m mt5.remote_api` now lives in `archive/bot_apis` for teams that still
+host it separately, while the core process-control features are implemented in
+`mt5.remote_api` for direct use inside your automation.
 
 ### Background services
 
@@ -340,9 +342,11 @@ the following command and press `Ctrl`+`C` when you want to stop watching:
 tail -f logs/app.log
 ```
 
-Edit `deploy/mt5bot.service` if you need a different entry point. The legacy
-remote API lives in `archive/bot_apis/remote_api.py` should you decide to
-host it as an external process.
+Edit `deploy/mt5bot.service` if you need a different entry point. The archived
+FastAPI implementation remains available under
+`archive/bot_apis/remote_api.py` for teams that host it as an external
+process, while most deployments can interact with bots through the
+in-process helpers in `mt5.remote_api`.
 
 ### Reproducibility
 
@@ -1077,21 +1081,22 @@ Liveness and readiness probes now call `scripts/healthcheck.py` so Kubernetes ca
 restart unhealthy pods. Configuration values such as the path to `config.yaml`
 can be overridden via environment variables defined in the deployment manifest.
 
-## Remote Management API
+## Remote Management Helpers
 
-The FastAPI application that previously exposed lifecycle management endpoints
-has been removed from the installable package. Its source now lives in
-`archive/bot_apis/remote_api.py`, allowing teams to run it as a standalone
-service when programmatic control over bots is required. The compatibility
-module `mt5.remote_api` now raises an `ImportError` so projects notice the
-dependency on this optional component. Launch the archived script directly
-(for example `python archive/bot_apis/remote_api.py`) if you still rely on the
-REST endpoints; they behave exactly as they did in earlier releases, including
-support for TLS and risk-manager integration via environment variables such as
-`MAX_PORTFOLIO_DRAWDOWN`.
+`mt5.remote_api` now implements the lifecycle controls that were previously
+served via FastAPI. Call `mt5.remote_api.init_remote_api()` (or
+`mt5.remote_api.ensure_initialized()`) after configuring `API_KEY` and
+`AUDIT_LOG_SECRET` to load secrets, start background monitors and expose async
+helpers for starting bots, tailing logs, updating configuration, pushing
+metrics and scheduling maintenance jobs. The gRPC bridge calls the same helper
+functions and continues to enforce the configured API key.
 
-If you self-host the archived service, the operational notes below continue to
-apply.
+Teams that still prefer an HTTP control surface can run the archived FastAPI
+application from `archive/bot_apis/remote_api.py`. Launch it directly (for
+example `python archive/bot_apis/remote_api.py`) to recover the REST and
+WebSocket endpoints, including TLS support and risk-manager integration via
+environment variables such as `MAX_PORTFOLIO_DRAWDOWN`. The operational notes
+below apply to that standalone deployment.
 
 ### API Key Rotation
 

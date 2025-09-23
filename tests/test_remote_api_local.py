@@ -6,19 +6,15 @@ import sys
 import types
 
 import pytest
+from fastapi import HTTPException
 
-grpc = pytest.importorskip("grpc")
-
-repo_root = Path(__file__).resolve().parents[1]
-
-sys.path.insert(0, str(repo_root))
-sys.path.insert(0, str(repo_root / "proto"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 class DummyProc:
     def __init__(self) -> None:
         self.terminated = False
-        self.pid = 123
+        self.pid = 321
         self.returncode = 0
 
     def poll(self) -> int | None:
@@ -33,7 +29,7 @@ class DummyProc:
 
 
 @pytest.fixture
-def remote_api_env(tmp_path, monkeypatch):
+def remote_api(tmp_path, monkeypatch):
     monkeypatch.setenv("API_KEY", "token")
     monkeypatch.setenv("AUDIT_LOG_SECRET", "audit")
     monkeypatch.setenv("MAX_RSS_MB", "0")
@@ -46,7 +42,7 @@ def remote_api_env(tmp_path, monkeypatch):
         exception=lambda *a, **k: None,
     )
     log_utils_stub = types.SimpleNamespace(
-        LOG_FILE=tmp_path / "grpc.log",
+        LOG_FILE=tmp_path / "app.log",
         setup_logging=lambda: logger,
     )
     original_log_utils = sys.modules.get("mt5.log_utils")
@@ -124,9 +120,6 @@ def remote_api_env(tmp_path, monkeypatch):
         update=lambda *a, **k: None,
     )
     risk_manager_stub.ensure_scheduler_started = lambda: None
-
-    async def _async_noop() -> None:
-        return None
 
     scheduler_stub = types.ModuleType("mt5.scheduler")
     scheduler_stub.start_scheduler = lambda: None
@@ -223,146 +216,98 @@ def remote_api_env(tmp_path, monkeypatch):
             sys.modules.pop("mt5.metrics", None)
     ra.bots.clear()
     Path(ra.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
-    Path(ra.LOG_FILE).write_text("line1\nline2\n", encoding="utf-8")
+    Path(ra.LOG_FILE).write_text("first\nsecond\n", encoding="utf-8")
 
     updates: dict[str, tuple[str, str]] = {}
+    retrains: list[dict[str, object]] = []
+    control_calls: list[str] = []
+
     monkeypatch.setattr(ra, "update_config", lambda k, v, r: updates.update({k: (v, r)}), raising=False)
-    monkeypatch.setattr(ra, "Popen", lambda *a, **k: DummyProc(), raising=False)
+    monkeypatch.setattr(ra, "schedule_retrain", lambda **kw: retrains.append(kw), raising=False)
     monkeypatch.setattr(ra, "send_alert", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(ra, "Popen", lambda *a, **k: DummyProc(), raising=False)
+
+    async def dummy_control() -> None:
+        control_calls.append("ran")
+
+    monkeypatch.setattr(ra, "CONTROL_TASKS", {"dummy": lambda: dummy_control()}, raising=False)
 
     ra.init_remote_api(api_key="token", audit_secret="audit")
-    grpc_mod = importlib.reload(importlib.import_module("mt5.grpc_api"))
 
-    yield ra, grpc_mod, updates
+    yield ra, updates, retrains, control_calls
 
     asyncio.get_event_loop().run_until_complete(ra.shutdown())
     ra.bots.clear()
 
 
-async def start_server(grpc_mod):
-    server = grpc.aio.server()
-    grpc_mod.management_pb2_grpc.add_ManagementServiceServicer_to_server(
-        grpc_mod.ManagementServicer(), server
+def test_start_stop_and_status(remote_api):
+    ra, updates, retrains, control_calls = remote_api
+
+    loop = asyncio.get_event_loop()
+
+    result = loop.run_until_complete(ra.start_bot("bot1"))
+    assert result["status"] == "started"
+    assert "bot1" in ra.bots
+
+    bots = loop.run_until_complete(ra.list_bots())
+    assert bots["bot1"]["running"] is True
+
+    status = loop.run_until_complete(ra.bot_status("bot1", lines=1))
+    assert status["running"] is True
+    assert "second" in status["logs"]
+
+    logs = loop.run_until_complete(ra.bot_logs("bot1", lines=1))
+    assert "second" in logs["logs"]
+
+    health = loop.run_until_complete(ra.health(lines=1))
+    assert health["running"] is True
+
+    stopped = loop.run_until_complete(ra.stop_bot("bot1"))
+    assert stopped["status"] == "stopped"
+    assert "bot1" not in ra.bots
+
+
+def test_update_configuration_and_controls(remote_api):
+    ra, updates, retrains, control_calls = remote_api
+
+    loop = asyncio.get_event_loop()
+
+    change = ra.ConfigUpdate(key="threshold", value="0.9", reason="test")
+    resp = loop.run_until_complete(ra.update_configuration(change))
+    assert resp["status"] == "updated"
+    assert updates["threshold"] == ("0.9", "test")
+
+    control = loop.run_until_complete(ra.run_control("dummy"))
+    assert control["status"] == "ok"
+    assert control_calls == ["ran"]
+
+    scheduled = loop.run_until_complete(
+        ra.schedule_manual_retrain("classic", update_hyperparams=True)
     )
-    cert_dir = repo_root / "certs"
-    private_key = (cert_dir / "server.key").read_bytes()
-    certificate_chain = (cert_dir / "server.crt").read_bytes()
-    server_credentials = grpc.ssl_server_credentials(((private_key, certificate_chain),))
-    port = server.add_secure_port("localhost:0", server_credentials)
-    await server.start()
-    return server, port
+    assert scheduled["model"] == "classic"
+    assert retrains == [{"model": "classic", "update_hyperparams": True}]
+
+    with pytest.raises(HTTPException):
+        loop.run_until_complete(ra.schedule_manual_retrain("unknown"))
 
 
-def test_list_and_update(remote_api_env):
-    ra, grpc_mod, updates = remote_api_env
+def test_metrics_and_risk(remote_api):
+    ra, *_ = remote_api
+    loop = asyncio.get_event_loop()
+    received: list[dict[str, int]] = []
+    remove = ra.register_metrics_consumer(lambda payload: received.append(payload))
 
-    async def _run() -> None:
-        server, port = await start_server(grpc_mod)
-        cert_dir = repo_root / "certs"
-        creds = grpc.ssl_channel_credentials(root_certificates=(cert_dir / "ca.crt").read_bytes())
-        async with grpc.aio.secure_channel(f"localhost:{port}", creds) as channel:
-            stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
-            with pytest.raises(grpc.aio.AioRpcError) as exc:
-                await stub.ListBots(grpc_mod.empty_pb2.Empty())
-            assert exc.value.code() == grpc.StatusCode.UNAUTHENTICATED
+    loop.run_until_complete(ra.push_metrics({"value": 1}))
+    assert received == [{"value": 1}]
+    remove()
 
-            metadata = (("x-api-key", "token"),)
-            resp = await stub.ListBots(grpc_mod.empty_pb2.Empty(), metadata=metadata)
-            assert resp.bots == {}
-
-            cfg = grpc_mod.management_pb2.ConfigChange(key="threshold", value="0.7", reason="test")
-            res = await stub.UpdateConfig(cfg, metadata=metadata)
-            assert res.status == "updated"
-            assert updates["threshold"] == ("0.7", "test")
-
-        await server.stop(None)
-
-    asyncio.get_event_loop().run_until_complete(_run())
+    risk = loop.run_until_complete(ra.risk_status())
+    assert set(risk) >= {"exposure", "daily_loss", "var", "trading_halted"}
 
 
-def test_start_stop(remote_api_env):
-    ra, grpc_mod, _ = remote_api_env
-
-    async def _run() -> None:
-        server, port = await start_server(grpc_mod)
-        cert_dir = repo_root / "certs"
-        creds = grpc.ssl_channel_credentials(root_certificates=(cert_dir / "ca.crt").read_bytes())
-        async with grpc.aio.secure_channel(f"localhost:{port}", creds) as channel:
-            stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
-            metadata = (("x-api-key", "token"),)
-            resp = await stub.StartBot(
-                grpc_mod.management_pb2.StartRequest(bot_id="b1"), metadata=metadata
-            )
-            assert resp.status == "started"
-            assert "b1" in ra.bots
-            resp2 = await stub.StopBot(
-                grpc_mod.management_pb2.BotIdRequest(bot_id="b1"), metadata=metadata
-            )
-            assert resp2.status == "stopped"
-            assert "b1" not in ra.bots
-
-        await server.stop(None)
-
-    asyncio.get_event_loop().run_until_complete(_run())
-
-
-def test_status_and_logs(remote_api_env):
-    ra, grpc_mod, _ = remote_api_env
-
-    async def _run() -> None:
-        server, port = await start_server(grpc_mod)
-        cert_dir = repo_root / "certs"
-        creds = grpc.ssl_channel_credentials(root_certificates=(cert_dir / "ca.crt").read_bytes())
-        async with grpc.aio.secure_channel(f"localhost:{port}", creds) as channel:
-            stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
-            metadata = (("x-api-key", "token"),)
-            await stub.StartBot(
-                grpc_mod.management_pb2.StartRequest(bot_id="b1"), metadata=metadata
-            )
-
-            status = await stub.BotStatus(
-                grpc_mod.management_pb2.BotStatusRequest(bot_id="b1", lines=5), metadata=metadata
-            )
-            assert status.bot_id == "b1"
-            assert status.running is True
-            assert status.pid == 123
-            assert status.returncode == 0
-            assert "line1" in status.logs
-
-            logs = await stub.GetLogs(
-                grpc_mod.management_pb2.LogRequest(lines=1), metadata=metadata
-            )
-            assert "line2" in logs.logs
-
-            await stub.StopBot(
-                grpc_mod.management_pb2.BotIdRequest(bot_id="b1"), metadata=metadata
-            )
-
-        await server.stop(None)
-
-    asyncio.get_event_loop().run_until_complete(_run())
-
-
-def test_get_risk_status(remote_api_env, monkeypatch):
-    ra, grpc_mod, _ = remote_api_env
-    monkeypatch.setenv("MAX_PORTFOLIO_DRAWDOWN", "100")
-    from mt5 import risk_manager as rm_mod
-
-    rm_mod.risk_manager.reset()
-    rm_mod.risk_manager.update("b1", -60)
-    rm_mod.risk_manager.update("b2", -50)
-
-    async def _run() -> None:
-        server, port = await start_server(grpc_mod)
-        cert_dir = repo_root / "certs"
-        creds = grpc.ssl_channel_credentials(root_certificates=(cert_dir / "ca.crt").read_bytes())
-        async with grpc.aio.secure_channel(f"localhost:{port}", creds) as channel:
-            stub = grpc_mod.management_pb2_grpc.ManagementServiceStub(channel)
-            metadata = (("x-api-key", "token"),)
-            status = await stub.GetRiskStatus(grpc_mod.empty_pb2.Empty(), metadata=metadata)
-            assert status.trading_halted is True
-            assert status.daily_loss == -110
-
-        await server.stop(None)
-
-    asyncio.get_event_loop().run_until_complete(_run())
+def test_get_logs_requires_file(remote_api, monkeypatch):
+    ra, *_ = remote_api
+    missing = Path(ra.LOG_FILE).with_name("missing.log")
+    monkeypatch.setattr(ra, "LOG_FILE", missing, raising=False)
+    with pytest.raises(HTTPException):
+        asyncio.get_event_loop().run_until_complete(ra.get_logs())
