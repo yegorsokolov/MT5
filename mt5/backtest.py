@@ -27,7 +27,7 @@ from data.features import make_features
 from mt5.ray_utils import ray, init as ray_init, shutdown as ray_shutdown
 
 try:  # optional metrics integration
-from mt5.metrics import (
+    from mt5.metrics import (
         SLIPPAGE_BPS,
         PARTIAL_FILL_COUNT,
         SKIPPED_TRADE_COUNT,
