@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from mt5.log_utils import setup_logging, log_exceptions
+from mt5.log_utils import setup_logging, log_exceptions, LOG_DIR
 
 from pathlib import Path
 from typing import Any, Iterable, List, cast
@@ -594,6 +594,28 @@ _ORCHESTRATOR_STARTED = False
 _ORCHESTRATOR_INSTANCE: Orchestrator | None = None
 
 
+def _artifact_dir(cfg: dict | None = None) -> Path:
+    """Return the directory used for reinforcement learning artifacts."""
+
+    override = None
+    if cfg is not None:
+        override = cfg.get("artifact_dir")
+    if override:
+        path = Path(override)
+    else:
+        path = LOG_DIR / "rl_artifacts"
+    path.mkdir(parents=True, exist_ok=True)
+    for sub in ("data", "models", "reports"):
+        (path / sub).mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def artifact_dir(cfg: dict | None = None) -> Path:
+    """Public accessor for :func:`_artifact_dir` to aid downstream modules."""
+
+    return _artifact_dir(cfg)
+
+
 def ensure_orchestrator_started() -> Orchestrator | None:
     """Ensure the orchestrator service is started before training."""
 
@@ -657,15 +679,17 @@ def main(
         device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
     else:  # pragma: no cover - torch may be stubbed
         device = "cpu"
-    root = Path(__file__).resolve().parent
-    root.joinpath("data").mkdir(exist_ok=True)
+    root = _artifact_dir(cfg)
+    data_dir = root / "data"
+    models_dir = root / "models"
+    reports_dir = root / "reports"
     if rank == 0:
         mlflow.start_run("training_rl", cfg)
 
     grad_monitor = GradientMonitor(
         explode=cfg.get("grad_explode", 1e3),
         vanish=cfg.get("grad_vanish", 1e-6),
-        out_dir=root / "reports" / "gradients",
+        out_dir=reports_dir / "gradients",
     )
     grad_callback = GradMonitorCallback(
         grad_monitor,
@@ -1151,11 +1175,12 @@ def main(
             start_iter = last_iter + 1
             logger.info("Resuming from checkpoint at iteration %s", last_iter)
         iters = max(1, int(cfg.get("rl_steps", 5)))
+        rllib_path = models_dir / "model_rllib"
         for i in range(start_iter, iters):
             model.train()
-            ckpt_path = model.save(str(root / "model_rllib"))
+            ckpt_path = model.save(str(rllib_path))
             save_checkpoint({"model_path": ckpt_path}, i, cfg.get("checkpoint_dir"))
-        checkpoint = model.save(str(root / "model_rllib"))
+        checkpoint = model.save(str(rllib_path))
         logger.info("RLlib model saved to %s", checkpoint)
         version_id = model_store.save_model(
             Path(checkpoint),
@@ -1283,17 +1308,17 @@ def main(
         cumulative_return = 0.0
         if rank == 0:
             if algo == "RECURRENTPPO":
-                rec_dir = root / "models" / "recurrent_rl"
+                rec_dir = models_dir / "recurrent_rl"
                 rec_dir.mkdir(parents=True, exist_ok=True)
                 policy_path = rec_dir / "recurrent_model"
                 model.save(policy_path)
                 logger.info("RL model saved to %s", policy_path.with_suffix(".zip"))
             elif algo == "HIERARCHICALPPO":
-                policy_path = root / "model_hierarchical"
+                policy_path = models_dir / "model_hierarchical"
                 model.save(policy_path)
                 logger.info("RL model saved to %s", policy_path.with_suffix(".zip"))
             else:
-                policy_path = root / "model_rl"
+                policy_path = models_dir / "model_rl"
                 model.save(policy_path)
                 logger.info("RL model saved to %s", policy_path.with_suffix(".zip"))
             register_policy(
@@ -1371,29 +1396,28 @@ def main(
             risk_model.learn(
                 total_timesteps=cfg.get("rl_steps", 5000), callback=grad_callback
             )
-            models_dir = root / "models"
-            models_dir.mkdir(exist_ok=True)
+            models_dir.mkdir(parents=True, exist_ok=True)
             risk_model.save(models_dir / "rl_risk_policy")
             logger.info("Risk policy saved to %s", models_dir / "rl_risk_policy.zip")
             mlflow.log_param("algorithm", algo)
             mlflow.log_param("steps", cfg.get("rl_steps", 5000))
             if algo == "RLLIB":
-                mlflow.log_artifact(str(root / "model_rllib"))
+                mlflow.log_artifact(str(models_dir / "model_rllib"))
             elif algo == "RECURRENTPPO":
                 mlflow.log_artifact(str(rec_dir / "recurrent_model.zip"))
             elif algo == "HIERARCHICALPPO":
-                mlflow.log_artifact(str(root / "model_hierarchical.zip"))
+                mlflow.log_artifact(str(models_dir / "model_hierarchical.zip"))
             else:
-                mlflow.log_artifact(str(root / "model_rl.zip"))
+                mlflow.log_artifact(str(models_dir / "model_rl.zip"))
             mlflow.log_artifact(str(models_dir / "rl_risk_policy.zip"))
             if algo == "RECURRENTPPO":
                 artifact = rec_dir / "recurrent_model.zip"
             elif algo == "HIERARCHICALPPO":
-                artifact = root / "model_hierarchical.zip"
+                artifact = models_dir / "model_hierarchical.zip"
             elif algo == "RLLIB":
-                artifact = root / "model_rllib"
+                artifact = models_dir / "model_rllib"
             else:
-                artifact = root / "model_rl.zip"
+                artifact = models_dir / "model_rl.zip"
             student_model = A2C(
                 "MlpPolicy",
                 env,
@@ -1427,16 +1451,16 @@ def main(
                 loader,
                 epochs=cfg.get("distill_epochs", 1),
             )
-            student_model.save(root / "model_rl_distilled")
+            student_model.save(models_dir / "model_rl_distilled")
             model_store.save_model(
-                root / "model_rl_distilled.zip",
+                models_dir / "model_rl_distilled.zip",
                 {**cfg, "distilled_from": str(artifact)},
                 {"cumulative_return": cumulative_return},
                 architecture_history=architecture_history,
                 features=features,
             )
             logger.info(
-                "Distilled RL policy saved to %s", root / "model_rl_distilled.zip"
+                "Distilled RL policy saved to %s", models_dir / "model_rl_distilled.zip"
             )
             version_id = model_store.save_model(
                 artifact,
@@ -1449,7 +1473,7 @@ def main(
             if cfg.get("quantize"):
                 q_policy = apply_quantization(model.policy)
                 model.policy = q_policy
-                q_artifact = root / "model_rl_quantized.zip"
+                q_artifact = models_dir / "model_rl_quantized.zip"
                 model.save(q_artifact)
                 model_store.save_model(
                     q_artifact,
@@ -1461,7 +1485,7 @@ def main(
                 logger.info("Quantized RL policy saved to %s", q_artifact)
             model_card.generate(
                 cfg,
-                [root / "data" / f"{s}_history.parquet" for s in symbols],
+                [data_dir / f"{s}_history.parquet" for s in symbols],
                 features,
                 {
                     "cumulative_return": cumulative_return,
@@ -1470,7 +1494,7 @@ def main(
                     "cvar": cvar,
                     "value_at_risk": var,
                 },
-                root / "reports" / "model_cards",
+                reports_dir / "model_cards",
             )
             mlflow.end_run()
 
@@ -1629,7 +1653,7 @@ def train_hierarchical(cfg: dict) -> float:
     """Run a lightweight training loop for :class:`HierarchicalAgent`."""
 
     symbol = cfg.get("symbol", "A")
-    root = Path(__file__).resolve().parent
+    root = _artifact_dir(cfg)
     if cfg.get("history_path"):
         df = pd.read_csv(cfg["history_path"])
         df["Timestamp"] = pd.to_datetime(df["Timestamp"])
@@ -1674,7 +1698,7 @@ def eval_hierarchical(cfg: dict) -> float:
     """Evaluate a saved hierarchical policy by running a short backtest."""
 
     symbol = cfg.get("symbol", "A")
-    root = Path(__file__).resolve().parent
+    root = _artifact_dir(cfg)
     if cfg.get("history_path"):
         df = pd.read_csv(cfg["history_path"])
         df["Timestamp"] = pd.to_datetime(df["Timestamp"])
