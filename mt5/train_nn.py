@@ -1712,8 +1712,9 @@ from mt5.backtest import run_backtest
             trial_cfg.update(params)
             launch(trial_cfg)
             metrics = run_backtest(trial_cfg)
+            total_return = metrics.get("total_return")
             return (
-                -float(metrics.get("return", 0.0)),
+                -float(total_return if total_return is not None else metrics.get("return", 0.0)),
                 float(metrics.get("max_drawdown", 0.0)),
                 -float(metrics.get("trade_count", metrics.get("trades", 0.0))),
             )
