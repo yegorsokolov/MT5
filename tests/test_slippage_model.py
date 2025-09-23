@@ -73,11 +73,22 @@ sys.modules.setdefault(
                 "get_params": lambda self: {"limit_offset": 0.0, "slice_size": None},
                 "schedule_nightly": lambda self: None,
             },
-        )
+        ),
+        OptimizationLoopHandle=type(
+            "OptHandle", (), {"stop": lambda self: None, "join": lambda self: None}
+        ),
     ),
 )
 sys.modules.setdefault(
     "crypto_utils",
+    types.SimpleNamespace(
+        _load_key=lambda *a, **k: None,
+        encrypt=lambda *a, **k: b"",
+        decrypt=lambda *a, **k: b"",
+    ),
+)
+sys.modules.setdefault(
+    "mt5.crypto_utils",
     types.SimpleNamespace(
         _load_key=lambda *a, **k: None,
         encrypt=lambda *a, **k: b"",
@@ -114,7 +125,7 @@ sys.modules.setdefault(
 )
 
 spec = importlib.util.spec_from_file_location(
-    "backtest", Path(__file__).resolve().parents[1] / "backtest.py"
+    "backtest", Path(__file__).resolve().parents[1] / "mt5" / "backtest.py"
 )
 sys.modules["lightgbm"] = types.SimpleNamespace(LGBMClassifier=object)
 sys.modules["log_utils"] = types.SimpleNamespace(
@@ -122,6 +133,7 @@ sys.modules["log_utils"] = types.SimpleNamespace(
 )
 backtest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(backtest)
+backtest.log_backtest_stats = lambda *a, **k: None
 
 
 class DummyModel:
