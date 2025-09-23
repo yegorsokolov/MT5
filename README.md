@@ -105,7 +105,6 @@ the `mt5/` package so they can be invoked as Python modules (for example,
 | Location | Description |
 | -------- | ----------- |
 | `mt5/` | Entry points such as `train`, `realtime_train`, orchestration helpers, and compatibility wrappers for legacy API imports. |
-| `archive/bot_apis/` | Archived FastAPI services (remote management, feature retrieval, federated helpers) preserved for optional standalone deployments. |
 | `analysis/` | Offline diagnostics, feature audits, anomaly detectors and reporting utilities. |
 | `core/` | Orchestrator, scheduling logic, and background service coordination. |
 | `training/` | Core machine learning pipeline, feature builders and curriculum logic. |
@@ -228,10 +227,10 @@ match your environment.
       until the run completes. Press `Ctrl`+`C` if you need to stop it early.
 13. **(Optional) Local management.** The `mt5.remote_api` module now exposes
     asynchronous helpers for starting or stopping realtime bots, tailing logs
-    and triggering maintenance tasks without hosting the archived FastAPI
-    service. Configure `API_KEY` and `AUDIT_LOG_SECRET` in your environment and
-    call the helpers directly (or through the gRPC bridge) from your
-    orchestration scripts.
+    and triggering maintenance tasks without hosting the FastAPI service that
+    previously shipped with the project. Configure `API_KEY` and
+    `AUDIT_LOG_SECRET` in your environment and call the helpers directly (or
+    through the gRPC bridge) from your orchestration scripts.
 
 For cloud deployments (EC2, Proxmox or other Ubuntu instances) supply
 `deploy/cloud-init.yaml` as the user-data script. It installs apt dependencies,
@@ -274,9 +273,8 @@ extras, for example `pip install .[rl]` or `pip install .[heavy]`.
 
 After the initial training run you can expose monitoring dashboards or other
 services as needed. The FastAPI management surface that previously launched via
-`python -m mt5.remote_api` now lives in `archive/bot_apis` for teams that still
-host it separately, while the core process-control features are implemented in
-`mt5.remote_api` for direct use inside your automation.
+`python -m mt5.remote_api` has been retired; the core process-control features
+are implemented directly in `mt5.remote_api` for in-process automation.
 
 ### Background services
 
@@ -354,11 +352,10 @@ the following command and press `Ctrl`+`C` when you want to stop watching:
 tail -f logs/app.log
 ```
 
-Edit `deploy/mt5bot.service` if you need a different entry point. The archived
-FastAPI implementation remains available under
-`archive/bot_apis/remote_api.py` for teams that host it as an external
-process, while most deployments can interact with bots through the
-in-process helpers in `mt5.remote_api`.
+Edit `deploy/mt5bot.service` if you need a different entry point. The FastAPI
+implementation that previously handled lifecycle commands has been removed;
+most deployments should interact with bots through the in-process helpers in
+`mt5.remote_api` or wrap those helpers in their own service layer.
 
 ### Reproducibility
 
@@ -642,8 +639,7 @@ For a full pipeline combining all of these approaches run `mt5.train_combined`.
    - `FEATURE_CACHE_CODE_HASH`: optional code version string or hash included in the cache key. Changing it forces cache invalidation when feature code changes.
 
 5. The feature store now operates locally. The former HTTPS feature service
-   has been removed from the supported stack; consult
-   `archive/bot_apis/feature_service.py` if you plan to host it as a
+   has been removed from the supported stack and is no longer distributed as a
    separate component.
 6. Adjust settings in `config.yaml` if needed. The `symbols` list controls which instruments are used for training.
 7. Train the model and run a backtest:
@@ -1110,12 +1106,11 @@ helpers for starting bots, tailing logs, updating configuration, pushing
 metrics and scheduling maintenance jobs. The gRPC bridge calls the same helper
 functions and continues to enforce the configured API key.
 
-Teams that still prefer an HTTP control surface can run the archived FastAPI
-application from `archive/bot_apis/remote_api.py`. Launch it directly (for
-example `python archive/bot_apis/remote_api.py`) to recover the REST and
-WebSocket endpoints, including TLS support and risk-manager integration via
-environment variables such as `MAX_PORTFOLIO_DRAWDOWN`. The operational notes
-below apply to that standalone deployment.
+The FastAPI application that previously exposed these helpers has been removed
+from the repository. Teams that require an HTTP control surface should wrap the
+functions provided by `mt5.remote_api` in their own service (for example by
+mounting them inside an existing FastAPI application) and re-use the same
+authentication checks.
 
 ### API Key Rotation
 
@@ -1142,7 +1137,8 @@ local development without Vault by simply setting environment variables.
 
 ### Monitoring and Dashboard
 
-When you host the archived API, Prometheus metrics remain available at
+When you expose a service around these helpers, publish the Prometheus metrics
+returned by `mt5.remote_api.collect_metrics()` at an endpoint such as
 `/metrics`. Deploying Prometheus and Grafana lets you monitor CPU/RAM usage,
 queue depth, trade counts and drift events in real time. Add the following
 scrape annotations to the deployment so Prometheus discovers the service:
@@ -1175,17 +1171,16 @@ distributions, consider the following responses:
 
 ## Feature Retrieval Service
 
-The HTTP feature service is no longer bundled with the project. The previous
-implementation is preserved for reference at
-`archive/bot_apis/feature_service.py`, while the default `FeatureStore` now
-operates purely on local caches.
+The HTTP feature service is no longer bundled with the project. The codebase no
+longer ships the FastAPI implementation; the default `FeatureStore` now operates
+purely on local caches.
 
 ## Federated Learning API
 
 Federated coordination helpers have also been removed from the supported
-distribution. Their last implementation resides under
-`archive/bot_apis/federated/` for teams that wish to maintain an external
-service.
+distribution and are no longer provided in the repository. Teams that require an
+HTTP surface should implement it externally against the public training
+interfaces.
 
 ---
 

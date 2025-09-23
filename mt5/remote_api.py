@@ -1,11 +1,11 @@
-"""Local management helpers that replace the archived FastAPI service.
+"""Local management helpers that replace the retired FastAPI service.
 
 The original project exposed process control, configuration updates and
-observability hooks through ``archive/bot_apis/remote_api.py``.  This module
-re-creates those capabilities as in-process async helpers so the bot can be
-controlled without hosting an HTTP service.  The functions intentionally keep
-names and semantics compatible with the historical API so existing tooling (for
-example the gRPC bridge) can continue to call them.
+observability hooks through a FastAPI application that has since been removed.
+This module re-creates those capabilities as in-process async helpers so the
+bot can be controlled without hosting an HTTP service.  The functions
+intentionally keep names and semantics compatible with the historical API so
+existing tooling (for example the gRPC bridge) can continue to call them.
 """
 
 from __future__ import annotations
