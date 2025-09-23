@@ -56,6 +56,74 @@ else
     )
 fi
 
+# Ensure Prometheus endpoints exist for remote metrics integrations.
+if [[ "${PROM_URLS_SKIP:-0}" == "1" ]]; then
+    echo "Skipping Prometheus URL generation (PROM_URLS_SKIP=1)"
+else
+    PROM_ENV_FILE="${PROM_URLS_ENV_FILE:-${REPO_DIR}/deploy/secrets/runtime.env}"
+    PROM_ARGS=(--env-file "${PROM_ENV_FILE}")
+
+    if [[ "${PROM_URLS_FORCE:-0}" == "1" ]]; then
+        PROM_ARGS+=(--force)
+    fi
+    if [[ "${PROM_URLS_DISABLE_PUSH:-0}" == "1" ]]; then
+        PROM_ARGS+=(--disable-push)
+    fi
+    if [[ "${PROM_URLS_DISABLE_QUERY:-0}" == "1" ]]; then
+        PROM_ARGS+=(--disable-query)
+    fi
+
+    if [[ -n "${PROM_URLS_PUSH_URL:-}" ]]; then
+        PROM_ARGS+=(--push-url "${PROM_URLS_PUSH_URL}")
+    else
+        if [[ -n "${PROM_URLS_PUSH_SCHEME:-}" ]]; then
+            PROM_ARGS+=(--push-scheme "${PROM_URLS_PUSH_SCHEME}")
+        fi
+        if [[ -n "${PROM_URLS_PUSH_HOST:-}" ]]; then
+            PROM_ARGS+=(--push-host "${PROM_URLS_PUSH_HOST}")
+        fi
+        if [[ -n "${PROM_URLS_PUSH_PORT:-}" ]]; then
+            PROM_ARGS+=(--push-port "${PROM_URLS_PUSH_PORT}")
+        fi
+        if [[ -n "${PROM_URLS_PUSH_PATH:-}" ]]; then
+            PROM_ARGS+=(--push-path "${PROM_URLS_PUSH_PATH}")
+        fi
+        if [[ -n "${PROM_URLS_PUSH_JOB:-}" ]]; then
+            PROM_ARGS+=(--push-job "${PROM_URLS_PUSH_JOB}")
+        fi
+        if [[ -n "${PROM_URLS_PUSH_INSTANCE:-}" ]]; then
+            PROM_ARGS+=(--push-instance "${PROM_URLS_PUSH_INSTANCE}")
+        fi
+    fi
+
+    if [[ -n "${PROM_URLS_QUERY_URL:-}" ]]; then
+        PROM_ARGS+=(--query-url "${PROM_URLS_QUERY_URL}")
+    else
+        if [[ -n "${PROM_URLS_QUERY_SCHEME:-}" ]]; then
+            PROM_ARGS+=(--query-scheme "${PROM_URLS_QUERY_SCHEME}")
+        fi
+        if [[ -n "${PROM_URLS_QUERY_HOST:-}" ]]; then
+            PROM_ARGS+=(--query-host "${PROM_URLS_QUERY_HOST}")
+        fi
+        if [[ -n "${PROM_URLS_QUERY_PORT:-}" ]]; then
+            PROM_ARGS+=(--query-port "${PROM_URLS_QUERY_PORT}")
+        fi
+        if [[ -n "${PROM_URLS_QUERY_PATH:-}" ]]; then
+            PROM_ARGS+=(--query-path "${PROM_URLS_QUERY_PATH}")
+        fi
+    fi
+
+    if [[ "${PROM_URLS_PRINT_EXPORTS:-0}" == "1" ]]; then
+        PROM_ARGS+=(--print-exports)
+    fi
+
+    echo "Ensuring Prometheus URLs exist (${PROM_ENV_FILE})"
+    (
+        cd "${REPO_DIR}"
+        python3 -m deployment.prometheus_urls "${PROM_ARGS[@]}"
+    )
+fi
+
 # Optionally bootstrap InfluxDB secrets as part of installation.
 if [[ -n "${INFLUXDB_BOOTSTRAP_URL:-}" ]]; then
     echo "Bootstrapping InfluxDB metrics bucket"
