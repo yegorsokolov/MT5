@@ -49,6 +49,11 @@ from mt5.scheduler import (
     stop_scheduler,
     update_regime_performance,
 )
+from mt5.controller_settings import (
+    ControllerSettings,
+    get_controller_settings,
+    subscribe_controller_settings,
+)
 from mt5.metrics import BOT_BACKOFFS, BOT_RESTARTS, BOT_RESTART_FAILURES, RESOURCE_RESTARTS
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from utils import update_config
@@ -96,21 +101,24 @@ def init_logging() -> logging.Logger:
     return logger
 
 
-MAX_RSS_MB = float(os.getenv("MAX_RSS_MB", "0") or 0)
-MAX_CPU_PCT = float(os.getenv("MAX_CPU_PCT", "0") or 0)
-resource_watchdog = ResourceMonitor(max_rss_mb=MAX_RSS_MB or None, max_cpu_pct=MAX_CPU_PCT or None)
-WATCHDOG_USEC = int(os.getenv("WATCHDOG_USEC", "0") or 0)
+_controller_settings: ControllerSettings = get_controller_settings()
+resource_watchdog = ResourceMonitor(
+    max_rss_mb=_controller_settings.max_rss_mb,
+    max_cpu_pct=_controller_settings.max_cpu_pct,
+)
+WATCHDOG_USEC = _controller_settings.watchdog_usec
 
-BOT_BACKOFF_BASE_SECONDS = max(float(os.getenv("BOT_BACKOFF_BASE", "1") or 1), 0.0)
-BOT_BACKOFF_MAX_SECONDS = max(
-    float(os.getenv("BOT_BACKOFF_MAX", "60") or 60), BOT_BACKOFF_BASE_SECONDS
-)
-BOT_BACKOFF_RESET_SECONDS = max(float(os.getenv("BOT_BACKOFF_RESET", "300") or 300), 0.0)
-BOT_MAX_CRASHES = max(int(os.getenv("BOT_MAX_CRASHES", "5") or 5), 1)
-BOT_CRASH_WINDOW = max(
-    float(os.getenv("BOT_CRASH_WINDOW", "600") or 600), BOT_BACKOFF_BASE_SECONDS
-)
-RESTART_HISTORY_LIMIT = max(BOT_MAX_CRASHES * 2, 10)
+
+def _restart_history_limit(settings: ControllerSettings | None = None) -> int:
+    cfg = settings or _controller_settings
+    return max(cfg.bot_max_crashes * 2, 10)
+
+
+def _new_restart_history(settings: ControllerSettings | None = None) -> Deque[float]:
+    return deque(maxlen=_restart_history_limit(settings))
+
+
+_settings_subscription: Optional[Callable[[], None]] = None
 
 API_KEY: Optional[str] = None
 AUDIT_SECRET: Optional[str] = None
@@ -171,7 +179,18 @@ class BotInfo:
     pending_restart: bool = False
     failure_streak: int = 0
     backoff_logged: bool = False
-    restart_history: Deque[float] = field(default_factory=lambda: deque(maxlen=RESTART_HISTORY_LIMIT))
+    restart_history: Deque[float] = field(default_factory=_new_restart_history)
+
+
+def _apply_controller_settings(settings: ControllerSettings) -> None:
+    global _controller_settings, WATCHDOG_USEC
+    _controller_settings = settings
+    resource_watchdog.max_rss_mb = settings.max_rss_mb
+    resource_watchdog.max_cpu_pct = settings.max_cpu_pct
+    WATCHDOG_USEC = settings.watchdog_usec
+    limit = _restart_history_limit(settings)
+    for info in bots.values():
+        info.restart_history = deque(info.restart_history, maxlen=limit)
 
 
 bots: Dict[str, BotInfo] = {}
@@ -182,6 +201,9 @@ _bot_watcher_task: Optional[asyncio.Task[Any]] = None
 _systemd_task: Optional[asyncio.Task[Any]] = None
 _task_loop: Optional[asyncio.AbstractEventLoop] = None
 _resource_watchdog_running = False
+
+
+_settings_subscription = subscribe_controller_settings(_apply_controller_settings)
 
 
 async def _run_sync(func: Callable[[], None]) -> None:
@@ -347,6 +369,13 @@ def _audit_log(action: str, status: int, actor: str = "local") -> None:
 
 
 async def _check_bots_once() -> None:
+    settings = _controller_settings
+    base = settings.bot_backoff_base
+    max_delay = settings.bot_backoff_max
+    reset_seconds = settings.bot_backoff_reset
+    crash_window = settings.bot_crash_window
+    max_crashes = settings.bot_max_crashes
+    history_limit = _restart_history_limit(settings)
     async with bots_lock:
         for bid, info in list(bots.items()):
             rc = info.proc.poll()
@@ -354,7 +383,7 @@ async def _check_bots_once() -> None:
                 if (
                     info.failure_streak
                     and info.last_start
-                    and (time.monotonic() - info.last_start) >= BOT_BACKOFF_RESET_SECONDS
+                    and (time.monotonic() - info.last_start) >= reset_seconds
                 ):
                     info.failure_streak = 0
                 continue
@@ -365,11 +394,13 @@ async def _check_bots_once() -> None:
 
             if not info.pending_restart:
                 logger.warning("Bot %s exited with code %s", bid, rc)
-                while info.restart_history and now - info.restart_history[0] > BOT_CRASH_WINDOW:
+                while info.restart_history and now - info.restart_history[0] > crash_window:
                     info.restart_history.popleft()
+                if info.restart_history.maxlen != history_limit:
+                    info.restart_history = deque(info.restart_history, maxlen=history_limit)
                 info.restart_history.append(now)
                 recent_attempts = len(info.restart_history)
-                if recent_attempts > BOT_MAX_CRASHES:
+                if recent_attempts > max_crashes:
                     bots.pop(bid, None)
                     message = (
                         f"Bot {bid} exceeded restart limit after {recent_attempts - 1} attempts; "
@@ -386,12 +417,12 @@ async def _check_bots_once() -> None:
                         except Exception:
                             pass
                     continue
-                if info.last_start and (now - info.last_start) >= BOT_BACKOFF_RESET_SECONDS:
+                if info.last_start and (now - info.last_start) >= reset_seconds:
                     info.failure_streak = 0
                 info.failure_streak += 1
                 delay = min(
-                    BOT_BACKOFF_MAX_SECONDS,
-                    BOT_BACKOFF_BASE_SECONDS * (2 ** (info.failure_streak - 1)),
+                    max_delay,
+                    base * (2 ** (info.failure_streak - 1)),
                 )
                 info.cooldown_until = now + delay
                 info.pending_restart = True
@@ -649,7 +680,7 @@ async def health(lines: int = 20) -> Dict[str, Any]:
 
 
 async def shutdown() -> None:
-    global _resource_watchdog_running, _bot_watcher_task, _systemd_task, _task_loop
+    global _resource_watchdog_running, _bot_watcher_task, _systemd_task, _task_loop, _settings_subscription
     tasks = list(_background_tasks)
     for task in tasks:
         task.cancel()
@@ -670,6 +701,11 @@ async def shutdown() -> None:
         stop_scheduler()
     except Exception:
         logger.exception("Failed to stop scheduler")
+    if _settings_subscription is not None:
+        try:
+            _settings_subscription()
+        finally:
+            _settings_subscription = None
     _audit_log("shutdown", 200)
 
 
