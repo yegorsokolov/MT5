@@ -6,6 +6,7 @@ num_threads: null
 num_workers: null
 pred_cache_size: 256
 pred_cache_policy: lru
+cache_dir: null  # override logs/cache for cached history and macro artifacts
 plugin_cache_ttl: 0
 training:
   model_type: lgbm
