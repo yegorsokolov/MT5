@@ -5,6 +5,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory={{REPO_PATH}}
+EnvironmentFile=-{{REPO_PATH}}/deploy/secrets/influx.env
+EnvironmentFile=-{{REPO_PATH}}/deploy/secrets/runtime.env
 ExecStartPre={{REPO_PATH}}/deploy/prestart.sh
 ExecStart=/usr/bin/env python3 -m mt5.realtime_train
 Restart=on-failure
