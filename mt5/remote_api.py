@@ -1,17 +1,14 @@
-"""Compatibility wrapper for the remote management API.
+"""Stub for the retired remote management API.
 
-The implementation was moved to :mod:`bot_apis.remote_api` to keep all
-FastAPI entry points grouped together.  Importing from this module continues to
-work so existing scripts and documentation remain valid.
+The FastAPI application that previously exposed lifecycle management endpoints
+now lives outside of the installable package.  The archived implementation is
+kept under ``archive/bot_apis/remote_api.py`` for reference, but the codebase no
+longer wires it into the supported workflows.  Importing this module therefore
+fails fast with an informative error.
 """
-from bot_apis.remote_api import *  # noqa: F401,F403
 
-try:  # pragma: no branch - fallback when ``__all__`` is missing
-    from bot_apis.remote_api import __all__ as __all__  # type: ignore  # noqa: F401
-except AttributeError:  # pragma: no cover - defensive
-    __all__ = [name for name in globals() if not name.startswith("_")]
-
-if __name__ == "__main__":  # pragma: no cover - CLI passthrough
-    from bot_apis.remote_api import main
-
-    main()
+raise ImportError(
+    "The remote management API has been removed from the MT5 package. "
+    "Refer to archive/bot_apis/remote_api.py for the preserved source if you "
+    "still need to host it separately."
+)

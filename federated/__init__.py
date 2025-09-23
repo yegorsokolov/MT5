@@ -1,2 +1,6 @@
-"""Compatibility package for the federated learning APIs."""
-from bot_apis.federated import *  # noqa: F401,F403
+"""Stub module signalling that the federated APIs were detached."""
+
+raise ImportError(
+    "Federated learning helpers have been removed from the installable package. "
+    "Refer to archive/bot_apis/federated for the preserved implementation."
+)

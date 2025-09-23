@@ -1,7 +1,15 @@
-"""Compatibility wrapper for the feature retrieval API."""
-from bot_apis.feature_service import *  # noqa: F401,F403
+"""Stub for the detached feature retrieval API.
 
-try:  # pragma: no branch - graceful when the target omits ``__all__``
-    from bot_apis.feature_service import __all__ as __all__  # type: ignore  # noqa: F401
-except AttributeError:  # pragma: no cover - defensive
-    __all__ = [name for name in globals() if not name.startswith("_")]
+The project no longer ships the FastAPI feature service as part of the
+installed package.  The historical implementation is preserved under
+``archive/bot_apis/feature_service.py`` for teams that still need it, but it is
+no longer wired into the training code.  Importing this module now raises a
+clear error so callers know the service has been removed from the supported
+surface area.
+"""
+
+raise ImportError(
+    "The feature retrieval API was removed from the core package. "
+    "Refer to archive/bot_apis/feature_service.py if you still require the "
+    "standalone service."
+)

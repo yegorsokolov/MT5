@@ -105,7 +105,7 @@ the `mt5/` package so they can be invoked as Python modules (for example,
 | Location | Description |
 | -------- | ----------- |
 | `mt5/` | Entry points such as `train`, `realtime_train`, orchestration helpers, and compatibility wrappers for legacy API imports. |
-| `bot_apis/` | FastAPI services owned by the bot (remote management, feature retrieval, federated coordinator/clients) secured with API keys. |
+| `archive/bot_apis/` | Archived FastAPI services (remote management, feature retrieval, federated helpers) preserved for optional standalone deployments. |
 | `analysis/` | Offline diagnostics, feature audits, anomaly detectors and reporting utilities. |
 | `core/` | Orchestrator, scheduling logic, and background service coordination. |
 | `training/` | Core machine learning pipeline, feature builders and curriculum logic. |
@@ -220,9 +220,10 @@ match your environment.
     * Type `python -m mt5.train` and press `Enter`.
     * The training process logs progress to the terminal. Leave the window open
       until the run completes. Press `Ctrl`+`C` if you need to stop it early.
-12. **(Optional) Expose the REST API locally.** When you are ready to interact
-    with the bot programmatically, type `python -m mt5.remote_api --config config.yaml`
-    and press `Enter`.
+12. **(Optional) Remote management.** The FastAPI control surface that used to
+    ship as `mt5.remote_api` is no longer part of the supported toolkit. If you
+    still require it, run the archived app under
+    `archive/bot_apis/remote_api.py` as a standalone service.
 
 For cloud deployments (EC2, Proxmox or other Ubuntu instances) supply
 `deploy/cloud-init.yaml` as the user-data script. It installs apt dependencies,
@@ -257,11 +258,11 @@ environment and start a training run. Adjust the final command for backtesting
 or signal generation as needed. Optional components can be installed via
 extras, for example `pip install .[rl]` or `pip install .[heavy]`.
 
-After the initial training run you can expose the REST API locally:
-
-```bash
-python -m mt5.remote_api --config config.yaml
-```
+After the initial training run you can expose monitoring dashboards or other
+services as needed. The management API that previously launched via
+`python -m mt5.remote_api` has been detached from the supported
+distribution; consult `archive/bot_apis` if you plan to host it
+independently.
 
 ### Background services
 
@@ -339,7 +340,9 @@ the following command and press `Ctrl`+`C` when you want to stop watching:
 tail -f logs/app.log
 ```
 
-Edit `deploy/mt5bot.service` to run `mt5.remote_api` instead of `mt5.realtime_train` if desired.
+Edit `deploy/mt5bot.service` if you need a different entry point. The legacy
+remote API lives in `archive/bot_apis/remote_api.py` should you decide to
+host it as an external process.
 
 ### Reproducibility
 
@@ -622,9 +625,10 @@ For a full pipeline combining all of these approaches run `mt5.train_combined`.
    - `FEATURE_CACHE_MAX_GB`: maximum size in gigabytes before least-recently-used items are evicted. Unset for no limit.
    - `FEATURE_CACHE_CODE_HASH`: optional code version string or hash included in the cache key. Changing it forces cache invalidation when feature code changes.
 
-5. Optionally configure `feature_service_url` and `feature_service_api_key` to
-   pull pre-computed features from a remote service over TLS. When the service
-   cannot be reached the pipeline falls back to local feature engineering.
+5. The feature store now operates locally. The former HTTPS feature service
+   has been removed from the supported stack; consult
+   `archive/bot_apis/feature_service.py` if you plan to host it as a
+   separate component.
 6. Adjust settings in `config.yaml` if needed. The `symbols` list controls which instruments are used for training.
 7. Train the model and run a backtest:
 
@@ -863,7 +867,9 @@ mlflow:
 ### Automatic self-updates
 
 The repository now includes an unattended updater that pulls the latest GitHub
-commits and restarts `mt5.remote_api` without manual intervention. The behaviour
+commits and restarts the realtime trainer without manual intervention. If you
+still operate the archived remote API you will need to restart that
+standalone process yourself. The behaviour
 is driven by the new `auto_update` section in `config.yaml` which controls the
 tracked branch, how aggressively updates are deferred while markets are open and
 which symbols map to which exchange calendars. Markets that trade 24/7 (for
@@ -1073,49 +1079,26 @@ can be overridden via environment variables defined in the deployment manifest.
 
 ## Remote Management API
 
-A small FastAPI application implemented in `bot_apis.remote_api` (exposed via the
-`mt5.remote_api` compatibility wrapper) exposes REST endpoints for
-starting and stopping multiple bots. Launch the server with TLS enabled:
+The FastAPI application that previously exposed lifecycle management endpoints
+has been removed from the installable package. Its source now lives in
+`archive/bot_apis/remote_api.py`, allowing teams to run it as a standalone
+service when programmatic control over bots is required. The compatibility
+module `mt5.remote_api` now raises an `ImportError` so projects notice the
+dependency on this optional component. Launch the archived script directly
+(for example `python archive/bot_apis/remote_api.py`) if you still rely on the
+REST endpoints; they behave exactly as they did in earlier releases, including
+support for TLS and risk-manager integration via environment variables such as
+`MAX_PORTFOLIO_DRAWDOWN`.
 
-```bash
-python -m mt5.remote_api
-```
-
-The process reads `certs/api.crt` and `certs/api.key` and **fails to start** if
-`API_KEY` is unset. Include the header `X-API-Key` in each request. Key
-endpoints include:
-
-- `GET /bots` – list running bot IDs and whether each is alive.
-- `POST /bots/<id>/start` – launch a new training process.
-- `POST /bots/<id>/stop` – terminate an existing process.
-- `GET /bots/<id>/status` – return the bot's PID, exit code and a log tail.
-- `GET /bots/<id>/logs` – fetch recent log lines for the bot.
-- `GET /logs` – fetch the last few lines from `logs/app.log`.
-- `GET /health` – overall service state and recent log snippet.
-- `POST /config` – update `config.yaml` with JSON fields `key`, `value` and
-  `reason`.
-- `GET /risk/status` – aggregated exposure, daily loss, VaR and whether trading
-  has been halted by the risk manager.
-
-Example:
-
-```bash
-curl -k -H "X-API-Key: <token>" https://localhost:8000/health
-```
-
-Set `MAX_PORTFOLIO_DRAWDOWN` (and optional `MAX_VAR`) before launching
-`mt5.remote_api` to enable the portfolio level risk manager:
-
-```bash
-MAX_PORTFOLIO_DRAWDOWN=1000 python -m mt5.remote_api
-```
+If you self-host the archived service, the operational notes below continue to
+apply.
 
 ### API Key Rotation
 
 Generate a new key and update the `API_KEY` environment variable or Kubernetes
-secret. Restart the service or roll your deployment so pods pick up the new
-value. Once clients have been updated to use the new token, remove the old key
-from the secret or environment.
+secret before restarting the standalone service so pods pick up the new value.
+Once clients have been updated to use the new token, remove the old key from
+your secret store to avoid accidental reuse.
 
 ### Secret Provisioning
 
@@ -1135,10 +1118,10 @@ local development without Vault by simply setting environment variables.
 
 ### Monitoring and Dashboard
 
-The API now exposes Prometheus metrics at `/metrics`. Deploying Prometheus and
-Grafana lets you monitor CPU/RAM usage, queue depth, trade counts and drift events
-in real time. Add the following scrape annotations to the deployment so
-Prometheus discovers the service:
+When you host the archived API, Prometheus metrics remain available at
+`/metrics`. Deploying Prometheus and Grafana lets you monitor CPU/RAM usage,
+queue depth, trade counts and drift events in real time. Add the following
+scrape annotations to the deployment so Prometheus discovers the service:
 
 ```yaml
     annotations:
@@ -1148,10 +1131,10 @@ Prometheus discovers the service:
       prometheus.io/scheme: "https"
 ```
 
-Import the provided Grafana dashboard JSON in the `grafana/` folder to visualise
-these metrics. Sample Prometheus and alerting configurations are available in
-`deploy/`. See `docs/monitoring.md` for details on enabling optional Alertmanager
-rules.
+Import the provided Grafana dashboard JSON in the `grafana/` folder to
+visualise these metrics. Sample Prometheus and alerting configurations are
+available in `deploy/`. See `docs/monitoring.md` for details on enabling
+optional Alertmanager rules.
 
 **Note:** Keep this section updated whenever deployment scripts or automation
 change to avoid configuration drift.
@@ -1168,19 +1151,17 @@ distributions, consider the following responses:
 
 ## Feature Retrieval Service
 
-The optional feature API now lives in `bot_apis.feature_service`. It must be
-served over HTTPS using certificates supplied via the `FEATURE_SERVICE_CERT` and
-`FEATURE_SERVICE_KEY` environment variables. The service reads a token from the
-`FEATURE_SERVICE_API_KEY` secret and rejects requests that do not include the
-matching `X-API-Key` header. When the remote store is unavailable the training
-pipeline falls back to building features locally.
+The HTTP feature service is no longer bundled with the project. The previous
+implementation is preserved for reference at
+`archive/bot_apis/feature_service.py`, while the default `FeatureStore` now
+operates purely on local caches.
 
 ## Federated Learning API
 
-Federated coordination helpers were moved under `bot_apis.federated`. Both the
-coordinator and client components require HTTPS and an API key delivered via the
-`X-API-KEY` header to exchange model updates. The classes continue to be
-re-exported through the legacy `federated` package for backwards compatibility.
+Federated coordination helpers have also been removed from the supported
+distribution. Their last implementation resides under
+`archive/bot_apis/federated/` for teams that wish to maintain an external
+service.
 
 ---
 
