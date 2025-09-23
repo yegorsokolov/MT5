@@ -1,15 +1,13 @@
 """Stub for the detached feature retrieval API.
 
-The project no longer ships the FastAPI feature service as part of the
-installed package.  The historical implementation is preserved under
-``archive/bot_apis/feature_service.py`` for teams that still need it, but it is
-no longer wired into the training code.  Importing this module now raises a
-clear error so callers know the service has been removed from the supported
-surface area.
+This placeholder remains so legacy imports fail fast with a helpful error.
+Teams that require an HTTP surface should provide their own shim that wraps
+``mt5.remote_api`` from their deployment environment rather than importing
+this stub.
 """
 
 raise ImportError(
-    "The feature retrieval API was removed from the core package. "
-    "Refer to archive/bot_apis/feature_service.py if you still require the "
-    "standalone service."
+    "`data.feature_service` is only kept as a compatibility stub. "
+    "Expose feature retrieval through your own service that delegates to "
+    "mt5.remote_api instead."
 )

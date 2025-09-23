@@ -1,6 +1,6 @@
-"""Stub entry point for the detached federated client helpers."""
+"""Compatibility stub for the legacy federated client helpers."""
 
 raise ImportError(
-    "Federated client utilities are no longer shipped. Consult "
-    "archive/bot_apis/federated/client.py for the archived implementation."
+    "`federated.client` no longer provides a concrete implementation. "
+    "Wire up your own orchestration that coordinates with mt5.remote_api."
 )

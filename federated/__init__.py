@@ -1,6 +1,11 @@
-"""Stub module signalling that the federated APIs were detached."""
+"""Compatibility stub for the retired federated HTTP helpers.
+
+The historical FastAPI service that backed these modules lives only in the
+archived bot API history.  Provide your own implementation (for example by
+wrapping ``mt5.remote_api``) if you still need a remote control surface.
+"""
 
 raise ImportError(
-    "Federated learning helpers have been removed from the installable package. "
-    "Refer to archive/bot_apis/federated for the preserved implementation."
+    "`federated` is preserved solely as a stub. Supply your own federated "
+    "client, coordinator, and utility helpers in your deployment."
 )

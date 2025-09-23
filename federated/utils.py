@@ -1,6 +1,6 @@
-"""Stub entry point for the detached federated utility helpers."""
+"""Compatibility stub for the legacy federated utility helpers."""
 
 raise ImportError(
-    "Federated utility helpers are no longer shipped. Consult "
-    "archive/bot_apis/federated/utils.py for the archived implementation."
+    "`federated.utils` is only a stub. Provide the utility helpers required "
+    "by your deployment or migrate to mt5.remote_api-based workflows."
 )

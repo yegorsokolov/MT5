@@ -1,6 +1,7 @@
-"""Stub entry point for the detached federated coordinator."""
+"""Compatibility stub for the legacy federated coordinator helpers."""
 
 raise ImportError(
-    "Federated coordinator utilities are no longer shipped. Consult "
-    "archive/bot_apis/federated/coordinator.py for the archived implementation."
+    "`federated.coordinator` only exists as a stub. Supply a coordinator "
+    "implementation that matches your infrastructure and integrates with "
+    "mt5.remote_api."
 )
