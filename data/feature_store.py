@@ -18,27 +18,17 @@ import time
 
 import duckdb
 import pandas as pd
-import requests
 from analytics.metrics_store import record_metric
 from services.worker_manager import get_worker_manager
 from analysis.data_lineage import log_lineage
-try:  # pragma: no cover - optional dependency in tests
-    from utils.secret_manager import SecretManager
-except Exception:  # pragma: no cover
-    class SecretManager:  # type: ignore
-        def get_secret(self, *_args: Any, **_kwargs: Any) -> None:
-            return None
-from utils.resource_monitor import monitor
 
 
 class FeatureStore:
     """Persist and retrieve feature DataFrames using DuckDB.
 
-    When ``service_url`` is provided, the store will attempt to fetch feature
-    data from that remote service before falling back to the local DuckDB cache.
-    Any locally computed features are uploaded back to the service. This allows
-    sharing feature computations across workers while still operating if the
-    service becomes unavailable.
+    The store now operates entirely on the local DuckDB cache. Remote
+    feature APIs have been removed from the supported stack; host the
+    archived services separately if you still require them.
     """
 
     def __init__(
@@ -55,17 +45,23 @@ class FeatureStore:
             path = Path(__file__).resolve().parent / "data" / "feature_store.duckdb"
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.service_url = service_url or os.getenv("FEATURE_SERVICE_URL")
-        sm = SecretManager()
-        self.api_key = api_key or sm.get_secret("FEATURE_SERVICE_API_KEY")
-        self.tls_cert = tls_cert or os.getenv("FEATURE_SERVICE_CA_CERT")
+        disallowed = {
+            "service_url": service_url or os.getenv("FEATURE_SERVICE_URL"),
+            "api_key": api_key,
+            "tls_cert": tls_cert or os.getenv("FEATURE_SERVICE_CA_CERT"),
+            "worker_url": worker_url or os.getenv("FEATURE_WORKER_URL"),
+        }
+        if any(disallowed.values()):
+            raise RuntimeError(
+                "Remote feature services were removed from the MT5 toolkit. "
+                "Run the archived FastAPI or worker components separately if "
+                "you still depend on them."
+            )
         self.memory_size = memory_size
-        self.worker_url = worker_url or os.getenv("FEATURE_WORKER_URL")
-        self.worker_retries = worker_retries
         self._memory: "OrderedDict[str, pd.DataFrame]" = OrderedDict()
         self._lock = threading.Lock()
-        self._hits = {"memory": 0, "disk": 0, "remote": 0}
-        self._totals = {"memory": 0, "disk": 0, "remote": 0}
+        self._hits = {"memory": 0, "disk": 0}
+        self._totals = {"memory": 0, "disk": 0}
 
     # ------------------------------------------------------------------
     def _key(self, symbol: str, window: int, params: Dict[str, Any]) -> str:
@@ -82,20 +78,6 @@ class FeatureStore:
         raw_hash: str,
     ) -> Optional[pd.DataFrame]:
         """Return cached features if available and up-to-date."""
-        usage = getattr(monitor, "latest_usage", {})
-        disk_pressure = usage.get("disk_read", 0) + usage.get("disk_write", 0)
-        net_pressure = usage.get("net_rx", 0) + usage.get("net_tx", 0)
-        if (
-            self.service_url
-            and disk_pressure > 50 * 1024 * 1024
-            and net_pressure < 10 * 1024 * 1024
-            and params.get("start")
-            and params.get("end")
-        ):
-            remote = self.fetch_remote(symbol, params["start"], params["end"])
-            if remote is not None:
-                return remote
-
         if not self.path.exists():
             return None
 
@@ -217,78 +199,8 @@ class FeatureStore:
         conn.close()
 
     # ------------------------------------------------------------------
-    def fetch_remote(self, symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
-        """Try retrieving features from the remote service.
-
-        Parameters are passed directly as query arguments to the service. If the
-        service is unreachable or returns a non-200 status code, ``None`` is
-        returned so callers can fallback to local computation.
-        """
-
-        if not self.service_url:
-            return None
-        url = f"{self.service_url.rstrip('/')}/features/{symbol}"
-        headers = {"X-API-Key": self.api_key} if self.api_key else {}
-        try:
-            resp = requests.get(
-                url,
-                params={"start": start, "end": end},
-                headers=headers,
-                timeout=10,
-                verify=self.tls_cert or True,
-            )
-            if resp.status_code == 200:
-                return pd.DataFrame(resp.json())
-        except Exception:
-            pass
-        return None
-
     # ------------------------------------------------------------------
-    def upload_remote(self, df: pd.DataFrame, symbol: str, start: str, end: str) -> None:
-        """Upload locally computed features to the remote service.
-
-        Failures are silently ignored so that training can continue even if the
-        service is temporarily unavailable.
-        """
-
-        if not self.service_url:
-            return
-        url = f"{self.service_url.rstrip('/')}/features/{symbol}"
-        headers = {"X-API-Key": self.api_key} if self.api_key else {}
-        try:
-            requests.post(
-                url,
-                params={"start": start, "end": end},
-                headers=headers,
-                json=df.to_dict(orient="records"),
-                timeout=10,
-                verify=self.tls_cert or True,
-            )
-        except Exception:
-            pass
-
     # ------------------------------------------------------------------
-    def compute_remote(self, symbol: str, start: str, end: str) -> Optional[pd.DataFrame]:
-        """Submit a feature computation job to the remote worker.
-
-        Retries are attempted according to ``worker_retries``.  ``None`` is
-        returned if the worker is unreachable or returns a non-200 status
-        code so callers can gracefully fall back to local computation.
-        """
-
-        if not self.worker_url:
-            return None
-        url = f"{self.worker_url.rstrip('/')}/compute"
-        payload = {"symbol": symbol, "start": start, "end": end}
-        for _ in range(max(1, self.worker_retries)):
-            try:
-                resp = requests.post(url, json=payload, timeout=30)
-                if resp.status_code == 200:
-                    return pd.DataFrame(resp.json())
-            except Exception:
-                pass
-        return None
-
     # ------------------------------------------------------------------
     def get_features(
         self,
@@ -299,14 +211,10 @@ class FeatureStore:
     ) -> pd.DataFrame:
         """Fetch features using tiered caching.
 
-        The lookup order is in-memory LRU cache, local DuckDB cache and
-        finally the remote feature service.  Misses fall back to
-        ``compute_fn``.  When a lower tier serves the request, upper tiers are
-        populated asynchronously so subsequent calls are faster.  Tier hit
-        ratios are reported via :func:`analytics.metrics_store.record_metric`.
-
-        The call latency is reported to
-        :class:`services.worker_manager.WorkerManager` to aid scaling decisions.
+        The lookup order is in-memory LRU cache followed by the local
+        DuckDB cache. Misses fall back to ``compute_fn`` and the result is
+        cached asynchronously for future requests. Tier hit ratios are
+        reported via :func:`analytics.metrics_store.record_metric`.
         """
 
         start_t = time.perf_counter()
@@ -326,7 +234,7 @@ class FeatureStore:
 
             # Disk tier ----------------------------------------------------
             self._totals["disk"] += 1
-            df = self.load(symbol, 0, params, raw_hash="remote")
+            df = self.load(symbol, 0, params, raw_hash="local")
             if df is not None:
                 self._hits["disk"] += 1
                 threading.Thread(
@@ -335,48 +243,13 @@ class FeatureStore:
                 self._record_metrics()
                 return df
 
-            # Remote tier --------------------------------------------------
-            if self.service_url:
-                self._totals["remote"] += 1
-                df = self.fetch_remote(symbol, start, end)
-                if df is not None:
-                    self._hits["remote"] += 1
-                    threading.Thread(
-                        target=self.save,
-                        args=(df, symbol, 0, params, "remote"),
-                        daemon=True,
-                    ).start()
-                    threading.Thread(
-                        target=self._cache_memory, args=(key, df), daemon=True
-                    ).start()
-                    self._record_metrics()
-                    return df
-
-            # Remote worker -----------------------------------------------
-            if getattr(monitor, "capability_tier", "") == "lite" and self.worker_url:
-                df = self.compute_remote(symbol, start, end)
-                if df is not None:
-                    threading.Thread(
-                        target=self.save,
-                        args=(df, symbol, 0, params, "remote"),
-                        daemon=True,
-                    ).start()
-                    threading.Thread(
-                        target=self._cache_memory, args=(key, df), daemon=True
-                    ).start()
-                    self._record_metrics()
-                    return df
-
             # Compute fallback ---------------------------------------------
             df = compute_fn()
             threading.Thread(
-                target=self.save, args=(df, symbol, 0, params, "remote"), daemon=True
+                target=self.save, args=(df, symbol, 0, params, "local"), daemon=True
             ).start()
             threading.Thread(
                 target=self._cache_memory, args=(key, df), daemon=True
-            ).start()
-            threading.Thread(
-                target=self.upload_remote, args=(df, symbol, start, end), daemon=True
             ).start()
             self._record_metrics()
             return df

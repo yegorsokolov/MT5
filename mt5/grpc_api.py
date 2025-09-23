@@ -5,7 +5,14 @@ import grpc
 from fastapi import HTTPException
 from google.protobuf import empty_pb2
 
-from mt5 import remote_api as ra
+try:
+    from mt5 import remote_api as ra  # type: ignore[import]
+except ImportError as exc:
+    raise ImportError(
+        "mt5.grpc_api depends on the archived remote management service. "
+        "Run archive/bot_apis/remote_api.py separately if you still need the "
+        "gRPC bridge."
+    ) from exc
 from proto import management_pb2, management_pb2_grpc
 from mt5.risk_manager import risk_manager
 

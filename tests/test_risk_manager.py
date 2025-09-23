@@ -1,3 +1,4 @@
+import pytest
 import sys
 import types
 import importlib
@@ -89,6 +90,7 @@ def setup_client(tmp_path, monkeypatch):
     return api, TestClient(api.app)
 
 
+@pytest.mark.skip(reason="Remote management API removed; see archive/bot_apis.")
 def test_risk_status_endpoint(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_PORTFOLIO_DRAWDOWN", "100")
     from mt5 import risk_manager as rm_mod

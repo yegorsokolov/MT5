@@ -1,9 +1,12 @@
+import pytest
+
+pytest.skip("Remote management API removed; see archive/bot_apis.", allow_module_level=True)
+
 import sys
 from pathlib import Path
 
 import types
 import importlib
-import pytest
 try:
     from fastapi.testclient import TestClient
 except Exception:  # pragma: no cover - fallback when FastAPI lacks testclient
