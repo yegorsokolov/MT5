@@ -68,6 +68,16 @@ A sample configuration is provided in `deploy/prometheus.yml`:
 prometheus --config.file=deploy/prometheus.yml
 ```
 
+### Endpoint provisioning
+
+`scripts/install_service.sh` now invokes `deployment/prometheus_endpoints.py`
+automatically so you do not need to manage Prometheus URLs manually. The helper
+derives `PROM_PUSH_URL` and `PROM_QUERY_URL` using the provided host/port flags
+and writes them into `deploy/secrets/runtime.env` alongside the other generated
+secrets. Set environment overrides such as `PROM_ENDPOINTS_PUSH_HOST` before
+running the installer to customise the generated URLs, or rerun the helper with
+`--force` when you need to change them later.
+
 ## Alerting
 
 Optional alerting rules are defined in `deploy/alert.rules.yml`. Enable them by
