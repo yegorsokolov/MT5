@@ -27,7 +27,10 @@ from tuning.baseline_opt import backtest, run_search as baseline_run_search
 from tuning.auto_search import run_search as auto_model_search
 from mt5.train_graphnet import train_graphnet
 from mt5.train_price_distribution import prepare_features, train_price_distribution
-from mt5.train_nn import main as train_nn_main
+from mt5.train_nn import (
+    ensure_orchestrator_started as ensure_nn_orchestrator_started,
+    main as train_nn_main,
+)
 from mt5.walk_forward import walk_forward_train
 from mt5.train_ensemble import (
     main as train_ensemble_main,
@@ -108,6 +111,7 @@ def neural(
     ),
 ) -> None:
     cfg = setup_training(config, experiment="training_nn")
+    ensure_nn_orchestrator_started()
     train_nn_main(cfg=cfg, resume_online=resume_online, transfer_from=transfer_from)
     end_training()
 
