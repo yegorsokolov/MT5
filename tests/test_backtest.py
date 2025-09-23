@@ -1,3 +1,5 @@
+import asyncio
+import math
 import pytest
 import sys
 import types
@@ -234,6 +236,47 @@ def test_backtest_on_df_no_trades():
     assert metrics["return"] == 0.0
     assert metrics["max_drawdown"] == 0.0
     assert metrics["win_rate"] == 0.0
+
+
+def test_backtest_on_df_async_paths():
+    class ZeroModel:
+        def predict_proba(self, X):
+            return np.column_stack([np.ones(len(X)), np.zeros(len(X))])
+
+    df = pd.DataFrame(
+        {
+            "return": [0.0, 0.0, 0.0],
+            "mid": [1.0, 1.0, 1.0],
+            "Bid": [1.0, 1.0, 1.0],
+            "Ask": [1.0, 1.0, 1.0],
+            "BidVolume": [1.0, 1.0, 1.0],
+            "AskVolume": [1.0, 1.0, 1.0],
+        }
+    )
+
+    async def runner():
+        metrics_async = await backtest.backtest_on_df_async(df, ZeroModel(), {})
+        metrics_wrapper = await backtest.backtest_on_df(df, ZeroModel(), {})
+        metrics_from_coroutine = await backtest.backtest_on_df(
+            df,
+            ZeroModel(),
+            {},
+            return_coroutine=True,
+        )
+        return metrics_async, metrics_wrapper, metrics_from_coroutine
+
+    metrics_async, metrics_wrapper, metrics_from_coroutine = asyncio.run(runner())
+
+    assert metrics_async["trade_count"] == 0
+    for key, value in metrics_async.items():
+        wrapper_value = metrics_wrapper[key]
+        coroutine_value = metrics_from_coroutine[key]
+        if isinstance(value, float) and math.isnan(value):
+            assert math.isnan(wrapper_value)
+            assert math.isnan(coroutine_value)
+        else:
+            assert wrapper_value == value
+            assert coroutine_value == value
 
 
 def test_backtest_cli_eval_fn_uses_total_return(monkeypatch):

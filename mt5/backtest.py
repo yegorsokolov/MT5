@@ -2,6 +2,7 @@
 
 import logging
 import asyncio
+from collections.abc import Awaitable
 from pathlib import Path
 import mt5.log_utils as log_utils
 from mt5.log_utils import setup_logging, log_exceptions
@@ -203,7 +204,91 @@ def fit_model(train_df: pd.DataFrame, cfg: dict) -> Pipeline:
     return pipe
 
 
-def backtest_on_df(
+async def _run_backtest(
+    df: pd.DataFrame,
+    probs: np.ndarray,
+    *,
+    engine: ExecutionEngine,
+    strategy: str,
+    threshold: float,
+    regime_thresholds: dict,
+    distance: float,
+    order_size: float,
+    delay_idx: np.ndarray,
+    expected_slippage_bps: float,
+    slippage_model=None,
+) -> tuple[list[float], int, int]:
+    """Iterate over ``df`` executing trades according to model probabilities."""
+
+    in_position = False
+    entry = 0.0
+    stop = 0.0
+    returns: list[float] = []
+    skipped = 0
+    partial = 0
+
+    for i, (row, prob) in enumerate(zip(df.itertuples(index=False), probs)):
+        delayed = df.iloc[delay_idx[i]]
+        price_mid = getattr(delayed, "mid")
+        bid = getattr(delayed, "Bid", price_mid)
+        ask = getattr(delayed, "Ask", price_mid)
+        bid_vol = getattr(delayed, "BidVolume", np.inf)
+        ask_vol = getattr(delayed, "AskVolume", np.inf)
+
+        engine.record_volume(bid_vol + ask_vol)
+        regime = getattr(row, "market_regime", None)
+        thr = (
+            regime_thresholds.get(int(regime), threshold)
+            if regime is not None
+            else threshold
+        )
+        if not in_position and prob > thr:
+            result = await engine.place_order(
+                side="buy",
+                quantity=order_size,
+                bid=bid,
+                ask=ask,
+                bid_vol=bid_vol,
+                ask_vol=ask_vol,
+                mid=price_mid,
+                strategy=strategy,
+                expected_slippage_bps=expected_slippage_bps,
+                slippage_model=slippage_model,
+            )
+            if result["filled"] < order_size:
+                skipped += 1
+                continue
+            in_position = True
+            entry = result["avg_price"]
+            stop = entry - distance
+            continue
+        if in_position:
+            current_mid = getattr(row, "mid")
+            stop = trailing_stop(entry, current_mid, stop, distance)
+            if current_mid <= stop:
+                result = await engine.place_order(
+                    side="sell",
+                    quantity=order_size,
+                    bid=bid,
+                    ask=ask,
+                    bid_vol=bid_vol,
+                    ask_vol=ask_vol,
+                    mid=price_mid,
+                    strategy=strategy,
+                    expected_slippage_bps=expected_slippage_bps,
+                    slippage_model=slippage_model,
+                )
+                fill_frac = min(result["filled"] / order_size, 1.0)
+                if fill_frac < 1.0:
+                    partial += 1
+                exit_price = result["avg_price"]
+                returns.append(((exit_price - entry) / entry) * fill_frac)
+                in_position = False
+
+    return returns, skipped, partial
+
+
+async def backtest_on_df_async(
     df: pd.DataFrame,
     model,
     cfg: dict,
@@ -212,6 +297,83 @@ def backtest_on_df(
     latency_ms: int = 0,
     return_returns: bool = False,
 ) -> dict | tuple[dict, pd.Series]:
+    """Asynchronous variant of :func:`backtest_on_df`.
+
+    The asynchronous interface allows integration into existing event loops without
+    blocking.  ``backtest_on_df`` wraps this helper and will execute it eagerly
+    when no event loop is running.
+    """
+
+    feats = feature_columns(df)
+    probs = model.predict_proba(df[feats])[:, 1]
+
+    threshold = cfg.get("threshold", 0.55)
+    regime_thresholds = getattr(model, "regime_thresholds", {})
+    distance = cfg.get("trailing_stop_pips", 20) * 1e-4
+    order_size = cfg.get("order_size", 1.0)
+    expected_slippage_bps = cfg.get("slippage_bps", 0.0)
+
+    engine = ExecutionEngine()
+    try:
+        engine.start_optimizer()
+        tier = getattr(monitor, "capability_tier", "lite")
+        strategy = "ioc" if tier == "lite" else cfg.get("execution_strategy", "vwap")
+
+        if latency_ms > 0 and "Timestamp" in df.columns:
+            ts = pd.to_datetime(df["Timestamp"]).to_numpy()
+            delays = ts + np.timedelta64(int(latency_ms), "ms")
+            delay_idx = np.searchsorted(ts, delays, side="left")
+            delay_idx = np.clip(delay_idx, 0, len(df) - 1)
+        else:
+            delay_idx = np.arange(len(df))
+
+        returns, skipped_trades, partial_fills = await _run_backtest(
+            df,
+            probs,
+            engine=engine,
+            strategy=strategy,
+            threshold=threshold,
+            regime_thresholds=regime_thresholds,
+            distance=distance,
+            order_size=order_size,
+            delay_idx=delay_idx,
+            expected_slippage_bps=expected_slippage_bps,
+            slippage_model=slippage_model,
+        )
+        series = pd.Series(returns)
+        metrics = compute_metrics(series)
+        metrics["trade_count"] = int(len(series))
+        metrics.setdefault("return", metrics.get("total_return", 0.0))
+        metrics["skipped_trades"] = skipped_trades
+        metrics["partial_fills"] = partial_fills
+        metrics["sharpe_p_value"] = bootstrap_sharpe_pvalue(series)
+        if SLIPPAGE_BPS is not None:
+            SLIPPAGE_BPS.set(expected_slippage_bps)
+            PARTIAL_FILL_COUNT.inc(partial_fills)
+            SKIPPED_TRADE_COUNT.inc(skipped_trades)
+        log_backtest_stats(metrics)
+        if return_returns:
+            return metrics, series
+        return metrics
+    finally:
+        engine.stop_optimizer()
+
+
+def backtest_on_df(
+    df: pd.DataFrame,
+    model,
+    cfg: dict,
+    *,
+    slippage_model=None,
+    latency_ms: int = 0,
+    return_returns: bool = False,
+    loop: asyncio.AbstractEventLoop | None = None,
+    return_coroutine: bool = False,
+) -> (
+    dict
+    | tuple[dict, pd.Series]
+    | Awaitable[dict | tuple[dict, pd.Series]]
+):
     """Run the trading simulation on a dataframe using the given model.
 
     Parameters
@@ -231,116 +393,53 @@ def backtest_on_df(
     return_returns: bool, optional
         When ``True`` the list of trade returns is also returned for
         statistical testing.
+    loop: asyncio.AbstractEventLoop, optional
+        Event loop used to run the coroutine.  When supplied with a loop that is
+        not running, the coroutine is executed using ``loop.run_until_complete``.
+        For running loops in other threads, ``asyncio.run_coroutine_threadsafe`` is
+        used.  If the loop is already running in the current thread, callers must
+        request a coroutine via ``return_coroutine=True`` instead.
+    return_coroutine: bool, optional
+        When ``True`` the underlying coroutine is returned without executing it.
+        This acts as an escape hatch for advanced integrations.
     """
-    feats = feature_columns(df)
-    probs = model.predict_proba(df[feats])[:, 1]
 
-    threshold = cfg.get("threshold", 0.55)
-    regime_thresholds = getattr(model, "regime_thresholds", {})
-    distance = cfg.get("trailing_stop_pips", 20) * 1e-4
-    order_size = cfg.get("order_size", 1.0)
+    coroutine = backtest_on_df_async(
+        df,
+        model,
+        cfg,
+        slippage_model=slippage_model,
+        latency_ms=latency_ms,
+        return_returns=return_returns,
+    )
 
-    engine = ExecutionEngine()
-    try:
-        engine.start_optimizer()
-        tier = getattr(monitor, "capability_tier", "lite")
-        strategy = "ioc" if tier == "lite" else cfg.get("execution_strategy", "vwap")
+    if return_coroutine:
+        return coroutine
 
-        # Pre-compute indices for delayed market data if latency is specified
-        if latency_ms > 0 and "Timestamp" in df.columns:
-            ts = pd.to_datetime(df["Timestamp"]).to_numpy()
-            delays = ts + np.timedelta64(int(latency_ms), "ms")
-            delay_idx = np.searchsorted(ts, delays, side="left")
-            delay_idx = np.clip(delay_idx, 0, len(df) - 1)
-        else:
-            delay_idx = np.arange(len(df))
-
-        async def _run_backtest() -> tuple[list[float], int, int]:
-            in_position = False
-            entry = 0.0
-            stop = 0.0
-            returns: list[float] = []
-            skipped = 0
-            partial = 0
-
-            for i, (row, prob) in enumerate(zip(df.itertuples(index=False), probs)):
-                delayed = df.iloc[delay_idx[i]]
-                price_mid = getattr(delayed, "mid")
-                bid = getattr(delayed, "Bid", price_mid)
-                ask = getattr(delayed, "Ask", price_mid)
-                bid_vol = getattr(delayed, "BidVolume", np.inf)
-                ask_vol = getattr(delayed, "AskVolume", np.inf)
-
-                engine.record_volume(bid_vol + ask_vol)
-                regime = getattr(row, "market_regime", None)
-                thr = (
-                    regime_thresholds.get(int(regime), threshold)
-                    if regime is not None
-                    else threshold
+    if loop is not None:
+        if loop.is_running():
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+            if running_loop is loop:
+                raise RuntimeError(
+                    "Cannot synchronously execute backtest_on_df on the running event loop; "
+                    "use return_coroutine=True or await backtest_on_df_async instead."
                 )
-                if not in_position and prob > thr:
-                    result = await engine.place_order(
-                        side="buy",
-                        quantity=order_size,
-                        bid=bid,
-                        ask=ask,
-                        bid_vol=bid_vol,
-                        ask_vol=ask_vol,
-                        mid=price_mid,
-                        strategy=strategy,
-                        expected_slippage_bps=cfg.get("slippage_bps", 0.0),
-                        slippage_model=slippage_model,
-                    )
-                    if result["filled"] < order_size:
-                        skipped += 1
-                        continue
-                    in_position = True
-                    entry = result["avg_price"]
-                    stop = entry - distance
-                    continue
-                if in_position:
-                    current_mid = getattr(row, "mid")
-                    stop = trailing_stop(entry, current_mid, stop, distance)
-                    if current_mid <= stop:
-                        result = await engine.place_order(
-                            side="sell",
-                            quantity=order_size,
-                            bid=bid,
-                            ask=ask,
-                            bid_vol=bid_vol,
-                            ask_vol=ask_vol,
-                            mid=price_mid,
-                            strategy=strategy,
-                            expected_slippage_bps=cfg.get("slippage_bps", 0.0),
-                            slippage_model=slippage_model,
-                        )
-                        fill_frac = min(result["filled"] / order_size, 1.0)
-                        if fill_frac < 1.0:
-                            partial += 1
-                        exit_price = result["avg_price"]
-                        returns.append(((exit_price - entry) / entry) * fill_frac)
-                        in_position = False
+            future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+            return future.result()
+        return loop.run_until_complete(coroutine)
 
-            return returns, skipped, partial
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
 
-        returns, skipped_trades, partial_fills = asyncio.run(_run_backtest())
-        series = pd.Series(returns)
-        metrics = compute_metrics(series)
-        metrics["trade_count"] = int(len(series))
-        metrics.setdefault("return", metrics.get("total_return", 0.0))
-        metrics["skipped_trades"] = skipped_trades
-        metrics["partial_fills"] = partial_fills
-        metrics["sharpe_p_value"] = bootstrap_sharpe_pvalue(series)
-        if SLIPPAGE_BPS is not None:
-            SLIPPAGE_BPS.set(cfg.get("slippage_bps", 0.0))
-            PARTIAL_FILL_COUNT.inc(partial_fills)
-            SKIPPED_TRADE_COUNT.inc(skipped_trades)
-        log_backtest_stats(metrics)
-        if return_returns:
-            return metrics, series
-        return metrics
-    finally:
-        engine.stop_optimizer()
+    if running_loop and running_loop.is_running():
+        return coroutine
+
+    return asyncio.run(coroutine)
 
 
 def run_backtest(
