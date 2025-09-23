@@ -914,15 +914,10 @@ def main(
         federated_cfg = cfg.get("federated", {})
         federated_client = None
         if federated_cfg.get("enabled"):
-            from federated.client import FederatedClient
-
-            federated_client = FederatedClient(
-                federated_cfg["server_url"],
-                federated_cfg["api_key"],
-                model,
-                cfg.get("checkpoint_dir"),
+            raise RuntimeError(
+                "Federated training support was removed from the package. "
+                "Disable the `federated` block in your configuration to continue."
             )
-            federated_client.fetch_global()
         optim = LookaheadAdamW(model.parameters(), lr=1e-3)
         grad_monitor = GradientMonitor(
             explode=cfg.get("grad_explode", 1e3),

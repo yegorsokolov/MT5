@@ -1119,17 +1119,11 @@ def main(
 
     federated_cfg = cfg.get("federated", {})
     federated_client = None
-    if federated_cfg.get("enabled") and algo != "RLLIB":
-        from federated.client import FederatedClient
-
-        target = model.policy if hasattr(model, "policy") else model
-        federated_client = FederatedClient(
-            federated_cfg["server_url"],
-            federated_cfg["api_key"],
-            target,
-            cfg.get("checkpoint_dir"),
+    if federated_cfg.get("enabled"):
+        raise RuntimeError(
+            "Federated training support was removed from the package. "
+            "Disable the `federated` block in your configuration to continue."
         )
-        federated_client.fetch_global()
 
     if algo == "RLLIB":
         ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
