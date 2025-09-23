@@ -874,8 +874,10 @@ and prints shell exports for immediate use.
    2. To view experiment history run `scripts/mlflow_ui.sh` and open `http://localhost:5000`.
 14. **Upload artifacts** –
     1. Start `python scripts/hourly_artifact_push.py` in a separate window. This
-      script commits `logs/` and `checkpoints/` every hour so history is archived automatically. Use Windows Task
-      Scheduler to launch it at logon for unattended operation.
+      script mirrors `logs/`, `checkpoints/` and analytics outputs into
+      `synced_artifacts/` before committing them every hour so history is
+      archived automatically. Use Windows Task Scheduler to launch it at logon
+      for unattended operation.
     2. If pushes fail interactively, run `git credential-manager configure` or `gh auth login` once to cache GitHub credentials for the service account.
 
 15. **Keep it running** –
@@ -1246,11 +1248,12 @@ can speed up training, checkpointing may slow it slightly due to recomputation.
 
 ## Automatic Artifact Uploading
 
-`scripts/sync_artifacts.py` commits the contents of `logs/`, `checkpoints/`,
+`scripts/sync_artifacts.py` mirrors the contents of `logs/`, `checkpoints/`,
 `analytics/` (metrics, regime diagnostics and issue snapshots), generated
-reports under `reports/` and `config.yaml` to the repository. Set the
-`GITHUB_TOKEN` environment variable to a token with write access before
-running:
+reports under `reports/` and `config.yaml` into the `synced_artifacts/`
+directory (override with `SYNC_ARTIFACT_ROOT`) before committing them to the
+repository. Set the `GITHUB_TOKEN` environment variable to a token with write
+access before running:
 
 ```bash
 GITHUB_TOKEN=<token> python scripts/sync_artifacts.py

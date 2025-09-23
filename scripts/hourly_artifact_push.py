@@ -1,4 +1,4 @@
-"""Periodically upload logs and checkpoints to the repository.
+"""Periodically mirror logs and checkpoints into the repository's ``synced_artifacts/`` archive.
 
 This helper is intended to be scheduled via cron or run as a background
 process.  It also registers the shutdown hook so a final upload occurs when the
