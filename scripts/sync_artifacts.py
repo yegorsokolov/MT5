@@ -1,7 +1,8 @@
 """Commit and push logs and model checkpoints.
 
-This utility stages the ``logs`` and ``checkpoints`` directories along with
-selected configuration files, committing them to the repository.  When the
+This utility mirrors the ``logs`` and ``checkpoints`` directories along with
+selected configuration files into ``synced_artifacts/`` (or a custom
+destination) before committing them to the repository. When the
 ``GITHUB_TOKEN`` environment variable is defined the token is injected into the
 remote URL allowing unattended pushes from automation jobs.
 
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import shutil
 import signal
 from pathlib import Path
 import logging
@@ -41,6 +43,7 @@ REPO_PATH = Path(__file__).resolve().parents[1]
 LOG_DIR = REPO_PATH / "logs"
 CHECKPOINT_DIR = REPO_PATH / "checkpoints"
 CONFIG_FILES = [REPO_PATH / "config.yaml"]
+DEFAULT_DESTINATION_ROOT = REPO_PATH / "synced_artifacts"
 
 # Additional artefact directories and file types collected alongside logs.
 DEFAULT_ARTIFACT_DIRS = [REPO_PATH / "analytics", REPO_PATH / "reports"]
@@ -64,6 +67,7 @@ DEFAULT_ARTIFACT_SUFFIXES = {
 
 ENV_ARTIFACT_DIRS = "SYNC_ARTIFACT_DIRS"
 ENV_ARTIFACT_SUFFIXES = "SYNC_ARTIFACT_SUFFIXES"
+ENV_ARTIFACT_DESTINATION = "SYNC_ARTIFACT_ROOT"
 AUTO_SYNC_ENV = "AUTO_SYNC_ARTIFACTS"
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -159,6 +163,80 @@ def _gather_artifact_targets() -> list[Path]:
     return targets
 
 
+def _resolve_destination_root() -> Path:
+    """Return the directory under which artifacts are archived."""
+
+    raw = os.getenv(ENV_ARTIFACT_DESTINATION)
+    if not raw:
+        return DEFAULT_DESTINATION_ROOT
+
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = (REPO_PATH / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    if not _is_within_repo(candidate):
+        logger.warning(
+            "Artifact destination %s is outside the repository; falling back to %s",
+            candidate,
+            DEFAULT_DESTINATION_ROOT.relative_to(REPO_PATH),
+        )
+        return DEFAULT_DESTINATION_ROOT
+
+    if candidate == REPO_PATH:
+        logger.warning(
+            "Artifact destination cannot be the repository root; using %s",
+            DEFAULT_DESTINATION_ROOT.relative_to(REPO_PATH),
+        )
+        return DEFAULT_DESTINATION_ROOT
+
+    return candidate
+
+
+def _prepare_destination_root(destination: Path) -> None:
+    """Ensure the destination directory exists and is empty."""
+
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+
+
+def _copy_to_destination(path: Path, destination_root: Path) -> Path | None:
+    """Copy ``path`` into ``destination_root`` preserving its relative path."""
+
+    try:
+        rel = path.relative_to(REPO_PATH)
+    except ValueError:
+        logger.warning("Skipping artifact outside repository: %s", path)
+        return None
+
+    destination = destination_root / rel
+    if destination_root in path.parents or path == destination_root:
+        logger.debug("Skipping nested destination path %s", path)
+        return None
+
+    if path.is_dir():
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(path, destination)
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)
+    return destination
+
+
+def _stage_destination_root(repo: Repo, destination: Path) -> None:
+    """Stage the mirrored artifact tree for commit."""
+
+    try:
+        rel = destination.relative_to(REPO_PATH)
+    except ValueError:
+        logger.warning("Destination outside repository, not staging: %s", destination)
+        return
+    repo.git.add("--all", str(rel))
+
+
 def _stage_path(repo: Repo, path: Path) -> None:
     """Stage ``path`` relative to the repository root."""
 
@@ -197,6 +275,8 @@ def sync_artifacts() -> None:
     init_logging()
     repo = Repo(REPO_PATH)
 
+    destination_root = _resolve_destination_root()
+
     targets = _gather_artifact_targets()
     if not targets:
         logger.info("No artifact paths found to stage")
@@ -204,17 +284,34 @@ def sync_artifacts() -> None:
 
     base_targets = {LOG_DIR, CHECKPOINT_DIR, *CONFIG_FILES}
     extra_targets = [p for p in targets if p not in base_targets]
+    try:
+        destination_display = destination_root.relative_to(REPO_PATH)
+    except ValueError:
+        destination_display = destination_root
+    logger.info(
+        "Mirroring %d artifact paths into %s", len(targets), destination_display
+    )
     if extra_targets:
-        logger.info("Staging %d analytics/report artefacts", len(extra_targets))
+        logger.info(
+            "Including %d analytics/report artefacts", len(extra_targets)
+        )
+
+    _prepare_destination_root(destination_root)
 
     for path in targets:
-        _stage_path(repo, path)
+        _copy_to_destination(path, destination_root)
+
+    _stage_destination_root(repo, destination_root)
+
+    for config_path in CONFIG_FILES:
+        if config_path.exists():
+            _stage_path(repo, config_path)
 
     if not repo.is_dirty():
         logger.info("No new artifacts or configs to commit")
         return
 
-    repo.index.commit("Update analytics, logs and checkpoints")
+    repo.index.commit("Update synced logs, checkpoints and analytics")
     try:
         repo.remote().pull(rebase=True)
     except GitCommandError as exc:
