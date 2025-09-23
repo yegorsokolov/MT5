@@ -1,5 +1,7 @@
 import importlib
 import importlib.util
+import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -64,3 +66,68 @@ def test_batch_size_backoff_respects_typed_training_config(monkeypatch):
     assert cfg_dict["batch_size"] == 64
     assert cfg_dict["eval_batch_size"] == 32
     assert attempts["count"] == 2
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("torch") is None,
+    reason="torch dependency unavailable",
+)
+def test_train_nn_main_lazily_starts_orchestrator(monkeypatch):
+    pd = pytest.importorskip("pandas")
+
+    class _Stop(Exception):
+        pass
+
+    orchestrator_calls = {"count": 0}
+    orch_module = types.ModuleType("core.orchestrator")
+
+    class _StubOrchestrator:
+        @staticmethod
+        def start():
+            orchestrator_calls["count"] += 1
+            return object()
+
+    orch_module.Orchestrator = _StubOrchestrator
+    orch_module.__spec__ = importlib.machinery.ModuleSpec(
+        "core.orchestrator", loader=None
+    )
+    monkeypatch.setitem(sys.modules, "core.orchestrator", orch_module)
+    monkeypatch.delitem(sys.modules, "train_nn", raising=False)
+    monkeypatch.delitem(sys.modules, "mt5.train_nn", raising=False)
+
+    module = importlib.import_module("train_nn")
+
+    assert orchestrator_calls["count"] == 0
+
+    monitor_stub = SimpleNamespace(
+        capabilities=SimpleNamespace(capability_tier=lambda: "lite", cpus=1)
+    )
+    monkeypatch.setattr(module, "monitor", monitor_stub, raising=False)
+    fake_df = pd.DataFrame({"mid": [1.0], "Symbol": ["SYM"]})
+    monkeypatch.setattr(
+        module,
+        "load_history_config",
+        lambda *a, **k: fake_df.copy(),
+        raising=False,
+    )
+
+    def _raise_make_features(*_args, **_kwargs):
+        raise _Stop()
+
+    monkeypatch.setattr(module, "make_features", _raise_make_features, raising=False)
+
+    cfg = {"symbols": ["SYM"], "stream_history": False, "seed": 1}
+
+    with pytest.raises(_Stop):
+        module.main(0, 1, cfg)
+
+    assert orchestrator_calls["count"] == 1
+
+    with pytest.raises(_Stop):
+        module.main(0, 1, cfg)
+
+    assert orchestrator_calls["count"] == 1
+    module._ORCHESTRATOR_STARTED = False
+    module._ORCHESTRATOR_INSTANCE = None
+    monkeypatch.delitem(sys.modules, "train_nn", raising=False)
+    monkeypatch.delitem(sys.modules, "mt5.train_nn", raising=False)

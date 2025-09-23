@@ -9,6 +9,7 @@ from typing import Any, Iterable, List, cast
 from types import ModuleType, SimpleNamespace
 
 import os
+import threading
 try:
     import numpy as np
 except Exception:  # pragma: no cover - optional dependency
@@ -587,13 +588,29 @@ def init_logging() -> logging.Logger:
 
 
 logger = logging.getLogger(__name__)
-Orchestrator.start()
+
+_ORCHESTRATOR_LOCK = threading.Lock()
+_ORCHESTRATOR_STARTED = False
+_ORCHESTRATOR_INSTANCE: Orchestrator | None = None
+
+
+def ensure_orchestrator_started() -> Orchestrator | None:
+    """Ensure the orchestrator service is started before training."""
+
+    global _ORCHESTRATOR_STARTED, _ORCHESTRATOR_INSTANCE
+    if not _ORCHESTRATOR_STARTED:
+        with _ORCHESTRATOR_LOCK:
+            if not _ORCHESTRATOR_STARTED:
+                _ORCHESTRATOR_INSTANCE = Orchestrator.start()
+                _ORCHESTRATOR_STARTED = True
+    return _ORCHESTRATOR_INSTANCE
 
 
 @log_exceptions
 def main(
     rank: int = 0, world_size: int | None = None, cfg: dict | None = None
 ) -> float:
+    ensure_orchestrator_started()
     init_logging()
     if cfg is None:
         cfg = load_config()
@@ -1498,6 +1515,7 @@ def main(
 
 
 def launch(cfg: dict | None = None) -> float:
+    ensure_orchestrator_started()
     init_logging()
     if cfg is None:
         cfg = load_config()
@@ -1936,6 +1954,7 @@ if __name__ == "__main__":
         cfg["history_path"] = args.history_path
     if args.checkpoint_dir:
         cfg["checkpoint_dir"] = args.checkpoint_dir
+    ensure_orchestrator_started()
     ensure_torch_available(require_cuda=args.ddp)
     if args.tune:
         from tuning.bayesian_search import run_search

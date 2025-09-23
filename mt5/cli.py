@@ -103,7 +103,10 @@ def train_cmd(args: argparse.Namespace) -> None:
 
 
 def train_nn_cmd(args: argparse.Namespace) -> None:
-    from mt5.train_nn import main as train_nn_main
+    from mt5.train_nn import (
+        ensure_orchestrator_started as ensure_nn_orchestrator_started,
+        main as train_nn_main,
+    )
 
     tmp, previous_config, env_modified = _prepare_config(
         args.config,
@@ -115,6 +118,7 @@ def train_nn_cmd(args: argparse.Namespace) -> None:
         validate=args.validate,
     )
     try:
+        ensure_nn_orchestrator_started()
         train_nn_main()
     finally:
         if tmp:
@@ -127,7 +131,11 @@ def train_nn_cmd(args: argparse.Namespace) -> None:
 
 
 def train_rl_cmd(args: argparse.Namespace) -> None:
-    from mt5.train_rl import ensure_torch_available, main as train_rl_main
+    from mt5.train_rl import (
+        ensure_orchestrator_started as ensure_rl_orchestrator_started,
+        ensure_torch_available,
+        main as train_rl_main,
+    )
 
     tmp, previous_config, env_modified = _prepare_config(
         args.config,
@@ -137,6 +145,7 @@ def train_rl_cmd(args: argparse.Namespace) -> None:
         validate=args.validate,
     )
     try:
+        ensure_rl_orchestrator_started()
         ensure_torch_available()
         train_rl_main()
     finally:
