@@ -121,13 +121,14 @@ class DriftMonitor:
         store_path: Path = DRIFT_METRICS,
         threshold: float = 0.05,
         drift_threshold: float = 0.2,
-        feature_set_path: Path = LOG_DIR / "selected_features.json",
+        feature_set_path: Path = (LOG_DIR / "nn_artifacts" / "selected_features.json"),
     ) -> None:
         self.baseline_path = baseline_path
         self.store_path = store_path
         self.threshold = threshold
         self.drift_threshold = drift_threshold
         self.feature_set_path = feature_set_path
+        self.feature_set_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(__name__)
         self._task: Optional[asyncio.Task[None]] = None
 
