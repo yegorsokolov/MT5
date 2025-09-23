@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 
 import numpy as np
@@ -188,6 +189,7 @@ def _run_train_nn(tmpdir: Path, stream: bool):
         return df
 
     train_nn.make_features = _simple_features  # type: ignore
+    artifact_dir = tmpdir / "artifacts"
     cfg = {
         "seed": 0,
         "risk_per_trade": 0.01,
@@ -199,16 +201,22 @@ def _run_train_nn(tmpdir: Path, stream: bool):
         "sequence_length": 5,
         "val_size": 0.2,
         "train_rows": 60,
+        "artifact_dir": str(artifact_dir),
     }
     cfg_path = tmpdir / "config.yaml"
     with cfg_path.open("w") as f:
         yaml.safe_dump(cfg, f)
     os.environ["CONFIG_FILE"] = str(cfg_path)
     mlflow.end_run()
+    src_hist = DATA_DIR / "TEST_history.parquet"
+    if src_hist.exists():
+        local_hist = artifact_dir / "data" / src_hist.name
+        local_hist.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_hist, local_hist)
     train_nn.main()
 
-    state = joblib.load(ROOT / "model_transformer.pt")
-    feat_path = ROOT / "selected_features.json"
+    state = joblib.load(artifact_dir / "model_transformer.pt")
+    feat_path = artifact_dir / "selected_features.json"
     features = json.loads(feat_path.read_text())
     df = _simple_features(load_history_parquet(DATA_DIR / "TEST_history.parquet"))
     df["Symbol"] = "TEST"

@@ -10,6 +10,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, NamedTuple
 
+from mt5.log_utils import LOG_DIR
+
 
 try:
     from utils import load_config
@@ -297,13 +299,15 @@ async def resource_reprobe() -> None:
         from analysis.domain_adapter import DomainAdapter
 from mt5.monitor_drift import DRIFT_METRICS
 
-        adapter = DomainAdapter.load(Path("domain_adapter.pkl"))
+        adapter_path = LOG_DIR / "nn_artifacts" / "domain_adapter.pkl"
+        adapter_path.parent.mkdir(parents=True, exist_ok=True)
+        adapter = DomainAdapter.load(adapter_path)
         if DRIFT_METRICS.exists():
             df = pd.read_parquet(DRIFT_METRICS)
             num = df.select_dtypes(np.number)
             if not num.empty:
                 adapter.reestimate(num)
-                adapter.save(Path("domain_adapter.pkl"))
+                adapter.save(adapter_path)
         logger.info("Domain adapter parameters refreshed")
     except Exception:
         logger.exception("Domain adapter re-estimation failed")

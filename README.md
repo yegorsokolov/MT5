@@ -783,7 +783,8 @@ to prepare a clean Windows PC or VPS.
       The script downloads the backtesting files `XAUUSD.csv` and `GBPUSD.csv`
       from Google Drive and trains a LightGBM model.
    2. To experiment with the transformer-based neural network instead run `python -m mt5.train_cli neural`.
-      This trains a small transformer on sequences of the same features and saves `model_transformer.pt`.
+      This trains a small transformer on sequences of the same features and saves `model_transformer.pt`
+      under `logs/nn_artifacts` (or the directory specified by `artifact_dir`).
    3. After either script finishes you will see the resulting model file under the project folder.
    4. To browse logged runs start `scripts/mlflow_ui.sh` and open `http://localhost:5000` in your browser.
 
