@@ -1,7 +1,9 @@
+import asyncio
 import sys
 import types
 import importlib.util
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
@@ -58,11 +60,22 @@ sys.modules.setdefault(
                 "get_params": lambda self: {"limit_offset": 0.0, "slice_size": None},
                 "schedule_nightly": lambda self: None,
             },
-        )
+        ),
+        OptimizationLoopHandle=type(
+            "OptHandle", (), {"stop": lambda self: None, "join": lambda self: None}
+        ),
     ),
 )
 sys.modules.setdefault(
     "crypto_utils",
+    types.SimpleNamespace(
+        _load_key=lambda *a, **k: None,
+        encrypt=lambda *a, **k: b"",
+        decrypt=lambda *a, **k: b"",
+    ),
+)
+sys.modules.setdefault(
+    "mt5.crypto_utils",
     types.SimpleNamespace(
         _load_key=lambda *a, **k: None,
         encrypt=lambda *a, **k: b"",
@@ -107,6 +120,7 @@ sys.modules["log_utils"] = types.SimpleNamespace(
 )
 backtest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(backtest)
+backtest.log_backtest_stats = lambda *a, **k: None
 
 
 class DummyModel:
@@ -135,6 +149,99 @@ def _make_df() -> pd.DataFrame:
     return df
 
 
+def _run_naive_backtest(df: pd.DataFrame, model, cfg: dict, *, slippage_model=None):
+    feats = backtest.feature_columns(df)
+    probs = model.predict_proba(df[feats])[:, 1]
+
+    threshold = cfg.get("threshold", 0.55)
+    regime_thresholds = getattr(model, "regime_thresholds", {})
+    distance = cfg.get("trailing_stop_pips", 20) * 1e-4
+    order_size = cfg.get("order_size", 1.0)
+
+    engine = backtest.ExecutionEngine()
+    try:
+        engine.start_optimizer()
+        tier = getattr(backtest.monitor, "capability_tier", lambda: "lite")
+        strategy = "ioc" if tier == "lite" else cfg.get("execution_strategy", "vwap")
+
+        in_position = False
+        entry = 0.0
+        stop = 0.0
+        returns: list[float] = []
+        skipped = 0
+        partial = 0
+
+        delay_idx = np.arange(len(df))
+
+        for i, (row, prob) in enumerate(zip(df.itertuples(index=False), probs)):
+            delayed = df.iloc[delay_idx[i]]
+            price_mid = getattr(delayed, "mid")
+            bid = getattr(delayed, "Bid", price_mid)
+            ask = getattr(delayed, "Ask", price_mid)
+            bid_vol = getattr(delayed, "BidVolume", np.inf)
+            ask_vol = getattr(delayed, "AskVolume", np.inf)
+
+            engine.record_volume(bid_vol + ask_vol)
+            regime = getattr(row, "market_regime", None)
+            thr = (
+                regime_thresholds.get(int(regime), threshold)
+                if regime is not None
+                else threshold
+            )
+
+            if not in_position and prob > thr:
+                result = asyncio.run(
+                    engine.place_order(
+                        side="buy",
+                        quantity=order_size,
+                        bid=bid,
+                        ask=ask,
+                        bid_vol=bid_vol,
+                        ask_vol=ask_vol,
+                        mid=price_mid,
+                        strategy=strategy,
+                        expected_slippage_bps=cfg.get("slippage_bps", 0.0),
+                        slippage_model=slippage_model,
+                    )
+                )
+                if result["filled"] < order_size:
+                    skipped += 1
+                    continue
+                in_position = True
+                entry = result["avg_price"]
+                stop = entry - distance
+                continue
+
+            if in_position:
+                current_mid = getattr(row, "mid")
+                stop = backtest.trailing_stop(entry, current_mid, stop, distance)
+                if current_mid <= stop:
+                    result = asyncio.run(
+                        engine.place_order(
+                            side="sell",
+                            quantity=order_size,
+                            bid=bid,
+                            ask=ask,
+                            bid_vol=bid_vol,
+                            ask_vol=ask_vol,
+                            mid=price_mid,
+                            strategy=strategy,
+                            expected_slippage_bps=cfg.get("slippage_bps", 0.0),
+                            slippage_model=slippage_model,
+                        )
+                    )
+                    fill_frac = min(result["filled"] / order_size, 1.0)
+                    if fill_frac < 1.0:
+                        partial += 1
+                    exit_price = result["avg_price"]
+                    returns.append(((exit_price - entry) / entry) * fill_frac)
+                    in_position = False
+
+        return returns, skipped, partial
+    finally:
+        engine.stop_optimizer()
+
+
 def test_pnl_drops_with_latency_and_slippage():
     model = DummyModel()
     df = _make_df()
@@ -159,3 +266,37 @@ def test_pnl_drops_with_latency_and_slippage():
 
     assert metrics_latency["total_return"] < metrics_base["total_return"]
     assert metrics_slip["total_return"] < metrics_base["total_return"]
+
+
+def test_backtest_single_event_loop_is_faster_than_naive():
+    model = DummyModel()
+    base = _make_df()
+    df = pd.concat([base] * 150, ignore_index=True)
+    df["Timestamp"] = pd.date_range("2020-01-01", periods=len(df), freq="ms")
+
+    cfg = {"threshold": 0.5, "trailing_stop_pips": 1000, "order_size": 100}
+
+    naive_times = []
+    naive_returns = None
+    for _ in range(2):
+        start = perf_counter()
+        naive_returns, _, _ = _run_naive_backtest(df, model, cfg)
+        naive_times.append(perf_counter() - start)
+
+    improved_times = []
+    improved_returns = None
+    for _ in range(2):
+        start = perf_counter()
+        _, improved_returns = backtest.backtest_on_df(
+            df, model, cfg, return_returns=True
+        )
+        improved_times.append(perf_counter() - start)
+
+    assert improved_returns is not None
+    assert naive_returns is not None
+    assert np.allclose(improved_returns.to_numpy(), np.array(naive_returns))
+
+    naive_best = min(naive_times)
+    improved_best = min(improved_times)
+    assert improved_best < naive_best
+    assert improved_best <= naive_best * 0.9
