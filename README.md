@@ -834,6 +834,13 @@ mlflow:
   username: "secret://MLFLOW_USER"
   password: "secret://MLFLOW_PASS"
 ```
+
+Generate the credentials referenced above with::
+
+    python -m deployment.mlflow_credentials --env-file .env --print-exports
+
+This command mints a random service account, stores it in your chosen env file
+and prints shell exports for immediate use.
 9. **Copy the EA** –
    1. Open MetaTrader 5 and click **File → Open Data Folder**.
    2. Run `python scripts/setup_terminal.py "<path-to-terminal>"` to automatically place `AdaptiveEA.mq5` and `RealtimeEA.mq5` inside `MQL5/Experts`.
