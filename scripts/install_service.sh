@@ -90,6 +90,78 @@ else
     echo "Skipping InfluxDB bootstrap (INFLUXDB_BOOTSTRAP_URL not set)"
 fi
 
+# Generate Prometheus Pushgateway/Prometheus endpoints alongside runtime secrets.
+if [[ "${PROM_ENDPOINTS_SKIP:-0}" == "1" ]]; then
+    echo "Skipping Prometheus endpoint generation (PROM_ENDPOINTS_SKIP=1)"
+else
+    PROM_ENV_FILE="${PROM_ENDPOINTS_ENV_FILE:-${REPO_DIR}/deploy/secrets/runtime.env}"
+    PROM_ARGS=(--env-file "${PROM_ENV_FILE}")
+
+    if [[ "${PROM_ENDPOINTS_FORCE:-0}" == "1" ]]; then
+        PROM_ARGS+=(--force)
+    fi
+    if [[ "${PROM_ENDPOINTS_SKIP_PUSH:-0}" == "1" ]]; then
+        PROM_ARGS+=(--skip-push)
+    fi
+    if [[ "${PROM_ENDPOINTS_SKIP_QUERY:-0}" == "1" ]]; then
+        PROM_ARGS+=(--skip-query)
+    fi
+
+    if [[ "${PROM_ENDPOINTS_PRINT_EXPORTS:-0}" == "1" ]]; then
+        PROM_ARGS+=(--print-exports)
+    fi
+
+    if [[ "${PROM_ENDPOINTS_SKIP_PUSH:-0}" != "1" ]]; then
+        if [[ -n "${PROM_ENDPOINTS_PUSH_URL:-}" ]]; then
+            PROM_ARGS+=(--push-url "${PROM_ENDPOINTS_PUSH_URL}")
+        else
+            if [[ -n "${PROM_ENDPOINTS_PUSH_SCHEME:-}" ]]; then
+                PROM_ARGS+=(--push-scheme "${PROM_ENDPOINTS_PUSH_SCHEME}")
+            fi
+            if [[ -n "${PROM_ENDPOINTS_PUSH_HOST:-}" ]]; then
+                PROM_ARGS+=(--push-host "${PROM_ENDPOINTS_PUSH_HOST}")
+            fi
+            if [[ -n "${PROM_ENDPOINTS_PUSH_PORT:-}" ]]; then
+                PROM_ARGS+=(--push-port "${PROM_ENDPOINTS_PUSH_PORT}")
+            fi
+            if [[ -n "${PROM_ENDPOINTS_PUSH_PATH:-}" ]]; then
+                PROM_ARGS+=(--push-path "${PROM_ENDPOINTS_PUSH_PATH}")
+            fi
+            if [[ -n "${PROM_ENDPOINTS_PUSH_JOB:-}" ]]; then
+                PROM_ARGS+=(--push-job "${PROM_ENDPOINTS_PUSH_JOB}")
+            fi
+            if [[ -n "${PROM_ENDPOINTS_PUSH_INSTANCE:-}" ]]; then
+                PROM_ARGS+=(--push-instance "${PROM_ENDPOINTS_PUSH_INSTANCE}")
+            fi
+        fi
+    fi
+
+    if [[ "${PROM_ENDPOINTS_SKIP_QUERY:-0}" != "1" ]]; then
+        if [[ -n "${PROM_ENDPOINTS_QUERY_URL:-}" ]]; then
+            PROM_ARGS+=(--query-url "${PROM_ENDPOINTS_QUERY_URL}")
+        else
+            if [[ -n "${PROM_ENDPOINTS_QUERY_SCHEME:-}" ]]; then
+                PROM_ARGS+=(--query-scheme "${PROM_ENDPOINTS_QUERY_SCHEME}")
+            fi
+            if [[ -n "${PROM_ENDPOINTS_QUERY_HOST:-}" ]]; then
+                PROM_ARGS+=(--query-host "${PROM_ENDPOINTS_QUERY_HOST}")
+            fi
+            if [[ -n "${PROM_ENDPOINTS_QUERY_PORT:-}" ]]; then
+                PROM_ARGS+=(--query-port "${PROM_ENDPOINTS_QUERY_PORT}")
+            fi
+            if [[ -n "${PROM_ENDPOINTS_QUERY_PATH:-}" ]]; then
+                PROM_ARGS+=(--query-path "${PROM_ENDPOINTS_QUERY_PATH}")
+            fi
+        fi
+    fi
+
+    echo "Ensuring Prometheus endpoint URLs exist (${PROM_ENV_FILE})"
+    (
+        cd "${REPO_DIR}"
+        python3 -m deployment.prometheus_endpoints "${PROM_ARGS[@]}"
+    )
+fi
+
 # Substitute repository path into unit file and install
 sudo sed "s|{{REPO_PATH}}|${REPO_DIR}|g" "deploy/${SERVICE_NAME}.service" | sudo tee "${SERVICE_FILE}" > /dev/null
 sudo sed "s|{{REPO_PATH}}|${REPO_DIR}|g" "deploy/${UPDATE_SERVICE_NAME}.service" | sudo tee "${UPDATE_SERVICE_FILE}" > /dev/null
