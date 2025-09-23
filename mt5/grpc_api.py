@@ -90,6 +90,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 async def serve(address: str = "[::]:50051") -> None:
+    ra.ensure_initialized()
     server = grpc.aio.server()
     management_pb2_grpc.add_ManagementServiceServicer_to_server(
         ManagementServicer(), server

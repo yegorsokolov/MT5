@@ -33,7 +33,6 @@ __all__ = [
     "ray_utils",
     "realtime_train",
     "regime",
-    "remote_api",
     "risk_manager",
     "scheduler",
     "signal_queue",

@@ -1,3 +1,7 @@
+import pytest
+
+pytest.skip("Remote management API removed; see archive/bot_apis.", allow_module_level=True)
+
 import sys
 from pathlib import Path
 import types
