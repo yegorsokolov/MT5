@@ -44,7 +44,7 @@ def init_logging() -> logging.Logger:
 
 logger = logging.getLogger(__name__)
 from mt5.train_meta import load_symbol_data, train_base_model, train_meta_network
-from mt5.train_rl import TradingEnv, DiscreteTradingEnv
+from mt5.train_rl import TradingEnv, DiscreteTradingEnv, artifact_dir
 from mt5.train_nn import TransformerModel
 
 
@@ -183,7 +183,7 @@ def run_meta_learning(df: pd.DataFrame, cfg: dict, root: Path) -> None:
     )
 
 
-def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
+def train_rl_agent(df: pd.DataFrame, cfg: dict, artifact_root: Path) -> None:
     """Train an RL agent using the trading environment."""
     features = [
         "return",
@@ -241,8 +241,10 @@ def train_rl_agent(df: pd.DataFrame, cfg: dict, root: Path) -> None:
     else:
         raise ValueError(f"Unknown rl_algorithm {algo}")
     model.learn(total_timesteps=cfg.get("rl_steps", 5000))
-    model.save(root / "model_rl")
-    logger.info("RL model saved to %s", root / "model_rl.zip")
+    models_dir = artifact_root / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    model.save(models_dir / "model_rl")
+    logger.info("RL model saved to %s", models_dir / "model_rl.zip")
 
 
 def evaluate_filters(df: pd.DataFrame, cfg: dict, root: Path) -> List[str]:
@@ -294,10 +296,11 @@ def main() -> None:
         torch.cuda.manual_seed_all(seed)
     root = Path(__file__).resolve().parent
     df = load_dataset(cfg, root)
+    rl_root = artifact_dir(cfg)
 
     train_transformer(df, cfg, root)
     run_meta_learning(df, cfg, root)
-    train_rl_agent(df, cfg, root)
+    train_rl_agent(df, cfg, rl_root)
     evaluate_filters(df, cfg, root)
 
 

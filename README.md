@@ -559,12 +559,15 @@ optimises risk-adjusted profit.  The PPO environment now supports trading
 multiple symbols at once using a vector of position sizes.  Per-symbol returns
 and transaction costs are tracked while a portfolio variance penalty discourages
 excess risk.  Key parameters such as `rl_max_position`, `rl_transaction_cost`,
-`rl_risk_penalty` and `rl_var_window` can be adjusted in `config.yaml`.  Set
-`rl_algorithm: RLlib` together with `rllib_algorithm: PPO` or `DDPG` to train
-using RLlib instead of Stable-Baselines.  The resulting checkpoint is stored
-under `model_rllib/` and is automatically used by `mt5.generate_signals` when
-`rl_algorithm` is set to `RLlib`.  Alternatively set `rl_algorithm: SAC` to
-train a Soft Actor-Critic agent with Stable-Baselines3:
+`rl_risk_penalty` and `rl_var_window` can be adjusted in `config.yaml`.  Trained
+artifacts are stored under `logs/rl_artifacts/` by default (override with
+`artifact_dir`), with separate `models/`, `data/` and `reports/` subfolders.
+Set `rl_algorithm: RLlib` together with `rllib_algorithm: PPO` or `DDPG` to
+train using RLlib instead of Stable-Baselines.  The resulting checkpoint is
+stored under `logs/rl_artifacts/models/model_rllib/` and is automatically used
+by `mt5.generate_signals` when `rl_algorithm` is set to `RLlib`.  Alternatively
+set `rl_algorithm: SAC` to train a Soft Actor-Critic agent with Stable-
+Baselines3:
 
 ```yaml
 rl_algorithm: SAC
@@ -577,7 +580,8 @@ You can also specify `rl_algorithm: TRPO` to use the Trust Region Policy
 Optimization implementation from `sb3-contrib`.  The trust region size is
 controlled by `rl_max_kl` (default `0.01`).
 `rl_algorithm: RecurrentPPO` trains the LSTM-based PPO implementation from
-`sb3-contrib` and writes checkpoints to `models/recurrent_rl/`.
+`sb3-contrib` and writes checkpoints to
+`logs/rl_artifacts/models/recurrent_rl/`.
 Example settings:
 
 ```yaml
@@ -587,7 +591,7 @@ rl_steps: 10000
 `rl_algorithm: HierarchicalPPO` enables the options framework from
 `sb3-contrib` where a manager policy chooses trade direction and a worker
 controls position sizing.  The trained model is stored as
-`model_hierarchical.zip`.
+`logs/rl_artifacts/models/model_hierarchical.zip`.
 
 ```yaml
 rl_algorithm: HierarchicalPPO
