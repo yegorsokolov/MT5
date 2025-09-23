@@ -335,9 +335,13 @@ def run_backtest(
         df["Symbol"] = cfg.get("symbol", "SIM")
     else:
         data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
+        symbols = cfg.get("symbols") or (
+            [cfg.get("symbol")] if cfg.get("symbol") else None
+        )
         if not data_path.exists():
             cfg_root = Path(__file__).resolve().parent
-            symbols = cfg.get("symbols") or [cfg.get("symbol")]
+            if not symbols:
+                raise ValueError("No symbols configured for history generation")
             dfs = []
             for sym in symbols:
                 df_sym = load_history_config(sym, cfg, cfg_root)
@@ -350,7 +354,8 @@ def run_backtest(
             df_all.to_parquet(save_path, index=False)
 
         df = load_history_parquet(data_path)
-        df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+        if symbols and "Symbol" in df.columns:
+            df = df[df["Symbol"].isin(symbols)]
     df = make_features(df)
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
@@ -415,9 +420,13 @@ def run_rolling_backtest(
         df["Symbol"] = cfg.get("symbol", "SIM")
     else:
         data_path = Path(__file__).resolve().parent / "data" / "history.parquet"
+        symbols = cfg.get("symbols") or (
+            [cfg.get("symbol")] if cfg.get("symbol") else None
+        )
         if not data_path.exists():
             cfg_root = Path(__file__).resolve().parent
-            symbols = cfg.get("symbols") or [cfg.get("symbol")]
+            if not symbols:
+                raise ValueError("No symbols configured for history generation")
             dfs = []
             for sym in symbols:
                 df_sym = load_history_config(sym, cfg, cfg_root)
@@ -428,7 +437,8 @@ def run_rolling_backtest(
             df_all.to_parquet(data_path, index=False)
 
         df = load_history_parquet(data_path)
-        df = df[df.get("Symbol").isin([cfg.get("symbol")])]
+        if symbols and "Symbol" in df.columns:
+            df = df[df["Symbol"].isin(symbols)]
     df = make_features(df)
     if "Symbol" in df.columns:
         df["SymbolCode"] = df["Symbol"].astype("category").cat.codes
