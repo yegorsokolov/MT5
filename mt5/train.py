@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
+import joblib
 from mt5.ray_utils import init as ray_init, shutdown as ray_shutdown
 from training.pipeline import init_logging as init_pipeline_logging, launch, main
 from utils import ensure_environment, load_config
@@ -128,7 +130,15 @@ def _run_evolutionary_search(risk_target: dict | None) -> None:
         trial_cfg = deepcopy(cfg)
         trial_cfg.update(params)
         main(trial_cfg, risk_target=risk_target)
-        metrics = run_backtest(trial_cfg)
+        model = None
+        model_path = Path(__file__).resolve().parent / "model.joblib"
+        if model_path.exists():
+            try:
+                model = joblib.load(model_path)
+            except Exception:
+                model = None
+        run_kwargs = {"model": model} if model is not None else {}
+        metrics = run_backtest(trial_cfg, **run_kwargs)
         total_return = metrics.get("total_return")
         return (
             -float(total_return if total_return is not None else metrics.get("return", 0.0)),

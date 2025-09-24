@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import logging
+import joblib
 import mt5.log_utils as log_utils
 import pandas as pd
 from scipy.stats import ttest_ind
@@ -120,15 +121,28 @@ def main():
         train_model()
 
         cfg = _config_to_dict(load_config())
-        base_metrics, base_returns = run_backtest(cfg, return_returns=True)
-        base_cv = run_rolling_backtest(cfg)
+
+        model = None
+        model_path = Path(__file__).resolve().parent / "model.joblib"
+        if model_path.exists():
+            try:
+                model = joblib.load(model_path)
+            except Exception:
+                logger.exception("Failed to load backtest model from %s", model_path)
+                model = None
+        model_kwargs = {"model": model} if model is not None else {}
+
+        base_metrics, base_returns = run_backtest(
+            cfg, return_returns=True, **model_kwargs
+        )
+        base_cv = run_rolling_backtest(cfg, **model_kwargs)
 
         results: List[Dict[str, float]] = []
 
         def evaluate(params: Dict[str, float]) -> float:
             test_cfg = copy.deepcopy(cfg)
             test_cfg.update(params)
-            metrics = run_rolling_backtest(test_cfg)
+            metrics = run_rolling_backtest(test_cfg, **model_kwargs)
             val = metrics.get("avg_sharpe", float("nan"))
             results.append({**params, "avg_sharpe": val})
             return val
@@ -211,8 +225,10 @@ def main():
         best_cfg["rl_max_kl"] = float(best_params.get("rl_max_kl", cfg.get("rl_max_kl", 0.01)))
         best_cfg["backtest_window_months"] = int(best_params["backtest_window_months"])
 
-        best_metrics, best_returns = run_backtest(best_cfg, return_returns=True)
-        best_cv = run_rolling_backtest(best_cfg)
+        best_metrics, best_returns = run_backtest(
+            best_cfg, return_returns=True, **model_kwargs
+        )
+        best_cv = run_rolling_backtest(best_cfg, **model_kwargs)
 
         stat = ttest_ind(best_returns, base_returns, equal_var=False)
         improved = (

@@ -487,3 +487,50 @@ def test_run_backtest_honours_history_cache_override(tmp_path, monkeypatch):
     assert writes == [override_path]
     assert load_calls == [override_path]
     assert override_path.parent.exists()
+
+
+def test_run_backtest_reuses_supplied_model(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Timestamp": pd.date_range("2024-03-01", periods=4, freq="D"),
+            "Symbol": ["EURUSD"] * 4,
+            "return": [0.01, -0.02, 0.005, 0.003],
+        }
+    )
+
+    original_exists = backtest.Path.exists
+
+    def fake_exists(path_self):
+        if str(path_self).endswith("history.parquet"):
+            return True
+        return original_exists(path_self)
+
+    monkeypatch.setattr(backtest.Path, "exists", fake_exists)
+    monkeypatch.setattr(backtest, "load_history_parquet", lambda path: df.copy())
+    monkeypatch.setattr(backtest, "make_features", lambda frame: frame)
+
+    load_calls: list[Path] = []
+    fake_model = object()
+
+    def fake_joblib_load(path):
+        load_calls.append(Path(path))
+        return fake_model
+
+    monkeypatch.setattr(backtest.joblib, "load", fake_joblib_load)
+
+    seen_models: list[object] = []
+
+    def fake_backtest_on_df(dataframe, model, cfg, **kwargs):
+        seen_models.append(model)
+        return {"return": 0.0}
+
+    monkeypatch.setattr(backtest, "backtest_on_df", fake_backtest_on_df)
+
+    cfg = {"symbol": "EURUSD"}
+    model = backtest.joblib.load(Path("dummy.joblib"))
+
+    backtest.run_backtest(cfg, model=model)
+    backtest.run_backtest(cfg, model=model)
+
+    assert len(load_calls) == 1
+    assert seen_models == [fake_model, fake_model]

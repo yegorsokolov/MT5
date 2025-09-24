@@ -1376,6 +1376,7 @@ def run_backtest(
     *,
     latency_ms: int = 0,
     slippage_model=None,
+    model=None,
 ):
     """Run a backtest of the baseline strategy with execution settings."""
 from mt5.backtest import run_backtest as _run_backtest
@@ -1384,6 +1385,7 @@ from mt5.backtest import run_backtest as _run_backtest
         cfg,
         latency_ms=latency_ms,
         slippage_model=slippage_model,
+        model=model,
     )
 
 
