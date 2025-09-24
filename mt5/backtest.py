@@ -4,6 +4,7 @@ import logging
 import asyncio
 from collections.abc import Awaitable
 from pathlib import Path
+from typing import Any
 import mt5.log_utils as log_utils
 from mt5.log_utils import setup_logging, log_exceptions
 import joblib
@@ -55,6 +56,7 @@ logger = logging.getLogger(__name__)
 LOG_DIR = getattr(log_utils, "LOG_DIR", Path(__file__).resolve().parents[1] / "logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 BACKTEST_STATS = LOG_DIR / "backtest_stats.csv"
+MODEL_PATH = Path(__file__).resolve().parent / "model.joblib"
 
 CACHE_SUBDIR = "cache"
 HISTORY_CACHE_FILENAME = "history.parquet"
@@ -449,6 +451,7 @@ def run_backtest(
     external_strategy: str | None = None,
     latency_ms: int = 0,
     slippage_model=None,
+    model: Any | None = None,
 ) -> dict | tuple[dict, pd.Series]:
     init_logging()
     if cfg.get("sim_env") and AgentMarketSimulator is not None:
@@ -490,7 +493,8 @@ def run_backtest(
 
         return run_external_strategy(df, external_strategy)
 
-    model = joblib.load(Path(__file__).resolve().parent / "model.joblib")
+    if model is None:
+        model = joblib.load(MODEL_PATH)
 
     return backtest_on_df(
         df,
@@ -533,8 +537,12 @@ def run_rolling_backtest(
     *,
     latency_ms: int = 0,
     slippage_model=None,
+    model: Any | None = None,
 ) -> dict:
     """Perform rolling train/test backtests and aggregate metrics."""
+    # ``model`` is currently unused but accepted to mirror ``run_backtest`` and allow
+    # callers to share a deserialised estimator without conditional logic.
+    _ = model
     init_logging()
     if cfg.get("sim_env") and AgentMarketSimulator is not None:
         sim = AgentMarketSimulator(
@@ -715,7 +723,19 @@ def main():
         run_evolutionary_search(eval_fn, space)
         return
 
-    metrics = run_backtest(cfg, external_strategy=args.external_strategy)
+    model = None
+    if not args.external_strategy and MODEL_PATH.exists():
+        try:
+            model = joblib.load(MODEL_PATH)
+        except Exception:
+            logger.exception("Failed to load backtest model from %s", MODEL_PATH)
+            model = None
+
+    metrics = run_backtest(
+        cfg,
+        external_strategy=args.external_strategy,
+        model=model,
+    )
     logger.info("Single period backtest:")
     for k, v in metrics.items():
         if k in {"max_drawdown", "win_rate"}:
@@ -724,7 +744,11 @@ def main():
             logger.info("%s: %.4f", k, v)
 
     logger.info("Rolling backtest:")
-    run_rolling_backtest(cfg, external_strategy=args.external_strategy)
+    run_rolling_backtest(
+        cfg,
+        external_strategy=args.external_strategy,
+        model=model,
+    )
 
     # Refresh baseline strategy scores so new baskets or strategies receive
     # historical weights immediately.
