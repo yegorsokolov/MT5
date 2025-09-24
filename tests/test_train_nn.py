@@ -169,3 +169,64 @@ def test_launch_aggregates_multi_seed_results(monkeypatch, caplog):
     assert any(
         "Aggregated mean score" in message for message in caplog.messages
     )
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("torch") is None,
+    reason="torch dependency unavailable",
+)
+def test_launch_initializes_ray_before_cluster_check(monkeypatch):
+    module = importlib.import_module("train_nn")
+    ray_utils = importlib.import_module("mt5.ray_utils")
+
+    calls: list[str] = []
+    submit_seeds: list[int] = []
+
+    def _fake_init(*_args, **_kwargs):
+        calls.append("init")
+        return True
+
+    def _fake_cluster_available():
+        calls.append("cluster")
+        return True
+
+    def _fake_submit(fn, *args, **kwargs):
+        del fn  # unused in test
+        calls.append("submit")
+        cfg_seed = args[2]["seed"]
+        submit_seeds.append(cfg_seed)
+        return float(cfg_seed)
+
+    def _fake_shutdown():
+        calls.append("shutdown")
+
+    monkeypatch.setattr(ray_utils, "init", _fake_init)
+    monkeypatch.setattr(ray_utils, "cluster_available", _fake_cluster_available)
+    monkeypatch.setattr(ray_utils, "submit", _fake_submit)
+    monkeypatch.setattr(ray_utils, "shutdown", _fake_shutdown)
+
+    monkeypatch.setattr(module, "ray_init", ray_utils.init)
+    monkeypatch.setattr(module, "cluster_available", ray_utils.cluster_available)
+    monkeypatch.setattr(module, "submit", ray_utils.submit)
+    monkeypatch.setattr(module, "ray_shutdown", ray_utils.shutdown)
+    monkeypatch.setattr(module, "ensure_orchestrator_started", lambda: None)
+    monkeypatch.setattr(module.mlflow, "log_metric", lambda *a, **k: None, raising=False)
+
+    cfg = {"seed": 0, "seeds": [7, 11]}
+    aggregated = module.launch(cfg)
+
+    expected = sum(cfg["seeds"]) / len(cfg["seeds"])
+    assert aggregated == pytest.approx(expected)
+    assert submit_seeds == cfg["seeds"]
+
+    assert calls[0] == "init"
+    cluster_index = calls.index("cluster")
+    assert cluster_index > calls.index("init")
+    assert calls.count("submit") == len(cfg["seeds"])
+    assert calls.count("shutdown") == 1
+    assert calls.index("shutdown") > max(
+        idx for idx, name in enumerate(calls) if name == "submit"
+    )
+
+    module._ORCHESTRATOR_STARTED = False
+    module._ORCHESTRATOR_INSTANCE = None
