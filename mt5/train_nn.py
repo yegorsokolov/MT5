@@ -1711,11 +1711,15 @@ def launch(cfg: dict | None = None) -> float:
     transfer_from = cfg.get("transfer_from")
     if cluster_available():
         seeds = cfg.get("seeds", [cfg.get("seed", 42)])
-        results = []
+        if not seeds:
+            logger.warning("No seeds provided for distributed launch; returning 0.0")
+            return 0.0
+
+        results: list[float] = []
         for s in seeds:
             cfg_s = dict(cfg)
             cfg_s["seed"] = s
-            results.append(
+            score = float(
                 submit(
                     main,
                     0,
@@ -1725,7 +1729,24 @@ def launch(cfg: dict | None = None) -> float:
                     transfer_from=transfer_from,
                 )
             )
-        return float(results[0] if results else 0.0)
+            results.append(score)
+            logger.info("Seed %s score: %.6f", s, score)
+            try:  # pragma: no cover - mlflow optional
+                mlflow.log_metric(f"seed_{s}", score)
+            except Exception:  # noqa: BLE001
+                pass
+
+        aggregated = float(sum(results) / len(results))
+        logger.info(
+            "Aggregated mean score across %d seeds: %.6f",
+            len(results),
+            aggregated,
+        )
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric("seed_mean_score", aggregated)
+        except Exception:  # noqa: BLE001
+            pass
+        return aggregated
     use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
     world_size = torch.cuda.device_count()
     if use_ddp and world_size > 1:
