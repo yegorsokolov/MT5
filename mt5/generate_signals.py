@@ -3,6 +3,7 @@ from mt5.log_utils import setup_logging, log_exceptions, log_predictions
 import mt5.log_utils as log_utils
 
 from pathlib import Path
+import datetime as _dt
 import os
 import json
 import logging
@@ -25,7 +26,7 @@ from utils.market_hours import is_market_open
 import argparse
 from mt5 import backtest
 from river import compose
-from data.history import load_history_parquet, load_history_config
+from data.history import load_history_parquet, load_history_config, load_history_iter
 from data.features import make_features, make_sequence_arrays
 from mt5.train_rl import (
     TradingEnv,
@@ -52,6 +53,18 @@ _CACHE_CFG_KEY = "cache_dir"
 _CACHE_SUBDIR = "cache"
 _HISTORY_CACHE_FILENAME = "history.parquet"
 _MACRO_CACHE_FILENAME = "macro.csv"
+
+_DEFAULT_HISTORY_CHUNK_SIZE = 5000
+_DEFAULT_HISTORY_LOOKBACK_DAYS = 3.0
+_HISTORY_STREAM_BATCH_KEYS = (
+    "history_stream_batch_size",
+    "history_stream_chunk_size",
+    "history_batch_size",
+)
+_HISTORY_LOOKBACK_KEYS = (
+    "history_max_lookback_days",
+    "history_lookback_days",
+)
 
 
 def init_logging() -> logging.Logger:
@@ -236,6 +249,137 @@ def _combine_interval_params(
     coverage_values = [float(p.coverage) for p in params if p.coverage is not None]
     coverage = float(np.mean(coverage_values)) if coverage_values else None
     return quantiles, coverage
+
+
+def _coerce_timestamp(value: Any) -> pd.Timestamp | None:
+    """Return ``value`` converted to a timezone-naive ``Timestamp``."""
+
+    if value is None:
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except Exception:  # pragma: no cover - defensive parsing
+        return None
+    if pd.isna(ts):
+        return None
+    if getattr(ts, "tzinfo", None) is not None:
+        try:
+            dt_val = ts.to_pydatetime()
+        except Exception:  # pragma: no cover - defensive conversion
+            return None
+        if getattr(dt_val, "tzinfo", None) is not None:
+            dt_val = dt_val.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        ts = pd.Timestamp(dt_val)
+    return ts
+
+
+def _resolve_history_streaming_params(
+    cfg: Mapping[str, Any] | None,
+) -> tuple[int, float | None]:
+    """Return ``(chunk_size, lookback_days)`` derived from ``cfg``."""
+
+    chunk_size = _DEFAULT_HISTORY_CHUNK_SIZE
+    lookback_days: float | None = _DEFAULT_HISTORY_LOOKBACK_DAYS
+    if isinstance(cfg, Mapping):
+        for key in _HISTORY_STREAM_BATCH_KEYS:
+            raw = cfg.get(key)
+            if raw is None:
+                continue
+            try:
+                chunk_size = int(raw)
+            except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+                continue
+            else:
+                break
+        if chunk_size <= 0:
+            chunk_size = _DEFAULT_HISTORY_CHUNK_SIZE
+
+        for key in _HISTORY_LOOKBACK_KEYS:
+            raw = cfg.get(key)
+            if raw is None:
+                continue
+            try:
+                lookback_days = float(raw)
+            except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+                continue
+            else:
+                break
+    if lookback_days is not None and lookback_days <= 0:
+        lookback_days = None
+    return chunk_size, lookback_days
+
+
+def _load_incremental_history(
+    path: Path,
+    *,
+    last_timestamp: Any,
+    chunk_size: int,
+    lookback_days: float | None,
+) -> pd.DataFrame:
+    """Stream and return history rows newer than ``last_timestamp``.
+
+    When ``lookback_days`` is provided, rows preceding ``last_timestamp`` by at
+    most that horizon are retained to provide feature context.  If streaming
+    fails, the helper falls back to ``load_history_parquet``.
+    """
+
+    ts_cutoff = _coerce_timestamp(last_timestamp)
+    if ts_cutoff is None:
+        logger.warning("Invalid last timestamp %r; loading full history", last_timestamp)
+        return load_history_parquet(path)
+
+    if chunk_size <= 0:
+        chunk_size = _DEFAULT_HISTORY_CHUNK_SIZE
+
+    earliest: pd.Timestamp | None = None
+    if lookback_days is not None:
+        try:
+            earliest = ts_cutoff - pd.Timedelta(days=float(lookback_days))
+        except Exception:  # pragma: no cover - defensive timedelta
+            earliest = None
+
+    frames: list[pd.DataFrame] = []
+    context_rows = 0
+    new_rows = 0
+    last_columns: list[str] | None = None
+
+    try:
+        for chunk in load_history_iter(path, chunk_size):
+            if last_columns is None:
+                last_columns = list(chunk.columns)
+            if chunk.empty or "Timestamp" not in chunk.columns:
+                continue
+            ts = pd.to_datetime(chunk["Timestamp"], errors="coerce")
+            if earliest is not None:
+                context_mask = (ts >= earliest) & (ts <= ts_cutoff)
+                if bool(context_mask.any()):
+                    context = chunk.loc[context_mask].copy()
+                    if not context.empty:
+                        frames.append(context)
+                        context_rows += len(context)
+            new_mask = ts > ts_cutoff
+            if bool(new_mask.any()):
+                newer = chunk.loc[new_mask].copy()
+                if not newer.empty:
+                    frames.append(newer)
+                    new_rows += len(newer)
+    except Exception:  # pragma: no cover - best effort logging
+        logger.exception(
+            "Streaming history from %s failed; falling back to eager load", path
+        )
+        return load_history_parquet(path)
+
+    if not frames:
+        logger.info("No new history rows found after %s", ts_cutoff.isoformat())
+        if last_columns is None:
+            return pd.DataFrame()
+        return pd.DataFrame(columns=last_columns)
+
+    logger.info(
+        "Streamed %d rows (%d context) newer than %s", new_rows, context_rows, ts_cutoff
+    )
+    combined = pd.concat(frames, ignore_index=True)
+    return combined
 
 
 def _apply_regression_trunk(model: Any, data: pd.DataFrame | np.ndarray):
@@ -901,6 +1045,8 @@ def main():
         delta=float(cfg.get("drift_delta", 0.002)),
     )
 
+    history_chunk_size, history_lookback_days = _resolve_history_streaming_params(cfg)
+
     # Reload previous runtime state if available
     state = load_runtime_state(account_id=account_id)
     if account_id and state is None and legacy_runtime_state_exists():
@@ -915,10 +1061,12 @@ def main():
         else:
             logger.info("Migrated runtime state to %s", migrated_path)
             state = load_runtime_state(account_id=account_id)
+    last_ts_raw = None
     last_ts = None
     prev_models: list[str] = []
     if state:
-        last_ts = state.get("last_timestamp")
+        last_ts_raw = state.get("last_timestamp")
+        last_ts = _coerce_timestamp(last_ts_raw)
         prev_models = state.get("model_versions", [])
 
     if args.simulate_closed_market or not is_market_open():
@@ -1034,7 +1182,16 @@ def main():
         [cfg.get("symbol")] if cfg.get("symbol") else None
     )
     if hist_path_pq.exists():
-        df = load_history_parquet(hist_path_pq)
+        if last_ts is not None or last_ts_raw is not None:
+            ts_arg = last_ts if last_ts is not None else last_ts_raw
+            df = _load_incremental_history(
+                hist_path_pq,
+                last_timestamp=ts_arg,
+                chunk_size=history_chunk_size,
+                lookback_days=history_lookback_days,
+            )
+        else:
+            df = load_history_parquet(hist_path_pq)
     else:
         cfg_root = Path(__file__).resolve().parent
         sym = cfg.get("symbol")
@@ -1046,14 +1203,15 @@ def main():
     if symbols and "Symbol" in df.columns:
         df = df[df["Symbol"].isin(symbols)]
 
-    # Catch up on any missed ticks since last processed timestamp
+    df = make_features(df)
+
     if last_ts is not None and "Timestamp" in df.columns:
         try:
-            df = df[pd.to_datetime(df["Timestamp"]) > pd.to_datetime(last_ts)]
-        except Exception:
-            pass
-
-    df = make_features(df)
+            ts_series = pd.to_datetime(df["Timestamp"], errors="coerce")
+            df = df[ts_series > last_ts]
+        except Exception:  # pragma: no cover - defensive filter
+            logger.debug("Failed to filter rows newer than last timestamp", exc_info=True)
+        df = df.reset_index(drop=True)
 
     # optional macro indicators merged on timestamp
     macro_path = cache_dir / _MACRO_CACHE_FILENAME
