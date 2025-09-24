@@ -279,6 +279,95 @@ def test_backtest_on_df_async_paths():
             assert coroutine_value == value
 
 
+class StaticProbabilityModel:
+    def __init__(self, positive_probs):
+        self._positive_probs = list(positive_probs)
+
+    def predict_proba(self, X):
+        length = len(X)
+        if length == 0:
+            return np.empty((0, 2))
+        positives = np.asarray(self._positive_probs, dtype=float)
+        if len(positives) == 0:
+            positives = np.full(length, 0.5)
+        elif len(positives) < length:
+            positives = np.pad(positives, (0, length - len(positives)), mode="edge")
+        else:
+            positives = positives[:length]
+        positives = np.clip(positives, 0.0, 1.0)
+        return np.column_stack([1.0 - positives, positives])
+
+
+def _make_trade_dataframe():
+    return pd.DataFrame(
+        {
+            "Timestamp": pd.date_range("2024-01-01", periods=2, freq="T"),
+            "return": [0.01, -0.02],
+            "mid": [1.0, 0.998],
+            "Bid": [0.999, 0.997],
+            "Ask": [1.001, 0.999],
+            "BidVolume": [100.0, 100.0],
+            "AskVolume": [100.0, 100.0],
+        }
+    )
+
+
+def _expected_single_trade_return(df: pd.DataFrame) -> float:
+    entry = float(df.iloc[0]["mid"])
+    exit_price = float(df.iloc[1]["mid"])
+    return (exit_price - entry) / entry
+
+
+def test_backtest_on_df_sync_returns_metrics():
+    df = _make_trade_dataframe()
+    model = StaticProbabilityModel([0.9, 0.1])
+
+    metrics = backtest.backtest_on_df(df, model, {})
+
+    assert isinstance(metrics, dict)
+    assert metrics["trade_count"] == 1
+    expected_return = _expected_single_trade_return(df)
+    assert metrics["total_return"] == pytest.approx(expected_return)
+    assert metrics["return"] == pytest.approx(expected_return)
+    assert metrics["skipped_trades"] == 0
+    assert metrics["partial_fills"] == 0
+    assert math.isnan(metrics["sharpe_p_value"])
+
+
+@pytest.mark.asyncio
+async def test_backtest_on_df_async_returns_metrics():
+    df = _make_trade_dataframe()
+    model = StaticProbabilityModel([0.9, 0.1])
+
+    metrics = await backtest.backtest_on_df_async(df, model, {})
+
+    assert isinstance(metrics, dict)
+    assert metrics["trade_count"] == 1
+    expected_return = _expected_single_trade_return(df)
+    assert metrics["total_return"] == pytest.approx(expected_return)
+    assert metrics["return"] == pytest.approx(expected_return)
+    assert metrics["skipped_trades"] == 0
+    assert metrics["partial_fills"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backtest_on_df_return_coroutine_in_running_loop():
+    df = _make_trade_dataframe()
+    model = StaticProbabilityModel([0.9, 0.1])
+
+    coroutine = backtest.backtest_on_df(df, model, {}, return_coroutine=True)
+
+    assert asyncio.iscoroutine(coroutine)
+
+    metrics = await coroutine
+
+    assert isinstance(metrics, dict)
+    assert metrics["trade_count"] == 1
+    expected_return = _expected_single_trade_return(df)
+    assert metrics["total_return"] == pytest.approx(expected_return)
+    assert metrics["return"] == pytest.approx(expected_return)
+
+
 def test_backtest_cli_eval_fn_uses_total_return(monkeypatch):
     captured = {}
 
