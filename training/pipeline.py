@@ -15,6 +15,7 @@ import joblib
 import pandas as pd
 import math
 import weakref
+from dataclasses import dataclass
 
 try:
     import torch
@@ -90,6 +91,7 @@ from analysis.active_learning import ActiveLearningQueue, merge_labels
 from analysis import model_card
 from reports.run_history import RunHistoryRecorder
 from analysis.domain_adapter import DomainAdapter
+from data.history import save_history_parquet
 from models.conformal import (
     ConformalIntervalParams,
     calibrate_intervals,
@@ -140,6 +142,94 @@ from training.postprocess import (
 from training.utils import combined_sample_weight
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class HistoryLoadResult:
+    """Data returned from :func:`load_histories`."""
+
+    frame: pd.DataFrame | StreamingTrainingFrame
+    data_source: str
+    stream_metadata: dict[str, object] | None
+    stream: bool
+    chunk_size: int
+    feature_lookback: int
+    validate: bool
+
+
+@dataclass
+class FeaturePreparationResult:
+    """Feature engineering output used to build datasets."""
+
+    df: pd.DataFrame
+    features: list[str]
+    labels: pd.DataFrame
+    label_cols: list[str]
+    abs_label_cols: list[str]
+    vol_label_cols: list[str]
+    sel_target: pd.Series | None
+    use_multi_task_heads: bool
+    user_budget: RiskBudget | None
+
+
+@dataclass
+class DatasetBuildResult:
+    """Datasets ready for model training."""
+
+    df: pd.DataFrame
+    X: pd.DataFrame
+    y: pd.DataFrame
+    features: list[str]
+    label_cols: list[str]
+    abs_label_cols: list[str]
+    vol_label_cols: list[str]
+    groups: pd.Series | pd.Index | None
+    timestamps: np.ndarray
+    al_queue: ActiveLearningQueue
+    al_threshold: float
+    queue_stats: dict[str, int]
+    risk_budget: RiskBudget | None
+    user_budget: RiskBudget | None
+
+
+@dataclass
+class TrainingResult:
+    """Outcome of the model training stage."""
+
+    final_pipe: Pipeline | None
+    features: list[str]
+    aggregate_report: dict[str, object]
+    boot_metrics: dict[str, object]
+    base_f1: float
+    regime_thresholds: dict[int, float]
+    overall_params: ConformalIntervalParams | None
+    overall_q: dict[int, float]
+    overall_cov: float
+    all_probs: list[float]
+    all_conf: list[float]
+    all_true: list[int]
+    al_queue: ActiveLearningQueue
+    al_threshold: float
+    df: pd.DataFrame
+    X: pd.DataFrame
+    X_train_final: pd.DataFrame | None
+    risk_budget: RiskBudget | None
+    model_metadata: dict[str, object]
+    f1_ci: tuple[float, float]
+    prec_ci: tuple[float, float]
+    rec_ci: tuple[float, float]
+    final_score: float
+    should_log_artifacts: bool
+
+
+@dataclass
+class ArtifactLogResult:
+    """Summary from :func:`log_artifacts`."""
+
+    meta_model_id: str | None
+    model_version_id: str | None
+    pseudo_label_path: Path | None
+    queued_count: int
 
 
 def init_logging() -> logging.Logger:
@@ -790,6 +880,1006 @@ def make_focal_loss_metric(alpha: float = 0.25, gamma: float = 2.0):
     return _focal_metric
 
 
+def load_histories(
+    cfg: AppConfig,
+    root: Path,
+    df_override: pd.DataFrame | None = None,
+) -> HistoryLoadResult:
+    """Load historical data and apply domain adaptation."""
+
+    validate_flag = bool(cfg.get("validate", False))
+    chunk_size_raw = cfg.get("stream_chunk_size", 100_000)
+    chunk_size = int(chunk_size_raw if chunk_size_raw is not None else 100_000)
+    stream = bool(cfg.get("stream_history", False))
+    feature_lookback_raw = cfg.get("stream_feature_lookback", 512)
+    feature_lookback = int(feature_lookback_raw if feature_lookback_raw is not None else 512)
+    training_data, data_source = load_training_frame(
+        cfg,
+        root,
+        df_override=df_override,
+        stream=stream,
+        chunk_size=chunk_size,
+        feature_lookback=feature_lookback,
+        validate=validate_flag,
+    )
+    stream_metadata: dict[str, object] | None = None
+    if isinstance(training_data, StreamingTrainingFrame):
+        stream_metadata = training_data.metadata
+    adapter_path = root / "domain_adapter.pkl"
+    df = apply_domain_adaptation(
+        training_data,
+        adapter_path,
+        regime_step=cfg.get("regime_reclass_period", 500),
+    )
+    return HistoryLoadResult(
+        frame=df,
+        data_source=str(data_source),
+        stream_metadata=stream_metadata,
+        stream=stream,
+        chunk_size=chunk_size,
+        feature_lookback=feature_lookback,
+        validate=validate_flag,
+    )
+
+
+def prepare_features(
+    history: HistoryLoadResult,
+    cfg: AppConfig,
+    model_type: str,
+    root: Path,
+) -> FeaturePreparationResult:
+    """Prepare features and labels for downstream stages."""
+
+    df = history.frame
+    rp = cfg.strategy.risk_profile
+    user_budget = append_risk_profile_features(df, rp)
+    features = build_feature_candidates(df, user_budget, cfg=cfg)
+    if isinstance(df, StreamingTrainingFrame):
+        column_source = df.collect_columns()
+    else:
+        column_source = list(df.columns)
+
+    price_window_cols = sorted(c for c in column_source if c.startswith("price_window_"))
+    news_emb_cols = sorted(c for c in column_source if c.startswith("news_emb_"))
+    if model_type == "cross_modal":
+        if not price_window_cols or not news_emb_cols:
+            raise ValueError(
+                "model_type='cross_modal' requires price_window_ and news_emb_ columns"
+            )
+        for col in price_window_cols + news_emb_cols:
+            if col not in features:
+                features.append(col)
+
+    horizons = cfg.get("horizons", [cfg.get("max_horizon", 10)])
+    labels_frame = generate_training_labels(
+        df,
+        stream=history.stream,
+        horizons=horizons,
+        chunk_size=history.chunk_size,
+    )
+
+    if isinstance(df, StreamingTrainingFrame):
+        column_source = df.collect_columns()
+        label_cols = [c for c in column_source if c.startswith("direction_")]
+        abs_label_cols = [c for c in column_source if c.startswith("abs_return_")]
+        vol_label_cols = [c for c in column_source if c.startswith("volatility_")]
+        df_materialised = df.materialise()
+        if label_cols or abs_label_cols or vol_label_cols:
+            label_subset = label_cols + abs_label_cols + vol_label_cols
+            labels_frame = df_materialised.loc[:, label_subset]
+        else:
+            labels_frame = pd.DataFrame(index=df_materialised.index)
+        df = df_materialised
+    else:
+        df = pd.concat([df, labels_frame], axis=1)
+        label_cols = [c for c in labels_frame.columns if c.startswith("direction_")]
+        abs_label_cols = [c for c in labels_frame.columns if c.startswith("abs_return_")]
+        vol_label_cols = [c for c in labels_frame.columns if c.startswith("volatility_")]
+
+    use_multi_task_heads = bool(cfg.get("use_multi_task_heads", True))
+    if model_type == "neural":
+        use_multi_task_heads = True
+    if model_type == "cross_modal":
+        use_multi_task_heads = False
+    elif not abs_label_cols and not vol_label_cols:
+        use_multi_task_heads = bool(cfg.get("use_multi_task_heads", False))
+
+    sel_target: pd.Series | None = None
+    if label_cols:
+        sel_target = labels_frame[label_cols[0]]
+    elif not labels_frame.empty:
+        sel_target = labels_frame.iloc[:, 0]
+
+    mandatory_cols = [
+        col
+        for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"]
+        if col in df.columns
+    ]
+    features = select_model_features(
+        df,
+        features,
+        sel_target,
+        model_type=model_type,
+        mandatory=mandatory_cols,
+    )
+
+    cross_modal_cfg = cfg.get("cross_modal_feature", {})
+    if sel_target is not None and torch is not None and CrossModalTransformer is not None:
+        try:
+            modal_result = prepare_modal_arrays(
+                df, sel_target.to_numpy(dtype=np.float32)
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            modal_result = None
+            logger.warning("Failed to prepare modal arrays: %s", exc)
+        else:
+            if modal_result is not None:
+                (
+                    price_modal,
+                    news_modal,
+                    labels_modal,
+                    mask_modal,
+                    price_cols,
+                    news_cols,
+                ) = modal_result
+                cfg.setdefault("model", {}).setdefault(
+                    "cross_modal_features",
+                    {"price": price_cols, "news": news_cols},
+                )
+                if (
+                    model_type != "cross_modal"
+                    and torch is not None
+                    and CrossModalTransformer is not None
+                ):
+                    min_samples = int(cross_modal_cfg.get("min_samples", 50))
+                    if labels_modal is not None and len(price_modal) >= max(10, min_samples):
+                        try:
+                            preds = _train_cross_modal_feature(
+                                price_modal,
+                                news_modal,
+                                labels_modal,
+                                epochs=int(cross_modal_cfg.get("epochs", 5)),
+                                batch_size=int(cross_modal_cfg.get("batch_size", 128)),
+                                d_model=int(cross_modal_cfg.get("d_model", 64)),
+                                nhead=int(cross_modal_cfg.get("nhead", 4)),
+                                num_layers=int(cross_modal_cfg.get("num_layers", 2)),
+                                dropout=float(cross_modal_cfg.get("dropout", 0.1)),
+                                lr=float(cross_modal_cfg.get("lr", 1e-3)),
+                            )
+                        except Exception as exc:  # pragma: no cover - fallback on failure
+                            logger.warning("Cross-modal fusion failed: %s", exc)
+                        else:
+                            fused = np.full(len(df), 0.5, dtype=float)
+                            fused[mask_modal] = preds
+                            df["cross_modal_signal"] = fused
+                            if "cross_modal_signal" not in features:
+                                features.append("cross_modal_signal")
+                            logger.info(
+                                "Cross-modal feature trained on %d samples", len(price_modal)
+                            )
+
+    feat_path = root / "selected_features.json"
+    feat_path.write_text(json.dumps(features))
+    index_path = root / "similar_days_index.pkl"
+    df, _ = add_similar_day_features(
+        df,
+        feature_cols=features,
+        return_col="return",
+        k=cfg.get("nn_k", 5),
+        index_path=index_path,
+    )
+    for derived in ["nn_return_mean", "nn_vol"]:
+        if derived not in features:
+            features.append(derived)
+
+    return FeaturePreparationResult(
+        df=df,
+        features=features,
+        labels=labels_frame,
+        label_cols=list(label_cols),
+        abs_label_cols=list(abs_label_cols),
+        vol_label_cols=list(vol_label_cols),
+        sel_target=sel_target,
+        use_multi_task_heads=use_multi_task_heads,
+        user_budget=user_budget,
+    )
+
+
+def build_datasets(
+    features: FeaturePreparationResult,
+    cfg: AppConfig,
+    root: Path,
+    use_pseudo_labels: bool,
+    risk_target: dict | None,
+) -> DatasetBuildResult:
+    """Construct model-ready datasets from engineered features."""
+
+    df = features.df.copy()
+    feature_cols = list(features.features)
+    label_cols = list(features.label_cols)
+    abs_label_cols = list(features.abs_label_cols)
+    vol_label_cols = list(features.vol_label_cols)
+    y = features.labels.copy()
+
+    risk_budget = None
+    if risk_target:
+        risk_budget = RiskBudget(
+            max_leverage=float(risk_target.get("max_leverage", 1.0)),
+            max_drawdown=float(risk_target.get("max_drawdown", 0.0)),
+            cvar_limit=risk_target.get("cvar"),
+        )
+        for name, val in risk_budget.as_features().items():
+            df[name] = val
+            if name not in feature_cols:
+                feature_cols.append(name)
+        if "position" in df.columns:
+            df["position"] = risk_budget.scale_positions(df["position"].to_numpy())
+
+    X = df[feature_cols]
+    groups = df["Symbol"] if "Symbol" in df.columns else df.get("SymbolCode")
+
+    al_queue = ActiveLearningQueue()
+    new_labels = al_queue.pop_labeled()
+    if not new_labels.empty and label_cols:
+        df = merge_labels(df, new_labels, label_cols[0])
+        y = df[label_cols]
+        X = df[feature_cols]
+        save_history_parquet(df, root / "data" / "history.parquet")
+    queue_stats = al_queue.stats()
+
+    al_threshold = float(cfg.get("active_learning", {}).get("threshold", 0.6))
+
+    if use_pseudo_labels and label_cols:
+        pseudo_dir = root / "data" / "pseudo_labels"
+        if pseudo_dir.exists():
+            files = list(pseudo_dir.glob("*.parquet")) + list(pseudo_dir.glob("*.csv"))
+            for p in files:
+                try:
+                    if p.suffix == ".parquet":
+                        df_pseudo = pd.read_parquet(p)
+                    else:
+                        df_pseudo = pd.read_csv(p)
+                except Exception:
+                    continue
+                if label_cols[0] not in df_pseudo.columns:
+                    continue
+                if not set(feature_cols).issubset(df_pseudo.columns):
+                    continue
+                X = pd.concat([X, df_pseudo[feature_cols]], ignore_index=True)
+                y = pd.concat([y, df_pseudo[label_cols]], ignore_index=True)
+
+    if "timestamp" in df.columns and len(df) == len(X):
+        timestamps = _index_to_timestamps(df["timestamp"])
+    else:
+        timestamps = np.arange(len(X), dtype="int64")
+
+    return DatasetBuildResult(
+        df=df,
+        X=X,
+        y=y,
+        features=feature_cols,
+        label_cols=label_cols,
+        abs_label_cols=abs_label_cols,
+        vol_label_cols=vol_label_cols,
+        groups=groups,
+        timestamps=timestamps,
+        al_queue=al_queue,
+        al_threshold=al_threshold,
+        queue_stats=queue_stats,
+        risk_budget=risk_budget,
+        user_budget=features.user_budget,
+    )
+
+
+def train_models(
+    dataset: DatasetBuildResult,
+    cfg: AppConfig,
+    seed: int,
+    model_type: str,
+    use_multi_task_heads: bool,
+    drift_monitor: ConceptDriftMonitor,
+    donor_booster,
+    use_focal: bool,
+    fobj,
+    feval,
+    scaler_path: Path,
+    root: Path,
+    risk_target: dict | None,
+    recorder: RunHistoryRecorder,
+    resume_online: bool = False,
+) -> TrainingResult:
+    """Train the configured models and collect evaluation artefacts."""
+
+    df = dataset.df
+    X = dataset.X
+    y = dataset.y
+    features = list(dataset.features)
+    label_cols = list(dataset.label_cols)
+    abs_label_cols = list(dataset.abs_label_cols)
+    vol_label_cols = list(dataset.vol_label_cols)
+    groups = dataset.groups
+    timestamps = dataset.timestamps
+    al_queue = dataset.al_queue
+    al_threshold = dataset.al_threshold
+    risk_budget = dataset.risk_budget
+    user_budget = dataset.user_budget
+
+    queue_stats = dataset.queue_stats
+    logger.info(
+        "Active learning queue stats: pending=%s ready_for_merge=%s",
+        queue_stats["awaiting_label"],
+        queue_stats["ready_for_merge"],
+    )
+    try:  # pragma: no cover - mlflow optional
+        mlflow.log_metric("al_queue_pending", queue_stats["awaiting_label"])
+        mlflow.log_metric("al_queue_ready_for_merge", queue_stats["ready_for_merge"])
+    except Exception:  # pragma: no cover - optional logging
+        pass
+
+    t_max = int(timestamps.max()) if len(timestamps) else 0
+
+    if cfg.get("tune"):
+        from tuning.tuning import tune_lightgbm
+
+        def train_trial(params: dict, _trial) -> float:
+            clf_params = {
+                "n_estimators": 200,
+                "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+                "random_state": seed,
+                **params,
+            }
+            if use_focal:
+                clf_params["objective"] = "None"
+            clf = LGBMClassifier(**clf_params)
+            tscv_inner = PurgedTimeSeriesSplit(
+                n_splits=cfg.get("n_splits", 5),
+                embargo=cfg.get("max_horizon", 0),
+            )
+            scores: list[float] = []
+            half_life = cfg.get("time_decay_half_life")
+            balance = cfg.get("balance_classes")
+            for tr_idx, va_idx in tscv_inner.split(X, groups=groups):
+                X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
+                y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
+                fit_kwargs: dict[str, object] = {
+                    "eval_set": [(X_va, y_va)],
+                    "early_stopping_rounds": cfg.get("early_stopping_rounds", 50),
+                    "verbose": False,
+                }
+                dq_w = dq_score_samples(X_tr)
+                y_tr_arr = (
+                    y_tr[label_cols[0]].to_numpy()
+                    if label_cols
+                    else y_tr.iloc[:, 0].to_numpy()
+                )
+                sw = combined_sample_weight(
+                    y_tr_arr,
+                    timestamps[tr_idx],
+                    t_max,
+                    balance,
+                    half_life,
+                    dq_w,
+                )
+                if sw is not None:
+                    fit_kwargs["sample_weight"] = sw
+                if use_focal:
+                    fit_kwargs["fobj"] = fobj
+                    fit_kwargs["feval"] = feval
+                clf.fit(X_tr, y_tr, **fit_kwargs)
+                preds = clf.predict(X_va)
+                rep = classification_report(y_va, preds, output_dict=True)
+                scores.append(rep["weighted avg"]["f1-score"])
+            return float(np.mean(scores))
+
+        best_params = tune_lightgbm(train_trial, n_trials=cfg.get("n_trials", 20))
+        cfg.update(best_params)
+
+    if cfg.get("meta_train"):
+        from analysis.meta_learning import meta_train_lgbm, save_meta_weights
+
+        state = meta_train_lgbm(df, features)
+        save_meta_weights(state, "lgbm")
+        return TrainingResult(
+            final_pipe=None,
+            features=features,
+            aggregate_report={},
+            boot_metrics={},
+            base_f1=0.0,
+            regime_thresholds={},
+            overall_params=None,
+            overall_q={},
+            overall_cov=0.0,
+            all_probs=[],
+            all_conf=[],
+            all_true=[],
+            al_queue=al_queue,
+            al_threshold=al_threshold,
+            df=df,
+            X=X,
+            X_train_final=None,
+            risk_budget=risk_budget,
+            model_metadata={},
+            f1_ci=(0.0, 0.0),
+            prec_ci=(0.0, 0.0),
+            rec_ci=(0.0, 0.0),
+            final_score=0.0,
+            should_log_artifacts=False,
+        )
+
+    if cfg.get("meta_init"):
+        from analysis.meta_learning import (
+            _LinearModel,
+            fine_tune_model,
+            load_meta_weights,
+            save_meta_weights,
+        )
+        from models.meta_learner import steps_to
+        from torch.utils.data import TensorDataset
+
+        X_all = torch.tensor(df[features].values, dtype=torch.float32)
+        y_all = torch.tensor(df[label_cols[0]].values, dtype=torch.float32)
+        dataset_tensor = TensorDataset(X_all, y_all)
+        state = load_meta_weights("lgbm")
+        new_state, history = fine_tune_model(
+            state, dataset_tensor, lambda: _LinearModel(len(features)), steps=5
+        )
+        logger.info("Meta-init adaptation steps: %s", steps_to(history))
+        save_meta_weights(new_state, "lgbm", regime=cfg.get("symbol", "asset"))
+        return TrainingResult(
+            final_pipe=None,
+            features=features,
+            aggregate_report={},
+            boot_metrics={},
+            base_f1=0.0,
+            regime_thresholds={},
+            overall_params=None,
+            overall_q={},
+            overall_cov=0.0,
+            all_probs=[],
+            all_conf=[],
+            all_true=[],
+            al_queue=al_queue,
+            al_threshold=al_threshold,
+            df=df,
+            X=X,
+            X_train_final=None,
+            risk_budget=risk_budget,
+            model_metadata={},
+            f1_ci=(0.0, 0.0),
+            prec_ci=(0.0, 0.0),
+            rec_ci=(0.0, 0.0),
+            final_score=0.0,
+            should_log_artifacts=False,
+        )
+
+    if cfg.get("fine_tune"):
+        from analysis.meta_learning import (
+            _LinearModel,
+            fine_tune_model,
+            load_meta_weights,
+            save_meta_weights,
+        )
+        from torch.utils.data import TensorDataset
+
+        regime = int(df["market_regime"].iloc[-1])
+        mask = df["market_regime"] == regime
+        X_reg = torch.tensor(df.loc[mask, features].values, dtype=torch.float32)
+        y_reg = torch.tensor(
+            df.loc[mask, label_cols[0]].values,
+            dtype=torch.float32,
+        )
+        dataset_tensor = TensorDataset(X_reg, y_reg)
+        state = load_meta_weights("lgbm")
+        new_state, _ = fine_tune_model(
+            state, dataset_tensor, lambda: _LinearModel(len(features)), steps=5
+        )
+        save_meta_weights(new_state, "lgbm", regime=f"regime_{regime}")
+        return TrainingResult(
+            final_pipe=None,
+            features=features,
+            aggregate_report={},
+            boot_metrics={},
+            base_f1=0.0,
+            regime_thresholds={},
+            overall_params=None,
+            overall_q={},
+            overall_cov=0.0,
+            all_probs=[],
+            all_conf=[],
+            all_true=[],
+            al_queue=al_queue,
+            al_threshold=al_threshold,
+            df=df,
+            X=X,
+            X_train_final=None,
+            risk_budget=risk_budget,
+            model_metadata={},
+            f1_ci=(0.0, 0.0),
+            prec_ci=(0.0, 0.0),
+            rec_ci=(0.0, 0.0),
+            final_score=0.0,
+            should_log_artifacts=False,
+        )
+
+    if resume_online:
+        batch_size = cfg.get("online_batch_size", 1000)
+        ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
+        if ckpt:
+            start_batch = ckpt[0] + 1
+            state = ckpt[1]
+            pipe: Pipeline = state["model"]
+            scaler_state = state.get("scaler_state")
+            if scaler_state and "scaler" in pipe.named_steps:
+                pipe.named_steps["scaler"].load_state_dict(scaler_state)
+        else:
+            start_batch = 0
+            steps: list[tuple[str, object]] = [("sanitizer", _make_sanitizer(cfg))]
+            if cfg.get("use_scaler", True):
+                steps.append(("scaler", FeatureScaler.load(scaler_path)))
+            clf_params = {
+                "n_estimators": 200,
+                "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+                "random_state": seed,
+                "keep_training_booster": True,
+                **_lgbm_params(cfg),
+            }
+            if use_focal:
+                clf_params["objective"] = "None"
+            steps.append(("clf", LGBMClassifier(**clf_params)))
+            pipe = Pipeline(steps)
+        _register_clf(pipe.named_steps["clf"])
+        sanitizer = pipe.named_steps.get("sanitizer")
+        if sanitizer is not None and not getattr(sanitizer, "_fitted", False):
+            sanitizer.fit(X)
+        n_batches = math.ceil(len(X) / batch_size)
+        half_life = cfg.get("time_decay_half_life")
+        for batch_idx in range(start_batch, n_batches):
+            start = batch_idx * batch_size
+            end = min(len(X), start + batch_size)
+            Xb = X.iloc[start:end]
+            yb = y.iloc[start:end]
+            dq_w = dq_score_samples(Xb)
+            if sanitizer is not None:
+                Xb = sanitizer.transform(Xb)
+            if "scaler" in pipe.named_steps:
+                scaler = pipe.named_steps["scaler"]
+                if getattr(scaler, "group_col", None):
+                    Xb_sym = Xb.copy()
+                    Xb_sym[scaler.group_col] = groups.iloc[start:end].values
+                    if hasattr(scaler, "partial_fit"):
+                        scaler.partial_fit(Xb_sym)
+                    Xb = scaler.transform(Xb_sym).drop(columns=[scaler.group_col])
+                else:
+                    if hasattr(scaler, "partial_fit"):
+                        scaler.partial_fit(Xb)
+                    Xb = scaler.transform(Xb)
+            clf = pipe.named_steps["clf"]
+            init_model = (
+                donor_booster
+                if batch_idx == 0 and donor_booster is not None and not ckpt
+                else (clf.booster_ if (batch_idx > 0 or ckpt) else None)
+            )
+            fit_kwargs: dict[str, object] = {"init_model": init_model}
+            if use_focal:
+                fit_kwargs["fobj"] = fobj
+                fit_kwargs["feval"] = feval
+            yb_arr = (
+                yb[label_cols[0]].to_numpy()
+                if label_cols
+                else yb.iloc[:, 0].to_numpy()
+            )
+            sw = combined_sample_weight(
+                yb_arr,
+                timestamps[start:end],
+                t_max,
+                cfg.get("balance_classes"),
+                half_life,
+                dq_w,
+            )
+            if sw is not None:
+                fit_kwargs["sample_weight"] = sw
+            clf.fit(Xb, yb, **fit_kwargs)
+            state = {"model": pipe}
+            if "scaler" in pipe.named_steps:
+                state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
+            save_checkpoint(state, batch_idx, cfg.get("checkpoint_dir"))
+        joblib.dump(pipe, root / "model.joblib")
+        if "scaler" in pipe.named_steps:
+            pipe.named_steps["scaler"].save(scaler_path)
+        return TrainingResult(
+            final_pipe=pipe,
+            features=features,
+            aggregate_report={},
+            boot_metrics={},
+            base_f1=0.0,
+            regime_thresholds={},
+            overall_params=None,
+            overall_q={},
+            overall_cov=0.0,
+            all_probs=[],
+            all_conf=[],
+            all_true=[],
+            al_queue=al_queue,
+            al_threshold=al_threshold,
+            df=df,
+            X=X,
+            X_train_final=None,
+            risk_budget=risk_budget,
+            model_metadata={},
+            f1_ci=(0.0, 0.0),
+            prec_ci=(0.0, 0.0),
+            rec_ci=(0.0, 0.0),
+            final_score=0.0,
+            should_log_artifacts=False,
+        )
+
+    tscv = PurgedTimeSeriesSplit(
+        n_splits=cfg.get("n_splits", 5), embargo=cfg.get("max_horizon", 0)
+    )
+    all_preds: list[int] = []
+    all_regimes: list[int] = []
+    all_true: list[int] = []
+    all_probs: list[float] = []
+    all_conf: list[float] = []
+    all_lower: list[float] = []
+    all_upper: list[float] = []
+    risk_violation = False
+    violation_penalty = 0.0
+    all_residuals: dict[int, list[float]] = {}
+    final_pipe: Pipeline | None = None
+    X_train_final: pd.DataFrame | None = None
+    last_val_X: pd.DataFrame | None = None
+    last_val_y: np.ndarray | None = None
+    last_val_probs: np.ndarray | None = None
+    last_val_regimes: np.ndarray | None = None
+    start_fold = 0
+    ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
+    if ckpt:
+        last_fold, state = ckpt
+        start_fold = last_fold + 1
+        all_preds = state.get("all_preds", [])
+        all_true = state.get("all_true", [])
+        all_probs = state.get("all_probs", [])
+        all_conf = state.get("all_conf", [])
+        all_regimes = state.get("all_regimes", [])
+        all_lower = state.get("all_lower", [])
+        all_upper = state.get("all_upper", [])
+        all_residuals = state.get("all_residuals", {})
+        final_pipe = state.get("model")
+        scaler_state = state.get("scaler_state")
+        if final_pipe and scaler_state and "scaler" in final_pipe.named_steps:
+            final_pipe.named_steps["scaler"].load_state_dict(scaler_state)
+        logger.info("Resuming from checkpoint at fold %s", last_fold)
+
+    last_split: tuple[np.ndarray, np.ndarray] | None = None
+    half_life = cfg.get("time_decay_half_life")
+    balance = cfg.get("balance_classes")
+    interval_alpha = float(cfg.get("interval_alpha", 0.1))
+    for fold, (train_idx, val_idx) in enumerate(tscv.split(X, groups=groups)):
+        if fold < start_fold:
+            continue
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+
+        if cfg.get("use_data_augmentation", False) or cfg.get(
+            "use_diffusion_aug", False
+        ):
+            fname = (
+                "synthetic_sequences_diffusion.npz"
+                if cfg.get("use_diffusion_aug", False)
+                else "synthetic_sequences.npz"
+            )
+            aug_path = root / "data" / "augmented" / fname
+            if aug_path.exists():
+                data = np.load(aug_path)
+                X_aug = data["X"][..., -1, :]
+                y_aug = data["y"]
+                df_aug = pd.DataFrame(X_aug, columns=features)
+                X_train = pd.concat([X_train, df_aug], ignore_index=True)
+                y_train = pd.concat(
+                    [
+                        y_train,
+                        pd.Series(
+                            y_aug, index=range(len(y_train), len(y_train) + len(y_aug))
+                        ),
+                    ],
+                    ignore_index=True,
+                )
+            elif cfg.get("use_diffusion_aug", False):
+                from analysis.scenario_diffusion import ScenarioDiffusion
+
+                logger.info("Generating diffusion crash scenarios on the fly")
+                seq_len = cfg.get("sequence_length", 50)
+                n_syn = cfg.get("diffusion_aug_samples", len(X_train))
+                model = ScenarioDiffusion(seq_len=seq_len)
+                ret_idx = features.index("return") if "return" in features else None
+                X_syn = np.zeros((n_syn, len(features)))
+                y_syn = np.zeros(n_syn, dtype=int)
+                for i in range(n_syn):
+                    path = model.sample_crash_recovery(seq_len)
+                    val = float(np.clip(path.min(), -0.3, 0.3))
+                    if ret_idx is not None:
+                        X_syn[i, ret_idx] = val
+                df_aug = pd.DataFrame(X_syn, columns=features)
+                X_train = pd.concat([X_train, df_aug], ignore_index=True)
+                y_train = pd.concat(
+                    [
+                        y_train,
+                        pd.Series(
+                            y_syn, index=range(len(y_train), len(y_train) + len(y_syn))
+                        ),
+                    ],
+                    ignore_index=True,
+                )
+
+        dq_w = dq_score_samples(X_train)
+        if use_multi_task_heads:
+            steps = [("sanitizer", _make_sanitizer(cfg))]
+            if cfg.get("use_scaler", True):
+                steps.append(("scaler", FeatureScaler()))
+            hidden_default = 32
+            if isinstance(X_train, pd.DataFrame):
+                hidden_default = max(16, len(X_train.columns) // 2 or 16)
+            head_cfg = {
+                "classification_targets": label_cols,
+                "abs_targets": abs_label_cols,
+                "volatility_targets": vol_label_cols,
+                "hidden_dim": int(cfg.get("head_hidden_dim", hidden_default)),
+                "learning_rate": float(cfg.get("head_learning_rate", 0.01)),
+                "epochs": int(cfg.get("head_epochs", 200)),
+                "classification_weight": float(cfg.get("head_classification_weight", 1.0)),
+                "abs_weight": float(cfg.get("head_abs_weight", 1.0)),
+                "volatility_weight": float(cfg.get("head_volatility_weight", 1.0)),
+                "l2": float(cfg.get("head_l2", 0.0)),
+                "random_state": seed,
+            }
+            head = MultiTaskHeadEstimator(**head_cfg)
+            steps.append(("multi_task", head))
+            pipe = Pipeline(steps)
+            fit_params = {}
+            sw = combined_sample_weight(
+                y_train[label_cols[0]].to_numpy()
+                if label_cols
+                else y_train.iloc[:, 0].to_numpy(),
+                timestamps[train_idx],
+                t_max,
+                cfg.get("balance_classes"),
+                half_life,
+                dq_w,
+            )
+            if sw is not None:
+                fit_params["multi_task__sample_weight"] = sw
+            pipe.fit(X_train, y_train, **fit_params)
+            if len(pipe.steps) > 1:
+                X_val_shared = pipe[:-1].transform(X_val)
+            else:
+                X_val_shared = X_val
+            if label_cols:
+                class_probs = pipe.named_steps["multi_task"].predict_classification_proba(
+                    X_val_shared
+                )
+                class_probs = np.asarray(class_probs, dtype=float)
+                if class_probs.ndim == 1:
+                    class_probs = class_probs.reshape(-1, 1)
+                probs = class_probs[:, 0]
+                val_probs = np.column_stack([1 - probs, probs])
+            else:
+                probs = np.zeros(len(X_val), dtype=float)
+                val_probs = np.column_stack([1 - probs, probs])
+            pipe.classification_targets_ = list(label_cols)
+            pipe.abs_return_targets_ = list(abs_label_cols)
+            pipe.volatility_targets_ = list(vol_label_cols)
+            pipe.regression_feature_columns_ = (
+                list(X_train.columns) if isinstance(X_train, pd.DataFrame) else None
+            )
+            pipe.head_config_ = dict(pipe.named_steps["multi_task"].head_config_)
+            pipe.primary_label_ = pipe.named_steps["multi_task"].primary_label_
+            pipe.classification_thresholds_ = dict(
+                getattr(pipe.named_steps["multi_task"], "thresholds_", {})
+            )
+            heads = {}
+            if abs_label_cols:
+                heads["abs_return"] = {"type": "multi_task", "columns": list(abs_label_cols)}
+            if vol_label_cols:
+                heads["volatility"] = {"type": "multi_task", "columns": list(vol_label_cols)}
+            pipe.regression_heads_ = heads
+            pipe.regression_target_columns_ = {k: v["columns"] for k, v in heads.items()}
+        else:
+            steps = [("sanitizer", _make_sanitizer(cfg))]
+            if model_type != "cross_modal" and cfg.get("use_scaler", True):
+                steps.append(("scaler", FeatureScaler()))
+            if model_type == "cross_modal":
+                if CrossModalClassifier is None:
+                    raise RuntimeError("CrossModalClassifier requires PyTorch")
+                cm_cfg = cfg.get("cross_modal_model", {})
+                estimator = CrossModalClassifier(
+                    d_model=int(cm_cfg.get("d_model", cfg.get("d_model", 64))),
+                    nhead=int(cm_cfg.get("nhead", cfg.get("nhead", 4))),
+                    num_layers=int(cm_cfg.get("num_layers", cfg.get("num_layers", 2))),
+                    dropout=float(cm_cfg.get("dropout", cfg.get("dropout", 0.1))),
+                    lr=float(cm_cfg.get("lr", cm_cfg.get("learning_rate", 1e-3))),
+                    epochs=int(cm_cfg.get("epochs", cm_cfg.get("num_epochs", 5))),
+                    batch_size=int(cm_cfg.get("batch_size", 128)),
+                    weight_decay=float(cm_cfg.get("weight_decay", 0.0)),
+                    time_encoding=bool(
+                        cm_cfg.get("time_encoding", cfg.get("time_encoding", False))
+                    ),
+                    average_attn_weights=bool(cm_cfg.get("average_attn_weights", True)),
+                )
+                steps.append(("clf", estimator))
+                pipe = Pipeline(steps)
+                fit_params_cm: dict[str, object] = {}
+                sw = combined_sample_weight(
+                    y_train[label_cols[0]].to_numpy()
+                    if label_cols
+                    else y_train.iloc[:, 0].to_numpy(),
+                    timestamps[train_idx],
+                    t_max,
+                    cfg.get("balance_classes"),
+                    half_life,
+                    dq_w,
+                )
+                if sw is not None:
+                    fit_params_cm["clf__sample_weight"] = sw
+                pipe.fit(X_train, y_train, **fit_params_cm)
+                val_probs = pipe.predict_proba(X_val)
+                probs = val_probs[:, 1]
+            else:
+                clf_params = {
+                    "n_estimators": 200,
+                    "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+                    "random_state": seed,
+                    **_lgbm_params(cfg),
+                }
+                if use_focal:
+                    clf_params["objective"] = "None"
+                steps.append(("clf", LGBMClassifier(**clf_params)))
+                pipe = Pipeline(steps)
+                if "clf" in pipe.named_steps:
+                    _register_clf(pipe.named_steps["clf"])
+                fit_params = {"clf__eval_set": [(X_val, y_val)]}
+                esr = cfg.get("early_stopping_rounds", 50)
+                if esr:
+                    fit_params["clf__early_stopping_rounds"] = esr
+                if donor_booster is not None:
+                    fit_params["clf__init_model"] = donor_booster
+                sw = combined_sample_weight(
+                    y_train[label_cols[0]].to_numpy()
+                    if label_cols
+                    else y_train.iloc[:, 0].to_numpy(),
+                    timestamps[train_idx],
+                    t_max,
+                    cfg.get("balance_classes"),
+                    half_life,
+                    dq_w,
+                )
+                if sw is not None:
+                    fit_params["clf__sample_weight"] = sw
+                if use_focal:
+                    fit_params["clf__fobj"] = fobj
+                    fit_params["clf__feval"] = feval
+                pipe.fit(X_train, y_train, **fit_params)
+                val_probs = pipe.predict_proba(X_val)
+                probs = val_probs[:, 1]
+
+        sanitizer = pipe.named_steps.get("sanitizer")
+        if sanitizer is not None and hasattr(sanitizer, "state_dict"):
+            pipe.sanitizer_state_ = sanitizer.state_dict()
+        pipe.head_config_ = getattr(pipe, "head_config_", {})
+        pipe.classification_thresholds_ = getattr(
+            pipe, "classification_thresholds_", {}
+        )
+        pipe.regression_heads_ = getattr(pipe, "regression_heads_", {})
+        pipe.regression_target_columns_ = getattr(
+            pipe, "regression_target_columns_", {}
+        )
+        if not hasattr(pipe, "regression_feature_columns_"):
+            pipe.regression_feature_columns_ = (
+                list(X_train.columns) if isinstance(X_train, pd.DataFrame) else None
+            )
+        if not hasattr(pipe, "classification_targets_"):
+            pipe.classification_targets_ = list(label_cols)
+        if not hasattr(pipe, "primary_label_"):
+            pipe.primary_label_ = label_cols[0] if label_cols else None
+        al_queue.push_low_confidence(X_val.index, val_probs, threshold=al_threshold)
+        logger.info("Active learning queue size: %d", len(al_queue))
+        for feat_row, pred in zip(X_val[features].to_dict("records"), probs):
+            drift_monitor.update(feat_row, float(pred))
+        regimes_val = X_val["market_regime"].values
+        thr_dict, preds = find_regime_thresholds(y_val.values, probs, regimes_val)
+        thr_dict = _normalise_regime_thresholds(thr_dict)
+        for reg, thr_val in thr_dict.items():
+            mlflow.log_metric(f"fold_{fold}_thr_regime_{reg}", float(thr_val))
+        last_val_X, last_val_y, last_val_probs, last_val_regimes = (
+            X_val,
+            y_val,
+            probs,
+            regimes_val,
+        )
+        interval_params_fold, residuals, (lower, upper) = calibrate_intervals(
+            y_val.values,
+            probs,
+            alpha=interval_alpha,
+            regimes=regimes_val,
+        )
+        for reg in np.unique(regimes_val):
+            mask = regimes_val == reg
+            all_residuals.setdefault(int(reg), []).extend(
+                [float(r) for r in residuals[mask]]
+            )
+        cov = float(interval_params_fold.coverage or 0.0)
+        mlflow.log_metric(f"fold_{fold}_interval_coverage", cov)
+        logger.info("Fold %d interval coverage: %.3f", fold, cov)
+        conf = np.abs(probs - 0.5) * 2
+        rp = cfg.strategy.risk_profile
+        sizer = PositionSizer(
+            capital=cfg.get("eval_capital", 1000.0) * rp.leverage_cap,
+            target_vol=rp.tolerance,
+        )
+        for p, c in zip(probs, conf):
+            sizer.size(p, confidence=c)
+        all_conf.extend(conf)
+        report = classification_report(y_val, preds, output_dict=True)
+        logger.info("Fold %d\n%s", fold, classification_report(y_val, preds))
+        budget_eval = risk_budget or user_budget
+        if "return" in df.columns and budget_eval is not None:
+            returns_val = df.loc[X_val.index, "return"].to_numpy()
+            alpha = float(risk_target.get("cvar_level", 0.05)) if risk_target else 0.05
+            cvar_val = float(-cvar(returns_val, alpha))
+            mdd_val = float(max_drawdown(returns_val))
+            mlflow.log_metric(f"fold_{fold}_cvar", cvar_val)
+            mlflow.log_metric(f"fold_{fold}_max_drawdown", mdd_val)
+            pen = risk_penalty(returns_val, budget_eval, level=alpha)
+            if pen > 0:
+                violation_penalty = float(pen)
+                logger.warning(
+                    "Risk constraints violated on fold %d: %.4f",
+                    fold,
+                    violation_penalty,
+                )
+                risk_violation = True
+                break
+        mlflow.log_metric(
+            f"fold_{fold}_f1_weighted", report["weighted avg"]["f1-score"]
+        )
+        mlflow.log_metric(
+            f"fold_{fold}_precision_weighted", report["weighted avg"]["precision"]
+        )
+        mlflow.log_metric(
+            f"fold_{fold}_recall_weighted", report["weighted avg"]["recall"]
+        )
+
+        all_preds.extend(preds)
+        all_true.extend(y_val)
+        all_probs.extend(probs)
+        all_regimes.extend(regimes_val)
+        all_lower.extend(lower)
+        all_upper.extend(upper)
+        state = {
+            "model": pipe,
+            "all_preds": all_preds,
+            "all_true": all_true,
+            "all_probs": all_probs,
+            "all_conf": all_conf,
+            "all_regimes": all_regimes,
+            "all_lower": all_lower,
+            "all_upper": all_upper,
+            "all_residuals": all_residuals,
+            "metrics": report,
+            "regime_thresholds": thr_dict,
+        }
+        state["interval_params"] = interval_params_fold.to_dict()
+        if "scaler" in pipe.named_steps:
+            state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
+        save_checkpoint(state, fold, cfg.get("checkpoint_dir"))
+
+        if risk_violation:
+            break
+
+        if fold == tscv.n_splits - 1:
+            final_pipe = pipe
+            X_train_final = X_train
+        last_split = (train_idx, val_idx)
 def log_shap_importance(
     pipe: Pipeline,
     X_train: pd.DataFrame,
@@ -829,7 +1919,210 @@ def log_shap_importance(
         logger.warning("Failed to compute SHAP values: %s", e)
 
 
-def _run_training(
+def log_artifacts(
+    training: TrainingResult,
+    cfg: AppConfig,
+    root: Path,
+    export: bool,
+    start_time: datetime,
+    recorder: RunHistoryRecorder,
+    df_unlabeled: pd.DataFrame | None = None,
+) -> ArtifactLogResult:
+    """Log ancillary artefacts after model training."""
+
+    final_pipe = training.final_pipe
+    features = training.features
+    al_queue = training.al_queue
+    al_threshold = training.al_threshold
+    pseudo_path: Path | None = None
+    queued_count = 0
+
+    if final_pipe is not None and df_unlabeled is not None:
+        X_unlabeled = df_unlabeled[features]
+        y_unlabeled = (
+            df_unlabeled["label"].values if "label" in df_unlabeled.columns else None
+        )
+        probs_unlabeled = final_pipe.predict_proba(X_unlabeled)
+        queued_count = al_queue.push_low_confidence(
+            X_unlabeled.index, probs_unlabeled, threshold=al_threshold
+        )
+        if queued_count:
+            logger.info(
+                "Queued %s low-confidence samples for review (threshold=%.2f)",
+                queued_count,
+                al_threshold,
+            )
+        queue_stats = al_queue.stats()
+        logger.info(
+            "Active learning queue stats: pending=%s ready_for_merge=%s",
+            queue_stats["awaiting_label"],
+            queue_stats["ready_for_merge"],
+        )
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_metric("al_queue_pending", queue_stats["awaiting_label"])
+            mlflow.log_metric(
+                "al_queue_ready_for_merge", queue_stats["ready_for_merge"]
+            )
+        except Exception:  # pragma: no cover - optional logging
+            pass
+        pseudo_threshold = cfg.get("pseudo_label_threshold", 0.9)
+        preds_unlabeled = probs_unlabeled.argmax(axis=1)
+        max_probs = probs_unlabeled.max(axis=1)
+        mask_high = max_probs >= pseudo_threshold
+        pseudo_path = generate_pseudo_labels(
+            final_pipe,
+            X_unlabeled,
+            y_true=y_unlabeled,
+            threshold=pseudo_threshold,
+            output_dir=root / "data" / "pseudo_labels",
+            report_dir=root / "reports" / "pseudo_label",
+        )
+        high_conf_count = int(np.sum(mask_high))
+        logger.info(
+            "Generated pseudo labels at %s for %s high-confidence samples (thr=%.2f)",
+            pseudo_path,
+            high_conf_count,
+            pseudo_threshold,
+        )
+        if high_conf_count:
+            precision_est = float(max_probs[mask_high].mean())
+            logger.info(
+                "Pseudo label precision estimate=%.3f on %s samples",
+                precision_est,
+                high_conf_count,
+            )
+            try:  # pragma: no cover - mlflow optional
+                mlflow.log_metric("pseudo_label_precision_estimate", precision_est)
+            except Exception:
+                pass
+        if y_unlabeled is not None and high_conf_count:
+            prec = precision_score(
+                y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
+            )
+            rec = recall_score(
+                y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
+            )
+            logger.info("Pseudo label precision=%s recall=%s", prec, rec)
+            mlflow.log_metric("pseudo_label_precision", prec)
+            mlflow.log_metric("pseudo_label_recall", rec)
+
+    meta_features = pd.DataFrame({"prob": training.all_probs, "confidence": training.all_conf})
+    meta_clf = train_meta_classifier(meta_features, training.all_true)
+    meta_version_id = model_store.save_model(meta_clf, cfg, {"type": "meta"})
+    training.model_metadata["meta_model_id"] = meta_version_id
+    if final_pipe is not None:
+        setattr(final_pipe, "model_metadata", training.model_metadata)
+    perf = {
+        "f1_weighted": training.boot_metrics["f1"],
+        "precision_weighted": training.boot_metrics["precision"],
+        "recall_weighted": training.boot_metrics["recall"],
+        "f1_ci": [training.f1_ci[0], training.f1_ci[1]],
+        "precision_ci": [training.prec_ci[0], training.prec_ci[1]],
+        "recall_ci": [training.rec_ci[0], training.rec_ci[1]],
+        "regime_thresholds": training.regime_thresholds,
+        "meta_model_id": meta_version_id,
+    }
+    if training.overall_params is not None:
+        perf["interval"] = training.overall_params.to_dict()
+        perf["interval_q"] = training.overall_q
+        perf["interval_alpha"] = cfg.get("interval_alpha", 0.1)
+        perf["interval_coverage"] = training.overall_cov
+        if training.overall_params.coverage_by_regime:
+            perf["interval_coverage_by_regime"] = {
+                int(k): float(v)
+                for k, v in training.overall_params.coverage_by_regime.items()
+            }
+        if final_pipe is not None:
+            setattr(final_pipe, "interval_q", training.overall_params.quantiles)
+            setattr(final_pipe, "interval_params", training.overall_params)
+            setattr(final_pipe, "interval_coverage", training.overall_params.coverage)
+            setattr(final_pipe, "interval_alpha", training.overall_params.alpha)
+            if training.overall_params.coverage_by_regime:
+                setattr(
+                    final_pipe,
+                    "interval_coverage_by_regime",
+                    {
+                        int(k): float(v)
+                        for k, v in training.overall_params.coverage_by_regime.items()
+                    },
+                )
+    version_id = persist_model(
+        final_pipe,
+        cfg,
+        perf,
+        features=features,
+        root=root,
+    )
+    try:  # pragma: no cover - mlflow optional
+        mlflow.log_artifact(str(root / "model.joblib"))
+    except Exception:
+        pass
+    logger.info("Registered model version %s", version_id)
+
+    regimes_path = root / "models" / "regime_models"
+    regimes_path.mkdir(parents=True, exist_ok=True)
+    recorder.add_artifact(
+        regimes_path, dest_name="models/regime_models", optional=True
+    )
+    logger.info("Regime-specific models saved to %s", regimes_path)
+
+    out = root / "classification_report.json"
+    with out.open("w") as f:
+        json.dump(training.aggregate_report, f, indent=2)
+    mlflow.log_artifact(str(out))
+    recorder.add_artifact(
+        out, dest_name="reports/classification_report.json", optional=True
+    )
+
+    if (
+        final_pipe is not None
+        and training.X_train_final is not None
+        and cfg.get("feature_importance", False)
+    ):
+        report_dir = Path(__file__).resolve().parent / "reports"
+        paths = generate_shap_report(
+            final_pipe,
+            training.X_train_final[features],
+            report_dir,
+        )
+        for p in paths.values():
+            mlflow.log_artifact(str(p))
+
+    if export and final_pipe is not None:
+        from models.export import export_lightgbm
+
+        sample = training.X.iloc[: min(len(training.X), 10)]
+        if "scaler" in final_pipe.named_steps:
+            sample = final_pipe.named_steps["scaler"].transform(sample)
+        clf = final_pipe.named_steps.get("clf", final_pipe)
+        export_lightgbm(clf, sample)
+
+    logger.info("Active learning queue size: %d", len(al_queue))
+    card_md, card_json = model_card.generate(
+        cfg,
+        [root / "data" / "history.parquet"],
+        features,
+        training.aggregate_report,
+        root / "reports" / "model_cards",
+    )
+    recorder.add_artifact(card_md, dest_name="reports/model_card.md", optional=True)
+    recorder.add_artifact(
+        card_json, dest_name="reports/model_card.json", optional=True
+    )
+    mlflow.log_metric(
+        "runtime",
+        (datetime.now() - start_time).total_seconds(),
+    )
+
+    return ArtifactLogResult(
+        meta_model_id=meta_version_id,
+        model_version_id=version_id,
+        pseudo_label_path=pseudo_path,
+        queued_count=queued_count,
+    )
+
+
+def run_training_pipeline(
     cfg: AppConfig | dict | None = None,
     export: bool = False,
     resume_online: bool = False,
@@ -875,6 +2168,7 @@ def _run_training(
     status = "failed"
     result_value: float | None = None
     error: Exception | None = None
+    base_f1 = 0.0
 
     _subscribe_cpu_updates(cfg)
     seed = cfg.training.seed
@@ -910,1259 +2204,72 @@ def _run_training(
             mlflow.log_param("model_type", model_type)
         except Exception:
             pass
-        validate_flag = cfg.get("validate", False)
-        chunk_size = cfg.get("stream_chunk_size", 100_000)
-        stream = cfg.get("stream_history", False)
-        feature_lookback = int(cfg.get("stream_feature_lookback", 512))
 
-        training_data, data_source = load_training_frame(
-            cfg,
-            root,
-            df_override=df_override,
-            stream=stream,
-            chunk_size=chunk_size,
-            feature_lookback=feature_lookback,
-            validate=validate_flag,
-        )
+        history = load_histories(cfg, root, df_override=df_override)
         recorder.update_context(
-            validate=bool(validate_flag),
-            stream_enabled=bool(stream),
-            stream_chunk_size=chunk_size,
-            stream_feature_lookback=feature_lookback,
-            data_source=str(data_source),
+            validate=history.validate,
+            stream_enabled=history.stream,
+            stream_chunk_size=history.chunk_size,
+            stream_feature_lookback=history.feature_lookback,
+            data_source=history.data_source,
         )
-
-        stream_metadata: dict[str, object] | None = None
-        if isinstance(training_data, StreamingTrainingFrame):
-            stream_metadata = training_data.metadata
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_param("data_source", history.data_source)
+        except Exception:
+            pass
+        if history.stream_metadata:
+            metadata = history.stream_metadata
             try:  # pragma: no cover - mlflow optional
-                if stream_metadata.get("chunk_size") is not None:
-                    mlflow.log_param(
-                        "stream_chunk_size", int(stream_metadata["chunk_size"])
-                    )
-                if stream_metadata.get("feature_lookback") is not None:
+                if metadata.get("chunk_size") is not None:
+                    mlflow.log_param("stream_chunk_size", int(metadata["chunk_size"]))
+                if metadata.get("feature_lookback") is not None:
                     mlflow.log_param(
                         "stream_feature_lookback",
-                        int(stream_metadata["feature_lookback"]),
+                        int(metadata["feature_lookback"]),
                     )
             except Exception:
                 pass
-        if stream_metadata:
-            recorder.update_context(stream_metadata=stream_metadata)
+            recorder.update_context(stream_metadata=metadata)
 
-        adapter_path = root / "domain_adapter.pkl"
-        df = apply_domain_adaptation(
-            training_data,
-            adapter_path,
-            regime_step=cfg.get("regime_reclass_period", 500),
-        )
-
-        rp = cfg.strategy.risk_profile
-        user_budget = append_risk_profile_features(df, rp)
-
-        features = build_feature_candidates(df, user_budget, cfg=cfg)
-
-        if isinstance(df, StreamingTrainingFrame):
-            column_source = df.collect_columns()
-        else:
-            column_source = list(df.columns)
-
-        price_window_cols = sorted(c for c in column_source if c.startswith("price_window_"))
-        news_emb_cols = sorted(c for c in column_source if c.startswith("news_emb_"))
-        if model_type == "cross_modal":
-            if not price_window_cols or not news_emb_cols:
-                raise ValueError(
-                    "model_type='cross_modal' requires price_window_ and news_emb_ columns"
-                )
-            for col in price_window_cols + news_emb_cols:
-                if col not in features:
-                    features.append(col)
-
-        try:  # pragma: no cover - mlflow optional
-            mlflow.log_param("data_source", data_source)
-        except Exception:
-            pass
-        horizons = cfg.get("horizons", [cfg.get("max_horizon", 10)])
-        labels_frame = generate_training_labels(
-            df,
-            stream=stream,
-            horizons=horizons,
-            chunk_size=chunk_size,
-        )
-
-        if isinstance(df, StreamingTrainingFrame):
-            column_source = df.collect_columns()
-            label_cols = [c for c in column_source if c.startswith("direction_")]
-            abs_label_cols = [c for c in column_source if c.startswith("abs_return_")]
-            vol_label_cols = [c for c in column_source if c.startswith("volatility_")]
-            df = df.materialise()
-            if label_cols or abs_label_cols or vol_label_cols:
-                label_subset = label_cols + abs_label_cols + vol_label_cols
-                labels_frame = df.loc[:, label_subset]
-            else:
-                labels_frame = pd.DataFrame(index=df.index)
-        else:
-            df = pd.concat([df, labels_frame], axis=1)
-            label_cols = [c for c in labels_frame.columns if c.startswith("direction_")]
-            abs_label_cols = [c for c in labels_frame.columns if c.startswith("abs_return_")]
-            vol_label_cols = [c for c in labels_frame.columns if c.startswith("volatility_")]
-
-        y = labels_frame
-        use_multi_task_heads = bool(cfg.get("use_multi_task_heads", True))
-        if model_type == "neural":
-            use_multi_task_heads = True
-        if model_type == "cross_modal":
-            use_multi_task_heads = False
-        elif not abs_label_cols and not vol_label_cols:
-            use_multi_task_heads = bool(cfg.get("use_multi_task_heads", False))
-
-        sel_target = None
-        if label_cols:
-            sel_target = labels_frame[label_cols[0]]
-        elif not labels_frame.empty:
-            sel_target = labels_frame.iloc[:, 0]
-
-        mandatory_cols = [col for col in ["risk_tolerance", "leverage_cap", "drawdown_limit"] if col in df.columns]
-        features = select_model_features(
-            df,
-            features,
-            sel_target,
-            model_type=model_type,
-            mandatory=mandatory_cols,
-        )
-
-        cross_modal_cfg = cfg.get("cross_modal_feature", {})
-        modal_result = None
-        if torch is not None and CrossModalTransformer is not None:
-            try:
-                modal_result = prepare_modal_arrays(
-                    df, sel_target.to_numpy(dtype=np.float32)
-                )
-            except Exception as exc:  # pragma: no cover - defensive logging
-                modal_result = None
-                logger.warning("Failed to prepare modal arrays: %s", exc)
-        if modal_result is not None:
-            price_modal, news_modal, labels_modal, mask_modal, price_cols, news_cols = modal_result
-            cfg.setdefault("model", {}).setdefault(
-                "cross_modal_features",
-                {"price": price_cols, "news": news_cols},
-            )
-            if model_type != "cross_modal" and torch is not None and CrossModalTransformer is not None:
-                min_samples = int(cross_modal_cfg.get("min_samples", 50))
-                if (
-                    labels_modal is not None
-                    and len(price_modal) >= max(10, min_samples)
-                ):
-                    try:
-                        preds = _train_cross_modal_feature(
-                            price_modal,
-                            news_modal,
-                            labels_modal,
-                            epochs=int(cross_modal_cfg.get("epochs", 5)),
-                            batch_size=int(cross_modal_cfg.get("batch_size", 128)),
-                            d_model=int(cross_modal_cfg.get("d_model", 64)),
-                            nhead=int(cross_modal_cfg.get("nhead", 4)),
-                            num_layers=int(cross_modal_cfg.get("num_layers", 2)),
-                            dropout=float(cross_modal_cfg.get("dropout", 0.1)),
-                            lr=float(cross_modal_cfg.get("lr", 1e-3)),
-                        )
-                        fused = np.full(len(df), 0.5, dtype=float)
-                        fused[mask_modal] = preds
-                        df["cross_modal_signal"] = fused
-                        if "cross_modal_signal" not in features:
-                            features.append("cross_modal_signal")
-                        logger.info(
-                            "Cross-modal feature trained on %d samples", len(price_modal)
-                        )
-                    except Exception as exc:  # pragma: no cover - fallback on failure
-                        logger.warning("Cross-modal fusion failed: %s", exc)
-
-        feat_path = root / "selected_features.json"
-        feat_path.write_text(json.dumps(features))
-        index_path = root / "similar_days_index.pkl"
-        df, _ = add_similar_day_features(
-            df,
-            feature_cols=features,
-            return_col="return",
-            k=cfg.get("nn_k", 5),
-            index_path=index_path,
-        )
-        features.extend(["nn_return_mean", "nn_vol"])
-
-        risk_budget = None
-        if risk_target:
-            risk_budget = RiskBudget(
-                max_leverage=float(risk_target.get("max_leverage", 1.0)),
-                max_drawdown=float(risk_target.get("max_drawdown", 0.0)),
-                cvar_limit=risk_target.get("cvar"),
-            )
-            for name, val in risk_budget.as_features().items():
-                df[name] = val
-                if name not in features:
-                    features.append(name)
-            if "position" in df.columns:
-                df["position"] = risk_budget.scale_positions(df["position"].to_numpy())
-
-        X = df[features]
-        # Use symbol identifiers as group labels so cross-validation folds
-        # never mix data from the same instrument between train and validation.
-        groups = df["Symbol"] if "Symbol" in df.columns else df.get("SymbolCode")
-
-        al_queue = ActiveLearningQueue()
-        new_labels = al_queue.pop_labeled()
-        if not new_labels.empty and label_cols:
-            df = merge_labels(df, new_labels, label_cols[0])
-            y = df[label_cols]
-            X = df[features]
-            save_history_parquet(df, root / "data" / "history.parquet")
-        queue_stats = al_queue.stats()
-        logger.info(
-            "Active learning queue stats: pending=%s ready_for_merge=%s",
-            queue_stats["awaiting_label"],
-            queue_stats["ready_for_merge"],
-        )
-        try:  # pragma: no cover - mlflow optional
-            mlflow.log_metric("al_queue_pending", queue_stats["awaiting_label"])
-            mlflow.log_metric("al_queue_ready_for_merge", queue_stats["ready_for_merge"])
-        except Exception:  # pragma: no cover - optional logging
-            pass
-        al_threshold = cfg.get("active_learning", {}).get("threshold", 0.6)
-
-        if use_pseudo_labels and label_cols:
-            pseudo_dir = root / "data" / "pseudo_labels"
-            if pseudo_dir.exists():
-                files = list(pseudo_dir.glob("*.parquet")) + list(pseudo_dir.glob("*.csv"))
-                for p in files:
-                    try:
-                        if p.suffix == ".parquet":
-                            df_pseudo = pd.read_parquet(p)
-                        else:
-                            df_pseudo = pd.read_csv(p)
-                    except Exception:
-                        continue
-                    if label_cols[0] not in df_pseudo.columns:
-                        continue
-                    if not set(features).issubset(df_pseudo.columns):
-                        continue
-                    X = pd.concat([X, df_pseudo[features]], ignore_index=True)
-                    y = pd.concat([y, df_pseudo[label_cols]], ignore_index=True)
-
-        if "timestamp" in df.columns and len(df) == len(X):
-            timestamps = _index_to_timestamps(df["timestamp"])
-        else:
-            timestamps = np.arange(len(X), dtype="int64")
-        t_max = int(timestamps.max())
-
-        if cfg.get("tune"):
-            from tuning.tuning import tune_lightgbm
-
-            def train_trial(params: dict, _trial) -> float:
-                clf_params = {
-                    "n_estimators": 200,
-                    "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
-                    "random_state": seed,
-                    **params,
-                }
-                if use_focal:
-                    clf_params["objective"] = "None"
-                clf = LGBMClassifier(**clf_params)
-                tscv_inner = PurgedTimeSeriesSplit(
-                    n_splits=cfg.get("n_splits", 5),
-                    embargo=cfg.get("max_horizon", 0),
-                )
-                scores: list[float] = []
-                half_life = cfg.get("time_decay_half_life")
-                balance = cfg.get("balance_classes")
-                for tr_idx, va_idx in tscv_inner.split(X, groups=groups):
-                    X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
-                    y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
-                    fit_kwargs: dict[str, object] = {
-                        "eval_set": [(X_va, y_va)],
-                        "early_stopping_rounds": cfg.get("early_stopping_rounds", 50),
-                        "verbose": False,
-                    }
-                    dq_w = dq_score_samples(X_tr)
-                    y_tr_arr = (
-                        y_tr[label_cols[0]].to_numpy()
-                        if label_cols
-                        else y_tr.iloc[:, 0].to_numpy()
-                    )
-                    sw = combined_sample_weight(
-                        y_tr_arr,
-                        timestamps[tr_idx],
-                        t_max,
-                        balance,
-                        half_life,
-                        dq_w,
-                    )
-                    if sw is not None:
-                        fit_kwargs["sample_weight"] = sw
-                    if use_focal:
-                        fit_kwargs["fobj"] = fobj
-                        fit_kwargs["feval"] = feval
-                    clf.fit(X_tr, y_tr, **fit_kwargs)
-                    preds = clf.predict(X_va)
-                    rep = classification_report(y_va, preds, output_dict=True)
-                    scores.append(rep["weighted avg"]["f1-score"])
-                return float(np.mean(scores))
-
-            best_params = tune_lightgbm(train_trial, n_trials=cfg.get("n_trials", 20))
-            cfg.update(best_params)
-
-        if cfg.get("meta_train"):
-            from analysis.meta_learning import meta_train_lgbm, save_meta_weights
-
-            state = meta_train_lgbm(df, features)
-            save_meta_weights(state, "lgbm")
-            return 0.0
-
-        if cfg.get("meta_init"):
-            from analysis.meta_learning import (
-                _LinearModel,
-                fine_tune_model,
-                load_meta_weights,
-                save_meta_weights,
-            )
-            from models.meta_learner import steps_to
-            from torch.utils.data import TensorDataset
-
-            X_all = torch.tensor(df[features].values, dtype=torch.float32)
-            y_all = torch.tensor(df[label_cols[0]].values, dtype=torch.float32)
-            dataset = TensorDataset(X_all, y_all)
-            state = load_meta_weights("lgbm")
-            new_state, history = fine_tune_model(
-                state, dataset, lambda: _LinearModel(len(features)), steps=5
-            )
-            logger.info("Meta-init adaptation steps: %s", steps_to(history))
-            save_meta_weights(new_state, "lgbm", regime=cfg.get("symbol", "asset"))
-            return 0.0
-
-        if cfg.get("fine_tune"):
-            from analysis.meta_learning import (
-                _LinearModel,
-                fine_tune_model,
-                load_meta_weights,
-                save_meta_weights,
-            )
-            from torch.utils.data import TensorDataset
-
-            regime = int(df["market_regime"].iloc[-1])
-            mask = df["market_regime"] == regime
-            X_reg = torch.tensor(df.loc[mask, features].values, dtype=torch.float32)
-            y_reg = torch.tensor(
-                df.loc[mask, label_cols[0]].values,
-                dtype=torch.float32,
-            )
-            dataset = TensorDataset(X_reg, y_reg)
-            state = load_meta_weights("lgbm")
-            new_state, _ = fine_tune_model(
-                state, dataset, lambda: _LinearModel(len(features)), steps=5
-            )
-            save_meta_weights(new_state, "lgbm", regime=f"regime_{regime}")
-            return 0.0
-
-        if resume_online:
-            batch_size = cfg.get("online_batch_size", 1000)
-            ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
-            if ckpt:
-                start_batch = ckpt[0] + 1
-                state = ckpt[1]
-                pipe: Pipeline = state["model"]
-                scaler_state = state.get("scaler_state")
-                if scaler_state and "scaler" in pipe.named_steps:
-                    pipe.named_steps["scaler"].load_state_dict(scaler_state)
-            else:
-                start_batch = 0
-                steps: list[tuple[str, object]] = [("sanitizer", _make_sanitizer(cfg))]
-                if cfg.get("use_scaler", True):
-                    steps.append(("scaler", FeatureScaler.load(scaler_path)))
-                clf_params = {
-                    "n_estimators": 200,
-                    "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
-                    "random_state": seed,
-                    "keep_training_booster": True,
-                    **_lgbm_params(cfg),
-                }
-                if use_focal:
-                    clf_params["objective"] = "None"
-                steps.append(("clf", LGBMClassifier(**clf_params)))
-                pipe = Pipeline(steps)
-            _register_clf(pipe.named_steps["clf"])
-            sanitizer = pipe.named_steps.get("sanitizer")
-            if sanitizer is not None and not getattr(sanitizer, "_fitted", False):
-                sanitizer.fit(X)
-            n_batches = math.ceil(len(X) / batch_size)
-            half_life = cfg.get("time_decay_half_life")
-            for batch_idx in range(start_batch, n_batches):
-                start = batch_idx * batch_size
-                end = min(len(X), start + batch_size)
-                Xb = X.iloc[start:end]
-                yb = y.iloc[start:end]
-                dq_w = dq_score_samples(Xb)
-                if sanitizer is not None:
-                    Xb = sanitizer.transform(Xb)
-                if "scaler" in pipe.named_steps:
-                    scaler = pipe.named_steps["scaler"]
-                    if getattr(scaler, "group_col", None):
-                        Xb_sym = Xb.copy()
-                        Xb_sym[scaler.group_col] = groups.iloc[start:end].values
-                        if hasattr(scaler, "partial_fit"):
-                            scaler.partial_fit(Xb_sym)
-                        Xb = scaler.transform(Xb_sym).drop(columns=[scaler.group_col])
-                    else:
-                        if hasattr(scaler, "partial_fit"):
-                            scaler.partial_fit(Xb)
-                        Xb = scaler.transform(Xb)
-                clf = pipe.named_steps["clf"]
-                init_model = (
-                    donor_booster
-                    if batch_idx == 0 and donor_booster is not None and not ckpt
-                    else (clf.booster_ if (batch_idx > 0 or ckpt) else None)
-                )
-                fit_kwargs: dict[str, object] = {"init_model": init_model}
-                if use_focal:
-                    fit_kwargs["fobj"] = fobj
-                    fit_kwargs["feval"] = feval
-                yb_arr = (
-                    yb[label_cols[0]].to_numpy()
-                    if label_cols
-                    else yb.iloc[:, 0].to_numpy()
-                )
-                sw = combined_sample_weight(
-                    yb_arr,
-                    timestamps[start:end],
-                    t_max,
-                    cfg.get("balance_classes"),
-                    half_life,
-                    dq_w,
-                )
-                if sw is not None:
-                    fit_kwargs["sample_weight"] = sw
-                clf.fit(Xb, yb, **fit_kwargs)
-                state = {"model": pipe}
-                if "scaler" in pipe.named_steps:
-                    state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
-                save_checkpoint(state, batch_idx, cfg.get("checkpoint_dir"))
-            joblib.dump(pipe, root / "model.joblib")
-            if "scaler" in pipe.named_steps:
-                pipe.named_steps["scaler"].save(scaler_path)
-            return 0.0
-
-        tscv = PurgedTimeSeriesSplit(
-            n_splits=cfg.get("n_splits", 5), embargo=cfg.get("max_horizon", 0)
-        )
-        all_preds: list[int] = []
-        all_regimes: list[int] = []
-        all_true: list[int] = []
-        all_probs: list[float] = []
-        all_conf: list[float] = []
-        all_lower: list[float] = []
-        all_upper: list[float] = []
-        risk_violation = False
-        violation_penalty = 0.0
-        all_residuals: dict[int, list[float]] = {}
-        final_pipe: Pipeline | None = None
-        X_train_final: pd.DataFrame | None = None
-        last_val_X: pd.DataFrame | None = None
-        last_val_y: np.ndarray | None = None
-        last_val_probs: np.ndarray | None = None
-        last_val_regimes: np.ndarray | None = None
-        start_fold = 0
-        ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
-        if ckpt:
-            last_fold, state = ckpt
-            start_fold = last_fold + 1
-            all_preds = state.get("all_preds", [])
-            all_true = state.get("all_true", [])
-            all_probs = state.get("all_probs", [])
-            all_conf = state.get("all_conf", [])
-            all_regimes = state.get("all_regimes", [])
-            all_lower = state.get("all_lower", [])
-            all_upper = state.get("all_upper", [])
-            all_residuals = state.get("all_residuals", {})
-            final_pipe = state.get("model")
-            scaler_state = state.get("scaler_state")
-            if final_pipe and scaler_state and "scaler" in final_pipe.named_steps:
-                final_pipe.named_steps["scaler"].load_state_dict(scaler_state)
-            logger.info("Resuming from checkpoint at fold %s", last_fold)
-
-        last_split: tuple[np.ndarray, np.ndarray] | None = None
-        half_life = cfg.get("time_decay_half_life")
-        balance = cfg.get("balance_classes")
-        interval_alpha = float(cfg.get("interval_alpha", 0.1))
-        for fold, (train_idx, val_idx) in enumerate(tscv.split(X, groups=groups)):
-            if fold < start_fold:
-                continue
-            X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-            y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-
-            if cfg.get("use_data_augmentation", False) or cfg.get(
-                "use_diffusion_aug", False
-            ):
-                fname = (
-                    "synthetic_sequences_diffusion.npz"
-                    if cfg.get("use_diffusion_aug", False)
-                    else "synthetic_sequences.npz"
-                )
-                aug_path = root / "data" / "augmented" / fname
-                if aug_path.exists():
-                    data = np.load(aug_path)
-                    X_aug = data["X"][:, -1, :]
-                    y_aug = data["y"]
-                    df_aug = pd.DataFrame(X_aug, columns=features)
-                    X_train = pd.concat([X_train, df_aug], ignore_index=True)
-                    y_train = pd.concat(
-                        [
-                            y_train,
-                            pd.Series(
-                                y_aug, index=range(len(y_train), len(y_train) + len(y_aug))
-                            ),
-                        ],
-                        ignore_index=True,
-                    )
-                elif cfg.get("use_diffusion_aug", False):
-                    from analysis.scenario_diffusion import ScenarioDiffusion
-
-                    logger.info("Generating diffusion crash scenarios on the fly")
-                    seq_len = cfg.get("sequence_length", 50)
-                    n_syn = cfg.get("diffusion_aug_samples", len(X_train))
-                    model = ScenarioDiffusion(seq_len=seq_len)
-                    ret_idx = features.index("return") if "return" in features else None
-                    X_syn = np.zeros((n_syn, len(features)))
-                    y_syn = np.zeros(n_syn, dtype=int)
-                    for i in range(n_syn):
-                        path = model.sample_crash_recovery(seq_len)
-                        val = float(np.clip(path.min(), -0.3, 0.3))
-                        if ret_idx is not None:
-                            X_syn[i, ret_idx] = val
-                    df_aug = pd.DataFrame(X_syn, columns=features)
-                    X_train = pd.concat([X_train, df_aug], ignore_index=True)
-                    y_train = pd.concat(
-                        [
-                            y_train,
-                            pd.Series(
-                                y_syn, index=range(len(y_train), len(y_train) + len(y_syn))
-                            ),
-                        ],
-                        ignore_index=True,
-                    )
-
-            if use_multi_task_heads:
-                steps = [("sanitizer", _make_sanitizer(cfg))]
-                if cfg.get("use_scaler", True):
-                    steps.append(("scaler", FeatureScaler()))
-                hidden_default = 32
-                if isinstance(X_train, pd.DataFrame):
-                    hidden_default = max(16, len(X_train.columns) // 2 or 16)
-                head_cfg = {
-                    "classification_targets": label_cols,
-                    "abs_targets": abs_label_cols,
-                    "volatility_targets": vol_label_cols,
-                    "hidden_dim": int(cfg.get("head_hidden_dim", hidden_default)),
-                    "learning_rate": float(cfg.get("head_learning_rate", 0.01)),
-                    "epochs": int(cfg.get("head_epochs", 200)),
-                    "classification_weight": float(cfg.get("head_classification_weight", 1.0)),
-                    "abs_weight": float(cfg.get("head_abs_weight", 1.0)),
-                    "volatility_weight": float(cfg.get("head_volatility_weight", 1.0)),
-                    "l2": float(cfg.get("head_l2", 0.0)),
-                    "random_state": seed,
-                }
-                head = MultiTaskHeadEstimator(**head_cfg)
-                steps.append(("multi_task", head))
-                pipe = Pipeline(steps)
-                fit_params = {}
-                if sw is not None:
-                    fit_params["multi_task__sample_weight"] = sw
-                pipe.fit(X_train, y_train, **fit_params)
-                if len(pipe.steps) > 1:
-                    X_val_shared = pipe[:-1].transform(X_val)
-                else:
-                    X_val_shared = X_val
-                if label_cols:
-                    class_probs = pipe.named_steps["multi_task"].predict_classification_proba(
-                        X_val_shared
-                    )
-                    class_probs = np.asarray(class_probs, dtype=float)
-                    if class_probs.ndim == 1:
-                        class_probs = class_probs.reshape(-1, 1)
-                    probs = class_probs[:, 0]
-                    val_probs = np.column_stack([1 - probs, probs])
-                else:
-                    probs = np.zeros(len(X_val), dtype=float)
-                    val_probs = np.column_stack([1 - probs, probs])
-                pipe.classification_targets_ = list(label_cols)
-                pipe.abs_return_targets_ = list(abs_label_cols)
-                pipe.volatility_targets_ = list(vol_label_cols)
-                pipe.regression_feature_columns_ = (
-                    list(X_train.columns) if isinstance(X_train, pd.DataFrame) else None
-                )
-                pipe.head_config_ = dict(pipe.named_steps["multi_task"].head_config_)
-                pipe.primary_label_ = pipe.named_steps["multi_task"].primary_label_
-                pipe.classification_thresholds_ = dict(getattr(pipe.named_steps["multi_task"], "thresholds_", {}))
-                heads = {}
-                if abs_label_cols:
-                    heads["abs_return"] = {"type": "multi_task", "columns": list(abs_label_cols)}
-                if vol_label_cols:
-                    heads["volatility"] = {"type": "multi_task", "columns": list(vol_label_cols)}
-                pipe.regression_heads_ = heads
-                pipe.regression_target_columns_ = {k: v["columns"] for k, v in heads.items()}
-            else:
-                steps = [("sanitizer", _make_sanitizer(cfg))]
-                if model_type != "cross_modal" and cfg.get("use_scaler", True):
-                    steps.append(("scaler", FeatureScaler()))
-                if model_type == "cross_modal":
-                    if CrossModalClassifier is None:
-                        raise RuntimeError("CrossModalClassifier requires PyTorch")
-                    cm_cfg = cfg.get("cross_modal_model", {})
-                    estimator = CrossModalClassifier(
-                        d_model=int(cm_cfg.get("d_model", cfg.get("d_model", 64))),
-                        nhead=int(cm_cfg.get("nhead", cfg.get("nhead", 4))),
-                        num_layers=int(cm_cfg.get("num_layers", cfg.get("num_layers", 2))),
-                        dropout=float(cm_cfg.get("dropout", cfg.get("dropout", 0.1))),
-                        lr=float(cm_cfg.get("lr", cm_cfg.get("learning_rate", 1e-3))),
-                        epochs=int(cm_cfg.get("epochs", cm_cfg.get("num_epochs", 5))),
-                        batch_size=int(cm_cfg.get("batch_size", 128)),
-                        weight_decay=float(cm_cfg.get("weight_decay", 0.0)),
-                        time_encoding=bool(
-                            cm_cfg.get("time_encoding", cfg.get("time_encoding", False))
-                        ),
-                        average_attn_weights=bool(cm_cfg.get("average_attn_weights", True)),
-                    )
-                    steps.append(("clf", estimator))
-                    pipe = Pipeline(steps)
-                    fit_params: dict[str, object] = {}
-                    if sw is not None:
-                        fit_params["clf__sample_weight"] = sw
-                    pipe.fit(X_train, y_train, **fit_params)
-                    val_probs = pipe.predict_proba(X_val)
-                    probs = val_probs[:, 1]
-                else:
-                    clf_params = {
-                        "n_estimators": 200,
-                        "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
-                        "random_state": seed,
-                        **_lgbm_params(cfg),
-                    }
-                    if use_focal:
-                        clf_params["objective"] = "None"
-                    steps.append(("clf", LGBMClassifier(**clf_params)))
-                    pipe = Pipeline(steps)
-                    if "clf" in pipe.named_steps:
-                        _register_clf(pipe.named_steps["clf"])
-                    fit_params = {"clf__eval_set": [(X_val, y_val)]}
-                    esr = cfg.get("early_stopping_rounds", 50)
-                    if esr:
-                        fit_params["clf__early_stopping_rounds"] = esr
-                    if donor_booster is not None:
-                        fit_params["clf__init_model"] = donor_booster
-                    if sw is not None:
-                        fit_params["clf__sample_weight"] = sw
-                    if use_focal:
-                        fit_params["clf__fobj"] = fobj
-                        fit_params["clf__feval"] = feval
-                    pipe.fit(X_train, y_train, **fit_params)
-                    val_probs = pipe.predict_proba(X_val)
-                    probs = val_probs[:, 1]
-            sanitizer = pipe.named_steps.get("sanitizer")
-            if sanitizer is not None and hasattr(sanitizer, "state_dict"):
-                pipe.sanitizer_state_ = sanitizer.state_dict()
-            pipe.head_config_ = getattr(pipe, "head_config_", {})
-            pipe.classification_thresholds_ = getattr(
-                pipe, "classification_thresholds_", {}
-            )
-            pipe.regression_heads_ = getattr(pipe, "regression_heads_", {})
-            pipe.regression_target_columns_ = getattr(
-                pipe, "regression_target_columns_", {}
-            )
-            if not hasattr(pipe, "regression_feature_columns_"):
-                pipe.regression_feature_columns_ = (
-                    list(X_train.columns) if isinstance(X_train, pd.DataFrame) else None
-                )
-            if not hasattr(pipe, "classification_targets_"):
-                pipe.classification_targets_ = list(label_cols)
-            if not hasattr(pipe, "primary_label_"):
-                pipe.primary_label_ = label_cols[0] if label_cols else None
-            al_queue.push_low_confidence(X_val.index, val_probs, threshold=al_threshold)
-            logger.info("Active learning queue size: %d", len(al_queue))
-            for feat_row, pred in zip(X_val[features].to_dict("records"), probs):
-                drift_monitor.update(feat_row, float(pred))
-            regimes_val = X_val["market_regime"].values
-            thr_dict, preds = find_regime_thresholds(y_val.values, probs, regimes_val)
-            thr_dict = _normalise_regime_thresholds(thr_dict)
-            for reg, thr_val in thr_dict.items():
-                mlflow.log_metric(f"fold_{fold}_thr_regime_{reg}", float(thr_val))
-            last_val_X, last_val_y, last_val_probs, last_val_regimes = (
-                X_val,
-                y_val,
-                probs,
-                regimes_val,
-            )
-            interval_params_fold, residuals, (lower, upper) = calibrate_intervals(
-                y_val.values,
-                probs,
-                alpha=interval_alpha,
-                regimes=regimes_val,
-            )
-            for reg in np.unique(regimes_val):
-                mask = regimes_val == reg
-                all_residuals.setdefault(int(reg), []).extend(
-                    [float(r) for r in residuals[mask]]
-                )
-            cov = float(interval_params_fold.coverage or 0.0)
-            mlflow.log_metric(f"fold_{fold}_interval_coverage", cov)
-            logger.info("Fold %d interval coverage: %.3f", fold, cov)
-            conf = np.abs(probs - 0.5) * 2
-            rp = cfg.strategy.risk_profile
-            sizer = PositionSizer(
-                capital=cfg.get("eval_capital", 1000.0) * rp.leverage_cap,
-                target_vol=rp.tolerance,
-            )
-            for p, c in zip(probs, conf):
-                sizer.size(p, confidence=c)
-            all_conf.extend(conf)
-            report = classification_report(y_val, preds, output_dict=True)
-            logger.info("Fold %d\n%s", fold, classification_report(y_val, preds))
-            budget_eval = risk_budget or user_budget
-            if "return" in df.columns and budget_eval is not None:
-                returns_val = df.loc[X_val.index, "return"].to_numpy()
-                alpha = float(risk_target.get("cvar_level", 0.05)) if risk_target else 0.05
-                cvar_val = float(-cvar(returns_val, alpha))
-                mdd_val = float(max_drawdown(returns_val))
-                mlflow.log_metric(f"fold_{fold}_cvar", cvar_val)
-                mlflow.log_metric(f"fold_{fold}_max_drawdown", mdd_val)
-                pen = risk_penalty(returns_val, budget_eval, level=alpha)
-                if pen > 0:
-                    violation_penalty = float(pen)
-                    logger.warning(
-                        "Risk constraints violated on fold %d: %.4f",
-                        fold,
-                        violation_penalty,
-                    )
-                    risk_violation = True
-                    break
-            mlflow.log_metric(
-                f"fold_{fold}_f1_weighted", report["weighted avg"]["f1-score"]
-            )
-            mlflow.log_metric(
-                f"fold_{fold}_precision_weighted", report["weighted avg"]["precision"]
-            )
-            mlflow.log_metric(
-                f"fold_{fold}_recall_weighted", report["weighted avg"]["recall"]
-            )
-
-            all_preds.extend(preds)
-            all_true.extend(y_val)
-            all_probs.extend(probs)
-            all_regimes.extend(regimes_val)
-            all_lower.extend(lower)
-            all_upper.extend(upper)
-            state = {
-                "model": pipe,
-                "all_preds": all_preds,
-                "all_true": all_true,
-                "all_probs": all_probs,
-                "all_conf": all_conf,
-                "all_regimes": all_regimes,
-                "all_lower": all_lower,
-                "all_upper": all_upper,
-                "all_residuals": all_residuals,
-                "metrics": report,
-                "regime_thresholds": thr_dict,
-            }
-            state["interval_params"] = interval_params_fold.to_dict()
-            if "scaler" in pipe.named_steps:
-                state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
-            save_checkpoint(state, fold, cfg.get("checkpoint_dir"))
-
-            if risk_violation:
-                break
-
-            if fold == tscv.n_splits - 1:
-                final_pipe = pipe
-                X_train_final = X_train
-            last_split = (train_idx, val_idx)
-
-        if risk_violation:
-            try:  # pragma: no cover - mlflow optional
-                mlflow.log_metric("risk_penalty", violation_penalty)
-            except Exception:
-                pass
-            logger.warning("Training stopped early due to risk violation")
-
-        overall_cov = (
-            evaluate_coverage(all_true, all_lower, all_upper) if all_lower else 0.0
-        )
-        coverage_by_regime: dict[int, float] = {}
-        if all_lower and all_regimes:
-            y_arr = np.asarray(all_true, dtype=float)
-            lower_arr = np.asarray(all_lower, dtype=float)
-            upper_arr = np.asarray(all_upper, dtype=float)
-            reg_arr = np.asarray(all_regimes)
-            for reg in np.unique(reg_arr):
-                mask = reg_arr == reg
-                if not np.any(mask):
-                    continue
-                reg_cov = evaluate_coverage(
-                    y_arr[mask],
-                    lower_arr[mask],
-                    upper_arr[mask],
-                )
-                coverage_by_regime[int(reg)] = reg_cov
-                try:  # pragma: no cover - mlflow optional
-                    mlflow.log_metric(f"interval_coverage_regime_{int(reg)}", reg_cov)
-                except Exception:
-                    pass
-                logger.info("Regime %s interval coverage: %.3f", reg, reg_cov)
-        overall_q = (
-            {
-                reg: fit_residuals(res, alpha=interval_alpha)
-                for reg, res in all_residuals.items()
-            }
-            if all_residuals
-            else {}
-        )
-        overall_params: ConformalIntervalParams | None = None
-        if overall_q:
-            overall_params = ConformalIntervalParams(
-                alpha=interval_alpha,
-                quantiles=overall_q,
-                coverage=overall_cov if all_lower else None,
-                coverage_by_regime=coverage_by_regime or None,
-            )
-        if cfg.get("use_price_distribution") and last_split is not None:
-from mt5.train_price_distribution import train_price_distribution
-
-            train_idx, val_idx = last_split
-            X_arr = X.values
-            returns = df["return"].to_numpy()
-            _, dist_metrics = train_price_distribution(
-                X_arr[train_idx],
-                returns[train_idx],
-                X_arr[val_idx],
-                returns[val_idx],
-                n_components=int(cfg.get("n_components", 3)),
-                epochs=int(cfg.get("dist_epochs", 100)),
-            )
-            mlflow.log_metric("dist_coverage", dist_metrics["coverage"])
-            mlflow.log_metric("dist_baseline_coverage", dist_metrics["baseline_coverage"])
-            mlflow.log_metric("dist_expected_shortfall", dist_metrics["expected_shortfall"])
-        mlflow.log_metric("interval_coverage", overall_cov)
-        logger.info("Overall interval coverage: %.3f", overall_cov)
-        pred_df = summarise_predictions(
-            all_true,
-            all_preds,
-            all_probs,
-            all_regimes,
-            lower=all_lower,
-            upper=all_upper,
-        )
-        pred_path = root / "val_predictions.csv"
-
-        calibrator = None
-        calib_method = cfg.get("calibration")
-        calib_cv = cfg.get("calibration_cv")
-        calibrated_probs: np.ndarray | None = None
-        calibrated_probs_all: np.ndarray | None = None
-        if calib_method and final_pipe is not None and last_val_y is not None:
-            calibrator = ProbabilityCalibrator(method=calib_method, cv=calib_cv)
-            if calib_cv:
-                calibrator.fit(
-                    last_val_y,
-                    base_model=final_pipe,
-                    X=last_val_X,
-                    regimes=last_val_regimes,
-                )
-                calibrated_probs = calibrator.predict(last_val_X)
-                final_pipe = calibrator.model
-            else:
-                calibrator.fit(
-                    last_val_y,
-                    last_val_probs,
-                    regimes=last_val_regimes,
-                )
-                calibrated_probs = calibrator.predict(last_val_probs)
-                final_pipe = CalibratedModel(final_pipe, calibrator)
-                if all_probs:
-                    calibrated_probs_all = calibrator.predict(np.asarray(all_probs, dtype=float))
-            brier_raw, brier_cal = log_reliability(
-                last_val_y,
-                last_val_probs,
-                calibrated_probs,
-                root / "reports" / "calibration",
-                "lgbm",
-                calib_method,
-            )
-            mlflow.log_metric("calibration_brier_raw", brier_raw)
-            mlflow.log_metric("calibration_brier_calibrated", brier_cal)
-
-        regime_thresholds: dict[int, float]
-        if calibrator is not None:
-            if calibrator.cv:
-                labels_thr = (
-                    np.asarray(last_val_y).ravel() if last_val_y is not None else None
-                )
-                probs_thr = calibrated_probs
-                regimes_thr = (
-                    np.asarray(last_val_regimes) if last_val_regimes is not None else None
-                )
-            else:
-                labels_thr = np.asarray(all_true).ravel() if all_true else None
-                probs_thr = calibrated_probs_all
-                regimes_thr = np.asarray(all_regimes) if all_regimes else None
-            if (
-                probs_thr is not None
-                and labels_thr is not None
-                and regimes_thr is not None
-                and len(probs_thr) == len(labels_thr) == len(regimes_thr)
-            ):
-                thr_dict, _ = find_regime_thresholds(labels_thr, probs_thr, regimes_thr)
-                calibrator.set_regime_thresholds(thr_dict)
-            regime_thresholds = _normalise_regime_thresholds(
-                calibrator.regime_thresholds or {}
-            )
-            if not regime_thresholds:
-                fallback_thr, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
-                regime_thresholds = _normalise_regime_thresholds(fallback_thr)
-        else:
-            regime_thresholds_raw, _ = find_regime_thresholds(all_true, all_probs, all_regimes)
-            regime_thresholds = _normalise_regime_thresholds(regime_thresholds_raw)
-        for reg, thr_val in regime_thresholds.items():
-            mlflow.log_metric(f"thr_regime_{reg}", float(thr_val))
-
-        if calibrator is not None and calibrator.cv is None and calibrated_probs_all is not None:
-            pred_df["prob_calibrated"] = calibrated_probs_all
-        pred_df.to_csv(pred_path, index=False)
-        recorder.add_artifact(
-            pred_path, dest_name="reports/val_predictions.csv", optional=True
-        )
-        mlflow.log_artifact(str(pred_path))
-
-        aggregate_report = classification_report(all_true, all_preds, output_dict=True)
-        logger.info("\n%s", classification_report(all_true, all_preds))
-        recorder.update_context(aggregate_report=aggregate_report)
-
-        # Evaluate risk metrics on realised returns and apply optional penalties
-        base_f1 = float(aggregate_report.get("weighted avg", {}).get("f1-score", 0.0))
-        if risk_target and "return" in df.columns:
-            alpha = float(risk_target.get("cvar_level", 0.05))
-            returns = df["return"].to_numpy()
-            if risk_budget is None:
-                risk_budget = RiskBudget(
-                    max_leverage=float(risk_target.get("max_leverage", 1.0)),
-                    max_drawdown=float(risk_target.get("max_drawdown", 0.0)),
-                    cvar_limit=risk_target.get("cvar"),
-                )
-            cvar_val = float(-cvar(returns, alpha))
-            mdd = float(max_drawdown(returns))
-            logger.info("CVaR@%.2f: %.4f", alpha, cvar_val)
-            logger.info("Max drawdown: %.4f", mdd)
-            recorder.set_metrics(
-                {
-                    "cvar": cvar_val,
-                    "max_drawdown": mdd,
-                }
-            )
-            try:  # pragma: no cover - mlflow optional
-                mlflow.log_metric("cvar", cvar_val)
-                mlflow.log_metric("max_drawdown", mdd)
-            except Exception:  # pragma: no cover
-                pass
-            penalty = risk_penalty(returns, risk_budget, level=alpha)
-            if penalty > 0:
-                logger.warning("Risk constraints violated: penalty %.4f", float(penalty))
-                penalty_val = float(penalty)
-                penalised = base_f1 - penalty_val
-                recorder.set_metrics(
-                    {
-                        "f1_weighted": base_f1,
-                        "risk_penalty": penalty_val,
-                        "final_score": penalised,
-                    }
-                )
-                recorder.add_note(
-                    "Risk constraints triggered a penalty; returning penalised score."
-                )
-                status = "completed"
-                result_value = penalised
-                return penalised
-
-        # Bootstrap confidence intervals for metrics
-        boot_metrics = bootstrap_classification_metrics(all_true, all_preds)
-        prec_ci = boot_metrics["precision_ci"]
-        rec_ci = boot_metrics["recall_ci"]
-        f1_ci = boot_metrics["f1_ci"]
-        logger.info(
-            "Precision: %.3f (95%% CI %.3f-%.3f)",
-            boot_metrics["precision"],
-            prec_ci[0],
-            prec_ci[1],
-        )
-        logger.info(
-            "Recall: %.3f (95%% CI %.3f-%.3f)",
-            boot_metrics["recall"],
-            rec_ci[0],
-            rec_ci[1],
-        )
-        logger.info(
-            "F1: %.3f (95%% CI %.3f-%.3f)",
-            boot_metrics["f1"],
-            f1_ci[0],
-            f1_ci[1],
-        )
-        recorder.set_metrics(
-            {
-                "f1_weighted": boot_metrics["f1"],
-                "precision_weighted": boot_metrics["precision"],
-                "recall_weighted": boot_metrics["recall"],
-                "f1_ci": [float(f1_ci[0]), float(f1_ci[1])],
-                "precision_ci": [float(prec_ci[0]), float(prec_ci[1])],
-                "recall_ci": [float(rec_ci[0]), float(rec_ci[1])],
-                "final_score": base_f1,
-            }
-        )
-        recorder.update_context(
-            features=list(features),
-            label_columns=list(label_cols),
-            regime_thresholds=regime_thresholds,
-        )
-        if overall_params is not None:
-            recorder.update_context(
-                interval_alpha=interval_alpha,
-                interval_coverage=overall_cov,
-            )
-        result_value = float(base_f1)
-
-        model_metadata = build_model_metadata(
-            regime_thresholds,
-            interval_params=overall_params,
-            interval_quantiles=overall_q,
-            interval_alpha=interval_alpha,
-            interval_coverage=overall_cov if all_lower else None,
-            interval_coverage_by_regime=coverage_by_regime,
-        )
-        if final_pipe is not None:
-            setattr(final_pipe, "model_metadata", model_metadata)
-            setattr(final_pipe, "regime_thresholds", regime_thresholds)
-            sanitizer = final_pipe.named_steps.get("sanitizer") if hasattr(final_pipe, "named_steps") else None
-            if sanitizer is not None and hasattr(sanitizer, "state_dict"):
-                sanitizer_state = sanitizer.state_dict()
-                final_pipe.sanitizer_state_ = sanitizer_state
-                model_metadata["sanitizer"] = sanitizer_state
-        if final_pipe and "scaler" in final_pipe.named_steps:
-            final_pipe.named_steps["scaler"].save(scaler_path)
-        logger.info("Model saved to %s", root / "model.joblib")
-        mlflow.log_param("use_scaler", cfg.get("use_scaler", True))
-        mlflow.log_metric("f1_weighted", boot_metrics["f1"])
-        mlflow.log_metric("precision_weighted", boot_metrics["precision"])
-        mlflow.log_metric("recall_weighted", boot_metrics["recall"])
-        mlflow.log_metric("f1_ci_lower", f1_ci[0])
-        mlflow.log_metric("f1_ci_upper", f1_ci[1])
-        mlflow.log_metric("precision_ci_lower", prec_ci[0])
-        mlflow.log_metric("precision_ci_upper", prec_ci[1])
-        mlflow.log_metric("recall_ci_lower", rec_ci[0])
-        mlflow.log_metric("recall_ci_upper", rec_ci[1])
-        if final_pipe is not None and df_unlabeled is not None:
-            X_unlabeled = df_unlabeled[features]
-            y_unlabeled = (
-                df_unlabeled["label"].values if "label" in df_unlabeled.columns else None
-            )
-            probs_unlabeled = final_pipe.predict_proba(X_unlabeled)
-            queued_count = al_queue.push_low_confidence(
-                X_unlabeled.index, probs_unlabeled, threshold=al_threshold
-            )
-            if queued_count:
-                logger.info(
-                    "Queued %s low-confidence samples for review (threshold=%.2f)",
-                    queued_count,
-                    al_threshold,
-                )
-            queue_stats = al_queue.stats()
-            logger.info(
-                "Active learning queue stats: pending=%s ready_for_merge=%s",
-                queue_stats["awaiting_label"],
-                queue_stats["ready_for_merge"],
-            )
-            try:  # pragma: no cover - mlflow optional
-                mlflow.log_metric("al_queue_pending", queue_stats["awaiting_label"])
-                mlflow.log_metric(
-                    "al_queue_ready_for_merge", queue_stats["ready_for_merge"]
-                )
-            except Exception:  # pragma: no cover - optional logging
-                pass
-            pseudo_threshold = cfg.get("pseudo_label_threshold", 0.9)
-            preds_unlabeled = probs_unlabeled.argmax(axis=1)
-            max_probs = probs_unlabeled.max(axis=1)
-            mask_high = max_probs >= pseudo_threshold
-            pseudo_path = generate_pseudo_labels(
-                final_pipe,
-                X_unlabeled,
-                y_true=y_unlabeled,
-                threshold=pseudo_threshold,
-                output_dir=root / "data" / "pseudo_labels",
-                report_dir=root / "reports" / "pseudo_label",
-            )
-            high_conf_count = int(np.sum(mask_high))
-            logger.info(
-                "Generated pseudo labels at %s for %s high-confidence samples (thr=%.2f)",
-                pseudo_path,
-                high_conf_count,
-                pseudo_threshold,
-            )
-            if high_conf_count:
-                precision_est = float(max_probs[mask_high].mean())
-                logger.info(
-                    "Pseudo label precision estimate=%.3f on %s samples",
-                    precision_est,
-                    high_conf_count,
-                )
-                try:  # pragma: no cover - mlflow optional
-                    mlflow.log_metric("pseudo_label_precision_estimate", precision_est)
-                except Exception:
-                    pass
-            if y_unlabeled is not None and high_conf_count:
-                prec = precision_score(
-                    y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
-                )
-                rec = recall_score(
-                    y_unlabeled[mask_high], preds_unlabeled[mask_high], zero_division=0
-                )
-                logger.info("Pseudo label precision=%s recall=%s", prec, rec)
-                mlflow.log_metric("pseudo_label_precision", prec)
-                mlflow.log_metric("pseudo_label_recall", rec)
-        meta_features = pd.DataFrame({"prob": all_probs, "confidence": all_conf})
-        meta_clf = train_meta_classifier(meta_features, all_true)
-        meta_version_id = model_store.save_model(meta_clf, cfg, {"type": "meta"})
-        model_metadata["meta_model_id"] = meta_version_id
-        if final_pipe is not None:
-            setattr(final_pipe, "model_metadata", model_metadata)
-        perf = {
-            "f1_weighted": boot_metrics["f1"],
-            "precision_weighted": boot_metrics["precision"],
-            "recall_weighted": boot_metrics["recall"],
-            "f1_ci": [f1_ci[0], f1_ci[1]],
-            "precision_ci": [prec_ci[0], prec_ci[1]],
-            "recall_ci": [rec_ci[0], rec_ci[1]],
-            "regime_thresholds": regime_thresholds,
-            "meta_model_id": meta_version_id,
-        }
-        if overall_params is not None:
-            perf["interval"] = overall_params.to_dict()
-            perf["interval_q"] = overall_q
-            perf["interval_alpha"] = interval_alpha
-            perf["interval_coverage"] = overall_cov
-            if overall_params.coverage_by_regime:
-                perf["interval_coverage_by_regime"] = {
-                    int(k): float(v)
-                    for k, v in overall_params.coverage_by_regime.items()
-                }
-            if final_pipe is not None:
-                setattr(final_pipe, "interval_q", overall_params.quantiles)
-                setattr(final_pipe, "interval_params", overall_params)
-                setattr(final_pipe, "interval_coverage", overall_params.coverage)
-                setattr(final_pipe, "interval_alpha", overall_params.alpha)
-                if overall_params.coverage_by_regime:
-                    setattr(
-                        final_pipe,
-                        "interval_coverage_by_regime",
-                        {
-                            int(k): float(v)
-                            for k, v in overall_params.coverage_by_regime.items()
-                        },
-                    )
-        version_id = persist_model(
-            final_pipe,
+        features_state = prepare_features(history, cfg, model_type, root)
+        dataset = build_datasets(
+            features_state,
             cfg,
-            perf,
-            features=features,
-            root=root,
+            root,
+            use_pseudo_labels=use_pseudo_labels,
+            risk_target=risk_target,
         )
-        try:  # pragma: no cover - mlflow optional
-            mlflow.log_artifact(str(root / "model.joblib"))
-        except Exception:
-            pass
-        logger.info("Registered model version %s", version_id)
-
-        # Train dedicated models for each market regime
-        base_features = [f for f in features if f != "market_regime"]
-        regime_models: dict[int, Pipeline] = {}
-        for regime in sorted(df["market_regime"].unique()):
-            mask = df["market_regime"] == regime
-            X_reg = df.loc[mask, base_features]
-            y_reg = df.loc[mask, label_cols[0]].astype(int)
-            steps_reg: list[tuple[str, object]] = []
-            if cfg.get("use_scaler", True):
-                steps_reg.append(("scaler", FeatureScaler()))
-            reg_clf_params = {
-                "n_estimators": 200,
-                "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
-                "random_state": seed,
-                **_lgbm_params(cfg),
-            }
-            if use_focal:
-                reg_clf_params["objective"] = "None"
-            steps_reg.append(("clf", LGBMClassifier(**reg_clf_params)))
-            pipe_reg = Pipeline(steps_reg)
-            _register_clf(pipe_reg.named_steps["clf"])
-            fit_reg: dict[str, object] = {}
-            if use_focal:
-                fit_reg["clf__fobj"] = fobj
-                fit_reg["clf__feval"] = feval
-            pipe_reg.fit(X_reg, y_reg, **fit_reg)
-            regime_models[int(regime)] = pipe_reg
-            logger.info("Trained regime-specific model for regime %s", regime)
-
-        regimes_path = root / "regime_models.joblib"
-        joblib.dump(regime_models, regimes_path)
-        mlflow.log_artifact(str(regimes_path))
-        logger.info("Regime-specific models saved to %s", regimes_path)
-
-        out = root / "classification_report.json"
-        with out.open("w") as f:
-            json.dump(aggregate_report, f, indent=2)
-        mlflow.log_artifact(str(out))
-        recorder.add_artifact(
-            out, dest_name="reports/classification_report.json", optional=True
-        )
-
-        if (
-            final_pipe is not None
-            and X_train_final is not None
-            and cfg.get("feature_importance", False)
-        ):
-            report_dir = Path(__file__).resolve().parent / "reports"
-            paths = generate_shap_report(
-                final_pipe,
-                X_train_final[features],
-                report_dir,
-            )
-            for p in paths.values():
-                mlflow.log_artifact(str(p))
-
-        if export and final_pipe is not None:
-            from models.export import export_lightgbm
-
-            sample = X.iloc[: min(len(X), 10)]
-            if "scaler" in final_pipe.named_steps:
-                sample = final_pipe.named_steps["scaler"].transform(sample)
-            clf = final_pipe.named_steps.get("clf", final_pipe)
-            export_lightgbm(clf, sample)
-
-        logger.info("Active learning queue size: %d", len(al_queue))
-        card_md, card_json = model_card.generate(
+        training_result = train_models(
+            dataset,
             cfg,
-            [root / "data" / "history.parquet"],
-            features,
-            aggregate_report,
-            root / "reports" / "model_cards",
+            seed,
+            model_type,
+            features_state.use_multi_task_heads,
+            drift_monitor,
+            donor_booster,
+            use_focal,
+            fobj,
+            feval,
+            scaler_path,
+            root,
+            risk_target,
+            recorder,
+            resume_online=resume_online,
         )
-        recorder.add_artifact(card_md, dest_name="reports/model_card.md", optional=True)
-        recorder.add_artifact(
-            card_json, dest_name="reports/model_card.json", optional=True
-        )
-        mlflow.log_metric(
-            "runtime",
-            (datetime.now() - start_time).total_seconds(),
-        )
+        base_f1 = training_result.final_score
+        result_value = training_result.final_score
+        status = "completed"
+        if training_result.should_log_artifacts:
+            log_artifacts(
+                training_result,
+                cfg,
+                root,
+                export,
+                start_time,
+                recorder,
+                df_unlabeled=df_unlabeled,
+            )
+        return float(training_result.final_score)
     except Exception as exc:
         error = exc
         recorder.add_error(str(exc))
@@ -2182,6 +2289,30 @@ from mt5.train_price_distribution import train_price_distribution
             status = "completed"
         recorder.finish(status=status, error=error, result=result_value)
     return float(base_f1)
+
+
+def _run_training(
+    cfg: AppConfig | dict | None = None,
+    export: bool = False,
+    resume_online: bool = False,
+    df_override: pd.DataFrame | None = None,
+    transfer_from: str | None = None,
+    use_pseudo_labels: bool = False,
+    df_unlabeled: pd.DataFrame | None = None,
+    risk_target: dict | None = None,
+) -> float:
+    """Backward-compatible wrapper for the training pipeline."""
+
+    return run_training_pipeline(
+        cfg=cfg,
+        export=export,
+        resume_online=resume_online,
+        df_override=df_override,
+        transfer_from=transfer_from,
+        use_pseudo_labels=use_pseudo_labels,
+        df_unlabeled=df_unlabeled,
+        risk_target=risk_target,
+    )
 
 
 @log_exceptions
@@ -2209,7 +2340,7 @@ def main(
     monitor.start()
     start_capability_watch()
     try:
-        return _run_training(
+        return run_training_pipeline(
             cfg=cfg,
             export=export,
             resume_online=resume_online,
