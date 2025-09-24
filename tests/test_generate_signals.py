@@ -58,6 +58,7 @@ sys.modules.setdefault("data", data_pkg_stub)
 data_history_stub = types.ModuleType("data.history")
 data_history_stub.load_history_parquet = lambda *a, **k: pd.DataFrame()
 data_history_stub.load_history_config = lambda *a, **k: pd.DataFrame()
+data_history_stub.load_history_iter = lambda *a, **k: []
 sys.modules.setdefault("data.history", data_history_stub)
 
 data_features_stub = types.ModuleType("data.features")
@@ -70,6 +71,7 @@ train_rl_stub.TradingEnv = object
 train_rl_stub.DiscreteTradingEnv = object
 train_rl_stub.RLLibTradingEnv = object
 train_rl_stub.HierarchicalTradingEnv = object
+train_rl_stub.artifact_dir = lambda *a, **k: Path(".")
 sys.modules.setdefault("mt5.train_rl", train_rl_stub)
 
 signal_queue_stub = types.ModuleType("mt5.signal_queue")
@@ -190,6 +192,8 @@ def run_generate_signals(monkeypatch):
         *,
         history_exists: bool = True,
         macro_exists: bool = False,
+        runtime_state: dict[str, object] | None = None,
+        history_iter=None,
     ):
         observed: list[pd.DataFrame] = []
 
@@ -199,12 +203,24 @@ def run_generate_signals(monkeypatch):
 
         monkeypatch.setattr(generate_signals, "make_features", _capture_make_features)
         monkeypatch.setattr(generate_signals, "load_config", lambda: config)
+        if history_iter is not None:
+            monkeypatch.setattr(generate_signals, "load_history_iter", history_iter)
         monkeypatch.setattr(
             generate_signals, "load_history_parquet", lambda path: df.copy()
         )
         monkeypatch.setattr(
             generate_signals, "load_history_config", lambda *a, **k: df.copy()
         )
+        if runtime_state is None:
+            monkeypatch.setattr(
+                generate_signals, "load_runtime_state", lambda *a, **k: None
+            )
+        else:
+            monkeypatch.setattr(
+                generate_signals,
+                "load_runtime_state",
+                lambda *a, **k: runtime_state,
+            )
         original_exists = generate_signals.Path.exists
 
         def _fake_exists(self):
@@ -348,3 +364,151 @@ def test_main_loads_macro_from_cache_dir(run_generate_signals, tmp_path, monkeyp
     assert macro_calls, "macro CSV was not read"
     expected_path = tmp_path / "cache" / "macro.csv"
     assert macro_calls[0] == expected_path
+
+
+def test_main_streams_only_new_rows_from_last_timestamp(
+    run_generate_signals, monkeypatch
+):
+    """Only rows newer than the stored timestamp should be processed."""
+
+    past = pd.DataFrame(
+        {
+            "Timestamp": pd.to_datetime(
+                ["2024-01-01 00:00:00", "2024-01-01 00:01:00"]
+            ),
+            "Symbol": ["EURUSD", "EURUSD"],
+            "ma_cross": [1, 1],
+            "rsi_14": [60.0, 62.0],
+        }
+    )
+    fresh = pd.DataFrame(
+        {
+            "Timestamp": pd.to_datetime(
+                ["2024-01-01 00:02:00", "2024-01-01 00:03:00"]
+            ),
+            "Symbol": ["EURUSD", "EURUSD"],
+            "ma_cross": [1, 1],
+            "rsi_14": [63.0, 64.0],
+        }
+    )
+    combined = pd.concat([past, fresh], ignore_index=True)
+
+    chunk_sizes: list[int] = []
+
+    def _stream(path, chunk_size):
+        chunk_sizes.append(chunk_size)
+        yield past.copy(deep=True)
+        yield fresh.copy(deep=True)
+
+    logged: list[pd.DataFrame] = []
+    monkeypatch.setattr(
+        generate_signals,
+        "log_predictions",
+        lambda data: logged.append(data.copy(deep=True)),
+    )
+    saved: dict[str, object] = {}
+
+    def _capture_state(last_processed, open_positions, model_versions, account_id=None):
+        saved["last_processed"] = last_processed
+        saved["open_positions"] = list(open_positions)
+        saved["model_versions"] = list(model_versions)
+        saved["account_id"] = account_id
+
+    monkeypatch.setattr(generate_signals, "save_runtime_state", _capture_state)
+
+    state = {
+        "last_timestamp": past["Timestamp"].max().isoformat(),
+        "model_versions": [],
+    }
+    config = {
+        "account_id": "123",
+        "symbol": "EURUSD",
+        "ensemble_models": [],
+        "model_versions": [],
+        "history_stream_batch_size": 2,
+        "history_max_lookback_days": 0,
+    }
+
+    observed = run_generate_signals(
+        combined,
+        config,
+        runtime_state=state,
+        history_iter=_stream,
+    )
+
+    assert chunk_sizes == [2]
+    assert observed, "make_features was not invoked"
+    expected = fresh.reset_index(drop=True)
+    pd.testing.assert_frame_equal(observed[0].reset_index(drop=True), expected)
+    assert logged and list(logged[0]["Timestamp"]) == list(fresh["Timestamp"])
+    assert saved.get("last_processed") == fresh["Timestamp"].max().isoformat()
+
+
+def test_main_respects_history_lookback_window(run_generate_signals, monkeypatch):
+    """Context rows should respect the configured look-back window."""
+
+    far_history = pd.DataFrame(
+        {
+            "Timestamp": pd.to_datetime(["2023-12-30 00:00:00"]),
+            "Symbol": ["EURUSD"],
+            "ma_cross": [1],
+            "rsi_14": [55.0],
+        }
+    )
+    context_history = pd.DataFrame(
+        {
+            "Timestamp": pd.to_datetime(["2024-01-02 18:00:00", "2024-01-02 23:30:00"]),
+            "Symbol": ["EURUSD", "EURUSD"],
+            "ma_cross": [1, 1],
+            "rsi_14": [58.0, 59.0],
+        }
+    )
+    fresh = pd.DataFrame(
+        {
+            "Timestamp": pd.to_datetime(["2024-01-03 00:05:00", "2024-01-03 00:06:00"]),
+            "Symbol": ["EURUSD", "EURUSD"],
+            "ma_cross": [1, 1],
+            "rsi_14": [65.0, 66.0],
+        }
+    )
+    combined = pd.concat([far_history, context_history, fresh], ignore_index=True)
+
+    def _stream(path, chunk_size):
+        yield far_history.copy(deep=True)
+        yield context_history.copy(deep=True)
+        yield fresh.copy(deep=True)
+
+    logged: list[pd.DataFrame] = []
+    monkeypatch.setattr(
+        generate_signals,
+        "log_predictions",
+        lambda data: logged.append(data.copy(deep=True)),
+    )
+
+    state = {
+        "last_timestamp": context_history["Timestamp"].max().isoformat(),
+        "model_versions": [],
+    }
+    config = {
+        "account_id": "123",
+        "symbol": "EURUSD",
+        "ensemble_models": [],
+        "model_versions": [],
+        "history_stream_batch_size": 4,
+        "history_max_lookback_days": 1,
+    }
+
+    observed = run_generate_signals(
+        combined,
+        config,
+        runtime_state=state,
+        history_iter=_stream,
+    )
+
+    assert observed, "make_features was not invoked"
+    captured = observed[0]
+    expected_context = pd.concat([context_history, fresh], ignore_index=True)
+    pd.testing.assert_frame_equal(
+        captured.reset_index(drop=True), expected_context.reset_index(drop=True)
+    )
+    assert logged and list(logged[0]["Timestamp"]) == list(fresh["Timestamp"])
