@@ -131,3 +131,41 @@ def test_train_nn_main_lazily_starts_orchestrator(monkeypatch):
     module._ORCHESTRATOR_INSTANCE = None
     monkeypatch.delitem(sys.modules, "train_nn", raising=False)
     monkeypatch.delitem(sys.modules, "mt5.train_nn", raising=False)
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("torch") is None,
+    reason="torch dependency unavailable",
+)
+def test_launch_aggregates_multi_seed_results(monkeypatch, caplog):
+    module = importlib.import_module("train_nn")
+
+    seeds = [101, 202, 303]
+    metrics = {seed: 0.4 + idx * 0.1 for idx, seed in enumerate(seeds)}
+    submitted: list[int] = []
+
+    monkeypatch.setattr(module, "ensure_orchestrator_started", lambda: None)
+    monkeypatch.setattr(module, "cluster_available", lambda: True)
+
+    def _fake_submit(fn, *args, **kwargs):
+        cfg_seed = args[2]["seed"]
+        submitted.append(cfg_seed)
+        return metrics[cfg_seed]
+
+    monkeypatch.setattr(module, "submit", _fake_submit)
+    monkeypatch.setattr(module, "main", lambda *a, **k: 0.0)
+
+    cfg = {"seed": 0, "seeds": seeds}
+
+    with caplog.at_level("INFO", logger=module.logger.name):
+        aggregated = module.launch(cfg)
+
+    expected = sum(metrics.values()) / len(metrics)
+    assert aggregated == pytest.approx(expected)
+    assert submitted == seeds
+
+    for seed in seeds:
+        assert any(f"Seed {seed} score" in message for message in caplog.messages)
+    assert any(
+        "Aggregated mean score" in message for message in caplog.messages
+    )
