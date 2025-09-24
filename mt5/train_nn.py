@@ -1709,55 +1709,76 @@ def launch(cfg: dict | None = None) -> float:
         cfg = load_config()
     resume_online = cfg.get("resume_online", False)
     transfer_from = cfg.get("transfer_from")
-    if cluster_available():
-        seeds = cfg.get("seeds", [cfg.get("seed", 42)])
-        if not seeds:
-            logger.warning("No seeds provided for distributed launch; returning 0.0")
-            return 0.0
+    ray_started = False
+    try:
+        try:
+            ray_started = bool(ray_init())
+        except Exception as exc:  # pragma: no cover - defensive safeguard
+            logger.debug("Ray initialisation failed: %s", exc, exc_info=exc)
+            ray_started = False
 
-        results: list[float] = []
-        for s in seeds:
-            cfg_s = dict(cfg)
-            cfg_s["seed"] = s
-            score = float(
-                submit(
-                    main,
-                    0,
-                    1,
-                    cfg_s,
-                    resume_online=resume_online,
-                    transfer_from=transfer_from,
+        if cluster_available():
+            seeds = cfg.get("seeds", [cfg.get("seed", 42)])
+            if not seeds:
+                logger.warning("No seeds provided for distributed launch; returning 0.0")
+                return 0.0
+
+            results: list[float] = []
+            for s in seeds:
+                cfg_s = dict(cfg)
+                cfg_s["seed"] = s
+                score = float(
+                    submit(
+                        main,
+                        0,
+                        1,
+                        cfg_s,
+                        resume_online=resume_online,
+                        transfer_from=transfer_from,
+                    )
                 )
+                results.append(score)
+                logger.info("Seed %s score: %.6f", s, score)
+                try:  # pragma: no cover - mlflow optional
+                    mlflow.log_metric(f"seed_{s}", score)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            aggregated = float(sum(results) / len(results))
+            logger.info(
+                "Aggregated mean score across %d seeds: %.6f",
+                len(results),
+                aggregated,
             )
-            results.append(score)
-            logger.info("Seed %s score: %.6f", s, score)
             try:  # pragma: no cover - mlflow optional
-                mlflow.log_metric(f"seed_{s}", score)
+                mlflow.log_metric("seed_mean_score", aggregated)
             except Exception:  # noqa: BLE001
                 pass
+            return aggregated
 
-        aggregated = float(sum(results) / len(results))
-        logger.info(
-            "Aggregated mean score across %d seeds: %.6f",
-            len(results),
-            aggregated,
+        use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
+        world_size = torch.cuda.device_count()
+        if use_ddp and world_size > 1:
+            mp.spawn(
+                main,
+                args=(world_size, cfg, resume_online, transfer_from),
+                nprocs=world_size,
+            )
+            return 0.0
+
+        return main(
+            0,
+            1,
+            cfg,
+            resume_online=resume_online,
+            transfer_from=transfer_from,
         )
-        try:  # pragma: no cover - mlflow optional
-            mlflow.log_metric("seed_mean_score", aggregated)
-        except Exception:  # noqa: BLE001
-            pass
-        return aggregated
-    use_ddp = cfg.get("ddp", monitor.capabilities.ddp())
-    world_size = torch.cuda.device_count()
-    if use_ddp and world_size > 1:
-        mp.spawn(
-            main,
-            args=(world_size, cfg, resume_online, transfer_from),
-            nprocs=world_size,
-        )
-        return 0.0
-    else:
-        return main(0, 1, cfg, resume_online=resume_online, transfer_from=transfer_from)
+    finally:
+        if ray_started:
+            try:
+                ray_shutdown()
+            except Exception as exc:  # pragma: no cover - defensive safeguard
+                logger.debug("Ray shutdown failed: %s", exc, exc_info=exc)
 
 
 if __name__ == "__main__":
