@@ -95,6 +95,15 @@ syntax:
   macroeconomic data without requiring API keys, filling coverage gaps for
   Latin America.
 
+In addition to the feature plug-ins above, the training pipeline can now
+augment raw price history with the ``external_context`` block in `config.yaml`.
+Each entry specifies a REST endpoint, optional query parameters and column
+renaming rules. During training the collector downloads the configured series,
+aligns them on the `Timestamp` column and merges the results before feature
+engineering begins. The default configuration fetches the Federal Funds Rate
+from FRED; export `FRED_API_KEY` in your environment (or `.env`) to activate
+the example source or replace it with your preferred provider.
+
 ## Repository layout
 
 The repository root now only contains top-level folders. All executable
@@ -207,6 +216,13 @@ match your environment.
      - Updates apt packages required by MetaTrader integration.
      - Upgrades `pip` inside the virtual environment.
      - Installs the Python dependencies from `requirements-core.txt`.
+     - Downloads the MetaTrader 5 setup executable into `/opt/mt5` (override
+       with `MT5_INSTALL_DIR`) and writes login instructions to
+       `/opt/mt5/LOGIN_INSTRUCTIONS.txt`. Run `wine /opt/mt5/mt5setup.exe`
+       once after the download completes and sign in with your broker account
+       so historical prices can synchronise before training. Once you have
+       logged in, the training jobs reuse the authenticated terminal to pull
+       price history automatically before feature generation begins.
    * If the script reports a permission error, run `chmod +x scripts/setup_ubuntu.sh`
      once and re-run the command.
    * If you have an NVIDIA GPU and want CUDA support, run the script with
@@ -223,8 +239,14 @@ match your environment.
       detected hardware. If something is missing it explains how to fix it.
 12. **Start a training run.**
     * Type `python -m mt5.train` and press `Enter`.
-    * The training process logs progress to the terminal. Leave the window open
-      until the run completes. Press `Ctrl`+`C` if you need to stop it early.
+    * The training process logs progress to the terminal and writes
+      stage-by-stage status updates to `reports/training/progress.json`. Leave
+      the window open until the run completes. Press `Ctrl`+`C` if you need to
+      stop it early.
+    * While training runs, the pipeline automatically ingests any configured
+      `external_context` API sources for additional market context and records
+      the final runtime so dashboards reflect the duration of the latest model
+      build.
 13. **(Optional) Local management.** The `mt5.remote_api` module now exposes
     asynchronous helpers for starting or stopping realtime bots, tailing logs
     and triggering maintenance tasks without hosting the FastAPI service that
@@ -272,9 +294,14 @@ or signal generation as needed. Optional components can be installed via
 extras, for example `pip install .[rl]` or `pip install .[heavy]`.
 
 After the initial training run you can expose monitoring dashboards or other
-services as needed. The FastAPI management surface that previously launched via
-`python -m mt5.remote_api` has been retired; the core process-control features
-are implemented directly in `mt5.remote_api` for in-process automation.
+services as needed. The `scripts/run_bot.sh` helper now launches the Streamlit
+dashboard automatically (unless `START_DASHBOARD=0`) so you can monitor the new
+training progress indicator, which is triggered as soon as the trainer starts,
+and review the runtime of the most recent model build without additional
+commands. The FastAPI management surface that
+previously launched via `python -m mt5.remote_api` has been retired; the core
+process-control features are implemented directly in `mt5.remote_api` for
+in-process automation.
 
 ### Background services
 
@@ -1175,7 +1202,9 @@ When monitoring detects significant drift between live data and training
 distributions, consider the following responses:
 
 * **Retrain** – update models on recent data so they adapt to new market
-  conditions.
+  conditions. Retraining requests are deduplicated: the scheduler now ignores
+  duplicate events while a job for the same model is pending, preventing
+  constant retraining loops unless you explicitly pass `force=True`.
 * **Rollback** – revert to a previously stable model version while the cause of
   drift is investigated.
 

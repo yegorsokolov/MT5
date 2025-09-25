@@ -15,7 +15,7 @@ import joblib
 import pandas as pd
 import math
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 try:
     import torch
@@ -77,6 +77,8 @@ except Exception:  # noqa: E722
     shap = None
 
 from utils import ensure_environment, load_config
+from training.external_sources import augment_with_external_context
+from training.progress import TrainingProgressTracker
 from features import start_capability_watch
 from mt5.config_models import AppConfig
 from utils.resource_monitor import monitor
@@ -155,6 +157,7 @@ class HistoryLoadResult:
     chunk_size: int
     feature_lookback: int
     validate: bool
+    external_sources: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass
@@ -902,6 +905,12 @@ def load_histories(
         feature_lookback=feature_lookback,
         validate=validate_flag,
     )
+    training_data, external_results = augment_with_external_context(
+        training_data, cfg, root
+    )
+    external_sources = [res.as_dict() for res in external_results]
+    if external_sources:
+        logger.info("Attached %d external context sources", len(external_sources))
     stream_metadata: dict[str, object] | None = None
     if isinstance(training_data, StreamingTrainingFrame):
         stream_metadata = training_data.metadata
@@ -919,6 +928,7 @@ def load_histories(
         chunk_size=chunk_size,
         feature_lookback=feature_lookback,
         validate=validate_flag,
+        external_sources=external_sources,
     )
 
 
@@ -2179,6 +2189,10 @@ def run_training_pipeline(
     root.joinpath("data").mkdir(exist_ok=True)
     scaler_path = root / "scaler.pkl"
     start_time = datetime.now()
+    tracker = TrainingProgressTracker()
+    tracker.start("initialising")
+    current_stage = "initialising"
+    runtime_seconds = 0.0
 
     drift_monitor = ConceptDriftMonitor(
         method=cfg.training.drift_method,
@@ -2205,18 +2219,31 @@ def run_training_pipeline(
         except Exception:
             pass
 
+        current_stage = "loading_history"
         history = load_histories(cfg, root, df_override=df_override)
+        tracker.advance("history_loaded")
+        current_stage = "preparing_features"
         recorder.update_context(
             validate=history.validate,
             stream_enabled=history.stream,
             stream_chunk_size=history.chunk_size,
             stream_feature_lookback=history.feature_lookback,
             data_source=history.data_source,
+            external_sources=history.external_sources,
         )
         try:  # pragma: no cover - mlflow optional
             mlflow.log_param("data_source", history.data_source)
         except Exception:
             pass
+        if history.external_sources:
+            try:  # pragma: no cover - mlflow optional
+                summary = ",".join(
+                    f"{src.get('name', 'unknown')}:{src.get('status', 'unknown')}"
+                    for src in history.external_sources
+                )
+                mlflow.log_param("external_context", summary)
+            except Exception:
+                pass
         if history.stream_metadata:
             metadata = history.stream_metadata
             try:  # pragma: no cover - mlflow optional
@@ -2232,6 +2259,8 @@ def run_training_pipeline(
             recorder.update_context(stream_metadata=metadata)
 
         features_state = prepare_features(history, cfg, model_type, root)
+        tracker.advance("features_prepared")
+        current_stage = "building_dataset"
         dataset = build_datasets(
             features_state,
             cfg,
@@ -2239,6 +2268,8 @@ def run_training_pipeline(
             use_pseudo_labels=use_pseudo_labels,
             risk_target=risk_target,
         )
+        tracker.advance("dataset_built")
+        current_stage = "training_models"
         training_result = train_models(
             dataset,
             cfg,
@@ -2256,6 +2287,9 @@ def run_training_pipeline(
             recorder,
             resume_online=resume_online,
         )
+        tracker.advance("models_trained")
+        current_stage = "finalising"
+        tracker.advance("finalising")
         base_f1 = training_result.final_score
         result_value = training_result.final_score
         status = "completed"
@@ -2269,8 +2303,12 @@ def run_training_pipeline(
                 recorder,
                 df_unlabeled=df_unlabeled,
             )
+        runtime_seconds = (datetime.now() - start_time).total_seconds()
+        tracker.complete(runtime_seconds)
         return float(training_result.final_score)
     except Exception as exc:
+        runtime_seconds = (datetime.now() - start_time).total_seconds()
+        tracker.fail(current_stage, exc, runtime_seconds)
         error = exc
         recorder.add_error(str(exc))
         raise
