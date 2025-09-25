@@ -27,6 +27,7 @@ _tasks: list[Future[Any]] = []
 _last_retrain_ts: str | None = None
 _failed_retrain_attempts: dict[str, int] = {}
 _retrain_watcher: Future[Any] | None = None
+_pending_retrain_models: set[str] = set()
 
 
 def _noop() -> None:
@@ -114,6 +115,7 @@ def stop_scheduler() -> None:
     _loop = None
     _thread = None
     _started = False
+    _pending_retrain_models.clear()
     _failed_retrain_attempts.clear()
 
 
@@ -132,16 +134,26 @@ def schedule_retrain(
     model: str = "classic",
     update_hyperparams: bool = False,
     store: "EventStore" | None = None,
+    *,
+    force: bool = False,
 ) -> None:
     """Record a retrain event for later processing."""
     if store is None:
         from event_store import EventStore
 
         store = EventStore()
+    if not force and model in _pending_retrain_models:
+        logger.info("Skipping retrain for %s because a run is already pending", model)
+        return
     payload: dict[str, object] = {"model": model}
     if update_hyperparams:
         payload["update_hyperparams"] = True
-    store.record("retrain", payload)
+    _pending_retrain_models.add(model)
+    try:
+        store.record("retrain", payload)
+    except Exception:
+        _pending_retrain_models.discard(model)
+        raise
     logger.info("Scheduled retrain for %s", model)
 
 
@@ -195,49 +207,52 @@ async def process_retrain_events(store: EventStore | None = None) -> None:
         payload = ev.get("payload", {})
         model = str(payload.get("model", "classic"))
         attempt_key = f"{ts}|{model}"
-        if (
-            _last_retrain_ts is not None
-            and ts <= _last_retrain_ts
-            and attempt_key not in _failed_retrain_attempts
-        ):
-            continue
-        cmd = _training_cmd(model)
-        env = os.environ.copy()
-        ckpt = payload.get("checkpoint_dir")
-        if ckpt:
-            env["CHECKPOINT_DIR"] = ckpt
-        attempt = _failed_retrain_attempts.get(attempt_key, 0) + 1
-        result = await asyncio.to_thread(
-            _run_retrain_command, cmd, env, model, ts, attempt
-        )
-        if not result.success:
-            _failed_retrain_attempts[attempt_key] = attempt
-            try:
-                log_retrain_outcome(model, "failed")
-            except Exception:
-                pass
-            try:
-                log_retrain_outcome(model, "retry_scheduled")
-            except Exception:
-                pass
-            logger.info(
-                "Scheduled retrain retry",
-                extra={
-                    "model": model,
-                    "event_timestamp": ts,
-                    "attempt": attempt,
-                },
-            )
-            continue
-        _failed_retrain_attempts.pop(attempt_key, None)
         try:
-            log_retrain_outcome(model, "success")
-        except Exception:
-            pass
-        if _last_retrain_ts is None:
-            _last_retrain_ts = ts
-        else:
-            _last_retrain_ts = max(_last_retrain_ts, ts)
+            if (
+                _last_retrain_ts is not None
+                and ts <= _last_retrain_ts
+                and attempt_key not in _failed_retrain_attempts
+            ):
+                continue
+            cmd = _training_cmd(model)
+            env = os.environ.copy()
+            ckpt = payload.get("checkpoint_dir")
+            if ckpt:
+                env["CHECKPOINT_DIR"] = ckpt
+            attempt = _failed_retrain_attempts.get(attempt_key, 0) + 1
+            result = await asyncio.to_thread(
+                _run_retrain_command, cmd, env, model, ts, attempt
+            )
+            if not result.success:
+                _failed_retrain_attempts[attempt_key] = attempt
+                try:
+                    log_retrain_outcome(model, "failed")
+                except Exception:
+                    pass
+                try:
+                    log_retrain_outcome(model, "retry_scheduled")
+                except Exception:
+                    pass
+                logger.info(
+                    "Scheduled retrain retry",
+                    extra={
+                        "model": model,
+                        "event_timestamp": ts,
+                        "attempt": attempt,
+                    },
+                )
+                continue
+            _failed_retrain_attempts.pop(attempt_key, None)
+            try:
+                log_retrain_outcome(model, "success")
+            except Exception:
+                pass
+            if _last_retrain_ts is None:
+                _last_retrain_ts = ts
+            else:
+                _last_retrain_ts = max(_last_retrain_ts, ts)
+        finally:
+            _pending_retrain_models.discard(model)
 
 
 def subscribe_retrain_events(
@@ -297,7 +312,7 @@ async def resource_reprobe() -> None:
         import pandas as pd
         import numpy as np
         from analysis.domain_adapter import DomainAdapter
-from mt5.monitor_drift import DRIFT_METRICS
+        from mt5.monitor_drift import DRIFT_METRICS
 
         adapter_path = LOG_DIR / "nn_artifacts" / "domain_adapter.pkl"
         adapter_path.parent.mkdir(parents=True, exist_ok=True)
@@ -365,7 +380,7 @@ def run_change_point_detection() -> None:
     try:
         import pandas as pd
         from analysis.change_point import ChangePointDetector
-from mt5.monitor_drift import DRIFT_METRICS
+        from mt5.monitor_drift import DRIFT_METRICS
     except Exception:  # pragma: no cover - optional dependency
         logger.exception("Change point detection dependencies unavailable")
         return
@@ -424,7 +439,7 @@ def update_regime_performance() -> None:
 
         store = RegimePerformanceStore()
         store.recompute()
-from mt5.signal_queue import _ROUTER
+        from mt5.signal_queue import _ROUTER
 
         _ROUTER.refresh_regime_performance()
         logger.info("Regime performance statistics updated")

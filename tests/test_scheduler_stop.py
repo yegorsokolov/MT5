@@ -33,8 +33,11 @@ except Exception:
     config_models_stub = types.ModuleType("config_models")
     config_models_stub.AppConfig = _AppConfig
     sys.modules["config_models"] = config_models_stub
+    sys.modules.setdefault("mt5", types.ModuleType("mt5"))
+    sys.modules["mt5.config_models"] = config_models_stub
 from mt5.config_models import AppConfig
 from mt5 import scheduler
+from event_store import EventStore
 
 
 def test_stop_scheduler_cancels_tasks_and_stops_loop():
@@ -56,6 +59,7 @@ def test_start_stop_scheduler_clears_retrain_watcher(monkeypatch: pytest.MonkeyP
     scheduler._thread = None
     scheduler._started = False
     scheduler._retrain_watcher = None
+    scheduler._pending_retrain_models.clear()
 
     class DummyStore:
         def iter_events(self, event_type: str):  # pragma: no cover - signature compat
@@ -144,6 +148,7 @@ def test_start_scheduler_respects_disabled_jobs(monkeypatch: pytest.MonkeyPatch)
     scheduler._thread = None
     scheduler._started = False
     scheduler._retrain_watcher = None
+    scheduler._pending_retrain_models.clear()
 
     scheduler_flags = {
         "retrain_events": False,
@@ -195,6 +200,7 @@ def test_subscribe_retrain_events_runs_from_plain_thread(
     scheduler._started = False
     scheduler._last_retrain_ts = None
     scheduler._retrain_watcher = None
+    scheduler._pending_retrain_models.clear()
 
     consumed: list[dict[str, object]] = []
     processed = threading.Event()
@@ -382,3 +388,79 @@ def test_slow_retrain_command_runs_off_thread(
     assert len(progress_markers) >= 1, "event loop stalled while retrain subprocess ran"
     assert scheduler._failed_retrain_attempts == {}
     assert scheduler._last_retrain_ts == "2024-03-03T00:00:00"
+
+
+def test_schedule_retrain_skips_duplicates(tmp_path: Path) -> None:
+    scheduler.stop_scheduler()
+    scheduler._pending_retrain_models.clear()
+    store = EventStore(tmp_path / "events.db")
+    try:
+        scheduler.schedule_retrain(model="classic", store=store)
+        scheduler.schedule_retrain(model="classic", store=store)
+        events = list(store.iter_events("retrain"))
+        assert len(events) == 1
+        scheduler._pending_retrain_models.clear()
+        scheduler.schedule_retrain(model="classic", store=store)
+        events = list(store.iter_events("retrain"))
+        assert len(events) == 2
+        scheduler.schedule_retrain(model="classic", store=store, force=True)
+        events = list(store.iter_events("retrain"))
+        assert len(events) == 3
+    finally:
+        store.close()
+
+
+def test_process_retrain_events_clears_pending_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler.stop_scheduler()
+    scheduler._pending_retrain_models.clear()
+    scheduler._failed_retrain_attempts.clear()
+    scheduler._last_retrain_ts = None
+
+    class DummyStore:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        def record(self, event_type: str, payload: dict[str, object]) -> None:
+            assert event_type == "retrain"
+            self.events.append(
+                {
+                    "timestamp": f"2024-05-01T00:00:0{len(self.events)}",
+                    "type": event_type,
+                    "payload": payload,
+                }
+            )
+
+        def iter_events(self, event_type: str):  # pragma: no cover - signature compat
+            assert event_type == "retrain"
+            while self.events:
+                yield self.events.pop(0)
+
+    store = DummyStore()
+
+    metrics_stub = types.SimpleNamespace(log_retrain_outcome=lambda *a, **k: None)
+    analytics_pkg = types.SimpleNamespace(metrics_store=metrics_stub)
+    monkeypatch.setitem(sys.modules, "analytics", analytics_pkg)
+    monkeypatch.setitem(sys.modules, "analytics.metrics_store", metrics_stub)
+
+    scheduler.schedule_retrain(model="classic", store=store)
+    assert scheduler._pending_retrain_models == {"classic"}
+
+    monkeypatch.setattr(
+        scheduler,
+        "_run_retrain_command",
+        lambda *a, **k: scheduler._RetrainExecutionResult(True, object(), None),
+    )
+
+    asyncio.run(scheduler.process_retrain_events(store))
+
+    assert scheduler._pending_retrain_models == set()
+    assert scheduler._last_retrain_ts == "2024-05-01T00:00:00"
+
+    scheduler.schedule_retrain(model="classic", store=store)
+    assert scheduler._pending_retrain_models == {"classic"}
+
+    asyncio.run(scheduler.process_retrain_events(store))
+    assert scheduler._pending_retrain_models == set()
+
