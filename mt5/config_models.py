@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -418,6 +418,57 @@ class ServicesConfig(BaseModel):
         return commands
 
 
+class ExternalSourceConfig(BaseModel):
+    """External data source specification used for context augmentation."""
+
+    name: str = Field(..., description="Human-friendly identifier for the source")
+    url: str = Field(..., description="Endpoint used to retrieve the dataset")
+    method: Literal["GET", "POST", "PUT", "PATCH"] = Field(
+        "GET", description="HTTP method used for the request"
+    )
+    format: Literal["json", "csv"] = Field(
+        "json", description="Response format emitted by the endpoint"
+    )
+    enabled: bool = Field(True, description="Disable the source without removing it")
+    params: Dict[str, Any] = Field(default_factory=dict, description="Query string parameters")
+    headers: Dict[str, Any] = Field(default_factory=dict, description="HTTP headers")
+    payload: Dict[str, Any] | None = Field(
+        None, description="Request payload used for POST/PUT/PATCH requests"
+    )
+    timeout: float = Field(15.0, ge=1.0, description="HTTP request timeout in seconds")
+    records_path: List[str] | None = Field(
+        default=None,
+        description="Nested keys to follow when extracting rows from a JSON response",
+    )
+    timestamp_key: str = Field(
+        "timestamp",
+        description="Column containing timestamps before renaming",
+    )
+    value_key: str | None = Field(
+        None,
+        description="Column containing the primary value to attach to the training frame",
+    )
+    value_name: str | None = Field(
+        None,
+        description="Rename applied to the value column once merged",
+    )
+    rename: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Mapping of raw response fields to dataframe column names",
+    )
+
+
+class ExternalContextConfig(BaseModel):
+    """Configuration for augmenting history with external context."""
+
+    enabled: bool = Field(True, description="Master switch for external context ingestion")
+    join: Literal["left", "right", "inner", "outer"] = Field(
+        "left", description="How external frames are joined to the base history"
+    )
+    sources: List[ExternalSourceConfig] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+
 class AppConfig(BaseModel):
     """Root application configuration grouping all sections."""
 
@@ -425,6 +476,7 @@ class AppConfig(BaseModel):
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     strategy: StrategyConfig
     services: ServicesConfig = Field(default_factory=ServicesConfig)
+    external_context: ExternalContextConfig | None = None
     auto_update: AutoUpdateConfig = Field(default_factory=AutoUpdateConfig)
     active_learning: ActiveLearningConfig | None = None
     mlflow: MLflowConfig | None = None
@@ -454,6 +506,7 @@ class AppConfig(BaseModel):
         _move_section("features", FeaturesConfig)
         _move_section("strategy", StrategyConfig)
         _move_section("services", ServicesConfig)
+        _move_section("external_context", ExternalContextConfig)
         if "model_type" in data:
             training_section = data.setdefault("training", {})
             if isinstance(training_section, Mapping):
