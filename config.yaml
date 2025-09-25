@@ -66,6 +66,23 @@ api_history:
     provider: mt5
     start: 2020-01-01
     end: 2025-01-01
+external_context:
+  enabled: true
+  join: left
+  sources:
+    - name: fred_funds
+      url: https://api.stlouisfed.org/fred/series/observations
+      method: GET
+      format: json
+      params:
+        series_id: FEDFUNDS
+        file_type: json
+        api_key: ${FRED_API_KEY}
+      records_path:
+        - observations
+      timestamp_key: date
+      value_key: value
+      value_name: fred_funds_rate
 index_data:
   sp500: data/sp500.csv
   vix: data/vix.csv

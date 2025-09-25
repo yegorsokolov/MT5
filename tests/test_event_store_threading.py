@@ -15,6 +15,37 @@ if importlib.util.find_spec("pydantic") is None:
     sys.modules["utils"] = utils_stub
     sys.modules["utils.resource_monitor"] = resource_monitor_stub
 
+if importlib.util.find_spec("yaml") is None:
+    sys.modules["yaml"] = types.ModuleType("yaml")
+
+if importlib.util.find_spec("requests") is None:
+    sys.modules["requests"] = types.ModuleType("requests")
+
+if importlib.util.find_spec("cryptography") is None:
+    crypto_stub = types.ModuleType("cryptography")
+    sys.modules["cryptography"] = crypto_stub
+    sys.modules["cryptography.hazmat"] = types.ModuleType("cryptography.hazmat")
+    sys.modules["cryptography.hazmat.primitives"] = types.ModuleType(
+        "cryptography.hazmat.primitives"
+    )
+    sys.modules["cryptography.hazmat.primitives.ciphers"] = types.ModuleType(
+        "cryptography.hazmat.primitives.ciphers"
+    )
+    aead_module = types.ModuleType("cryptography.hazmat.primitives.ciphers.aead")
+
+    class _AESGCM:  # pragma: no cover - stub used when dependency missing
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("cryptography is required for AESGCM operations")
+
+    aead_module.AESGCM = _AESGCM
+    sys.modules["cryptography.hazmat.primitives.ciphers.aead"] = aead_module
+
+sys.modules.setdefault("mt5", types.ModuleType("mt5"))
+sys.modules.setdefault("mt5.utils", types.ModuleType("mt5.utils"))
+sys.modules.setdefault(
+    "mt5.utils.secret_manager", types.ModuleType("mt5.utils.secret_manager")
+)
+
 repo_root = str(Path(__file__).resolve().parents[1])
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
@@ -38,6 +69,7 @@ def _reset_scheduler_state() -> None:
     scheduler._last_retrain_ts = None
     scheduler._failed_retrain_attempts.clear()
     scheduler._retrain_watcher = None
+    scheduler._pending_retrain_models.clear()
 
 
 def test_retrain_watcher_consumes_events_from_background_thread(

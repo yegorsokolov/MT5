@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict
+from datetime import timedelta
 
 import pandas as pd
 import requests
@@ -29,6 +30,7 @@ from mt5 import risk_manager as rm_mod
 
 API_URL = os.getenv("REMOTE_API_URL", "https://localhost:8000")
 CERT_PATH = os.getenv("API_CERT", "certs/api.crt")
+PROGRESS_PATH = Path("reports/training/progress.json")
 
 
 @st.cache_data
@@ -70,6 +72,15 @@ def schema_table(current: Dict[str, Any]):
             }
         )
     return rows
+
+
+def load_training_progress() -> Dict[str, Any] | None:
+    try:
+        if PROGRESS_PATH.exists():
+            return json.loads(PROGRESS_PATH.read_text())
+    except Exception:
+        return None
+    return None
 
 
 def _format_bytes(num_bytes: float) -> str:
@@ -339,6 +350,26 @@ def main() -> None:
         col7.metric("Free Margin", margin_avail_val)
 
         render_vps_health_section()
+
+        st.subheader("Training Progress")
+        progress = load_training_progress()
+        if not progress:
+            st.info("No training progress has been recorded yet.")
+        else:
+            status = str(progress.get("status", "unknown")).title()
+            stage = progress.get("stage", "")
+            step = float(progress.get("step", 0))
+            total = max(float(progress.get("total_steps", 1)), 1.0)
+            ratio = max(0.0, min(step / total, 1.0))
+            st.metric("Status", status, stage)
+            st.progress(ratio, text=f"Stage: {stage}")
+            runtime_seconds = progress.get("runtime_seconds")
+            if runtime_seconds is not None:
+                delta = timedelta(seconds=float(runtime_seconds))
+                st.caption(f"Last runtime: {delta}")
+            updated_at = progress.get("updated_at")
+            if updated_at:
+                st.caption(f"Last update: {updated_at}")
 
         # Show per-broker performance metrics
         lat_df = query_local_metrics("broker_fill_latency_ms")
