@@ -9,8 +9,15 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     tf = None
 
-from ydata_synthetic.synthesizers.timeseries import TimeGAN
-from ydata_synthetic.preprocessing.timeseries import TimeSeriesScalerMinMax
+try:
+    from ydata_synthetic.synthesizers.timeseries import TimeGAN
+    from ydata_synthetic.preprocessing.timeseries import TimeSeriesScalerMinMax
+except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+    raise ModuleNotFoundError(
+        "ydata-synthetic is required for TimeGAN training."
+        " Install it with `pip install ydata-synthetic` or run the"
+        " setup script using Python < 3.13."
+    ) from exc
 
 from utils import load_config
 from data.history import load_history_config
