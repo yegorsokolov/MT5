@@ -249,7 +249,7 @@ def _stage_path(repo: Repo, path: Path) -> None:
 
 
 def _push_with_token(repo: Repo) -> None:
-    """Push to the default remote using a GitHub token when provided."""
+    """Push to the default remote, retrying with a GitHub token if necessary."""
 
     origin = repo.remote()
     url = origin.url
@@ -259,12 +259,18 @@ def _push_with_token(repo: Repo) -> None:
         token_url = None
 
     try:
-        if token_url:
-            repo.git.push(token_url, repo.active_branch.name)
-        else:
-            origin.push()
+        origin.push()
+        return
     except GitCommandError as exc:
-        logger.error("Git push failed: %s", exc)
+        if not token_url:
+            logger.error("Git push failed: %s", exc)
+            raise
+        logger.warning("Initial git push failed (%s); retrying with token", exc)
+
+    try:
+        repo.git.push(token_url, repo.active_branch.name)
+    except GitCommandError as exc:
+        logger.error("Git push failed even with token: %s", exc)
         raise
 
 
