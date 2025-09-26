@@ -30,7 +30,7 @@ Use the checklist below to provision a clean Windows machine or VPS.
    - Configure your identity in Git by running `git config --global user.name
      "<Your Name>"` and `git config --global user.email "<you@example.com>"`.
 3. **Python environment**
-   - Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/)
+   - Install Python 3.13 from [python.org](https://www.python.org/downloads/)
      and tick **Add Python to PATH**.
    - Open “Command Prompt” and verify the installation with `python --version`
      and `pip --version`.
@@ -47,8 +47,7 @@ Use the checklist below to provision a clean Windows machine or VPS.
 
    The repository now ships a single consolidated `requirements.txt` that bundles
    the previously separate dependency groups. Trim the file or install extras via
-   `pyproject.toml` if you prefer a leaner environment. Install any extras you
-   require, for example `pip install .[heavy]`.
+   `pyproject.toml` if you prefer a leaner environment.
 3. Generate the Protobuf bindings the signal publisher and trading backend
    consume:
 

@@ -4,8 +4,10 @@ from pathlib import Path
 import os
 import copy
 import json
+import io
+import pickle
 from typing import Any, Tuple, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import shutil
 import logging
@@ -76,6 +78,109 @@ except Exception:  # pragma: no cover - optional dependency
 class StateCorruptionError(Exception):
     """Raised when a checkpoint's integrity check fails."""
 
+
+class MissingDependencyPlaceholder:
+    """Placeholder reconstructed when checkpoint modules are unavailable."""
+
+    missing_module: str = "unknown"
+    missing_name: str = "unknown"
+
+    __slots__ = ("init_args", "init_kwargs", "state")
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - pickle hook
+        self.init_args = args
+        self.init_kwargs = kwargs
+        self.state: Any = None
+
+    def __setstate__(self, state: Any) -> None:  # pragma: no cover - pickle hook
+        self.state = state
+
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...], Any]:  # pragma: no cover - pickle hook
+        return (self.__class__, self.init_args, self.state)
+
+    @classmethod
+    def build(cls, module: str, name: str) -> type:
+        """Return a dynamic subclass bound to ``module`` and ``name``."""
+
+        safe_module = module.replace(".", "_")
+        subclass_name = f"MissingDependency_{safe_module}_{name}"
+        return type(
+            subclass_name,
+            (cls,),
+            {"missing_module": module, "missing_name": name},
+        )
+
+    def describe(self) -> dict[str, Any]:
+        """Return a serialisable summary of the missing dependency."""
+
+        return {
+            "module": self.missing_module,
+            "name": self.missing_name,
+            "has_state": self.state is not None,
+        }
+
+
+class _ResilientUnpickler(pickle.Unpickler):
+    """Unpickler that replaces missing classes with placeholders."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._warned: set[str] = set()
+
+    def find_class(self, module: str, name: str) -> Any:  # pragma: no cover - exercised indirectly
+        try:
+            return super().find_class(module, name)
+        except Exception as exc:  # noqa: BLE001 - propagate as placeholder
+            key = f"{module}.{name}"
+            if key not in self._warned:
+                logger.warning(
+                    "Checkpoint refers to missing dependency %s (%s); using placeholder.",
+                    key,
+                    exc,
+                )
+                self._warned.add(key)
+            return MissingDependencyPlaceholder.build(module, name)
+
+
+def _deserialize_checkpoint(blob: bytes) -> dict[str, Any]:
+    """Return checkpoint payload handling missing dependencies gracefully."""
+
+    try:
+        state = joblib.loads(blob)
+    except Exception as exc:  # pragma: no cover - fallback path during migration
+        logger.warning(
+            "Standard checkpoint deserialisation failed (%s); falling back to resilient loader.",
+            exc,
+        )
+        buffer = io.BytesIO(blob)
+        state = _ResilientUnpickler(buffer).load()
+    return state
+
+
+def _collect_placeholders(state: Any) -> list[MissingDependencyPlaceholder]:
+    """Return placeholders contained within ``state``."""
+
+    found: list[MissingDependencyPlaceholder] = []
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, MissingDependencyPlaceholder):
+            found.append(value)
+            return
+        if isinstance(value, dict):
+            for sub in value.values():
+                _walk(sub)
+        elif isinstance(value, (list, tuple, set)):
+            for sub in value:
+                _walk(sub)
+
+    _walk(state)
+    return found
+
+
+def collect_missing_dependencies(state: Any) -> list[dict[str, Any]]:
+    """Expose missing dependencies stored in ``state`` for downstream use."""
+
+    return [placeholder.describe() for placeholder in _collect_placeholders(state)]
 
 class _ConfigEventHandler(FileSystemEventHandler):
     """Reload configuration on file modifications."""
@@ -220,8 +325,55 @@ def load_latest_checkpoint(
         step = 0
     key = _load_key("CHECKPOINT_AES_KEY")
     data = decrypt(blob, key)
-    state = joblib.loads(data)
+    state = _deserialize_checkpoint(data)
+    missing = collect_missing_dependencies(state)
+    if missing:
+        state.setdefault("__missing_dependencies__", missing)
+        logger.warning(
+            "Loaded checkpoint step %s with %d unresolved dependencies.",
+            step,
+            len(missing),
+        )
     return step, state
+
+
+def describe_checkpoints(directory: str | None = None) -> list[dict[str, Any]]:
+    """Return filesystem metadata for available checkpoints."""
+
+    base = Path(directory or os.getenv("CHECKPOINT_DIR", "/data/checkpoints"))
+    if not base.exists():
+        return []
+
+    descriptions: list[dict[str, Any]] = []
+    for run_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+        for ckpt in sorted(run_dir.glob("checkpoint_*.pkl.enc")):
+            hash_path = ckpt.with_name(ckpt.name + ".sha256")
+            step_str = ckpt.stem.split("_")[-1]
+            try:
+                step = int(step_str)
+            except ValueError:
+                step = 0
+            stat = ckpt.stat()
+            modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+            checksum: str | None = None
+            if hash_path.exists():
+                try:
+                    checksum = hash_path.read_text().strip() or None
+                except Exception:  # pragma: no cover - best effort only
+                    checksum = None
+            descriptions.append(
+                {
+                    "run": run_dir.name,
+                    "step": step,
+                    "path": ckpt.resolve().as_posix(),
+                    "relative_path": ckpt.relative_to(base).as_posix(),
+                    "size_bytes": stat.st_size,
+                    "modified_at": modified.isoformat(),
+                    "has_checksum": hash_path.exists(),
+                    "checksum": checksum,
+                }
+            )
+    return descriptions
 
 
 # ---------------------------------------------------------------------------

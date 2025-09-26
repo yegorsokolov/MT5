@@ -26,7 +26,6 @@ testcontainers[kafka,redis]
 filelock
 fastapi
 uvicorn
-uvloop; platform_system != "Windows"
 mlflow
 shap  # optional, used to compute SHAP feature importance
 statsmodels
@@ -50,8 +49,8 @@ opentelemetry-exporter-prometheus
 opentelemetry-instrumentation-logging
 
 # Heavy optional dependencies
-ray; python_version < "3.13"
-torch-geometric; python_version < "3.13"
+# Ray and torch-geometric currently lack official Python 3.13 wheels; the
+# distributed and graph trainers gracefully fall back when they are absent.
 flaml>=2.3.6
 
 # Reinforcement learning dependencies
