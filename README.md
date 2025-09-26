@@ -831,6 +831,12 @@ python scripts/train_tsgan.py        # TimeGAN based augmentation
 python scripts/train_tsdiffusion.py  # Diffusion model (TimeGrad-style)
 ```
 
+The GAN trainer uses the in-repo PyTorch implementation of TimeGAN found under
+``synthetic/gan.py``. This lightweight model mirrors the bits of the
+``ydata-synthetic`` API that the project relied on while remaining fully
+compatible with modern Python runtimes (3.11+). Scaling utilities were rewritten
+in NumPy to preserve backwards compatibility with older configuration files.
+
 Enable `use_data_augmentation: true` to include the GAN samples or `use_diffusion_aug: true` to
 blend in the diffusion sequences during model training. The number of diffusion training epochs
 is controlled by the `diffusion_epochs` configuration key.
