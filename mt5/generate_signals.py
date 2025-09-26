@@ -7,6 +7,7 @@ import datetime as _dt
 import os
 import json
 import logging
+import sys
 import importlib
 import joblib
 import pandas as pd
@@ -1262,7 +1263,16 @@ def main():
             features.append("SymbolCode")
 
     if model_type == "autogluon":
-        from autogluon.tabular import TabularPredictor
+        try:
+            from autogluon.tabular import TabularPredictor
+        except ModuleNotFoundError as exc:  # pragma: no cover - defensive guard
+            raise RuntimeError(
+                "AutoGluon support requires the optional 'heavy' dependencies "
+                "and a Python interpreter earlier than 3.13. "
+                f"Current interpreter: {sys.version.split()[0]}. "
+                "Re-run the setup under Python 3.12 or earlier or choose a "
+                "different model_type."
+            ) from exc
 
         ag_path = Path(__file__).resolve().parent / "models" / "autogluon"
         predictor = TabularPredictor.load(str(ag_path))

@@ -48,6 +48,48 @@ else
     echo "MetaTrader 5 already installed at $MT5_INSTALL_DIR"
 fi
 
+if [[ "${SKIP_MT5_LOGIN_PROMPT:-0}" != "1" ]]; then
+    if [ -t 0 ]; then
+        launch_target=""
+        if [ -f "$MT5_INSTALL_DIR/terminal64.exe" ]; then
+            launch_target="$MT5_INSTALL_DIR/terminal64.exe"
+        elif [ -f "$MT5_SETUP_PATH" ]; then
+            launch_target="$MT5_SETUP_PATH"
+        fi
+
+        if [ -n "$launch_target" ]; then
+            if command -v wine >/dev/null 2>&1; then
+                echo "Launching MetaTrader 5 so you can complete the initial login..."
+                wine "$launch_target" >/dev/null 2>&1 &
+                wine_pid=$!
+                while true; do
+                    if ! read -r -p "Did you log into MetaTrader 5 successfully? Type 'yes' to continue: " response; then
+                        echo "Input closed before confirmation; continuing without verification." >&2
+                        break
+                    fi
+                    response="${response,,}"
+                    if [[ "$response" == "yes" ]]; then
+                        break
+                    fi
+                    echo "Please complete the login inside the MetaTrader 5 terminal before proceeding."
+                done
+                if command -v wineserver >/dev/null 2>&1; then
+                    wineserver -k >/dev/null 2>&1 || true
+                fi
+                if kill -0 "$wine_pid" 2>/dev/null; then
+                    wait "$wine_pid" || true
+                fi
+            else
+                echo "Wine is not available; skipping automatic MetaTrader 5 launch." >&2
+            fi
+        else
+            echo "MetaTrader 5 executable not found; skipping automatic login prompt." >&2
+        fi
+    else
+        echo "Skipping MetaTrader 5 login prompt because the script is running non-interactively." >&2
+    fi
+fi
+
 # Optionally install CUDA drivers if an NVIDIA GPU is detected or WITH_CUDA=1
 if command -v nvidia-smi >/dev/null 2>&1 || [[ "${WITH_CUDA:-0}" == "1" ]]; then
     sudo apt-get install -y nvidia-cuda-toolkit
