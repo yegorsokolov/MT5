@@ -12,7 +12,7 @@ fi
 
 # Install Python dependencies
 python3 -m pip install --upgrade pip
-pip install -r requirements-core.txt
+pip install -r requirements.txt
 
 # Post-install checks
 python3 - <<'PYTHON'

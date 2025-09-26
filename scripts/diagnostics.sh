@@ -26,22 +26,14 @@ ts = os.environ["TS"]
 freeze_file = Path(os.environ["FREEZE_FILE"])
 freeze_lines = set(freeze_file.read_text().splitlines())
 
-req_files = [
-    "requirements-core.txt",
-    "requirements-heavy.txt",
-    "requirements-rl.txt",
-    "requirements-nlp.txt",
-]
-
+req_path = Path("requirements.txt")
 required: list[str] = []
-for rf in req_files:
-    p = Path(rf)
-    if p.exists():
-        for line in p.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            required.append(line)
+if req_path.exists():
+    for line in req_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        required.append(line)
 
 missing = [r for r in required if r not in freeze_lines]
 if missing:

@@ -14,20 +14,14 @@ fi
 echo "Ensuring pip itself is up to date..."
 python3 -m pip install --upgrade pip
 
-REQ_FILES=(
-    requirements-core.txt
-    requirements.txt
-    requirements-heavy.txt
-    requirements-rl.txt
-    requirements-nlp.txt
-)
+REQ_FILE="requirements.txt"
 
-for req in "${REQ_FILES[@]}"; do
-    if [[ -f "${req}" ]]; then
-        echo "Synchronising packages from ${req}..."
-        python3 -m pip install --upgrade --upgrade-strategy eager -r "${req}"
-    fi
-done
+if [[ -f "${REQ_FILE}" ]]; then
+    echo "Synchronising packages from ${REQ_FILE}..."
+    python3 -m pip install --upgrade --upgrade-strategy eager -r "${REQ_FILE}"
+else
+    echo "Warning: ${REQ_FILE} not found; skipping dependency synchronisation." >&2
+fi
 
 echo "Validating dependency consistency with pip check..."
 python3 -m pip check
