@@ -59,6 +59,11 @@ python3 -m pip list --outdated || true
 echo "Upgrading pip to the latest version..."
 python3 -m pip install --upgrade pip
 
+if python3 -m pip show ydata-synthetic >/dev/null 2>&1; then
+    echo "Removing legacy ydata-synthetic package that is incompatible with modern Python versions..."
+    python3 -m pip uninstall -y ydata-synthetic
+fi
+
 echo "Installing the latest compatible versions of project dependencies..."
 python3 -m pip install --upgrade --upgrade-strategy eager -r requirements-core.txt
 
