@@ -7,6 +7,7 @@ scripts and CI pipelines can upload or inspect them later.
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -95,6 +96,98 @@ class _LogArchiveContext:
         marker.write_text(self.run_id, encoding="utf-8")
 
         return self.dest
+
+
+MAX_LONGREPR_CHARS = 4000
+
+
+def _collect_failures(terminal) -> list[dict[str, str]]:
+    if terminal is None:
+        return []
+    failures: list[dict[str, str]] = []
+    stats = getattr(terminal, "stats", {})
+    for outcome in ("failed", "error"):
+        reports = stats.get(outcome) or []
+        for report in reports:
+            nodeid = getattr(report, "nodeid", getattr(report, "location", ["<unknown>"])[0])
+            longrepr = getattr(report, "longrepr", "")
+            text = str(longrepr)
+            if len(text) > MAX_LONGREPR_CHARS:
+                text = text[-MAX_LONGREPR_CHARS:]
+            failures.append(
+                {
+                    "nodeid": str(nodeid),
+                    "when": getattr(report, "when", "call"),
+                    "outcome": outcome,
+                    "longrepr": text,
+                }
+            )
+    return failures
+
+
+def _remove_file(path: Path) -> bool:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def _clear_failure_records(context: _LogArchiveContext) -> list[Path]:
+    removed: list[Path] = []
+    summary_path = context.repo_root / "logs" / "test_failures.json"
+    if _remove_file(summary_path):
+        removed.append(summary_path)
+
+    archive_root = context.repo_root / "logs" / "test_runs"
+    if archive_root.exists():
+        for commit_dir in archive_root.iterdir():
+            if not commit_dir.is_dir():
+                continue
+            for run_dir in commit_dir.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                failure_path = run_dir / "failures.json"
+                if _remove_file(failure_path):
+                    removed.append(failure_path)
+
+    return removed
+
+
+def _write_failures(
+    context: _LogArchiveContext,
+    destination: Path | None,
+    failures: list[dict[str, str]],
+    terminal,
+) -> None:
+    summary_path = context.repo_root / "logs" / "test_failures.json"
+    if failures:
+        summary = {
+            "run_id": context.run_id,
+            "commit": context.commit,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "failures": failures,
+        }
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_text = json.dumps(summary, indent=2, sort_keys=True)
+        summary_path.write_text(summary_text, encoding="utf-8")
+        if destination is not None:
+            failure_path = destination / "failures.json"
+            failure_path.write_text(summary_text, encoding="utf-8")
+        if terminal is not None:
+            terminal.write_line(f"recorded {len(failures)} failing tests to {summary_path}")
+        return
+
+    removed_paths = _clear_failure_records(context)
+    if terminal is not None:
+        if removed_paths:
+            terminal.write_line(
+                "no test failures recorded; cleared previous failure records"
+            )
+        else:
+            terminal.write_line("no test failures recorded; no failure records to clear")
 
 
 def _is_relative_to(path: Path, other: Path) -> bool:
@@ -205,20 +298,23 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     if config.option.collectonly:
         return
 
+    terminal = config.pluginmanager.get_plugin("terminalreporter")
+    destination: Path | None = None
     try:
         destination = context.collect()
     except Exception as exc:  # pragma: no cover - unexpected failures should not crash
-        terminal = config.pluginmanager.get_plugin("terminalreporter")
         message = f"Log archive plugin failed: {exc}"
         if terminal is not None:
             terminal.write_line(message, red=True)
         else:
             print(message, file=sys.stderr)
-        return
+        destination = None
+
+    failures = _collect_failures(terminal)
+    _write_failures(context, destination, failures, terminal)
 
     if destination is None:
         return
 
-    terminal = config.pluginmanager.get_plugin("terminalreporter")
     if terminal is not None:
         terminal.write_line(f"log archive created at {destination}")

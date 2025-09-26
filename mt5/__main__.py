@@ -35,7 +35,7 @@ import runpy
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 try:
     from pydantic import BaseModel
@@ -48,6 +48,11 @@ except Exception:  # pragma: no cover - optional dependency missing in tests
     _load_config = None
 
 import mt5 as _mt5_package
+
+try:  # optional dependency during lightweight tests
+    from mt5.state_manager import load_latest_checkpoint as _load_latest_checkpoint
+except Exception:  # pragma: no cover - state manager optional in tests
+    _load_latest_checkpoint = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +242,61 @@ def _select_mode(
     return "pipeline"
 
 
+def _maybe_get(obj: object, key: str) -> Any:
+    if isinstance(obj, Mapping):
+        return obj.get(key)
+    attr = getattr(obj, key, None)
+    if attr is not None:
+        return attr
+    getter = getattr(obj, "get", None)
+    if callable(getter):
+        try:
+            return getter(key)  # type: ignore[call-arg]
+        except Exception:  # pragma: no cover - defensive fallback
+            return None
+    return None
+
+
+def _extract_checkpoint_dir(config_sources: Sequence[object]) -> str | None:
+    for cfg in config_sources:
+        if cfg is None:
+            continue
+        candidate = _maybe_get(cfg, "checkpoint_dir")
+        if candidate:
+            return str(candidate)
+        training = _maybe_get(cfg, "training")
+        if training:
+            nested = _maybe_get(training, "checkpoint_dir")
+            if nested:
+                return str(nested)
+    env_value = os.getenv("CHECKPOINT_DIR")
+    if env_value:
+        return env_value
+    return None
+
+
+def _augment_args_for_resume(
+    module: str,
+    argv: Sequence[str],
+    config_sources: Sequence[object],
+) -> list[str]:
+    args = list(argv)
+    if module != "mt5.train":
+        return args
+    if any(arg == "--resume-online" or arg.startswith("--resume-online=") for arg in args):
+        return args
+    if _load_latest_checkpoint is None:
+        return args
+    checkpoint_dir = _extract_checkpoint_dir(config_sources)
+    try:
+        checkpoint = _load_latest_checkpoint(checkpoint_dir)
+    except Exception:  # pragma: no cover - checkpoint loading is best-effort
+        return args
+    if checkpoint:
+        return ["--resume-online", *args]
+    return args
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m mt5",
@@ -318,6 +378,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"{resolved_mode}: {entry.module}")
         return 0
 
+    remainder = _augment_args_for_resume(entry.module, remainder, tuple(config_candidates))
     _run_module(entry.module, remainder)
     return 0
 
