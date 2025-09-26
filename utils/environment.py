@@ -1,4 +1,6 @@
+import argparse
 import importlib
+import json
 import logging
 import os
 import re
@@ -29,7 +31,7 @@ except Exception:  # pragma: no cover - handled later
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQ_FILE = PROJECT_ROOT / "requirements-core.txt"
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", PROJECT_ROOT / "config.yaml"))
-AUTO_INSTALL_DEPENDENCIES = os.getenv("AUTO_INSTALL_DEPENDENCIES", "1").strip().lower() not in {
+AUTO_INSTALL_DEPENDENCIES_DEFAULT = os.getenv("AUTO_INSTALL_DEPENDENCIES", "1").strip().lower() not in {
     "0",
     "false",
     "no",
@@ -41,6 +43,25 @@ MIN_CORES = 1
 REC_CORES = 4
 
 _SPECIFIER_SPLIT_RE = re.compile(r"\s*(?:==|!=|<=|>=|~=|===|<|>|=)")
+
+
+class EnvironmentCheckError(RuntimeError):
+    """Exception raised when environment diagnostics fail."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        missing_dependencies: Iterable[str] | None = None,
+        install_attempts: dict[str, str] | None = None,
+        hardware: dict[str, Any] | None = None,
+        manual_tests: Iterable[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.missing_dependencies = list(missing_dependencies or [])
+        self.install_attempts = dict(install_attempts or {})
+        self.hardware = dict(hardware or {})
+        self.manual_tests = list(manual_tests or [])
 
 
 def _parse_requirement_line(line: str) -> tuple[str, str] | None:
@@ -322,7 +343,11 @@ def _adjust_config_for_low_spec() -> None:
     save_config(raw_cfg)
 
 
-def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
+def ensure_environment(
+    strict: bool | None = None,
+    *,
+    auto_install: bool | None = None,
+) -> dict[str, Any]:
     """Validate dependencies, hardware and pre-run requirements.
 
     Parameters
@@ -332,6 +357,12 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
         ``False`` the function logs warnings for hardware checks. This does not
         affect dependency validation – required packages are always enforced.
         Defaults to the ``STRICT_ENV_CHECK`` environment variable (``true``/``1``).
+    auto_install:
+        Override the default behaviour for attempting to install missing
+        dependencies. When ``True`` the checker will attempt ``pip install`` for
+        missing packages, when ``False`` it will only report the missing
+        dependencies. By default the value is sourced from the
+        ``AUTO_INSTALL_DEPENDENCIES`` environment variable.
 
     Returns
     -------
@@ -346,11 +377,15 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
         strict_env = os.getenv("STRICT_ENV_CHECK", "").strip().lower()
         strict = strict_env in {"1", "true", "yes"}
 
+    manual_tests = _render_manual_tests()
     missing_unique = _collect_missing_dependencies()
     install_attempts: dict[str, str] = {}
+    auto_install_enabled = (
+        AUTO_INSTALL_DEPENDENCIES_DEFAULT if auto_install is None else auto_install
+    )
 
     if missing_unique:
-        if AUTO_INSTALL_DEPENDENCIES:
+        if auto_install_enabled:
             install_attempts = _attempt_dependency_install(missing_unique)
         else:
             install_attempts = {pkg: "auto-install disabled" for pkg in missing_unique}
@@ -366,18 +401,21 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
                 globals()["psutil"] = psutil_module
 
     if missing_unique:
-        raise RuntimeError(
+        raise EnvironmentCheckError(
             "Missing dependencies: "
             + ", ".join(missing_unique)
-            + ". Install with 'pip install -r requirements-core.txt' or the appropriate extras, then re-run the check."
+            + ". Install with 'pip install -r requirements-core.txt' or the appropriate extras, then re-run the check.",
+            missing_dependencies=missing_unique,
+            install_attempts=install_attempts,
+            manual_tests=manual_tests,
         )
 
     if psutil is None:
-        raise RuntimeError(
-            "psutil is required for environment diagnostics but could not be imported."
+        raise EnvironmentCheckError(
+            "psutil is required for environment diagnostics but could not be imported.",
+            install_attempts=install_attempts,
+            manual_tests=manual_tests,
         )
-
-    manual_tests = _render_manual_tests()
 
     mem_info = psutil.virtual_memory()
     mem_gb = mem_info.total / 1_000_000_000
@@ -390,7 +428,11 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
             f"Minimum required is {MIN_RAM_GB}GB RAM and {MIN_CORES} core."
         )
         if strict:
-            raise RuntimeError(message)
+            raise EnvironmentCheckError(
+                message,
+                hardware=hardware,
+                manual_tests=manual_tests,
+            )
         logger.warning(message)
 
     if mem_gb < REC_RAM_GB or cores < REC_CORES:
@@ -409,18 +451,105 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
     }
 
 
-if __name__ == "__main__":
-    report = ensure_environment()
-    if report.get("install_attempts"):
+def _create_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Validate MT5 environment prerequisites and render the manual checklist.",
+    )
+    parser.set_defaults(strict=None, auto_install=None)
+
+    strict_group = parser.add_mutually_exclusive_group()
+    strict_group.add_argument(
+        "--strict",
+        dest="strict",
+        action="store_true",
+        help="Fail when minimum hardware requirements are not met.",
+    )
+    strict_group.add_argument(
+        "--no-strict",
+        dest="strict",
+        action="store_false",
+        help="Log hardware issues as warnings instead of raising.",
+    )
+
+    install_group = parser.add_mutually_exclusive_group()
+    install_group.add_argument(
+        "--auto-install",
+        dest="auto_install",
+        action="store_true",
+        help="Attempt to install missing dependencies with pip.",
+    )
+    install_group.add_argument(
+        "--no-auto-install",
+        dest="auto_install",
+        action="store_false",
+        help="Only report missing dependencies without installing them.",
+    )
+
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output the diagnostics as JSON instead of formatted text.",
+    )
+    return parser
+
+
+def _print_report(report: dict[str, Any]) -> None:
+    missing = report.get("missing_dependencies") or []
+    if missing:
+        print("Missing dependencies:")
+        for package in missing:
+            print(f"  - {package}")
+
+    install_attempts = report.get("install_attempts") or {}
+    if install_attempts:
         print("Dependency auto-install attempts:")
-        for package, status in report["install_attempts"].items():
+        for package, status in install_attempts.items():
             print(f"  - {package}: {status}")
-    if report.get("hardware"):
-        hardware = report["hardware"]
-        print(
-            "Hardware detected: "
-            f"{hardware['memory_gb']:.1f}GB RAM, {hardware['cpu_cores']} cores"
-        )
-    print("Manual pre-run checklist:")
-    for idx, item in enumerate(report["manual_tests"], start=1):
-        print(f"  {idx}. {item}")
+
+    hardware = report.get("hardware") or {}
+    if hardware:
+        memory_gb = hardware.get("memory_gb")
+        cpu_cores = hardware.get("cpu_cores")
+        if memory_gb is not None and cpu_cores is not None:
+            print(
+                "Hardware detected: "
+                f"{memory_gb:.1f}GB RAM, {cpu_cores} cores"
+            )
+
+    manual_tests = report.get("manual_tests") or []
+    if manual_tests:
+        print("Manual pre-run checklist:")
+        for idx, item in enumerate(manual_tests, start=1):
+            print(f"  {idx}. {item}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _create_arg_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        report = ensure_environment(strict=args.strict, auto_install=args.auto_install)
+    except EnvironmentCheckError as exc:
+        payload = {
+            "error": str(exc),
+            "missing_dependencies": exc.missing_dependencies,
+            "install_attempts": exc.install_attempts,
+            "hardware": exc.hardware,
+            "manual_tests": exc.manual_tests,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            _print_report(payload)
+            print(f"Environment check failed: {exc}")
+        return 1
+
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        _print_report(report)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
