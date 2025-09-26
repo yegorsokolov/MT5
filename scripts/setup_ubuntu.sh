@@ -60,12 +60,12 @@ python3 -m pip install --upgrade --upgrade-strategy eager -r requirements-core.t
 echo "Outdated packages remaining after upgrade (if any):"
 python3 -m pip list --outdated || true
 
-echo "Enabling automatic MT5 bot updates..."
-sudo systemctl enable --now mt5bot-update.timer
-
 echo "Installing and starting the MT5 bot service..."
 sudo ./scripts/install_service.sh
 sudo systemctl status mt5bot
+
+echo "Enabling automatic MT5 bot updates..."
+sudo systemctl enable --now mt5bot-update.timer
 
 echo "Triggering an immediate MT5 bot update check..."
 python -m services.auto_updater --force

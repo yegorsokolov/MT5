@@ -28,7 +28,7 @@ uvloop; platform_system != "Windows"
 mlflow
 shap  # optional, used to compute SHAP feature importance
 statsmodels
-ydata-synthetic; python_version < "3.13"
+ydata-synthetic; python_version < "3.12"
 tsfresh
 exchange-calendars
 arch
