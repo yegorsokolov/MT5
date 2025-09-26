@@ -169,7 +169,10 @@ python -m utils.environment
 The checker now attempts to install any missing packages automatically before
 failing. Set `AUTO_INSTALL_DEPENDENCIES=0` if you prefer to handle package
 installation manually. When requirements remain unresolved, the command raises
-an error explaining which dependencies still need to be installed.
+an error explaining which dependencies still need to be installed. In addition
+to dependency validation, it now performs automated smoke tests that exercise
+MetaTrader connectivity, Git remotes, environment variable loading and the core
+FastAPI services, flagging any remaining manual steps in the summary output.
 
 To simplify repeated checks, run the bundled helper script:
 
@@ -177,8 +180,10 @@ To simplify repeated checks, run the bundled helper script:
 ./scripts/manual_preflight.sh
 ```
 
-The script executes the same diagnostics and prints a manual pre-run checklist
-so operators can confirm external integrations before launching the bot:
+The helper now executes the full pre-flight sequence automatically and reports
+any follow-up tasks that still require attention. Each check corresponds to the
+historical manual steps below – the diagnostics connect to external services and
+only surface an item when automation fails:
 
 1. Download and register the MetaTrader 5 terminal (or place it in the `mt5/`
    directory) and ensure the bot can log in with broker credentials.
