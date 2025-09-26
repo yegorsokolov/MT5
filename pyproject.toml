@@ -65,10 +65,7 @@ baseline = "strategies:register_builtin_strategies"
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov", "pyyaml"]
 gpu = ["tensorflow"]
-heavy = [
-    "ray==2.48.0; python_version < \"3.13\"",
-    "torch-geometric==2.6.1; python_version < \"3.13\"",
-]
+heavy = []
 rl = [
     "stable-baselines3==2.7.0",
     "sb3-contrib==2.7.0",
@@ -79,7 +76,7 @@ nlp = [
     "FinGPT",
     "diffusers==0.34.0",
 ]
-uvloop = ["uvloop==0.21.0"]
+uvloop = []
 
 
 [tool.setuptools]
