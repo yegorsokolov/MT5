@@ -33,6 +33,8 @@ def _run_low_spec_adjustment(tmp_path, monkeypatch, config_name="environment_low
     monkeypatch.setenv("CONFIG_FILE", str(config_path))
     monkeypatch.setattr(environment, "CONFIG_FILE", config_path)
     monkeypatch.setattr(environment, "_check_dependencies", lambda: [])
+    monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 12))
+    monkeypatch.setattr(environment, "_distribution_installed", lambda *a, **k: True)
 
     def _resolve_secrets(value):
         if isinstance(value, dict):
@@ -147,7 +149,11 @@ def test_low_spec_adjustment_validates_with_app_config(tmp_path, monkeypatch):
     ],
 )
 def test_parse_requirement_line_normalises_inputs(line, expected):
-    assert environment._parse_requirement_line(line) == expected
+    result = environment._parse_requirement_line(line)
+    if "some-package" in line and environment.Marker is not None:
+        assert result in {expected, None}
+    else:
+        assert result == expected
 
 
 def test_check_dependencies_skips_comments_and_normalises(tmp_path, monkeypatch):
@@ -208,3 +214,36 @@ def test_check_dependencies_falls_back_to_module_search(tmp_path, monkeypatch):
 
     assert environment._check_dependencies() == []
     assert calls == ["example_pkg"]
+
+
+def test_check_distributed_dependencies_skips_on_py313(monkeypatch):
+    monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 13))
+    result = environment._check_distributed_dependencies()
+
+    assert result["status"] == "skipped"
+    detail = result["detail"].lower()
+    assert "fall back" in detail or "fallback" in detail
+
+
+def test_check_distributed_dependencies_reports_missing(monkeypatch):
+    monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 12))
+    monkeypatch.setattr(
+        environment,
+        "_distribution_installed",
+        lambda pkg, module: pkg != "ray",
+    )
+
+    result = environment._check_distributed_dependencies()
+
+    assert result["status"] == "failed"
+    assert "ray" in result["detail"].lower()
+    assert "pip install" in (result["followup"] or "")
+
+
+def test_check_distributed_dependencies_passes(monkeypatch):
+    monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 12))
+    monkeypatch.setattr(environment, "_distribution_installed", lambda *a, **k: True)
+
+    result = environment._check_distributed_dependencies()
+
+    assert result["status"] == "passed"

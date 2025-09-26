@@ -8,7 +8,7 @@ cd "${PROJECT_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-}" 
 if [[ -z "${PYTHON_BIN}" ]]; then
-    for candidate in python3 python3.13 python3.12; do
+    for candidate in python3 python3.13 python3.12 python3.11 python3.10; do
         if command -v "$candidate" >/dev/null 2>&1; then
             PYTHON_BIN="$(command -v "$candidate")"
             break
