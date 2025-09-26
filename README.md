@@ -1,7 +1,8 @@
 # Adaptive MT5 Trading Bot
 
-This folder contains a modular Expert Advisor (EA) and supporting Python scripts for training and
-backtesting machine learning driven trading strategies on MetaTrader 5.
+This folder contains the Python tooling for training and backtesting machine-learning driven trading
+strategies on MetaTrader 5, plus integration helpers that talk to the terminal through the official
+MetaTrader5 Python package.
 
 ## Overview
 
@@ -189,6 +190,9 @@ The dispatcher automatically resolves the desired mode based on CLI arguments,
 returned by `utils.load_config`. If none of those are set it safely falls back
 to the orchestrated pipeline so the full workflow is executed with sensible
 defaults. Pass `--dry-run` to inspect the resolved module without executing it.
+Use `python -m mt5` as the standard command when documenting or scripting bot
+start-up; it automatically selects the appropriate stage sequence for most
+deployments.
 
 ## Deployment and Environment Checks
 
@@ -215,30 +219,27 @@ to dependency validation, it now performs automated smoke tests that exercise
 MetaTrader connectivity, Git remotes, environment variable loading and the core
 FastAPI services, flagging any remaining manual steps in the summary output.
 
-To simplify repeated checks, run the bundled helper script:
+### Connecting the bot to MetaTrader 5
 
-```bash
-./scripts/manual_preflight.sh
-```
-
-The helper now executes the full pre-flight sequence automatically and reports
-any follow-up tasks that still require attention. Each check corresponds to the
-historical manual steps below – the diagnostics connect to external services and
-only surface an item when automation fails:
-
-1. Download and register the MetaTrader 5 terminal (or place it in the `mt5/`
-   directory) and ensure the bot can log in with broker credentials.
-2. From a running bot session, ping the MT5 terminal to confirm live
-   connectivity.
-3. Validate Git access (clone/pull/push) using configured SSH keys or tokens.
-4. Confirm that environment variables from `.env` or related files load before
-   starting trading services.
-5. Exercise the oracle scalper pipeline (for example, run `collect()` followed
-   by `assess_probabilities()`) to verify external market data APIs respond.
-6. Start the inference FastAPI service (`services.inference_server`) and call
-   the `/health` endpoint to test REST integrations.
-7. Launch the feature worker FastAPI app and ensure background tasks can
-   subscribe to the message bus or broker queue.
+1. Install the MetaTrader 5 terminal from your broker or the official MetaQuotes
+   download and log in with your live or demo credentials. Keep the terminal
+   running so the Python bridge can piggyback on the authenticated session.
+2. Make the terminal discoverable by Python. Either set the
+   `MT5_TERMINAL_PATH` environment variable to the installation directory (or
+   directly to `terminal64.exe`) or place the terminal under `mt5/` inside this
+   repository so the environment check can find it automatically.
+3. Run `python scripts/setup_terminal.py --install-heartbeat` to verify the
+   MetaTrader5 Python module can attach to the terminal. Provide
+   `--login/--password/--server` if you want the helper to perform a headless
+   login; otherwise it reuses the running terminal session. On success the
+   script prints the connected account, balance and broker name.
+4. If the connection fails, review the reported MetaTrader5 error and run the
+   installed `ConnectionHeartbeat` script from inside MetaTrader 5 for more
+   detailed diagnostics. The script lives under
+   **Navigator → Scripts → MT5Bridge → ConnectionHeartbeat** once installed.
+5. Re-run `python -m utils.environment` after resolving any terminal issues to
+   confirm the environment check sees an authenticated session. The trading
+   services launched via `python -m mt5` will reuse that connectivity.
 
 ### CPU Feature Detection and Acceleration
 
@@ -338,13 +339,17 @@ match your environment.
       interpreter is pinned to Python 3.11.x (or at least within the supported
       3.10–3.11 window) and prints the detected hardware. If something is missing
       it explains how to fix it.
-12. **Start a training run.**
-    * Type `python -m mt5.train` and press `Enter`.
-    * The training process logs progress to the terminal and writes
-      stage-by-stage status updates to `reports/training/progress.json`. Leave
-      the window open until the run completes. Press `Ctrl`+`C` if you need to
-      stop it early.
-    * While training runs, the pipeline automatically ingests any configured
+12. **Start the orchestrated bot.**
+    * Type `python -m mt5` and press `Enter`. This launches the unified
+      dispatcher, which by default runs the end-to-end training, backtesting and
+      evaluation pipeline before handing off to the realtime bot.
+    * Use `python -m mt5 --mode realtime` when you only want to start the live
+      trading loop or `python -m mt5 backtest` to restrict execution to the
+      historical suite.
+    * Each run logs progress to the terminal and writes stage-by-stage status
+      updates to `reports/training/progress.json`. Leave the window open until
+      the run completes. Press `Ctrl`+`C` if you need to stop it early.
+    * While the pipeline runs, it automatically ingests any configured
       `external_context` API sources for additional market context and records
       the final runtime so dashboards reflect the duration of the latest model
       build.
@@ -374,7 +379,7 @@ touch .env  # create blank environment file and fill it using .env.template
 pip install -r requirements-core.txt
 dvc pull  # fetch raw/history data
 python -m utils.environment  # verify deps and adjust config
-python -m mt5.train
+python -m mt5
 ```
 
 Windows PowerShell:
@@ -386,7 +391,7 @@ New-Item -Path . -Name .env -ItemType File -Force | Out-Null  # blank env file, 
 pip install -r requirements-core.txt
 dvc pull  # fetch raw/history data
 python -m utils.environment
-python -m mt5.train
+python -m mt5
 ```
 
 These commands download the repository, install required packages, verify the
@@ -841,7 +846,8 @@ Enable `use_data_augmentation: true` to include the GAN samples or `use_diffusio
 blend in the diffusion sequences during model training. The number of diffusion training epochs
 is controlled by the `diffusion_epochs` configuration key.
 
-The resulting model file (`model.joblib`) can be loaded by the EA. When
+The resulting model file (`model.joblib`) is consumed by the Python trading
+backend. When
 training with `mt5.train_tabular` the trained pipeline is stored under
 `models/tabular` and will be used when `model_type: tabular` is set in
 `config.yaml`. Running `mt5.train_autogluon` produces an AutoGluon predictor
@@ -878,7 +884,7 @@ to prepare a clean Windows PC or VPS.
 2. **Install MetaTrader 5** –
    1. Download MetaTrader 5 from your broker or the official website and run the installer with the default options.
    2. Launch the terminal once so it creates the `MQL5` data directory and log in with your trading or demo account.
-   3. Verify **Algo Trading** is visible on the toolbar—it will be enabled later when attaching the EA.
+   3. Verify **Algo Trading** is visible on the toolbar—you will enable it later before starting the Python services.
 3. **Install Git, GitHub tooling and Python** –
    1. Download Git from [git-scm.com](https://git-scm.com/) and install using the default options. Ensure the “Git from the command line” option is selected so scheduled scripts can commit changes.
    2. (Optional) Install [GitHub Desktop](https://desktop.github.com/) or the [GitHub CLI](https://cli.github.com/) to simplify authentication. Sign in with your GitHub account and grant access to the repository the bot will push to.
@@ -980,24 +986,21 @@ Generate the credentials referenced above with::
 
 This command mints a random service account, stores it in your chosen env file
 and prints shell exports for immediate use.
-9. **Copy the EA** –
-   1. Open MetaTrader 5 and click **File → Open Data Folder**.
-   2. Run `python scripts/setup_terminal.py "<path-to-terminal>"` to automatically place `AdaptiveEA.mq5` and `RealtimeEA.mq5` inside `MQL5/Experts`.
-   3. Restart MetaTrader 5 and compile the EA inside the MetaEditor by pressing **F7**.
-10. **Attach the EA** –
-    1. In MetaTrader 5 open the **Navigator** panel (Ctrl+N).
-    2. Drag the EA onto a chart of either XAUUSD or GBPUSD and click **OK**.
-    3. Enable **Algo Trading** on the toolbar and, if prompted, allow automated trading under **Tools → Options → Expert Advisors**.
+9. **Verify MetaTrader 5 connectivity** –
+   1. Ensure the MetaTrader 5 terminal is running and logged into the account you intend to trade.
+   2. Run `python scripts/setup_terminal.py --install-heartbeat` (append `--path "<terminal-or-install-dir>"` if the helper cannot auto-detect the terminal). The script confirms Python can initialise MetaTrader 5 and prints the connected account details.
+   3. If the script reports an error, review the reason, open the terminal logs and run the installed `ConnectionHeartbeat` script from the Navigator tree for detailed diagnostics before retrying.
+10. **Enable automated trading** –
+    1. In MetaTrader 5 open **Tools → Options → Expert Advisors** and tick **Allow automated trading**.
+    2. Confirm the **Algo Trading** toolbar toggle is green so the terminal accepts trading requests from Python.
 11. **Publish signals** –
     1. In the command prompt run `python -m mt5.generate_signals`.
-      This publishes prediction messages to `tcp://localhost:5555` which the EA subscribes to.
+      This publishes prediction messages to `tcp://localhost:5555`, which the realtime trading services consume.
     2. Set the environment variable `SIGNAL_QUEUE_BIND` or `SIGNAL_QUEUE_URL` to change the port if needed.
-    3. Confirm the EA input `ZmqAddress` matches the publisher URL (default `tcp://localhost:5555`).
-    4. Messages are sent as Protobuf by default.  Set `SIGNAL_FORMAT=json` to
-      publish plain JSON instead.  The Expert Advisors read from this queue via
-      the `ZmqAddress` input and no longer require a `signals.csv` file.
-    5. Check the **Experts** tab in MetaTrader 5 for “Connected to signal socket” to confirm the bot is linked to the publisher.
-    6. The script checks market hours using `exchange_calendars`; if the market
+    3. Messages are sent as Protobuf by default. Set `SIGNAL_FORMAT=json` to
+      publish plain JSON instead. The Python consumers no longer require a `signals.csv` file because they subscribe to the queue directly.
+    4. Watch the `logs/` folder or the console output of `python -m mt5.realtime_train` for confirmation that signals are flowing.
+    5. The script checks market hours using `exchange_calendars`; if the market
       is closed it runs a rolling backtest or falls back to historical data so
       analysis can continue. Pass `--simulate-closed-market` to manually test
       this behaviour.
@@ -1062,34 +1065,38 @@ python -m services.auto_updater --force
 
 Setting `auto_update.enabled` to `false` cleanly disables the behaviour.
 
-With the EA running on your VPS and the training script collecting realtime data,
-the bot will continually adapt to market conditions.
+With the MetaTrader terminal logged in on your VPS and the training script
+collecting realtime data, the bot will continually adapt to market
+conditions.
 
-## MetaTrader 5 EA
+## MetaTrader 5 integration
 
-The EA script `AdaptiveEA.mq5` demonstrates how to load predictions
-produced by the Python model and place trades with a context aware trailing
-stop. Trading no longer relies on MQL Expert Advisors; signals are transmitted
-directly from Python to MetaTrader5 via the ``mt5_direct`` broker module.
-This removes the external messaging bridge and simplifies deployment.
+Trading no longer relies on any MQL Expert Advisor files. Orders are executed
+directly from Python through the ``brokers.mt5_direct`` module, which wraps the
+official MetaTrader5 package. When `python -m mt5` launches it initialises the
+bridge, enforces the configured drawdown and risk limits and submits trades to
+the logged-in terminal session (or performs a headless login when credentials
+are supplied). Keep the terminal running and authenticated, or provide
+credentials to the helper scripts, so the bridge can establish a session. The
+optional `mt5/mql5/ConnectionHeartbeat.mq5` script remains available for
+troubleshooting connectivity entirely within MetaTrader 5.
 
-`mt5.generate_signals` merges ML probabilities with a moving average
-crossover and RSI filter so trades are only taken when multiple conditions
-confirm the direction.  Additional optional filters check for Bollinger band
-breakouts, volume spikes and even macro indicators when a `macro.csv` file is
-present within the writable cache directory. Configuration values for these
-filters live in `config.yaml`.  By default cached histories and macro data are
-stored under `logs/cache`; set `cache_dir` in the configuration or the
-`MT5_CACHE_DIR` environment variable to relocate them. The
-pipeline now also considers news sentiment scores and cross-asset momentum
-to further refine entries. Set `enable_news_trading` to `false` to automatically
-block trades within a few minutes of scheduled high impact events pulled from
-all three calendars.  When the optional `transformers` dependency is available,
-news summaries are encoded with a HuggingFace
-`AutoModelForSequenceClassification` to produce both polarity scores and
-embedding vectors that downstream models can consume.  If the model cannot be
-loaded the features gracefully fall back to zeros so existing pipelines remain
-operational.
+`mt5.generate_signals` merges ML probabilities with a moving average crossover
+and RSI filter so trades are only taken when multiple conditions confirm the
+direction. Additional optional filters check for Bollinger band breakouts,
+volume spikes and even macro indicators when a `macro.csv` file is present
+within the writable cache directory. Configuration values for these filters live
+in `config.yaml`. By default cached histories and macro data are stored under
+`logs/cache`; set `cache_dir` in the configuration or the `MT5_CACHE_DIR`
+environment variable to relocate them. The pipeline now also considers news
+sentiment scores and cross-asset momentum to further refine entries. Set
+`enable_news_trading` to `false` to automatically block trades within a few
+minutes of scheduled high impact events pulled from all three calendars. When
+the optional `transformers` dependency is available, news summaries are encoded
+with a HuggingFace `AutoModelForSequenceClassification` to produce both polarity
+scores and embedding vectors that downstream models can consume. If the model
+cannot be loaded the features gracefully fall back to zeros so existing
+pipelines remain operational.
 
 Sentiment scoring behaviour can be tuned via `sentiment_mode` in
 `config.yaml`. The default `full` mode loads the original FinBERT/FinGPT
@@ -1208,17 +1215,18 @@ The helper script `scripts/sync_artifacts.py` can be run to automatically commit
 
 The repository now includes a `Dockerfile` and GitHub Actions workflow which
 mirror the manual Windows VPS steps. Building the container installs MetaTrader
-5 under Wine, all Python dependencies and copies the EA so an identical
-environment can be launched under WSL or Docker Desktop. Running
-`docker-compose up` spins up the terminal with the latest code making rollbacks
-trivial.  Containers start via `scripts/run_bot.sh` which performs an initial
-training pass when no `model.joblib` is present, launches the terminal and then
-enters the realtime training loop while uploading logs in the background.
+5 under Wine, all Python dependencies and places the diagnostic heartbeat
+script so an identical environment can be launched under WSL or Docker
+Desktop. Running `docker-compose up` spins up the terminal with the latest code
+making rollbacks trivial. Containers start via `scripts/run_bot.sh` which
+performs an initial training pass when no `model.joblib` is present, launches
+the terminal and then enters the realtime training loop while uploading logs in
+the background.
 
 The workflow `.github/workflows/train.yml` retrains both `mt5.train` and
-`mt5.train_cli neural` whenever new data is pushed or on a daily schedule. Generated
-models are committed back to the repository ensuring the EA always uses the
-most recent versions.
+`mt5.train_cli neural` whenever new data is pushed or on a daily schedule.
+Generated models are committed back to the repository ensuring the trading
+services always run with the most recent versions.
 
 ## Kubernetes Deployment
 
