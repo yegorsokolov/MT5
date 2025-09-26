@@ -39,12 +39,16 @@ except Exception:  # pragma: no cover - optional dependency may be missing
     def setup_logging() -> None:
         logging.basicConfig(level=logging.INFO)
 
+from mt5.run_state import PIPELINE_STAGES, PipelineState
+from strategy.archive import StrategyArchive
+
 logger = logging.getLogger(__name__)
 
 
 PIPELINE_ARTIFACT_SUBDIR = "pipeline"
 BACKTEST_ARTIFACT_NAME = "backtest_metrics.json"
 STRATEGY_ARTIFACT_NAME = "strategy.json"
+PIPELINE_STATE_FILE = "state.json"
 
 
 def _serialise(obj: Any) -> Any:
@@ -101,6 +105,40 @@ def _save_artifact(path: Path, payload: Mapping[str, Any]) -> None:
     with tmp_path.open("w", encoding="utf8") as fh:
         json.dump(data, fh, indent=2, sort_keys=True)
     tmp_path.replace(path)
+
+
+def _collect_training_artifacts() -> list[Path]:
+    root = Path(__file__).resolve().parent
+    candidates = {
+        root / "model.joblib",
+        root / "scaler.pkl",
+        root / "models" / "model.joblib",
+        root / "models" / "regime_models",
+        root / "reports" / "training" / "progress.json",
+    }
+    return [path for path in candidates if path.exists()]
+
+
+def _record_strategy_archive(
+    archive: StrategyArchive,
+    artifact: Mapping[str, Any],
+    episodes: int,
+    artifact_path: Path,
+) -> Path | None:
+    best = artifact.get("best_strategy")
+    if not isinstance(best, Mapping):
+        return None
+    monthly_profit = best.get("pnl")
+    metadata = {
+        "episodes": episodes,
+        "summary": artifact.get("summary"),
+        "source": "pipeline",
+        "artifact_path": artifact_path.as_posix(),
+        "updated_at": artifact.get("updated_at"),
+    }
+    if monthly_profit is not None:
+        metadata["monthly_profit"] = monthly_profit
+    return archive.record(best, metadata=metadata)
 
 
 def _estimate_data_quality(metrics: Mapping[str, Any]) -> float:
@@ -320,6 +358,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the realtime stage",
     )
+    parser.add_argument(
+        "--fresh-start",
+        action="store_true",
+        help="Ignore saved pipeline state and rerun every stage",
+    )
     return parser
 
 
@@ -335,35 +378,120 @@ def main(argv: Sequence[str] | None = None) -> int:
     artifact_dir = _resolve_artifact_dir(args.artifact_dir or None)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    if not args.skip_training:
-        _run_training(_split_args(args.train_args))
-    else:
-        logger.info("Training stage skipped via CLI flag")
+    state = PipelineState(artifact_dir / PIPELINE_STATE_FILE)
+    if args.fresh_start:
+        state.reset()
+    resume_stage: str | None = None
+    if not args.fresh_start and state.should_resume():
+        resume_stage = state.resume_stage()
+        if resume_stage:
+            logger.info("Resuming pipeline from stage %s", resume_stage)
+
+    stage_flags = {
+        "training": bool(args.skip_training),
+        "backtest": bool(args.skip_backtest),
+        "strategy": bool(args.skip_strategy),
+        "realtime": bool(args.skip_realtime),
+    }
+    if resume_stage:
+        for stage in PIPELINE_STAGES:
+            if stage == resume_stage:
+                break
+            stage_flags[stage] = True
+
+    state.begin_run(args=vars(args), resume_from=resume_stage)
+    archive = StrategyArchive()
 
     backtest_metrics: Mapping[str, Any] | None = None
-    if not args.skip_backtest:
-        backtest_metrics = _run_backtest(
-            artifact_dir,
-            reuse=not args.no_reuse_backtest,
-            quality_threshold=args.quality_threshold,
-            force=args.force_backtest,
-        )
-    else:
-        logger.info("Backtesting stage skipped via CLI flag")
-
     strategy_artifact: Mapping[str, Any] | None = None
-    if not args.skip_strategy:
-        strategy_artifact = _run_strategy_creation(
-            artifact_dir,
-            episodes=args.strategy_episodes,
-        )
-    else:
-        logger.info("Strategy creation stage skipped via CLI flag")
 
-    if not args.skip_realtime:
-        _run_realtime(args.realtime_duration if args.realtime_duration > 0 else None)
+    try:
+        if not stage_flags["training"]:
+            state.mark_stage_started("training")
+            try:
+                _run_training(_split_args(args.train_args))
+            except Exception as exc:
+                state.mark_stage_failed("training", exc)
+                raise
+            artifacts = _collect_training_artifacts()
+            resume_ready = bool(artifacts)
+            state.mark_stage_complete("training", artifacts=artifacts, resume=resume_ready)
+        else:
+            logger.info("Training stage skipped via CLI flag or resume")
+
+        if not stage_flags["backtest"]:
+            state.mark_stage_started("backtest")
+            try:
+                backtest_metrics = _run_backtest(
+                    artifact_dir,
+                    reuse=not args.no_reuse_backtest,
+                    quality_threshold=args.quality_threshold,
+                    force=args.force_backtest,
+                )
+            except Exception as exc:
+                state.mark_stage_failed("backtest", exc)
+                raise
+            artifact_path = artifact_dir / BACKTEST_ARTIFACT_NAME
+            state.mark_stage_complete(
+                "backtest",
+                artifacts=[artifact_path],
+                metrics=backtest_metrics or {},
+                resume=True,
+            )
+        else:
+            logger.info("Backtesting stage skipped via CLI flag or resume")
+
+        archive_path: Path | None = None
+        if not stage_flags["strategy"]:
+            state.mark_stage_started("strategy")
+            try:
+                strategy_artifact = _run_strategy_creation(
+                    artifact_dir,
+                    episodes=args.strategy_episodes,
+                )
+            except Exception as exc:
+                state.mark_stage_failed("strategy", exc)
+                raise
+            artifacts: list[Path] = []
+            if strategy_artifact is not None:
+                artifact_path = artifact_dir / STRATEGY_ARTIFACT_NAME
+                artifacts.append(artifact_path)
+                try:
+                    archive_path = _record_strategy_archive(
+                        archive,
+                        strategy_artifact,
+                        args.strategy_episodes,
+                        artifact_path,
+                    )
+                except Exception:
+                    logger.exception("Failed to archive generated strategy")
+                else:
+                    if archive_path is not None:
+                        artifacts.append(archive_path)
+            state.mark_stage_complete(
+                "strategy",
+                artifacts=artifacts,
+                metrics=strategy_artifact or {},
+                resume=bool(artifacts),
+            )
+        else:
+            logger.info("Strategy creation stage skipped via CLI flag or resume")
+
+        if not stage_flags["realtime"]:
+            state.mark_stage_started("realtime")
+            try:
+                _run_realtime(args.realtime_duration if args.realtime_duration > 0 else None)
+            except Exception as exc:
+                state.mark_stage_failed("realtime", exc)
+                raise
+            state.mark_stage_complete("realtime", resume=False)
+        else:
+            logger.info("Realtime stage skipped via CLI flag or resume")
+    except Exception as exc:
+        state.mark_run_failed(exc)
+        raise
     else:
-        logger.info("Realtime stage skipped via CLI flag")
+        state.mark_run_completed()
 
     if backtest_metrics is not None:
         logger.info(
