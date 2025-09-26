@@ -128,3 +128,6 @@ fi
 
 echo "Triggering an immediate MT5 bot update check..."
 python -m services.auto_updater --force
+
+echo "AutoGluon has been replaced with the built-in tabular trainer."
+echo "Run 'python -m mt5.train_tabular' after setup to train the default model."

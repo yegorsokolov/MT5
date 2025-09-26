@@ -42,6 +42,7 @@ __all__ = [
     "train",
     "train_allocator",
     "train_autogluon",
+    "train_tabular",
     "train_baseline",
     "train_cli",
     "train_combined",
