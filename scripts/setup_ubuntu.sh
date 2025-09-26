@@ -6,7 +6,27 @@ PROJECT_ROOT="${SCRIPT_DIR}/.."
 
 cd "${PROJECT_ROOT}"
 
+PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
+PYTHON_BIN="/usr/bin/python${PYTHON_VERSION}"
+
 sudo apt-get update
+sudo apt-get install -y software-properties-common
+
+if ! command -v "python${PYTHON_VERSION}" >/dev/null 2>&1; then
+    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo apt-get update
+    sudo apt-get install -y "python${PYTHON_VERSION}" "python${PYTHON_VERSION}-dev" "python${PYTHON_VERSION}-venv" "python${PYTHON_VERSION}-distutils"
+fi
+
+sudo update-alternatives --install /usr/bin/python3 python3 "$PYTHON_BIN" 2
+sudo update-alternatives --set python3 "$PYTHON_BIN"
+
+if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    "$PYTHON_BIN" -m ensurepip --upgrade
+fi
+
+sudo apt-mark hold python3 "python${PYTHON_VERSION}"
+
 sudo apt-get install -y python3-dev build-essential wine
 
 if ! command -v wget >/dev/null 2>&1; then
@@ -95,25 +115,27 @@ if command -v nvidia-smi >/dev/null 2>&1 || [[ "${WITH_CUDA:-0}" == "1" ]]; then
     sudo apt-get install -y nvidia-cuda-toolkit
 fi
 
+PIP_CMD=("$PYTHON_BIN" -m pip)
+
 echo "Checking for outdated Python packages before installation..."
-python3 -m pip list --outdated || true
+"${PIP_CMD[@]}" list --outdated || true
 
 echo "Upgrading pip to the latest version..."
-python3 -m pip install --upgrade pip
+"${PIP_CMD[@]}" install --upgrade pip
 
-if python3 -m pip show ydata-synthetic >/dev/null 2>&1; then
+if "${PIP_CMD[@]}" show ydata-synthetic >/dev/null 2>&1; then
     echo "Removing legacy ydata-synthetic package that is incompatible with modern Python versions..."
-    python3 -m pip uninstall -y ydata-synthetic
+    "${PIP_CMD[@]}" uninstall -y ydata-synthetic
 fi
 
 echo "Installing the latest compatible versions of project dependencies..."
-python3 -m pip install --upgrade --upgrade-strategy eager -r requirements-core.txt
+"${PIP_CMD[@]}" install --upgrade --upgrade-strategy eager -r requirements-core.txt
 
 echo "Running project package synchronisation script..."
 ./scripts/update_python_packages.sh
 
 echo "Outdated packages remaining after upgrade (if any):"
-python3 -m pip list --outdated || true
+"${PIP_CMD[@]}" list --outdated || true
 
 echo "Installing and starting the MT5 bot service..."
 sudo ./scripts/install_service.sh
@@ -127,7 +149,7 @@ else
 fi
 
 echo "Triggering an immediate MT5 bot update check..."
-python -m services.auto_updater --force
+"$PYTHON_BIN" -m services.auto_updater --force
 
 echo "AutoGluon has been replaced with the built-in tabular trainer."
 echo "Run 'python -m mt5.train_tabular' after setup to train the default model."
