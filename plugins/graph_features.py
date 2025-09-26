@@ -13,7 +13,7 @@ from . import register_feature
 from utils import load_config
 import pandas as pd
 import numpy as np
-from typing import Dict, Iterable
+from typing import Dict, Iterable, TYPE_CHECKING
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,37 +24,58 @@ try:
     from torch_geometric.data import Data
     from torch_geometric.nn import GATConv
 except Exception:  # pragma: no cover - optional dependency
-    torch = None
-    dense_to_sparse = None
-    degree = None
-    Data = None
+    torch = None  # type: ignore[assignment]
+    dense_to_sparse = None  # type: ignore[assignment]
+    degree = None  # type: ignore[assignment]
+    Data = None  # type: ignore[assignment]
+    GATConv = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    from torch import Tensor as TorchTensor
+else:
+    TorchTensor = object  # type: ignore[misc,assignment]
 
 
-class TemporalGAT(torch.nn.Module):
-    """Simple temporal GAT with a GRU over node embeddings."""
+if torch is not None:
 
-    def __init__(self, num_nodes: int) -> None:
-        super().__init__()
-        self.num_nodes = num_nodes
-        self.conv1 = GATConv(num_nodes, 8, add_self_loops=False)
-        self.conv2 = GATConv(8, 4, add_self_loops=False)
-        self.gru = torch.nn.GRU(4, 4)
+    class TemporalGAT(torch.nn.Module):
+        """Simple temporal GAT with a GRU over node embeddings."""
 
-    def forward(self, matrices: Iterable[torch.Tensor]) -> list[torch.Tensor]:
-        """Process a sequence of dense adjacency matrices."""
-        device = next(self.parameters()).device
-        h = torch.zeros(1, self.num_nodes, 4, device=device)
-        outputs = []
-        for mat in matrices:
-            edge_index, edge_weight = dense_to_sparse(mat.to(device))
-            x = torch.eye(self.num_nodes, device=device)
-            x = self.conv1(x, edge_index, edge_weight)
-            x = torch.relu(x)
-            x = self.conv2(x, edge_index, edge_weight)
-            x = torch.relu(x)
-            out, h = self.gru(x.unsqueeze(0), h)
-            outputs.append(out.squeeze(0))
-        return outputs
+        def __init__(self, num_nodes: int) -> None:
+            super().__init__()
+            self.num_nodes = num_nodes
+            self.conv1 = GATConv(num_nodes, 8, add_self_loops=False)
+            self.conv2 = GATConv(8, 4, add_self_loops=False)
+            self.gru = torch.nn.GRU(4, 4)
+
+        def forward(self, matrices: Iterable["TorchTensor"]) -> list["TorchTensor"]:
+            """Process a sequence of dense adjacency matrices."""
+
+            assert torch is not None  # for type checkers
+            device = next(self.parameters()).device
+            h = torch.zeros(1, self.num_nodes, 4, device=device)
+            outputs: list["TorchTensor"] = []
+            for mat in matrices:
+                edge_index, edge_weight = dense_to_sparse(mat.to(device))
+                x = torch.eye(self.num_nodes, device=device)
+                x = self.conv1(x, edge_index, edge_weight)
+                x = torch.relu(x)
+                x = self.conv2(x, edge_index, edge_weight)
+                x = torch.relu(x)
+                out, h = self.gru(x.unsqueeze(0), h)
+                outputs.append(out.squeeze(0))
+            return outputs
+
+else:
+
+    class TemporalGAT:  # type: ignore[override]
+        """Placeholder when torch-geometric is unavailable."""
+
+        def __init__(self, *_: object, **__: object) -> None:
+            raise RuntimeError("TemporalGAT requires torch and torch-geometric")
+
+        def forward(self, *_: object, **__: object) -> list[object]:
+            raise RuntimeError("TemporalGAT requires torch and torch-geometric")
 
 
 @register_feature

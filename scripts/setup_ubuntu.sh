@@ -4,25 +4,66 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}/.."
 
+SERVICES_ONLY=0
+SKIP_SERVICE_INSTALL=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --services-only|--install-services-only)
+            SERVICES_ONLY=1
+            shift
+            ;;
+        --skip-service-install)
+            SKIP_SERVICE_INSTALL=1
+            shift
+            ;;
+        -h|--help)
+            cat <<'USAGE'
+Usage: setup_ubuntu.sh [--services-only] [--skip-service-install]
+
+Without flags the script provisions the Python toolchain, installs project
+dependencies, prepares the MetaTrader terminal and installs the systemd
+services.  --services-only skips the package and dependency steps and reuses
+the existing environment to (re)install the services.  --skip-service-install
+performs the environment preparation but leaves the systemd units untouched.
+USAGE
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
 cd "${PROJECT_ROOT}"
 
-sudo apt-get update
-sudo apt-get install -y software-properties-common
-
-if ! command -v python3.13 >/dev/null 2>&1; then
-    echo "Adding deadsnakes PPA for Python 3.13 packages..."
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
+if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
     sudo apt-get update
-    echo "Installing Python 3.13 toolchain..."
-    sudo apt-get install -y python3.13 python3.13-venv python3.13-dev python3.13-distutils
-else
-    echo "Python 3.13 already present. Ensuring development headers and venv module are installed..."
-    sudo apt-get install -y python3.13-venv python3.13-dev python3.13-distutils
+    sudo apt-get install -y software-properties-common
+
+    if ! command -v python3.13 >/dev/null 2>&1; then
+        echo "Adding deadsnakes PPA for Python 3.13 packages..."
+        sudo add-apt-repository -y ppa:deadsnakes/ppa
+        sudo apt-get update
+        echo "Installing Python 3.13 toolchain..."
+        sudo apt-get install -y python3.13 python3.13-venv python3.13-dev python3.13-distutils
+    else
+        echo "Python 3.13 already present. Ensuring development headers and venv module are installed..."
+        sudo apt-get install -y python3.13-venv python3.13-dev python3.13-distutils
+    fi
+
+    sudo apt-get install -y build-essential wine
 fi
 
-sudo apt-get install -y build-essential wine
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+    PYTHON_BIN="$(command -v python3.13 || true)"
+fi
 
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3.13)}"
+if [[ -z "${PYTHON_BIN}" && "${SERVICES_ONLY}" -ne 1 ]]; then
+    PYTHON_BIN="$(command -v python3.13 || true)"
+fi
 
 if [[ -z "${PYTHON_BIN}" ]]; then
     echo "python3.13 is not available after installation attempts." >&2
@@ -31,28 +72,31 @@ fi
 
 export PYTHON_BIN
 
-if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-    "$PYTHON_BIN" -m ensurepip --upgrade
+if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
+    if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+        "$PYTHON_BIN" -m ensurepip --upgrade
+    fi
+
+    if ! command -v wget >/dev/null 2>&1; then
+        sudo apt-get install -y wget
+    fi
 fi
 
-if ! command -v wget >/dev/null 2>&1; then
-    sudo apt-get install -y wget
-fi
+if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
+    MT5_INSTALL_DIR="${MT5_INSTALL_DIR:-/opt/mt5}"
+    MT5_DOWNLOAD_URL="${MT5_DOWNLOAD_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
+    MT5_SETUP_PATH="$MT5_INSTALL_DIR/mt5setup.exe"
 
-MT5_INSTALL_DIR="${MT5_INSTALL_DIR:-/opt/mt5}"
-MT5_DOWNLOAD_URL="${MT5_DOWNLOAD_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
-MT5_SETUP_PATH="$MT5_INSTALL_DIR/mt5setup.exe"
-
-echo "Preparing MetaTrader 5 terminal under $MT5_INSTALL_DIR ..."
-if [ ! -f "$MT5_INSTALL_DIR/terminal64.exe" ] && [ ! -f "$MT5_SETUP_PATH" ]; then
-    sudo mkdir -p "$MT5_INSTALL_DIR"
-    tmpfile="$(mktemp)"
-    echo "Downloading MetaTrader 5 setup from $MT5_DOWNLOAD_URL"
-    if wget -O "$tmpfile" "$MT5_DOWNLOAD_URL"; then
-        sudo mv "$tmpfile" "$MT5_SETUP_PATH"
-        sudo chown root:root "$MT5_SETUP_PATH"
-        sudo chmod 755 "$MT5_SETUP_PATH"
-        sudo tee "$MT5_INSTALL_DIR/LOGIN_INSTRUCTIONS.txt" >/dev/null <<'EOF'
+    echo "Preparing MetaTrader 5 terminal under $MT5_INSTALL_DIR ..."
+    if [ ! -f "$MT5_INSTALL_DIR/terminal64.exe" ] && [ ! -f "$MT5_SETUP_PATH" ]; then
+        sudo mkdir -p "$MT5_INSTALL_DIR"
+        tmpfile="$(mktemp)"
+        echo "Downloading MetaTrader 5 setup from $MT5_DOWNLOAD_URL"
+        if wget -O "$tmpfile" "$MT5_DOWNLOAD_URL"; then
+            sudo mv "$tmpfile" "$MT5_SETUP_PATH"
+            sudo chown root:root "$MT5_SETUP_PATH"
+            sudo chmod 755 "$MT5_SETUP_PATH"
+            sudo tee "$MT5_INSTALL_DIR/LOGIN_INSTRUCTIONS.txt" >/dev/null <<'EOF'
 MetaTrader 5 login instructions
 ================================
 
@@ -65,100 +109,292 @@ MetaTrader 5 login instructions
 If you reinstall MetaTrader 5 elsewhere update MT5_INSTALL_DIR before running
 setup_ubuntu.sh.
 EOF
-        echo "MetaTrader 5 setup downloaded to $MT5_SETUP_PATH."
-    else
-        echo "Warning: Failed to download MetaTrader 5 setup." >&2
-        rm -f "$tmpfile"
-    fi
-else
-    echo "MetaTrader 5 already installed at $MT5_INSTALL_DIR"
-fi
-
-if [[ "${SKIP_MT5_LOGIN_PROMPT:-0}" != "1" ]]; then
-    if [ -t 0 ]; then
-        launch_target=""
-        if [ -f "$MT5_INSTALL_DIR/terminal64.exe" ]; then
-            launch_target="$MT5_INSTALL_DIR/terminal64.exe"
-        elif [ -f "$MT5_SETUP_PATH" ]; then
-            launch_target="$MT5_SETUP_PATH"
+            echo "MetaTrader 5 setup downloaded to $MT5_SETUP_PATH."
+        else
+            echo "Warning: Failed to download MetaTrader 5 setup." >&2
+            rm -f "$tmpfile"
         fi
+    else
+        echo "MetaTrader 5 already installed at $MT5_INSTALL_DIR"
+    fi
 
-        if [ -n "$launch_target" ]; then
-            if command -v wine >/dev/null 2>&1; then
-                echo "Launching MetaTrader 5 so you can complete the initial login..."
-                wine "$launch_target" >/dev/null 2>&1 &
-                wine_pid=$!
-                while true; do
-                    if ! read -r -p "Did you log into MetaTrader 5 successfully? Type 'yes' to continue: " response; then
-                        echo "Input closed before confirmation; continuing without verification." >&2
-                        break
+    if [[ "${SKIP_MT5_LOGIN_PROMPT:-0}" != "1" ]]; then
+        if [ -t 0 ]; then
+            launch_target=""
+            if [ -f "$MT5_INSTALL_DIR/terminal64.exe" ]; then
+                launch_target="$MT5_INSTALL_DIR/terminal64.exe"
+            elif [ -f "$MT5_SETUP_PATH" ]; then
+                launch_target="$MT5_SETUP_PATH"
+            fi
+
+            if [ -n "$launch_target" ]; then
+                if command -v wine >/dev/null 2>&1; then
+                    echo "Launching MetaTrader 5 so you can complete the initial login..."
+                    wine "$launch_target" >/dev/null 2>&1 &
+                    wine_pid=$!
+                    while true; do
+                        if ! read -r -p "Did you log into MetaTrader 5 successfully? Type 'yes' to continue: " response; then
+                            echo "Input closed before confirmation; continuing without verification." >&2
+                            break
+                        fi
+                        response="${response,,}"
+                        if [[ "$response" == "yes" ]]; then
+                            break
+                        fi
+                        echo "Please complete the login inside the MetaTrader 5 terminal before proceeding."
+                    done
+                    if command -v wineserver >/dev/null 2>&1; then
+                        wineserver -k >/dev/null 2>&1 || true
                     fi
-                    response="${response,,}"
-                    if [[ "$response" == "yes" ]]; then
-                        break
+                    if kill -0 "$wine_pid" 2>/dev/null; then
+                        wait "$wine_pid" || true
                     fi
-                    echo "Please complete the login inside the MetaTrader 5 terminal before proceeding."
-                done
-                if command -v wineserver >/dev/null 2>&1; then
-                    wineserver -k >/dev/null 2>&1 || true
-                fi
-                if kill -0 "$wine_pid" 2>/dev/null; then
-                    wait "$wine_pid" || true
+                else
+                    echo "Wine is not available; skipping automatic MetaTrader 5 launch." >&2
                 fi
             else
-                echo "Wine is not available; skipping automatic MetaTrader 5 launch." >&2
+                echo "MetaTrader 5 executable not found; skipping automatic login prompt." >&2
             fi
         else
-            echo "MetaTrader 5 executable not found; skipping automatic login prompt." >&2
+            echo "Skipping MetaTrader 5 login prompt because the script is running non-interactively." >&2
         fi
-    else
-        echo "Skipping MetaTrader 5 login prompt because the script is running non-interactively." >&2
+    fi
+
+    # Optionally install CUDA drivers if an NVIDIA GPU is detected or WITH_CUDA=1
+    if command -v nvidia-smi >/dev/null 2>&1 || [[ "${WITH_CUDA:-0}" == "1" ]]; then
+        sudo apt-get install -y nvidia-cuda-toolkit
     fi
 fi
 
-# Optionally install CUDA drivers if an NVIDIA GPU is detected or WITH_CUDA=1
-if command -v nvidia-smi >/dev/null 2>&1 || [[ "${WITH_CUDA:-0}" == "1" ]]; then
-    sudo apt-get install -y nvidia-cuda-toolkit
+provision_mt5bot_service() {
+    local service_name="mt5bot"
+    local service_file="/etc/systemd/system/${service_name}.service"
+    local update_service_name="mt5bot-update"
+    local update_service_file="/etc/systemd/system/${update_service_name}.service"
+    local update_timer_file="/etc/systemd/system/${update_service_name}.timer"
+
+    local env_file="${PROJECT_ROOT}/.env"
+    if [[ ! -e "${env_file}" ]]; then
+        echo "Creating ${env_file} (populate it using .env.template)"
+        if [[ -n "${SUDO_USER:-}" ]]; then
+            sudo -u "${SUDO_USER}" touch "${env_file}"
+        else
+            : > "${env_file}"
+        fi
+    else
+        echo "Found existing ${env_file}"
+    fi
+
+    if [[ "${INSTALL_SKIP_ENV_CHECK:-0}" == "1" ]]; then
+        echo "Skipping environment diagnostics (INSTALL_SKIP_ENV_CHECK=1)"
+    else
+        echo "Running environment diagnostics (utils.environment)"
+        if ! (
+            cd "${PROJECT_ROOT}"
+            "${PYTHON_BIN}" -m utils.environment --no-auto-install --strict
+        ); then
+            echo "Environment diagnostics failed; resolve the issues above and rerun the installer." >&2
+            exit 1
+        fi
+    fi
+
+    if [[ "${RUNTIME_SECRETS_SKIP:-0}" == "1" ]]; then
+        echo "Skipping runtime secret generation (RUNTIME_SECRETS_SKIP=1)"
+    else
+        local secret_env_file="${RUNTIME_SECRETS_ENV_FILE:-${PROJECT_ROOT}/deploy/secrets/runtime.env}"
+        local secret_args=(--env-file "${secret_env_file}")
+
+        if [[ "${RUNTIME_SECRETS_FORCE:-0}" == "1" ]]; then
+            secret_args+=(--force)
+        fi
+        if [[ "${RUNTIME_SECRETS_SKIP_CONFIG:-0}" == "1" ]]; then
+            secret_args+=(--skip-config)
+        fi
+        if [[ "${RUNTIME_SECRETS_SKIP_CONTROLLER:-0}" == "1" ]]; then
+            secret_args+=(--skip-controller)
+        fi
+        if [[ "${RUNTIME_SECRETS_SKIP_ENCRYPTION:-0}" == "1" ]]; then
+            secret_args+=(--skip-encryption)
+        fi
+        if [[ -n "${RUNTIME_SECRETS_ROTATE:-}" ]]; then
+            for key in ${RUNTIME_SECRETS_ROTATE}; do
+                secret_args+=(--rotate "${key}")
+            done
+        fi
+        if [[ "${RUNTIME_SECRETS_PRINT_EXPORTS:-0}" == "1" ]]; then
+            secret_args+=(--print-exports)
+        fi
+
+        echo "Ensuring runtime secrets exist (${secret_env_file})"
+        (
+            cd "${PROJECT_ROOT}"
+            "${PYTHON_BIN}" -m deployment.runtime_secrets "${secret_args[@]}"
+        )
+    fi
+
+    if [[ "${PROM_URLS_SKIP:-0}" == "1" ]]; then
+        echo "Skipping Prometheus URL generation (PROM_URLS_SKIP=1)"
+    else
+        local prom_env_file="${PROM_URLS_ENV_FILE:-${PROJECT_ROOT}/deploy/secrets/runtime.env}"
+        local prom_args=(--env-file "${prom_env_file}")
+
+        if [[ "${PROM_URLS_FORCE:-0}" == "1" ]]; then
+            prom_args+=(--force)
+        fi
+        if [[ "${PROM_URLS_DISABLE_PUSH:-0}" == "1" ]]; then
+            prom_args+=(--disable-push)
+        fi
+        if [[ "${PROM_URLS_DISABLE_QUERY:-0}" == "1" ]]; then
+            prom_args+=(--disable-query)
+        fi
+
+        if [[ -n "${PROM_URLS_PUSH_URL:-}" ]]; then
+            prom_args+=(--push-url "${PROM_URLS_PUSH_URL}")
+        else
+            if [[ -n "${PROM_URLS_PUSH_SCHEME:-}" ]]; then
+                prom_args+=(--push-scheme "${PROM_URLS_PUSH_SCHEME}")
+            fi
+            if [[ -n "${PROM_URLS_PUSH_HOST:-}" ]]; then
+                prom_args+=(--push-host "${PROM_URLS_PUSH_HOST}")
+            fi
+            if [[ -n "${PROM_URLS_PUSH_PORT:-}" ]]; then
+                prom_args+=(--push-port "${PROM_URLS_PUSH_PORT}")
+            fi
+            if [[ -n "${PROM_URLS_PUSH_PATH:-}" ]]; then
+                prom_args+=(--push-path "${PROM_URLS_PUSH_PATH}")
+            fi
+            if [[ -n "${PROM_URLS_PUSH_JOB:-}" ]]; then
+                prom_args+=(--push-job "${PROM_URLS_PUSH_JOB}")
+            fi
+            if [[ -n "${PROM_URLS_PUSH_INSTANCE:-}" ]]; then
+                prom_args+=(--push-instance "${PROM_URLS_PUSH_INSTANCE}")
+            fi
+        fi
+
+        if [[ -n "${PROM_URLS_QUERY_URL:-}" ]]; then
+            prom_args+=(--query-url "${PROM_URLS_QUERY_URL}")
+        else
+            if [[ -n "${PROM_URLS_QUERY_SCHEME:-}" ]]; then
+                prom_args+=(--query-scheme "${PROM_URLS_QUERY_SCHEME}")
+            fi
+            if [[ -n "${PROM_URLS_QUERY_HOST:-}" ]]; then
+                prom_args+=(--query-host "${PROM_URLS_QUERY_HOST}")
+            fi
+            if [[ -n "${PROM_URLS_QUERY_PORT:-}" ]]; then
+                prom_args+=(--query-port "${PROM_URLS_QUERY_PORT}")
+            fi
+            if [[ -n "${PROM_URLS_QUERY_PATH:-}" ]]; then
+                prom_args+=(--query-path "${PROM_URLS_QUERY_PATH}")
+            fi
+        fi
+
+        if [[ "${PROM_URLS_PRINT_EXPORTS:-0}" == "1" ]]; then
+            prom_args+=(--print-exports)
+        fi
+
+        echo "Ensuring Prometheus URLs exist (${prom_env_file})"
+        (
+            cd "${PROJECT_ROOT}"
+            "${PYTHON_BIN}" -m deployment.prometheus_urls "${prom_args[@]}"
+        )
+    fi
+
+    if [[ -n "${INFLUXDB_BOOTSTRAP_URL:-}" ]]; then
+        echo "Bootstrapping InfluxDB metrics bucket"
+        : "${INFLUXDB_BOOTSTRAP_ORG:?Set INFLUXDB_BOOTSTRAP_ORG when INFLUXDB_BOOTSTRAP_URL is provided}"
+        : "${INFLUXDB_BOOTSTRAP_BUCKET:?Set INFLUXDB_BOOTSTRAP_BUCKET when INFLUXDB_BOOTSTRAP_URL is provided}"
+
+        local bootstrap_env_file="${INFLUXDB_BOOTSTRAP_ENV_FILE:-${PROJECT_ROOT}/deploy/secrets/influx.env}"
+        local bootstrap_args=(
+            --url "${INFLUXDB_BOOTSTRAP_URL}"
+            --org "${INFLUXDB_BOOTSTRAP_ORG}"
+            --bucket "${INFLUXDB_BOOTSTRAP_BUCKET}"
+            --env-file "${bootstrap_env_file}"
+        )
+
+        if [[ -n "${INFLUXDB_BOOTSTRAP_USERNAME:-}" ]]; then
+            bootstrap_args+=(--username "${INFLUXDB_BOOTSTRAP_USERNAME}")
+        fi
+        if [[ -n "${INFLUXDB_BOOTSTRAP_PASSWORD:-}" ]]; then
+            bootstrap_args+=(--password "${INFLUXDB_BOOTSTRAP_PASSWORD}")
+        fi
+        if [[ -n "${INFLUXDB_BOOTSTRAP_RETENTION:-}" ]]; then
+            bootstrap_args+=(--retention "${INFLUXDB_BOOTSTRAP_RETENTION}")
+        fi
+        if [[ -n "${INFLUXDB_BOOTSTRAP_TOKEN_DESCRIPTION:-}" ]]; then
+            bootstrap_args+=(--token-description "${INFLUXDB_BOOTSTRAP_TOKEN_DESCRIPTION}")
+        fi
+        if [[ -n "${INFLUXDB_BOOTSTRAP_ADMIN_TOKEN:-}" ]]; then
+            bootstrap_args+=(--admin-token "${INFLUXDB_BOOTSTRAP_ADMIN_TOKEN}")
+        fi
+        if [[ "${INFLUXDB_BOOTSTRAP_STORE_ADMIN:-0}" == "1" ]]; then
+            bootstrap_args+=(--store-admin-secret)
+        fi
+        if [[ "${INFLUXDB_BOOTSTRAP_FORCE:-0}" == "1" ]]; then
+            bootstrap_args+=(--force)
+        fi
+        if [[ "${INFLUXDB_BOOTSTRAP_ROTATE_TOKEN:-0}" == "1" ]]; then
+            bootstrap_args+=(--rotate-token)
+        fi
+
+        (
+            cd "${PROJECT_ROOT}"
+            "${PYTHON_BIN}" -m deployment.influx_bootstrap "${bootstrap_args[@]}"
+        )
+    else
+        echo "Skipping InfluxDB bootstrap (INFLUXDB_BOOTSTRAP_URL not set)"
+    fi
+
+    echo "Installing systemd units..."
+    sudo sed "s|{{REPO_PATH}}|${PROJECT_ROOT}|g" "deploy/${service_name}.service" | sudo tee "${service_file}" >/dev/null
+    sudo sed "s|{{REPO_PATH}}|${PROJECT_ROOT}|g" "deploy/${update_service_name}.service" | sudo tee "${update_service_file}" >/dev/null
+    sudo sed "s|{{REPO_PATH}}|${PROJECT_ROOT}|g" "deploy/${update_service_name}.timer" | sudo tee "${update_timer_file}" >/dev/null
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now "${service_name}"
+    sudo systemctl enable --now "${update_service_name}.timer"
+    sudo systemctl status --no-pager "${service_name}" || true
+    sudo systemctl status --no-pager "${update_service_name}.timer" || true
+}
+
+if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
+    PIP_CMD=("$PYTHON_BIN" -m pip)
+
+    echo "Checking for outdated Python packages before installation..."
+    "${PIP_CMD[@]}" list --outdated || true
+
+    echo "Upgrading pip to the latest version..."
+    "${PIP_CMD[@]}" install --upgrade pip
+
+    if "${PIP_CMD[@]}" show ydata-synthetic >/dev/null 2>&1; then
+        echo "Removing legacy ydata-synthetic package that is incompatible with modern Python versions..."
+        "${PIP_CMD[@]}" uninstall -y ydata-synthetic
+    fi
+
+    echo "Installing the latest compatible versions of project dependencies..."
+    "${PIP_CMD[@]}" install --upgrade --upgrade-strategy eager -r requirements.txt
+
+    echo "Running project package synchronisation script..."
+    ./scripts/update_python_packages.sh
+
+    echo "Outdated packages remaining after upgrade (if any):"
+    "${PIP_CMD[@]}" list --outdated || true
 fi
 
-PIP_CMD=("$PYTHON_BIN" -m pip)
-
-echo "Checking for outdated Python packages before installation..."
-"${PIP_CMD[@]}" list --outdated || true
-
-echo "Upgrading pip to the latest version..."
-"${PIP_CMD[@]}" install --upgrade pip
-
-if "${PIP_CMD[@]}" show ydata-synthetic >/dev/null 2>&1; then
-    echo "Removing legacy ydata-synthetic package that is incompatible with modern Python versions..."
-    "${PIP_CMD[@]}" uninstall -y ydata-synthetic
-fi
-
-echo "Installing the latest compatible versions of project dependencies..."
-"${PIP_CMD[@]}" install --upgrade --upgrade-strategy eager -r requirements.txt
-
-echo "Running project package synchronisation script..."
-./scripts/update_python_packages.sh
-
-echo "Outdated packages remaining after upgrade (if any):"
-"${PIP_CMD[@]}" list --outdated || true
-
-echo "Installing and starting the MT5 bot service..."
-sudo ./scripts/install_service.sh
-sudo systemctl status mt5bot
-
-echo "Enabling automatic MT5 bot updates..."
-if sudo systemctl list-unit-files | grep -q '^mt5bot-update.timer'; then
-    sudo systemctl enable --now mt5bot-update.timer
+if [[ "${SKIP_SERVICE_INSTALL}" -ne 1 ]]; then
+    echo "Installing and starting the MT5 bot service..."
+    provision_mt5bot_service
 else
-    echo "Warning: mt5bot-update.timer is not installed; skipping enable step." >&2
+    echo "Skipping service installation (--skip-service-install)."
 fi
 
 echo "Triggering an immediate MT5 bot update check..."
 "$PYTHON_BIN" -m services.auto_updater --force
 
-echo "Recording environment diagnostics for reproducibility..."
-"$PYTHON_BIN" -m utils.environment --json || true
+if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
+    echo "Recording environment diagnostics for reproducibility..."
+    "$PYTHON_BIN" -m utils.environment --json || true
 
-echo "AutoGluon has been replaced with the built-in tabular trainer."
-echo "Run 'python -m mt5.train_tabular' after setup to train the default model."
+    echo "AutoGluon has been replaced with the built-in tabular trainer."
+    echo "Run 'python -m mt5.train_tabular' after setup to train the default model."
+fi
