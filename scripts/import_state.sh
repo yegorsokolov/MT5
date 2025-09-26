@@ -13,6 +13,13 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 INCLUDES=("data" "config.yaml")
 MAX_SIZE=${MAX_ARCHIVE_SIZE:-1073741824}
 
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3.13)}"
+
+if [[ -z "${PYTHON_BIN}" ]]; then
+  echo "python3.13 is required to import checkpoints" >&2
+  exit 1
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --include)
@@ -71,7 +78,7 @@ done
 
 rm -rf "$tmpdir"
 
-python3 - <<'PY'
+"${PYTHON_BIN}" - <<'PY'
 from state_manager import load_latest_checkpoint
 ckpt = load_latest_checkpoint()
 if ckpt:

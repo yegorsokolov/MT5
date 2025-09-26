@@ -8,6 +8,13 @@ UPDATE_SERVICE_NAME=mt5bot-update
 UPDATE_SERVICE_FILE="/etc/systemd/system/${UPDATE_SERVICE_NAME}.service"
 UPDATE_TIMER_FILE="/etc/systemd/system/${UPDATE_SERVICE_NAME}.timer"
 
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3.13)}"
+
+if [[ -z "${PYTHON_BIN}" ]]; then
+    echo "python3.13 is required to provision services." >&2
+    exit 1
+fi
+
 # Ensure a placeholder environment file exists for operators to populate.
 ENV_FILE="${REPO_DIR}/.env"
 if [[ ! -e "${ENV_FILE}" ]]; then
@@ -28,7 +35,7 @@ else
     echo "Running environment diagnostics (utils.environment)"
     if ! (
         cd "${REPO_DIR}"
-        python3 -m utils.environment --no-auto-install --strict
+        "${PYTHON_BIN}" -m utils.environment --no-auto-install --strict
     ); then
         echo "Environment diagnostics failed; resolve the issues above and rerun the installer." >&2
         exit 1
@@ -66,7 +73,7 @@ else
     echo "Ensuring runtime secrets exist (${SECRET_ENV_FILE})"
     (
         cd "${REPO_DIR}"
-        python3 -m deployment.runtime_secrets "${SECRET_ARGS[@]}"
+        "${PYTHON_BIN}" -m deployment.runtime_secrets "${SECRET_ARGS[@]}"
     )
 fi
 
@@ -134,7 +141,7 @@ else
     echo "Ensuring Prometheus URLs exist (${PROM_ENV_FILE})"
     (
         cd "${REPO_DIR}"
-        python3 -m deployment.prometheus_urls "${PROM_ARGS[@]}"
+        "${PYTHON_BIN}" -m deployment.prometheus_urls "${PROM_ARGS[@]}"
     )
 fi
 
@@ -179,7 +186,7 @@ if [[ -n "${INFLUXDB_BOOTSTRAP_URL:-}" ]]; then
 
     (
         cd "${REPO_DIR}"
-        python3 -m deployment.influx_bootstrap "${BOOTSTRAP_ARGS[@]}"
+        "${PYTHON_BIN}" -m deployment.influx_bootstrap "${BOOTSTRAP_ARGS[@]}"
     )
 else
     echo "Skipping InfluxDB bootstrap (INFLUXDB_BOOTSTRAP_URL not set)"

@@ -9,19 +9,27 @@ cd "${PROJECT_ROOT}"
 sudo apt-get update
 sudo apt-get install -y software-properties-common
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "Installing the distribution provided Python 3 interpreter..."
-    sudo apt-get install -y python3
+if ! command -v python3.13 >/dev/null 2>&1; then
+    echo "Adding deadsnakes PPA for Python 3.13 packages..."
+    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo apt-get update
+    echo "Installing Python 3.13 toolchain..."
+    sudo apt-get install -y python3.13 python3.13-venv python3.13-dev python3.13-distutils
+else
+    echo "Python 3.13 already present. Ensuring development headers and venv module are installed..."
+    sudo apt-get install -y python3.13-venv python3.13-dev python3.13-distutils
 fi
 
-sudo apt-get install -y python3-dev python3-venv python3-distutils build-essential wine
+sudo apt-get install -y build-essential wine
 
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3.13)}"
 
 if [[ -z "${PYTHON_BIN}" ]]; then
-    echo "python3 is not available after installation attempts." >&2
+    echo "python3.13 is not available after installation attempts." >&2
     exit 1
 fi
+
+export PYTHON_BIN
 
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
     "$PYTHON_BIN" -m ensurepip --upgrade
@@ -148,6 +156,9 @@ fi
 
 echo "Triggering an immediate MT5 bot update check..."
 "$PYTHON_BIN" -m services.auto_updater --force
+
+echo "Recording environment diagnostics for reproducibility..."
+"$PYTHON_BIN" -m utils.environment --json || true
 
 echo "AutoGluon has been replaced with the built-in tabular trainer."
 echo "Run 'python -m mt5.train_tabular' after setup to train the default model."
