@@ -297,7 +297,7 @@ fi
 
 PYTHON_BIN="${PYTHON_BIN:-}"
 if [[ -z "${PYTHON_BIN}" ]]; then
-    for candidate in python3 python3.13 python3.12; do
+    for candidate in python3 python3.13 python3.12 python3.11 python3.10; do
         if command -v "$candidate" >/dev/null 2>&1; then
             PYTHON_BIN="$(command -v "$candidate")"
             break
@@ -306,7 +306,7 @@ if [[ -z "${PYTHON_BIN}" ]]; then
 fi
 
 if [[ -z "${PYTHON_BIN}" && "${SERVICES_ONLY}" -ne 1 ]]; then
-    for candidate in python3 python3.13 python3.12; do
+    for candidate in python3 python3.13 python3.12 python3.11 python3.10; do
         if command -v "$candidate" >/dev/null 2>&1; then
             PYTHON_BIN="$(command -v "$candidate")"
             break
@@ -621,6 +621,28 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
 
     echo "Running project package synchronisation script..."
     ./scripts/update_python_packages.sh
+
+    if (( PYTHON_MAJOR == 3 && PYTHON_MINOR <= 12 )); then
+        missing_packages=()
+        if ! "$PYTHON_BIN" -c "import ray" >/dev/null 2>&1; then
+            missing_packages+=("ray[default]")
+        fi
+        if ! "$PYTHON_BIN" -c "import torch_geometric" >/dev/null 2>&1; then
+            missing_packages+=("torch-geometric")
+        fi
+
+        if (( ${#missing_packages[@]} )); then
+            echo "Installing distributed training dependencies: ${missing_packages[*]}"
+            if ! "${PIP_CMD[@]}" install --upgrade "${missing_packages[@]}"; then
+                echo "Warning: Failed to install distributed training dependencies (${missing_packages[*]})." >&2
+                echo "Distributed and graph trainers will fall back to pure-Python implementations." >&2
+            fi
+        else
+            echo "Ray and torch-geometric already available; distributed trainers enabled."
+        fi
+    else
+        echo "Skipping Ray/torch-geometric installation on Python ${PYTHON_MAJOR}.${PYTHON_MINOR}."
+    fi
 
     echo "Outdated packages remaining after upgrade (if any):"
     "${PIP_CMD[@]}" list --outdated || true
