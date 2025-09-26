@@ -8,14 +8,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from diffusers import UNet1DModel, DDPMScheduler
-try:
-    from ydata_synthetic.preprocessing.timeseries import TimeSeriesScalerMinMax
-except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
-    raise ModuleNotFoundError(
-        "ydata-synthetic is required for the diffusion training script."
-        " Install it with `pip install ydata-synthetic` or run the"
-        " setup script using Python < 3.13."
-    ) from exc
+
+from synthetic.scalers import TimeSeriesMinMaxScaler
 
 from utils import load_config
 from data.history import load_history_config

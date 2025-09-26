@@ -4,20 +4,13 @@ import random
 import logging
 import numpy as np
 import pandas as pd
+import torch
 try:
     import tensorflow as tf
 except Exception:  # pragma: no cover - optional dependency
     tf = None
 
-try:
-    from ydata_synthetic.synthesizers.timeseries import TimeGAN
-    from ydata_synthetic.preprocessing.timeseries import TimeSeriesScalerMinMax
-except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
-    raise ModuleNotFoundError(
-        "ydata-synthetic is required for TimeGAN training."
-        " Install it with `pip install ydata-synthetic` or run the"
-        " setup script using Python < 3.13."
-    ) from exc
+from synthetic import TimeGAN, TimeSeriesMinMaxScaler
 
 from utils import load_config
 from data.history import load_history_config
@@ -50,6 +43,9 @@ def main() -> None:
     seed = cfg.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     if tf is not None:
         tf.random.set_seed(seed)
     root = Path(__file__).resolve().parents[1]
