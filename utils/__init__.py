@@ -8,11 +8,46 @@ from contextlib import contextmanager
 from typing import Any, Literal, overload
 import os
 import warnings
-import yaml
-from mt5 import log_utils
-from pydantic import ValidationError, BaseModel
-from filelock import FileLock
-from mt5.config_models import AppConfig, ConfigError
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    yaml = None  # type: ignore
+try:
+    from mt5 import log_utils
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    log_utils = None  # type: ignore
+try:
+    from pydantic import ValidationError, BaseModel
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    class ValidationError(Exception):
+        """Fallback validation error when pydantic is unavailable."""
+
+
+    class BaseModel:  # type: ignore
+        """Minimal stub used when Pydantic is not installed."""
+
+        def __init__(self, *args, **kwargs) -> None:  # pragma: no cover - shim
+            raise RuntimeError(
+                "Pydantic is required for configuration modelling. Install it with 'pip install pydantic'."
+            )
+
+        def model_dump(self, *args, **kwargs):  # pragma: no cover - shim
+            return {}
+try:
+    from filelock import FileLock
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    class FileLock:  # type: ignore
+        """Minimal file lock shim when filelock is unavailable."""
+
+        def __init__(self, *args, **kwargs) -> None:  # pragma: no cover - shim
+            raise RuntimeError(
+                "The 'filelock' package is required for safe config updates. Install it with 'pip install filelock'."
+            )
+try:
+    from mt5.config_models import AppConfig, ConfigError
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    AppConfig = None  # type: ignore
+    ConfigError = RuntimeError  # type: ignore
 from .secret_manager import SecretManager
 
 try:
@@ -153,6 +188,11 @@ def load_config_data(
         :class:`SecretManager`. When ``False`` the original placeholders are
         preserved.
     """
+
+    if yaml is None:
+        raise RuntimeError(
+            "PyYAML is required to load configuration files. Install it with 'pip install pyyaml'."
+        )
 
     cfg_path = _config_path(path)
     with open(cfg_path, "r") as f:

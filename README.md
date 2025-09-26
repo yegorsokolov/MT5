@@ -158,7 +158,33 @@ also be invoked directly:
 python -m utils.environment
 ```
 
-This command raises an error if required packages are missing.
+The checker now attempts to install any missing packages automatically before
+failing. Set `AUTO_INSTALL_DEPENDENCIES=0` if you prefer to handle package
+installation manually. When requirements remain unresolved, the command raises
+an error explaining which dependencies still need to be installed.
+
+To simplify repeated checks, run the bundled helper script:
+
+```bash
+./scripts/manual_preflight.sh
+```
+
+The script executes the same diagnostics and prints a manual pre-run checklist
+so operators can confirm external integrations before launching the bot:
+
+1. Download and register the MetaTrader 5 terminal (or place it in the `mt5/`
+   directory) and ensure the bot can log in with broker credentials.
+2. From a running bot session, ping the MT5 terminal to confirm live
+   connectivity.
+3. Validate Git access (clone/pull/push) using configured SSH keys or tokens.
+4. Confirm that environment variables from `.env` or related files load before
+   starting trading services.
+5. Exercise the oracle scalper pipeline (for example, run `collect()` followed
+   by `assess_probabilities()`) to verify external market data APIs respond.
+6. Start the inference FastAPI service (`services.inference_server`) and call
+   the `/health` endpoint to test REST integrations.
+7. Launch the feature worker FastAPI app and ensure background tasks can
+   subscribe to the message bus or broker queue.
 
 ### CPU Feature Detection and Acceleration
 
