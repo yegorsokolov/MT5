@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}/.."
+
+cd "${PROJECT_ROOT}"
+
 sudo apt-get update
 sudo apt-get install -y python3-dev build-essential wine
 
@@ -57,6 +62,9 @@ python3 -m pip install --upgrade pip
 echo "Installing the latest compatible versions of project dependencies..."
 python3 -m pip install --upgrade --upgrade-strategy eager -r requirements-core.txt
 
+echo "Running project package synchronisation script..."
+./scripts/update_python_packages.sh
+
 echo "Outdated packages remaining after upgrade (if any):"
 python3 -m pip list --outdated || true
 
@@ -65,7 +73,11 @@ sudo ./scripts/install_service.sh
 sudo systemctl status mt5bot
 
 echo "Enabling automatic MT5 bot updates..."
-sudo systemctl enable --now mt5bot-update.timer
+if sudo systemctl list-unit-files | grep -q '^mt5bot-update.timer'; then
+    sudo systemctl enable --now mt5bot-update.timer
+else
+    echo "Warning: mt5bot-update.timer is not installed; skipping enable step." >&2
+fi
 
 echo "Triggering an immediate MT5 bot update check..."
 python -m services.auto_updater --force
