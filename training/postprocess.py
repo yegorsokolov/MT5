@@ -92,8 +92,15 @@ def persist_model(
     *,
     features: Iterable[str],
     root: Path,
+    artifacts: Mapping[str, str] | None = None,
 ) -> str:
     """Persist the trained model and register it in the model store."""
 
     joblib.dump(model, root / "model.joblib")
-    return model_store.save_model(model, cfg, performance, features=list(features))
+    return model_store.save_model(
+        model,
+        cfg,
+        performance,
+        features=list(features),
+        artifacts=dict(artifacts or {}),
+    )

@@ -11,11 +11,14 @@ import random
 import json
 import logging
 import asyncio
+import importlib
 import joblib
 import pandas as pd
 import math
 import weakref
+from collections import Counter
 from dataclasses import dataclass, field
+from typing import Any
 
 try:
     import torch
@@ -32,7 +35,6 @@ else:  # pragma: no cover - torch may be unavailable in some environments
     CrossModalClassifier = None  # type: ignore
 from analysis.purged_cv import PurgedTimeSeriesSplit
 from analysis.data_quality import score_samples as dq_score_samples
-from lightgbm import LGBMClassifier
 from analytics import mlflow_client as mlflow
 from datetime import datetime
 
@@ -60,6 +62,12 @@ except Exception:  # pragma: no cover - optional dependency
 
         def save(self, path):  # pragma: no cover - compatibility shim
             return path
+
+        def state_dict(self):  # type: ignore[override]
+            return {}
+
+        def load_state_dict(self, state):  # type: ignore[override]
+            return None
 from mt5.train_utils import prepare_modal_arrays
 from mt5.log_utils import setup_logging, log_exceptions, LOG_DIR
 import numpy as np
@@ -76,13 +84,61 @@ try:
 except Exception:  # noqa: E722
     shap = None
 
-from utils import ensure_environment, load_config
+try:  # pragma: no cover - optional dependency may be missing in lean environments
+    from lightgbm import LGBMClassifier as _NativeLGBMClassifier
+except Exception:  # noqa: E722
+    _NativeLGBMClassifier = None
+
+_LIGHTGBM_AVAILABLE = _NativeLGBMClassifier is not None
+_LIGHTGBM_FALLBACK_WARNED = False
+
+if _LIGHTGBM_AVAILABLE:
+    LGBMClassifier = _NativeLGBMClassifier
+else:  # pragma: no cover - executed when lightgbm is not installed
+    from sklearn.ensemble import GradientBoostingClassifier
+
+    class LGBMClassifier(GradientBoostingClassifier):  # type: ignore[misc]
+        """GradientBoosting-based fallback when LightGBM is unavailable."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            params = dict(kwargs)
+            self._extra_params: dict[str, Any] = {}
+            for key in list(params.keys()):
+                if key in {"n_estimators", "learning_rate", "max_depth", "random_state"}:
+                    continue
+                self._extra_params[key] = params.pop(key)
+            super().__init__(
+                n_estimators=params.pop("n_estimators", 100),
+                learning_rate=params.pop("learning_rate", 0.1),
+                max_depth=params.pop("max_depth", 3),
+                random_state=params.pop("random_state", None),
+            )
+
+        def get_params(self, deep: bool = True) -> dict[str, Any]:
+            params = super().get_params(deep=deep)
+            params.update(self._extra_params)
+            return params
+
+        def set_params(self, **params: Any):  # type: ignore[override]
+            for key in list(params.keys()):
+                if key not in {"n_estimators", "learning_rate", "max_depth", "random_state"}:
+                    self._extra_params[key] = params.pop(key)
+            return super().set_params(**params)
+
+
+from utils import ensure_environment, load_config, PROJECT_ROOT
+from utils.environment import EnvironmentCheckError
 from training.external_sources import augment_with_external_context
 from training.progress import TrainingProgressTracker
 from features import start_capability_watch
 from mt5.config_models import AppConfig
 from utils.resource_monitor import monitor
-from mt5.state_manager import save_checkpoint, load_latest_checkpoint
+from mt5.state_manager import (
+    save_checkpoint,
+    load_latest_checkpoint,
+    MissingDependencyPlaceholder,
+    describe_checkpoints,
+)
 from models import model_store
 from analysis.prob_calibration import (
     ProbabilityCalibrator,
@@ -233,6 +289,7 @@ class ArtifactLogResult:
     model_version_id: str | None
     pseudo_label_path: Path | None
     queued_count: int
+    artifact_manifest: dict[str, str]
 
 
 def init_logging() -> logging.Logger:
@@ -259,6 +316,17 @@ def _prune_finished_classifiers() -> None:
     _ACTIVE_CLFS = weakref.WeakSet(_ACTIVE_CLFS)
 
 
+def _warn_lightgbm_missing() -> None:
+    """Log a warning the first time the LightGBM fallback is used."""
+
+    global _LIGHTGBM_FALLBACK_WARNED
+    if not _LIGHTGBM_AVAILABLE and not _LIGHTGBM_FALLBACK_WARNED:
+        logger.warning(
+            "lightgbm is not installed; falling back to GradientBoostingClassifier."
+        )
+        _LIGHTGBM_FALLBACK_WARNED = True
+
+
 def _normalise_regime_thresholds(
     thresholds: dict[int | str, float | int] | None,
 ) -> dict[int, float]:
@@ -267,6 +335,27 @@ def _normalise_regime_thresholds(
     if not thresholds:
         return {}
     return {int(k): float(v) for k, v in thresholds.items()}
+
+
+def _prepare_classifier_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Sanitise classifier parameters for the active backend."""
+
+    clean = dict(params)
+    if not _LIGHTGBM_AVAILABLE:
+        _warn_lightgbm_missing()
+        for key in [
+            "n_jobs",
+            "keep_training_booster",
+            "num_leaves",
+            "boosting_type",
+            "metric",
+            "objective",
+            "colsample_bytree",
+            "subsample",
+            "subsample_freq",
+        ]:
+            clean.pop(key, None)
+    return clean
 
 
 def _lgbm_params(cfg: AppConfig) -> dict:
@@ -322,6 +411,193 @@ def _make_sanitizer(cfg: AppConfig | dict | None) -> FeatureSanitizer:
     except Exception:
         method = "median"
     return FeatureSanitizer(fill_method=method, fill_value=value)
+
+
+def _safe_get_params(component: Any) -> dict[str, Any]:
+    getter = getattr(component, "get_params", None)
+    if callable(getter):
+        try:
+            return getter(deep=False)
+        except Exception:
+            return {}
+    return {}
+
+
+def _capture_pipeline_spec(pipe: Pipeline | None) -> dict[str, Any] | None:
+    if pipe is None:
+        return None
+    steps = []
+    for name, component in pipe.named_steps.items():
+        steps.append(
+            {
+                "name": name,
+                "class_path": f"{component.__class__.__module__}.{component.__class__.__name__}",
+                "params": _safe_get_params(component),
+            }
+        )
+    return {"steps": steps}
+
+
+def _instantiate_step_from_spec(step_spec: dict[str, Any]) -> Any | None:
+    class_path = step_spec.get("class_path") or ""
+    params = dict(step_spec.get("params") or {})
+    name = step_spec.get("name", "")
+    if "lightgbm" in class_path.lower() or name == "clf":
+        clf_params = _prepare_classifier_params(params)
+        return LGBMClassifier(**clf_params)
+    if "FeatureScaler" in class_path or name == "scaler":
+        scaler = FeatureScaler()
+        state = step_spec.get("state")
+        if isinstance(state, dict):
+            try:
+                scaler.load_state_dict(state)
+            except Exception:
+                pass
+        return scaler
+    if not class_path:
+        return None
+    module_name, _, class_name = class_path.rpartition(".")
+    try:
+        module = importlib.import_module(module_name)
+        cls = getattr(module, class_name)
+        if isinstance(params, dict):
+            try:
+                return cls(**params)
+            except Exception:
+                return cls()
+        return cls()
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        logger.warning(
+            "Unable to instantiate %s from checkpoint specification: %s",
+            class_path,
+            exc,
+        )
+        return None
+
+
+def _replace_placeholders_in_pipeline(
+    pipe: Pipeline | None, spec: dict[str, Any] | None
+) -> Pipeline | None:
+    if pipe is None or spec is None:
+        return pipe
+    spec_by_name = {s.get("name"): s for s in spec.get("steps", [])}
+    rebuilt: list[tuple[str, Any]] = []
+    for name, component in pipe.steps:
+        replacement = component
+        if isinstance(component, MissingDependencyPlaceholder):
+            step_spec = spec_by_name.get(name, {})
+            candidate = _instantiate_step_from_spec(step_spec)
+            if candidate is not None:
+                replacement = candidate
+            else:
+                logger.warning(
+                    "Checkpoint placeholder for step '%s' could not be materialised; using fresh instance.",
+                    name,
+                )
+                replacement = _instantiate_step_from_spec(
+                    {"name": name, "class_path": step_spec.get("class_path", "")}
+                )
+            if replacement is None:
+                replacement = component
+        rebuilt.append((name, replacement))
+    try:
+        return Pipeline(rebuilt)
+    except Exception:  # pragma: no cover - fallback to original pipeline
+        return pipe
+
+
+def _rehydrate_pipeline_from_state(
+    state: dict[str, Any],
+) -> Pipeline | None:
+    pipe = state.get("model")
+    spec = state.get("model_spec")
+    if isinstance(pipe, MissingDependencyPlaceholder):
+        pipe = None
+    if isinstance(pipe, Pipeline):
+        pipe = _replace_placeholders_in_pipeline(pipe, spec)
+    if pipe is None and spec is not None:
+        steps: list[tuple[str, Any]] = []
+        for step_spec in spec.get("steps", []):
+            component = _instantiate_step_from_spec(step_spec)
+            if component is None:
+                logger.warning(
+                    "Skipping step '%s' from checkpoint specification; dependency unavailable.",
+                    step_spec.get("name", "step"),
+                )
+                continue
+            steps.append((step_spec.get("name", f"step_{len(steps)}"), component))
+        if steps:
+            try:
+                pipe = Pipeline(steps)
+            except Exception as exc:  # pragma: no cover - fallback path
+                logger.warning("Failed to rebuild pipeline from checkpoint spec: %s", exc)
+                pipe = None
+    return pipe if isinstance(pipe, Pipeline) else None
+
+
+def _relative_repo_path(path: Path) -> str:
+    path = path.resolve()
+    try:
+        return path.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _json_default(obj: Any) -> str:
+    return repr(obj)
+
+
+def _summarise_dataset(dataset: DatasetBuildResult) -> dict[str, Any]:
+    summary = {
+        "rows": int(len(dataset.df)),
+        "feature_count": int(len(dataset.features)),
+        "label_columns": list(dataset.label_cols),
+    }
+    if dataset.timestamps.size:
+        summary["time_range"] = {
+            "start": str(dataset.timestamps.min()),
+            "end": str(dataset.timestamps.max()),
+        }
+    if dataset.groups is not None:
+        try:
+            unique_groups = pd.Index(dataset.groups).nunique()
+        except Exception:
+            unique_groups = len(set(dataset.groups))
+        summary["group_count"] = int(unique_groups)
+    if dataset.y.shape[1]:
+        try:
+            counts = Counter(dataset.y.iloc[:, 0])
+            summary["label_distribution"] = {str(k): int(v) for k, v in counts.items()}
+        except Exception:
+            pass
+    try:
+        summary["active_learning"] = dataset.al_queue.stats()
+    except Exception:
+        summary["active_learning"] = {}
+    return summary
+
+
+def _build_online_pipeline(
+    cfg: AppConfig,
+    scaler_path: Path,
+    seed: int,
+    use_focal: bool,
+) -> Pipeline:
+    steps: list[tuple[str, Any]] = [("sanitizer", _make_sanitizer(cfg))]
+    if cfg.get("use_scaler", True):
+        steps.append(("scaler", FeatureScaler.load(scaler_path)))
+    clf_params = {
+        "n_estimators": 200,
+        "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
+        "random_state": seed,
+        "keep_training_booster": True,
+        **_lgbm_params(cfg),
+    }
+    if use_focal:
+        clf_params["objective"] = "None"
+    clf_params = _prepare_classifier_params(clf_params)
+    steps.append(("clf", LGBMClassifier(**clf_params)))
+    return Pipeline(steps)
 
 
 def _subscribe_cpu_updates(cfg: AppConfig) -> None:
@@ -1240,6 +1516,7 @@ def train_models(
             }
             if use_focal:
                 clf_params["objective"] = "None"
+            clf_params = _prepare_classifier_params(clf_params)
             clf = LGBMClassifier(**clf_params)
             tscv_inner = PurgedTimeSeriesSplit(
                 n_splits=cfg.get("n_splits", 5),
@@ -1414,29 +1691,32 @@ def train_models(
     if resume_online:
         batch_size = cfg.get("online_batch_size", 1000)
         ckpt = load_latest_checkpoint(cfg.get("checkpoint_dir"))
+        start_batch = 0
+        pipe: Pipeline | None = None
+        missing_from_ckpt = []
         if ckpt:
             start_batch = ckpt[0] + 1
             state = ckpt[1]
-            pipe: Pipeline = state["model"]
+            missing_from_ckpt = state.get("__missing_dependencies__", [])
+            pipe = _rehydrate_pipeline_from_state(state)
             scaler_state = state.get("scaler_state")
-            if scaler_state and "scaler" in pipe.named_steps:
-                pipe.named_steps["scaler"].load_state_dict(scaler_state)
-        else:
-            start_batch = 0
-            steps: list[tuple[str, object]] = [("sanitizer", _make_sanitizer(cfg))]
-            if cfg.get("use_scaler", True):
-                steps.append(("scaler", FeatureScaler.load(scaler_path)))
-            clf_params = {
-                "n_estimators": 200,
-                "n_jobs": cfg.get("n_jobs") or monitor.capabilities.cpus,
-                "random_state": seed,
-                "keep_training_booster": True,
-                **_lgbm_params(cfg),
-            }
-            if use_focal:
-                clf_params["objective"] = "None"
-            steps.append(("clf", LGBMClassifier(**clf_params)))
-            pipe = Pipeline(steps)
+            if pipe is not None and scaler_state and "scaler" in pipe.named_steps:
+                try:
+                    pipe.named_steps["scaler"].load_state_dict(scaler_state)
+                except Exception:
+                    logger.warning(
+                        "Failed to restore scaler state from checkpoint; continuing with fresh scaler.",
+                    )
+        if pipe is None:
+            pipe = _build_online_pipeline(cfg, scaler_path, seed, use_focal)
+        if missing_from_ckpt:
+            recorder.add_note(
+                "Recovered checkpoint with missing dependencies: "
+                + ", ".join(
+                    f"{item.get('module', 'unknown')}.{item.get('name', 'object')}"
+                    for item in missing_from_ckpt
+                )
+            )
         _register_clf(pipe.named_steps["clf"])
         sanitizer = pipe.named_steps.get("sanitizer")
         if sanitizer is not None and not getattr(sanitizer, "_fitted", False):
@@ -1489,7 +1769,7 @@ def train_models(
             if sw is not None:
                 fit_kwargs["sample_weight"] = sw
             clf.fit(Xb, yb, **fit_kwargs)
-            state = {"model": pipe}
+            state = {"model": pipe, "model_spec": _capture_pipeline_spec(pipe)}
             if "scaler" in pipe.named_steps:
                 state["scaler_state"] = pipe.named_steps["scaler"].state_dict()
             save_checkpoint(state, batch_idx, cfg.get("checkpoint_dir"))
@@ -1555,10 +1835,24 @@ def train_models(
         all_lower = state.get("all_lower", [])
         all_upper = state.get("all_upper", [])
         all_residuals = state.get("all_residuals", {})
-        final_pipe = state.get("model")
+        missing_from_ckpt = state.get("__missing_dependencies__", [])
+        if missing_from_ckpt:
+            recorder.add_note(
+                "Training checkpoint missing dependencies: "
+                + ", ".join(
+                    f"{item.get('module', 'unknown')}.{item.get('name', 'object')}"
+                    for item in missing_from_ckpt
+                )
+            )
+        final_pipe = _rehydrate_pipeline_from_state(state)
         scaler_state = state.get("scaler_state")
         if final_pipe and scaler_state and "scaler" in final_pipe.named_steps:
-            final_pipe.named_steps["scaler"].load_state_dict(scaler_state)
+            try:
+                final_pipe.named_steps["scaler"].load_state_dict(scaler_state)
+            except Exception:
+                logger.warning(
+                    "Failed to restore scaler state from cross-validation checkpoint; using uninitialised scaler."
+                )
         logger.info("Resuming from checkpoint at fold %s", last_fold)
 
     last_split: tuple[np.ndarray, np.ndarray] | None = None
@@ -1867,6 +2161,7 @@ def train_models(
         all_upper.extend(upper)
         state = {
             "model": pipe,
+            "model_spec": _capture_pipeline_spec(pipe),
             "all_preds": all_preds,
             "all_true": all_true,
             "all_probs": all_probs,
@@ -1937,6 +2232,10 @@ def log_artifacts(
     start_time: datetime,
     recorder: RunHistoryRecorder,
     df_unlabeled: pd.DataFrame | None = None,
+    *,
+    environment_report: dict[str, Any] | None = None,
+    dataset_summary: dict[str, Any] | None = None,
+    checkpoint_index: list[dict[str, Any]] | None = None,
 ) -> ArtifactLogResult:
     """Log ancillary artefacts after model training."""
 
@@ -1946,6 +2245,34 @@ def log_artifacts(
     al_threshold = training.al_threshold
     pseudo_path: Path | None = None
     queued_count = 0
+    artifact_manifest: dict[str, str] = {}
+
+    reports_dir = root / "reports"
+    reports_dir.mkdir(exist_ok=True)
+
+    if environment_report:
+        env_path = reports_dir / "environment_diagnostics.json"
+        env_path.write_text(json.dumps(environment_report, indent=2, default=_json_default))
+        recorder.add_artifact(
+            env_path, dest_name="reports/environment_diagnostics.json", optional=True
+        )
+        artifact_manifest["environment_diagnostics"] = _relative_repo_path(env_path)
+
+    if dataset_summary:
+        dataset_path = reports_dir / "dataset_summary.json"
+        dataset_path.write_text(json.dumps(dataset_summary, indent=2, default=_json_default))
+        recorder.add_artifact(
+            dataset_path, dest_name="reports/dataset_summary.json", optional=True
+        )
+        artifact_manifest["dataset_summary"] = _relative_repo_path(dataset_path)
+
+    if checkpoint_index:
+        ckpt_path = reports_dir / "checkpoint_index.json"
+        ckpt_path.write_text(json.dumps(checkpoint_index, indent=2, default=_json_default))
+        recorder.add_artifact(
+            ckpt_path, dest_name="reports/checkpoint_index.json", optional=True
+        )
+        artifact_manifest["checkpoint_index"] = _relative_repo_path(ckpt_path)
 
     if final_pipe is not None and df_unlabeled is not None:
         X_unlabeled = df_unlabeled[features]
@@ -1987,6 +2314,14 @@ def log_artifacts(
             output_dir=root / "data" / "pseudo_labels",
             report_dir=root / "reports" / "pseudo_label",
         )
+        if pseudo_path is not None:
+            artifact_manifest["pseudo_labels"] = _relative_repo_path(pseudo_path)
+            recorder.add_artifact(
+                pseudo_path,
+                dest_name=f"data/pseudo_labels/{pseudo_path.name}",
+                optional=True,
+                copy=False,
+            )
         high_conf_count = int(np.sum(mask_high))
         logger.info(
             "Generated pseudo labels at %s for %s high-confidence samples (thr=%.2f)",
@@ -2062,11 +2397,13 @@ def log_artifacts(
         perf,
         features=features,
         root=root,
+        artifacts=artifact_manifest,
     )
     try:  # pragma: no cover - mlflow optional
         mlflow.log_artifact(str(root / "model.joblib"))
     except Exception:
         pass
+    artifact_manifest["model_joblib"] = _relative_repo_path(root / "model.joblib")
     logger.info("Registered model version %s", version_id)
 
     regimes_path = root / "models" / "regime_models"
@@ -2074,6 +2411,7 @@ def log_artifacts(
     recorder.add_artifact(
         regimes_path, dest_name="models/regime_models", optional=True
     )
+    artifact_manifest["regime_models"] = _relative_repo_path(regimes_path)
     logger.info("Regime-specific models saved to %s", regimes_path)
 
     out = root / "classification_report.json"
@@ -2083,6 +2421,7 @@ def log_artifacts(
     recorder.add_artifact(
         out, dest_name="reports/classification_report.json", optional=True
     )
+    artifact_manifest["classification_report"] = _relative_repo_path(out)
 
     if (
         final_pipe is not None
@@ -2097,6 +2436,7 @@ def log_artifacts(
         )
         for p in paths.values():
             mlflow.log_artifact(str(p))
+            artifact_manifest[f"shap_{p.name}"] = _relative_repo_path(p)
 
     if export and final_pipe is not None:
         from models.export import export_lightgbm
@@ -2119,16 +2459,21 @@ def log_artifacts(
     recorder.add_artifact(
         card_json, dest_name="reports/model_card.json", optional=True
     )
+    artifact_manifest["model_card_md"] = _relative_repo_path(card_md)
+    artifact_manifest["model_card_json"] = _relative_repo_path(card_json)
     mlflow.log_metric(
         "runtime",
         (datetime.now() - start_time).total_seconds(),
     )
+
+    training.model_metadata.setdefault("artifact_manifest", artifact_manifest)
 
     return ArtifactLogResult(
         meta_model_id=meta_version_id,
         model_version_id=version_id,
         pseudo_label_path=pseudo_path,
         queued_count=queued_count,
+        artifact_manifest=artifact_manifest,
     )
 
 
@@ -2142,7 +2487,22 @@ def run_training_pipeline(
     df_unlabeled: pd.DataFrame | None = None,
     risk_target: dict | None = None,
 ) -> float:
-    ensure_environment()
+    environment_report: dict[str, Any] | None = None
+    dataset_summary: dict[str, Any] | None = None
+    try:
+        environment_report = ensure_environment()
+    except EnvironmentCheckError as exc:
+        environment_report = {
+            "error": str(exc),
+            "missing_dependencies": exc.missing_dependencies,
+            "install_attempts": exc.install_attempts,
+            "hardware": exc.hardware,
+            "manual_tests": exc.manual_tests,
+            "automated_checks": exc.check_results,
+        }
+        logger.warning("Environment diagnostics reported issues: %s", exc)
+    if environment_report is None:
+        environment_report = {}
     if cfg is None:
         cfg = load_config()
     elif isinstance(cfg, dict):
@@ -2173,6 +2533,7 @@ def run_training_pipeline(
         LOG_DIR / "trades.csv", dest_name="logs/trades.csv", optional=True
     )
     recorder.start()
+    recorder.update_context(environment=environment_report)
     previous_run_id = os.environ.get("MT5_RUN_ID")
     os.environ["MT5_RUN_ID"] = recorder.run_id
     status = "failed"
@@ -2218,6 +2579,17 @@ def run_training_pipeline(
             mlflow.log_param("model_type", model_type)
         except Exception:
             pass
+        hw = environment_report.get("hardware") if environment_report else None
+        if isinstance(hw, dict):
+            try:  # pragma: no cover - mlflow optional
+                if hw.get("memory_gb") is not None:
+                    mlflow.log_param(
+                        "hardware_memory_gb", round(float(hw["memory_gb"]), 2)
+                    )
+                if hw.get("cpu_cores") is not None:
+                    mlflow.log_param("hardware_cpu_cores", int(hw["cpu_cores"]))
+            except Exception:
+                pass
 
         current_stage = "loading_history"
         history = load_histories(cfg, root, df_override=df_override)
@@ -2268,6 +2640,15 @@ def run_training_pipeline(
             use_pseudo_labels=use_pseudo_labels,
             risk_target=risk_target,
         )
+        dataset_summary = _summarise_dataset(dataset)
+        recorder.update_context(dataset_summary=dataset_summary)
+        try:  # pragma: no cover - mlflow optional
+            mlflow.log_param("dataset_rows", dataset_summary.get("rows"))
+            mlflow.log_param(
+                "dataset_feature_count", dataset_summary.get("feature_count")
+            )
+        except Exception:
+            pass
         tracker.advance("dataset_built")
         current_stage = "training_models"
         training_result = train_models(
@@ -2293,8 +2674,26 @@ def run_training_pipeline(
         base_f1 = training_result.final_score
         result_value = training_result.final_score
         status = "completed"
+        recorder.set_metrics(
+            {
+                "final_score": float(training_result.final_score),
+                "f1_weighted": float(training_result.boot_metrics.get("f1", 0.0)),
+                "precision_weighted": float(
+                    training_result.boot_metrics.get("precision", 0.0)
+                ),
+                "recall_weighted": float(
+                    training_result.boot_metrics.get("recall", 0.0)
+                ),
+            }
+        )
+        training_result.model_metadata.setdefault("environment", environment_report)
+        if dataset_summary is not None:
+            training_result.model_metadata.setdefault(
+                "dataset_summary", dataset_summary
+            )
         if training_result.should_log_artifacts:
-            log_artifacts(
+            checkpoint_index = describe_checkpoints(cfg.get("checkpoint_dir"))
+            artifact_result = log_artifacts(
                 training_result,
                 cfg,
                 root,
@@ -2302,7 +2701,11 @@ def run_training_pipeline(
                 start_time,
                 recorder,
                 df_unlabeled=df_unlabeled,
+                environment_report=environment_report,
+                dataset_summary=dataset_summary,
+                checkpoint_index=checkpoint_index,
             )
+            recorder.update_context(artifact_manifest=artifact_result.artifact_manifest)
         runtime_seconds = (datetime.now() - start_time).total_seconds()
         tracker.complete(runtime_seconds)
         return float(training_result.final_score)

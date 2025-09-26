@@ -86,6 +86,7 @@ def save_model(
     architecture_history: List[Dict] | None = None,
     store_dir: Path | None = None,
     features: List[str] | None = None,
+    artifacts: Dict[str, str] | None = None,
 ) -> str:
     """Persist a model artifact with associated metadata.
 
@@ -145,6 +146,8 @@ def save_model(
         metadata["architecture_history"] = architecture_history
     if features is not None:
         metadata["features"] = features
+    if artifacts:
+        metadata["artifacts"] = dict(artifacts)
     with open(version_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
     return version_id

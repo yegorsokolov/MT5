@@ -26,7 +26,7 @@ testcontainers[kafka,redis]
 filelock
 fastapi
 uvicorn
-uvloop; platform_system != "Windows"
+uvloop; platform_system != "Windows" and python_version < "3.13"
 mlflow
 shap  # optional, used to compute SHAP feature importance
 statsmodels

@@ -46,22 +46,38 @@ The solution is split into two components:
 
 ### Python runtime compatibility
 
-The project now follows the latest stable CPython release provided by your
-operating system instead of pinning to a specific minor version. The setup
-script installs the `python3` meta-package together with the matching development
-headers and virtual-environment tooling, then lets `pip` resolve the most recent
-compatible wheels. NumPy remains constrained to `<2.0.0` in
-`requirements.txt` to keep Great Expectations and other scientific packages
-happy while upstreams finish their Python 3.13 migration.
+The toolkit now targets CPython 3.10 through 3.13. Optional integrations such as
+LightGBM and uvloop degrade gracefully: when wheels are not available the
+training pipeline switches to a scikit-learn gradient boosting fallback and
+records the missing modules inside the checkpoint metadata for later recovery.
+The dependency list automatically skips uvloop on Python 3.13 where upstream
+support is still stabilising.
 
-* Linux: run `./scripts/setup_ubuntu.sh` to install the distro-provided `python3`
+Run `python -m utils.environment --json` to confirm both interpreter and
+hardware meet the minimum requirements. The training routine executes the same
+diagnostic up front, persists the hardware snapshot alongside every model run
+and logs it to MLflow so you can audit the environment that produced each
+artifact.
+
+* Linux: run `./scripts/setup_ubuntu.sh` to install the distribution `python3`
   interpreter, ensure `pip` is available and upgrade dependencies.
-* Windows/macOS: install the latest Python 3 release from python.org, ensure it
-  appears first on your `PATH`, then create a virtual environment (`python -m
-  venv .venv`) before installing requirements.
+* Windows/macOS: install Python 3.13 (or the latest supported release) from
+  python.org, ensure it appears first on your `PATH`, then create a virtual
+  environment (`python -m venv .venv`) before installing requirements.
 
-You can re-run `python -m utils.environment` at any time; the diagnostic exits
-early if the interpreter drifts outside the supported 3.10+ window.
+### Resilient checkpoints and artifact tracking
+
+Checkpoints now load even when original dependencies are missing. Encrypted
+checkpoint payloads include a lightweight pipeline specification so the loader
+can rebuild missing steps with compatible fallbacks. Any unresolved modules are
+captured in the run history and surfaced in the returned state so you can act on
+them during migration.
+
+Every successful training run emits an expanded artifact manifest containing the
+environment report, dataset summary, active learning queue diagnostics,
+checkpoint index and generated pseudo labels. The manifest is persisted both in
+the run history and in the model store metadata, making it easy to trace how a
+model was produced and to reproduce its exact context.
 
 ### MQL5 connectivity fallback
 
