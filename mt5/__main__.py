@@ -27,11 +27,14 @@ behaviour and argument handling of the underlying modules remains unchanged.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import os
+import pkgutil
 import runpy
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 try:
@@ -44,6 +47,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency missing in tests
     _load_config = None
 
+import mt5 as _mt5_package
+
 
 @dataclass(frozen=True)
 class EntryPoint:
@@ -53,7 +58,7 @@ class EntryPoint:
     description: str
 
 
-ENTRY_POINTS: dict[str, EntryPoint] = {
+BASE_ENTRY_POINTS: dict[str, EntryPoint] = {
     "pipeline": EntryPoint(
         module="mt5.pipeline_runner",
         description="Full pipeline: training → backtest → strategy → realtime",
@@ -73,7 +78,7 @@ ENTRY_POINTS: dict[str, EntryPoint] = {
 }
 
 
-ALIASES: dict[str, str] = {
+BASE_ALIASES: dict[str, str] = {
     "auto": "pipeline",
     "orchestrate": "pipeline",
     "full": "pipeline",
@@ -89,6 +94,81 @@ ALIASES: dict[str, str] = {
     "live_train": "realtime",
     "live-train": "realtime",
 }
+
+
+def _discover_entry_points(existing: Mapping[str, EntryPoint]) -> dict[str, EntryPoint]:
+    """Discover script-style modules that expose a ``main`` entry point."""
+
+    discovered: dict[str, EntryPoint] = {}
+    package_paths = list(getattr(_mt5_package, "__path__", []))
+    if not package_paths:
+        return discovered
+
+    existing_modules = {entry.module for entry in existing.values()}
+
+    for module_info in pkgutil.iter_modules(package_paths):
+        if module_info.ispkg:
+            continue
+
+        module_name = module_info.name
+        if module_name.startswith("_"):
+            continue
+
+        full_module = f"{_mt5_package.__name__}.{module_name}"
+        if full_module in existing_modules:
+            continue
+
+        spec = importlib.util.find_spec(full_module)
+        origin = getattr(spec, "origin", None)
+        if spec is None or origin is None or not origin.endswith(".py"):
+            continue
+
+        try:
+            source = Path(origin).read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+        if (
+            'if __name__ == "__main__"' not in source
+            and "if __name__ == '__main__'" not in source
+        ):
+            continue
+
+        try:
+            module_ast = ast.parse(source, filename=origin)
+        except SyntaxError:
+            continue
+
+        has_main = any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "main"
+            for node in module_ast.body
+        )
+        if not has_main:
+            continue
+
+        docstring = ast.get_docstring(module_ast) or ""
+        description = docstring.strip().splitlines()[0].strip() if docstring else "Script entry point"
+        discovered[module_name] = EntryPoint(module=full_module, description=description)
+
+    return discovered
+
+
+def _build_aliases(entries: Mapping[str, EntryPoint]) -> dict[str, str]:
+    alias_map = dict(BASE_ALIASES)
+    for name in entries:
+        if "_" in name:
+            alias_map.setdefault(name.replace("_", "-"), name)
+        alias_map.setdefault(name.replace("-", "_"), name)
+
+    alias_map.setdefault("pipeline_runner", "pipeline")
+    alias_map.setdefault("pipeline-runner", "pipeline")
+    return alias_map
+
+
+ENTRY_POINTS: dict[str, EntryPoint] = dict(BASE_ENTRY_POINTS)
+ENTRY_POINTS.update(_discover_entry_points(ENTRY_POINTS))
+ALIASES: dict[str, str] = _build_aliases(ENTRY_POINTS)
 
 
 def _normalise_mode(value: str | None) -> str | None:

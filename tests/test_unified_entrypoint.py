@@ -22,12 +22,12 @@ def _run(argv: list[str]) -> int:
     return mt5_main.main(argv)
 
 
-def test_default_mode_is_train(monkeypatch, capsys):
+def test_default_mode_is_pipeline(monkeypatch, capsys):
     _clear_mode_env(monkeypatch)
     exit_code = _run(["--dry-run"])
     assert exit_code == 0
     out = capsys.readouterr().out.strip().splitlines()
-    assert out[-1] == "train: mt5.train"
+    assert out[-1] == "pipeline: mt5.pipeline_runner"
 
 
 def test_environment_override_with_alias(monkeypatch, capsys):
@@ -38,12 +38,12 @@ def test_environment_override_with_alias(monkeypatch, capsys):
     assert out[-1] == "realtime: mt5.realtime_train"
 
 
-def test_invalid_environment_falls_back_to_train(monkeypatch, capsys):
+def test_invalid_environment_falls_back_to_pipeline(monkeypatch, capsys):
     monkeypatch.setenv("MT5_MODE", "unknown")
     exit_code = _run(["--dry-run"])
     assert exit_code == 0
     out = capsys.readouterr().out.strip().splitlines()
-    assert out[-1] == "train: mt5.train"
+    assert out[-1] == "pipeline: mt5.pipeline_runner"
 
 
 def test_config_override(monkeypatch, capsys):
@@ -85,11 +85,11 @@ def test_list_modes(capsys):
         name.strip(): rest.strip()
         for name, rest in (line.split("->", maxsplit=1) for line in out)
     }
-    assert parsed == {
-        "backtest": "mt5.backtest (Historical backtesting suite)",
-        "realtime": "mt5.realtime_train (Realtime / live training service)",
-        "train": "mt5.train (Classic tabular training pipeline)",
+    expected = {
+        name: f"{entry.module} ({entry.description})"
+        for name, entry in sorted(mt5_main.ENTRY_POINTS.items())
     }
+    assert parsed == expected
 
 
 def test_unknown_mode_errors(monkeypatch, capsys):
