@@ -20,6 +20,7 @@ def self_review_strategy(
     log_dir: Path,
     config: Any | None = None,
     metrics_path: Path | None = None,
+    archive: "StrategyArchive | None" = None,
 ) -> Dict[str, str]:
     """Refine a strategy via two self-review iterations.
 
@@ -55,6 +56,19 @@ def self_review_strategy(
 
     with (log_dir / "final.json").open("w", encoding="utf-8") as f:
         json.dump(current, f)
+
+    if archive is not None:
+        metadata = {
+            "source": "self_review",
+            "iterations": 2,
+            "log_dir": log_dir.as_posix(),
+        }
+        try:
+            archive.record(current, metadata=metadata)
+        except Exception:  # pragma: no cover - archival best effort
+            logging.getLogger(__name__).warning(
+                "Failed to archive self-reviewed strategy", exc_info=True
+            )
 
     try:
         initial_len = len(json.dumps(strategy))
