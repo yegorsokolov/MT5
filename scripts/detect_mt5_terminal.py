@@ -90,6 +90,15 @@ def _discover_terminal() -> Optional[Path]:
     return None
 
 
+def _fallback_terminal_dir() -> Path:
+    """Return the fallback directory used when auto-discovery fails."""
+
+    fallback = os.getenv(ENV_KEY)
+    if fallback:
+        return Path(fallback).expanduser()
+    return Path("/opt/mt5")
+
+
 def _format_env_line(value: str) -> str:
     return f"{ENV_KEY}={value}"
 
@@ -137,9 +146,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = _parse_args(argv or sys.argv[1:])
 
     terminal_dir = _discover_terminal()
+    used_fallback = False
     if terminal_dir is None:
-        print("Could not locate a MetaTrader 5 terminal. Set MT5_TERMINAL_PATH manually.")
-        return 1
+        terminal_dir = _fallback_terminal_dir()
+        used_fallback = True
 
     resolved_value = str(terminal_dir)
     if args.print_only:
@@ -153,7 +163,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Failed to update {env_file}: {exc}")
         return 1
 
-    print(f"Detected MetaTrader 5 terminal at {resolved_value}")
+    if used_fallback:
+        print(
+            "Could not auto-detect a MetaTrader 5 terminal. "
+            f"Defaulting to {resolved_value}. Update {ENV_KEY} if this path is incorrect."
+        )
+    else:
+        print(f"Detected MetaTrader 5 terminal at {resolved_value}")
     print(f"Updated {env_file} with {ENV_KEY}.")
     return 0
 

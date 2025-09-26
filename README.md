@@ -241,14 +241,16 @@ FastAPI services, flagging any remaining manual steps in the summary output.
 1. Install the MetaTrader 5 terminal from your broker or the official MetaQuotes
    download and log in with your live or demo credentials. Keep the terminal
    running so the Python bridge can piggyback on the authenticated session.
-2. Make the terminal discoverable by Python. Run
-   `python scripts/detect_mt5_terminal.py` to auto-populate `.env` with the
-   detected installation directory (falling back to `${MT5_TERMINAL_PATH:-/opt/mt5}`)
-   or place the terminal under `mt5/` inside this repository so the environment
-   check can find it automatically. You can also set the
-   `MT5_TERMINAL_PATH` environment variable manually if you prefer.
-3. Run `python scripts/setup_terminal.py --install-heartbeat` to verify the
-   MetaTrader5 Python module can attach to the terminal. Provide
+2. Run `./scripts/setup_ubuntu.sh` (or rerun it with `--services-only`) after
+   installing the terminal. The installer now launches
+   `scripts/detect_mt5_terminal.py` automatically to populate `.env` with the
+   discovered installation path, falling back to `${MT5_TERMINAL_PATH:-/opt/mt5}`
+   when discovery fails, and reuses the running terminal session to install the
+   ConnectionHeartbeat script. On non-Linux platforms you can still execute
+   `python scripts/detect_mt5_terminal.py` manually or set `MT5_TERMINAL_PATH`
+   yourself.
+3. The installer also invokes `python scripts/setup_terminal.py --install-heartbeat`
+   to verify the MetaTrader5 Python module can attach to the terminal. Provide
    `--login/--password/--server` if you want the helper to perform a headless
    login; otherwise it reuses the running terminal session. On success the
    script prints the connected account, balance and broker name.

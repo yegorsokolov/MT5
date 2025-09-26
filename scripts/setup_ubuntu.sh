@@ -376,6 +376,11 @@ provision_mt5bot_service() {
         echo "Found existing ${env_file}"
     fi
 
+    echo "Detecting MetaTrader 5 terminal path for service configuration ..."
+    if ! "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/detect_mt5_terminal.py"; then
+        echo "Warning: Unable to determine the MetaTrader 5 terminal path automatically." >&2
+    fi
+
     if [[ "${INSTALL_SKIP_ENV_CHECK:-0}" == "1" ]]; then
         echo "Skipping environment diagnostics (INSTALL_SKIP_ENV_CHECK=1)"
     else
@@ -387,6 +392,11 @@ provision_mt5bot_service() {
             echo "Environment diagnostics failed; resolve the issues above and rerun the installer." >&2
             exit 1
         fi
+    fi
+
+    echo "Verifying MetaTrader 5 connectivity (reusing any running terminal session) ..."
+    if ! "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/setup_terminal.py" --install-heartbeat; then
+        echo "Warning: MetaTrader 5 connectivity check failed. Continue after ensuring the terminal is running and logged in." >&2
     fi
 
     if [[ "${RUNTIME_SECRETS_SKIP:-0}" == "1" ]]; then
