@@ -4,6 +4,55 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}/.."
 
+trim_whitespace() {
+    local value="$1"
+    value="${value#${value%%[![:space:]]*}}"
+    value="${value%${value##*[![:space:]]}}"
+    printf '%s' "${value}"
+}
+
+load_project_env() {
+    local env_file="$1"
+    local line key value
+
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%%$'\r'}"
+        line="$(trim_whitespace "${line}")"
+        if [[ -z "${line}" || "${line}" == \#* ]]; then
+            continue
+        fi
+        if [[ "${line}" =~ ^export[[:space:]]+ ]]; then
+            line="${line#export}"
+            line="$(trim_whitespace "${line}")"
+        fi
+        if [[ "${line}" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            value="$(trim_whitespace "${value}")"
+            if [[ ${#value} -ge 2 && "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
+                value="${value:1:-1}"
+            elif [[ ${#value} -ge 2 && "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+                value="${value:1:-1}"
+            fi
+            export "${key}=${value}"
+        else
+            echo "Skipping invalid line in ${env_file}: ${line}" >&2
+        fi
+    done <"${env_file}"
+}
+
+PROJECT_ENV_FILE=""
+if env_path="$(${SCRIPT_DIR}/detect_env_file.sh "${PROJECT_ROOT}")"; then
+    PROJECT_ENV_FILE="${env_path}"
+    export PROJECT_ENV_FILE
+    if [[ -f "${PROJECT_ENV_FILE}" ]]; then
+        echo "Loading environment overrides from ${PROJECT_ENV_FILE}"
+        load_project_env "${PROJECT_ENV_FILE}"
+    fi
+else
+    echo "Warning: Unable to locate a .env file; continuing without local overrides." >&2
+fi
+
 SERVICES_ONLY=0
 SKIP_SERVICE_INSTALL=0
 
@@ -364,16 +413,11 @@ provision_mt5bot_service() {
     local update_service_file="/etc/systemd/system/${update_service_name}.service"
     local update_timer_file="/etc/systemd/system/${update_service_name}.timer"
 
-    local env_file="${PROJECT_ROOT}/.env"
-    if [[ ! -e "${env_file}" ]]; then
-        echo "Creating ${env_file} (populate it using .env.template)"
-        if [[ -n "${SUDO_USER:-}" ]]; then
-            sudo -u "${SUDO_USER}" touch "${env_file}"
-        else
-            : > "${env_file}"
-        fi
+    local env_file="${PROJECT_ENV_FILE:-${PROJECT_ROOT}/.env}"
+    if [[ -n "${env_file}" && -f "${env_file}" ]]; then
+        echo "Using environment file ${env_file}"
     else
-        echo "Found existing ${env_file}"
+        echo "Warning: Environment file not found; expected at ${env_file}." >&2
     fi
 
     echo "Detecting MetaTrader 5 terminal path for service configuration ..."
