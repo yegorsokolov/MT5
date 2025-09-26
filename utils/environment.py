@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import shutil
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -33,6 +34,23 @@ try:
     from mt5.config_models import AppConfig
 except Exception:  # pragma: no cover - handled later
     AppConfig = None  # type: ignore
+
+try:
+    from utils.mt5_bridge import (
+        MetaTraderImportError,
+        describe_backend as describe_mt5_backend,
+        load_mt5_module,
+    )
+except Exception:  # pragma: no cover - bridge helper optional in minimal builds
+    MetaTraderImportError = RuntimeError  # type: ignore
+
+    def describe_mt5_backend() -> dict[str, Any]:  # type: ignore
+        return {}
+
+    def load_mt5_module():  # type: ignore
+        import MetaTrader5 as _mt5  # type: ignore
+
+        return _mt5
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQ_FILE = PROJECT_ROOT / "requirements.txt"
@@ -178,6 +196,14 @@ def _collect_missing_dependencies() -> list[str]:
     return sorted(set(missing))
 
 
+def _mt5_backend_suffix() -> str:
+    info = describe_mt5_backend()
+    backend = info.get("backend") if isinstance(info, dict) else None
+    if backend:
+        return f" (backend: {backend})"
+    return ""
+
+
 def _attempt_dependency_install(packages: Iterable[str]) -> dict[str, str]:
     """Attempt to install the provided packages using ``pip``.
 
@@ -287,9 +313,9 @@ def _check_mt5_login() -> dict[str, Any]:
         }
 
     try:
-        import MetaTrader5 as mt5  # type: ignore
+        mt5 = load_mt5_module()
         from brokers import mt5_direct
-    except Exception as exc:  # pragma: no cover - optional dependency
+    except (MetaTraderImportError, ImportError, RuntimeError) as exc:  # pragma: no cover
         return {
             "name": "MetaTrader 5 login",
             "status": "failed",
@@ -311,7 +337,7 @@ def _check_mt5_login() -> dict[str, Any]:
         return {
             "name": "MetaTrader 5 login",
             "status": "passed",
-            "detail": "MetaTrader 5 terminal login detected.",
+            "detail": f"MetaTrader 5 terminal login detected{_mt5_backend_suffix()}.",
             "followup": None,
         }
     return {
@@ -329,9 +355,9 @@ def _check_mt5_ping() -> dict[str, Any]:
         "From the running bot, execute a simple ping to the MT5 terminal to confirm connectivity."
     )
     try:
-        import MetaTrader5 as mt5  # type: ignore
+        mt5 = load_mt5_module()
         from brokers import mt5_direct
-    except Exception as exc:  # pragma: no cover - optional dependency
+    except (MetaTraderImportError, ImportError, RuntimeError) as exc:  # pragma: no cover
         return {
             "name": "MetaTrader 5 connectivity",
             "status": "failed",
@@ -383,7 +409,7 @@ def _check_mt5_ping() -> dict[str, Any]:
         return {
             "name": "MetaTrader 5 connectivity",
             "status": "passed",
-            "detail": f"Terminal responded successfully{version}.",
+            "detail": f"Terminal responded successfully{version}{_mt5_backend_suffix()}.",
             "followup": None,
         }
     return {
@@ -391,6 +417,168 @@ def _check_mt5_ping() -> dict[str, Any]:
         "status": "failed",
         "detail": "Terminal reported a disconnected state.",
         "followup": instruction,
+    }
+
+
+def _normalize_windows_path(path: str) -> str:
+    """Return ``path`` without surrounding whitespace or quotes."""
+
+    cleaned = path.strip()
+    if cleaned.startswith("\"") and cleaned.endswith("\""):
+        return cleaned[1:-1]
+    if cleaned.startswith("'") and cleaned.endswith("'"):
+        return cleaned[1:-1]
+    return cleaned
+
+
+def _read_login_instructions() -> list[str]:
+    instructions = PROJECT_ROOT / "LOGIN_INSTRUCTIONS_WINE.txt"
+    if not instructions.exists():
+        return []
+    try:
+        return instructions.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:  # pragma: no cover - defensive best effort
+        return []
+
+
+def _discover_wine_python_path() -> tuple[str | None, str | None]:
+    """Return the configured Wine-hosted Python interpreter if available."""
+
+    for key in ("WINE_PYTHON", "WIN_PYTHON", "WINE_PYTHON_PATH"):
+        value = os.getenv(key)
+        if value:
+            return _normalize_windows_path(value), f"environment variable {key}"
+
+    for line in _read_login_instructions():
+        if line.lower().startswith("windows python"):
+            _, _, remainder = line.partition(":")
+            candidate = _normalize_windows_path(remainder)
+            if candidate and "<not detected>" not in candidate.lower():
+                return candidate, "LOGIN_INSTRUCTIONS_WINE.txt"
+
+    return None, None
+
+
+def _discover_wine_prefix() -> tuple[str | None, str | None]:
+    """Return the Wine prefix used for the MetaTrader bridge."""
+
+    for key in ("WIN_PY_WINE_PREFIX", "WINE_PY_WINE_PREFIX", "MT5_WINE_PREFIX", "WINEPREFIX"):
+        value = os.getenv(key)
+        if value:
+            return value, f"environment variable {key}"
+
+    for line in _read_login_instructions():
+        if line.lower().startswith("terminal prefix"):
+            _, _, remainder = line.partition(":")
+            candidate = remainder.strip()
+            if candidate and "<not detected>" not in candidate.lower():
+                return candidate, "LOGIN_INSTRUCTIONS_WINE.txt"
+
+    return None, None
+
+
+def _check_wine_bridge() -> dict[str, Any]:
+    """Exercise the Wine-hosted MetaTrader bridge via Windows Python."""
+
+    name = "Wine MetaTrader bridge"
+    instruction = (
+        "Re-run scripts/setup_ubuntu.sh to install Windows Python under Wine, "
+        "export WINE_PYTHON (or regenerate LOGIN_INSTRUCTIONS_WINE.txt) and keep the terminal logged in."
+    )
+
+    if sys.platform.startswith("win"):
+        return {
+            "name": name,
+            "status": "skipped",
+            "detail": "Native Windows runtime detected; Wine bridge validation not required.",
+            "followup": None,
+        }
+
+    wine_executable = shutil.which("wine")
+    if wine_executable is None:
+        detail = "wine executable not found in PATH. Install Wine to enable the MetaTrader bridge."
+        return {
+            "name": name,
+            "status": "failed" if sys.platform.startswith("linux") else "skipped",
+            "detail": detail,
+            "followup": instruction if sys.platform.startswith("linux") else None,
+        }
+
+    try:
+        importlib.import_module("pymt5linux")
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": f"pymt5linux module unavailable: {exc}",
+            "followup": instruction,
+        }
+
+    wine_python, source = _discover_wine_python_path()
+    if not wine_python:
+        detail = "Windows Python path for Wine bridge not configured."
+        if source:
+            detail += f" (Checked {source}.)"
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": detail,
+            "followup": instruction,
+        }
+
+    prefix, prefix_source = _discover_wine_prefix()
+    env = os.environ.copy()
+    if prefix:
+        env["WINEPREFIX"] = prefix
+
+    try:
+        completed = subprocess.run(
+            [wine_executable, wine_python, "-m", "MetaTrader5", "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=45,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": "Timed out while invoking MetaTrader5 via Wine. Ensure the terminal is running and responsive.",
+            "followup": instruction,
+        }
+    except FileNotFoundError:
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": f"Windows Python executable not accessible at {wine_python}.",
+            "followup": instruction,
+        }
+
+    if completed.returncode != 0:
+        diagnostic = completed.stderr.strip() or completed.stdout.strip()
+        if not diagnostic:
+            diagnostic = f"wine exited with status {completed.returncode}"
+        if prefix and prefix_source:
+            diagnostic += f" (WINEPREFIX from {prefix_source}: {prefix})"
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": diagnostic.splitlines()[0],
+            "followup": instruction,
+        }
+
+    output = completed.stdout.strip() or completed.stderr.strip()
+    detail = output.splitlines()[0] if output else "MetaTrader5 responded via Wine."
+    if prefix and prefix_source:
+        detail += f" (Using WINEPREFIX from {prefix_source}.)"
+    if source:
+        detail += f" Windows Python discovered via {source}."
+    return {
+        "name": name,
+        "status": "passed",
+        "detail": detail,
+        "followup": None,
     }
 
 
@@ -870,6 +1058,7 @@ _AUTOMATED_CHECKS: tuple[Callable[[], dict[str, Any]], ...] = (
     _check_model_configuration,
     _check_mt5_login,
     _check_mt5_ping,
+    _check_wine_bridge,
     _check_git_remote,
     _check_env_loaded,
     _check_oracle_pipeline,

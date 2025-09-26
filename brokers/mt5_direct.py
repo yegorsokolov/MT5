@@ -2,7 +2,12 @@ import datetime as dt
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import MetaTrader5 as _mt5
+from utils.mt5_bridge import MetaTraderImportError, describe_backend, load_mt5_module
+
+try:
+    _mt5 = load_mt5_module()
+except MetaTraderImportError as exc:  # pragma: no cover - surfaced during runtime checks
+    raise ImportError(str(exc)) from exc
 try:  # allow import to be stubbed in tests
     from utils.data_backend import get_dataframe_module
 except Exception:  # pragma: no cover - fallback for tests
@@ -17,6 +22,10 @@ IS_CUDF = pd.__name__ == "cudf"
 
 
 logger = logging.getLogger(__name__)
+
+_BRIDGE_DETAILS = describe_backend()
+if _BRIDGE_DETAILS:
+    logger.debug("MetaTrader5 backend details: %s", _BRIDGE_DETAILS)
 
 from analysis.broker_tca import broker_tca
 
