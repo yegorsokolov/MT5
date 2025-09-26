@@ -167,11 +167,37 @@ def test_check_dependencies_skips_comments_and_normalises(tmp_path, monkeypatch)
 
     requested: list[str] = []
 
-    def _fake_find_loader(name: str):
+    def _fake_distribution(name: str):
         requested.append(name)
+        if name == "rich":
+            raise environment.metadata.PackageNotFoundError  # pragma: no cover
         return object()
 
-    monkeypatch.setattr(environment.pkgutil, "find_loader", _fake_find_loader)
+    monkeypatch.setattr(environment.metadata, "distribution", _fake_distribution)
+
+    assert environment._check_dependencies() == ["rich"]
+    assert requested == ["requests", "uvicorn", "some-package", "rich"]
+
+
+def test_check_dependencies_falls_back_to_module_search(tmp_path, monkeypatch):
+    req_file = tmp_path / "requirements-core.txt"
+    req_file.write_text("example-pkg\n")
+
+    monkeypatch.setattr(environment, "REQ_FILE", req_file)
+
+    monkeypatch.setattr(
+        environment.metadata,
+        "distribution",
+        lambda name: (_ for _ in ()).throw(environment.metadata.PackageNotFoundError()),
+    )
+
+    calls: list[str] = []
+
+    def _fake_find_spec(name: str):
+        calls.append(name)
+        return object()
+
+    monkeypatch.setattr(environment, "find_spec", _fake_find_spec)
 
     assert environment._check_dependencies() == []
-    assert requested == ["requests", "uvicorn", "some_package", "rich"]
+    assert calls == ["example_pkg"]

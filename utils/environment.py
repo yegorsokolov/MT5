@@ -7,6 +7,7 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
+from importlib import metadata
 from importlib.util import find_spec
 
 try:
@@ -88,6 +89,22 @@ def _parse_requirement_line(line: str) -> tuple[str, str] | None:
     return base_name, module_name
 
 
+def _distribution_installed(distribution_name: str, module_name: str) -> bool:
+    """Return ``True`` when a package appears to be installed."""
+
+    try:
+        metadata.distribution(distribution_name)
+    except metadata.PackageNotFoundError:
+        pass
+    except Exception:  # pragma: no cover - metadata lookup should not fail
+        # Fall back to module level introspection in unexpected scenarios.
+        return find_spec(module_name) is not None
+    else:
+        return True
+
+    return find_spec(module_name) is not None
+
+
 def _check_dependencies() -> list[str]:
     missing: list[str] = []
     if not REQ_FILE.exists():
@@ -98,7 +115,7 @@ def _check_dependencies() -> list[str]:
         if parsed is None:
             continue
         pkg_name, module_name = parsed
-        if find_spec(module_name) is None:
+        if not _distribution_installed(pkg_name, module_name):
             missing.append(pkg_name)
     return missing
 
