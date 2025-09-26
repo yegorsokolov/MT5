@@ -52,7 +52,11 @@ available the training pipeline switches to a scikit-learn gradient boosting
 fallback and records the missing modules inside the checkpoint metadata for
 later recovery. Components that previously relied on `uvloop`, Ray or
 torch-geometric now ship with pure-Python fallbacks so the project remains fully
-operational even when recent wheels are unavailable.
+operational even when recent wheels are unavailable. With Python 3.11.9 available
+again the setup tooling reinstalls the accelerated Ray, torch-geometric and
+`uvloop` integrations automatically on Python 3.10–3.12 interpreters, and the
+environment diagnostics will highlight remediation steps whenever these
+packages are missing.
 
 Run `python -m utils.environment --json` to confirm both interpreter and
 hardware meet the minimum requirements. The training routine executes the same
@@ -61,7 +65,9 @@ and logs it to MLflow so you can audit the environment that produced each
 artifact.
 
 * Linux: run `./scripts/setup_ubuntu.sh` to provision a supported Python
-  interpreter, ensure `pip` is available and upgrade dependencies.
+  interpreter, ensure `pip` is available and upgrade dependencies. The script
+  now verifies that Ray, torch-geometric and `uvloop` are installed when the
+  interpreter supports their binary wheels.
 * Windows/macOS: install Python 3.13 (or another supported version) from
   python.org, ensure it appears first on your `PATH`, then create a virtual
   environment (`python -m venv .venv`)

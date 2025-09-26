@@ -55,6 +55,13 @@ RECOMMENDED_PYTHON = "3.13"
 _SPECIFIER_SPLIT_RE = re.compile(r"\s*(?:==|!=|<=|>=|~=|===|<|>|=)")
 
 
+def _python_major_minor() -> tuple[int, int]:
+    """Return the active interpreter's ``(major, minor)`` version tuple."""
+
+    version = sys.version_info
+    return version.major, version.minor
+
+
 def _marker_allows(marker_text: str | None) -> bool:
     if not marker_text:
         return True
@@ -689,6 +696,57 @@ def _check_python_runtime() -> dict[str, Any]:
     }
 
 
+def _check_distributed_dependencies() -> dict[str, Any]:
+    """Confirm Ray and torch-geometric are available when supported."""
+
+    name = "Distributed training dependencies"
+    followup = (
+        "Install Ray and torch-geometric packages: "
+        "pip install 'ray[default]' torch-geometric"
+    )
+    major, minor = _python_major_minor()
+
+    if major > 3 or (major == 3 and minor >= 13):
+        return {
+            "name": name,
+            "status": "skipped",
+            "detail": (
+                "Python "
+                f"{major}.{minor} currently lacks official Ray/torch-geometric wheels. "
+                "The distributed trainers will fall back to pure-Python implementations."
+            ),
+            "followup": None,
+        }
+
+    missing = [
+        pkg
+        for pkg, module in (
+            ("ray", "ray"),
+            ("torch-geometric", "torch_geometric"),
+        )
+        if not _distribution_installed(pkg, module)
+    ]
+
+    if not missing:
+        return {
+            "name": name,
+            "status": "passed",
+            "detail": (
+                "Ray and torch-geometric available. Distributed and graph trainers "
+                "are fully enabled."
+            ),
+            "followup": None,
+        }
+
+    display = ", ".join(missing)
+    return {
+        "name": name,
+        "status": "failed",
+        "detail": f"Missing packages: {display}.",
+        "followup": followup,
+    }
+
+
 def _check_model_configuration() -> dict[str, Any]:
     """Validate that model configuration references consistent artifacts."""
 
@@ -787,6 +845,7 @@ def _check_model_configuration() -> dict[str, Any]:
 
 _AUTOMATED_CHECKS: tuple[Callable[[], dict[str, Any]], ...] = (
     _check_python_runtime,
+    _check_distributed_dependencies,
     _check_model_configuration,
     _check_mt5_login,
     _check_mt5_ping,

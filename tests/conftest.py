@@ -128,6 +128,10 @@ class _StubBaseModel:
 
 pydantic_mod.BaseModel = _StubBaseModel
 pydantic_mod.ValidationError = type("ValidationError", (Exception,), {})
+pydantic_mod.ConfigDict = dict
+pydantic_mod.Field = lambda *args, **kwargs: None
+pydantic_mod.field_validator = lambda *args, **kwargs: (lambda func: func)
+pydantic_mod.model_validator = lambda *args, **kwargs: (lambda func: func)
 pydantic_mod.__spec__ = importlib.machinery.ModuleSpec("pydantic", loader=None)
 sys.modules.setdefault("pydantic", pydantic_mod)
 

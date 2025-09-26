@@ -26,6 +26,7 @@ testcontainers[kafka,redis]
 filelock
 fastapi
 uvicorn
+uvloop; platform_system != "Windows"
 mlflow
 shap  # optional, used to compute SHAP feature importance
 statsmodels
@@ -52,6 +53,8 @@ opentelemetry-instrumentation-logging
 # Ray and torch-geometric currently lack official Python 3.13 wheels; the
 # distributed and graph trainers gracefully fall back when they are absent.
 flaml>=2.3.6
+ray==2.48.0; python_version < "3.13"
+torch-geometric==2.6.1; python_version < "3.13"
 
 # Reinforcement learning dependencies
 stable-baselines3
