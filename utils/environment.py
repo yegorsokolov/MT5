@@ -48,6 +48,10 @@ REC_RAM_GB = 8
 MIN_CORES = 1
 REC_CORES = 4
 
+MIN_PYTHON = (3, 10)
+MAX_PYTHON = (3, 12)
+RECOMMENDED_PYTHON = "3.11"
+
 _SPECIFIER_SPLIT_RE = re.compile(r"\s*(?:==|!=|<=|>=|~=|===|<|>|=)")
 
 
@@ -648,6 +652,43 @@ def _check_feature_worker() -> dict[str, Any]:
     }
 
 
+def _check_python_runtime() -> dict[str, Any]:
+    """Verify that the active interpreter matches supported versions."""
+
+    version = sys.version_info
+    runtime = f"{version.major}.{version.minor}.{version.micro}"
+    instruction = (
+        "Install Python 3.11.x and rerun scripts/setup_ubuntu.sh to pin the interpreter before continuing."
+    )
+
+    if version < MIN_PYTHON or version >= MAX_PYTHON:
+        return {
+            "name": "python-runtime",
+            "status": "failed",
+            "detail": (
+                "Python "
+                f"{runtime} is not supported. The project requires Python "
+                f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}-{MAX_PYTHON[0]}.{MAX_PYTHON[1]-1} "
+                f"with {RECOMMENDED_PYTHON}.x recommended for binary dependencies."
+            ),
+            "followup": instruction,
+        }
+
+    detail = (
+        f"Python runtime detected: {runtime}. Recommended interpreter: {RECOMMENDED_PYTHON}.x."
+    )
+
+    if version.minor != int(RECOMMENDED_PYTHON.split(".")[1]):
+        detail += " Some third-party wheels may be missing; pin to the recommended version if package installs fail."
+
+    return {
+        "name": "python-runtime",
+        "status": "passed",
+        "detail": detail,
+        "followup": None,
+    }
+
+
 def _check_model_configuration() -> dict[str, Any]:
     """Warn when configuration still references the deprecated AutoGluon stack."""
 
@@ -734,6 +775,7 @@ def _check_model_configuration() -> dict[str, Any]:
 
 
 _AUTOMATED_CHECKS: tuple[Callable[[], dict[str, Any]], ...] = (
+    _check_python_runtime,
     _check_model_configuration,
     _check_mt5_login,
     _check_mt5_ping,
@@ -882,6 +924,17 @@ def ensure_environment(
         strict = strict_env in {"1", "true", "yes"}
 
     check_results, manual_tests = _run_automated_preflight()
+
+    python_check = next(
+        (c for c in check_results if c.get("name") == "python-runtime"),
+        None,
+    )
+    if python_check and (python_check.get("status") or "").lower() == "failed":
+        raise EnvironmentCheckError(
+            python_check.get("detail") or "Unsupported Python runtime detected.",
+            manual_tests=manual_tests,
+            checks=check_results,
+        )
     missing_unique = _collect_missing_dependencies()
     install_attempts: dict[str, str] = {}
     auto_install_enabled = (

@@ -43,6 +43,47 @@ The solution is split into two components:
    an Optuna search over learning rate, model depth and RL discount factors. The
    best settings are logged to MLflow and persisted in `tuning/*.db`.
 
+### Python runtime compatibility
+
+The project intentionally targets Python 3.11 because two critical dependencies –
+the official MetaTrader5 bridge and Great Expectations – do not ship wheels for
+newer interpreters yet. When Python 3.12/3.13 is used, `pip check` reports
+incompatible combinations such as `great-expectations 0.18.22 has requirement
+numpy<2.0.0,>=1.22.4; python_version >= "3.10", but you have numpy 2.3.3.` The
+setup script now pins Python 3.11.x, constrains NumPy to `<2.0.0` and holds the
+packages at the apt level so unattended upgrades cannot move the interpreter to
+an unsupported version.
+
+* Linux: run `./scripts/setup_ubuntu.sh` to install `python3.11`, set it as the
+  system `python3` alternative and upgrade dependencies.
+* Windows/macOS: download Python 3.11.x from python.org, ensure it is the first
+  interpreter on your `PATH`, then create a virtual environment (`python -m venv
+  .venv`) before installing requirements.
+
+You can re-run `python -m utils.environment` at any time; the diagnostic exits
+early if the interpreter drifts outside the supported 3.10–3.11 window.
+
+### MQL5 connectivity fallback
+
+If the Python bindings cannot log in to MetaTrader 5 (for example because the
+terminal is stuck at the credential dialog), use the `mt5/mql5/ConnectionHeartbeat.mq5`
+script as a fallback:
+
+1. Open the MetaEditor, create a new **Script** and paste the contents of
+   `mt5/mql5/ConnectionHeartbeat.mq5` into the editor. Save it inside
+   `MQL5/Scripts/MT5Bridge/ConnectionHeartbeat.mq5` (or a similar folder).
+2. Compile the script and run it from the Navigator tree inside MetaTrader 5.
+3. Confirm that the Experts tab prints “Heartbeat complete” with no warnings. If
+   warnings are shown, resolve them (usually incorrect login or server) and run
+   the script again until the terminal is connected and market data ticks are
+   flowing.
+
+The script prints the connected login, server name, leverage and the most recent
+market tick so you can diagnose credential problems before re-running the Python
+environment checks. Once the heartbeat reports a clean status, re-run
+`python -m utils.environment` – the MetaTrader5 module can only import
+successfully when the terminal is already authenticated.
+
 ## Data sources
 
 The feature engineering pipeline supports a range of optional external
@@ -270,6 +311,7 @@ match your environment.
    * Ensure you are still inside the repository and the virtual environment is
      active.
    * Run `./scripts/setup_ubuntu.sh` and press `Enter`. This command:
+     - Installs and pins Python 3.11.x using the `deadsnakes` packages, holds the interpreter packages so apt will not auto-upgrade to unsupported releases and ensures `python3` points to the pinned version.
      - Updates apt packages required by MetaTrader integration.
      - Upgrades `pip` inside the virtual environment.
      - Installs the Python dependencies from `requirements-core.txt`.
@@ -292,8 +334,10 @@ match your environment.
      contact your administrator for the credentials.
 11. **Verify the environment.**
     * Type `python -m utils.environment` and press `Enter`.
-    * The command checks that all dependencies are available and prints the
-      detected hardware. If something is missing it explains how to fix it.
+    * The command checks that all dependencies are available, verifies the
+      interpreter is pinned to Python 3.11.x (or at least within the supported
+      3.10–3.11 window) and prints the detected hardware. If something is missing
+      it explains how to fix it.
 12. **Start a training run.**
     * Type `python -m mt5.train` and press `Enter`.
     * The training process logs progress to the terminal and writes
@@ -835,7 +879,7 @@ to prepare a clean Windows PC or VPS.
       git config --global user.email "<you@example.com>"
       ```
 
-   4. Download Python 3.10 or newer from [python.org](https://www.python.org/downloads/).
+   4. Download Python 3.11.x from [python.org](https://www.python.org/downloads/).
       During installation tick the **Add Python to PATH** checkbox and click **Install Now**.
 4. **Clone this repository** –
    1. Launch **Git Bash** or **GitHub Desktop**.
