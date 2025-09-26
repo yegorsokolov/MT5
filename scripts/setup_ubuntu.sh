@@ -7,6 +7,189 @@ PROJECT_ROOT="${SCRIPT_DIR}/.."
 SERVICES_ONLY=0
 SKIP_SERVICE_INSTALL=0
 
+WINE_PREFIX="${WINEPREFIX:-$HOME/.wine-mt5}"
+WIN_PY_VERSION="${WIN_PY_VERSION:-3.13.0}"
+WIN_PY_INSTALLER="python-${WIN_PY_VERSION}-amd64.exe"
+WIN_PY_MAJOR_MINOR="$(echo "${WIN_PY_VERSION}" | awk -F. '{printf "%d%d", $1, $2}')"
+WIN_PY_DIR_NAME="Python${WIN_PY_MAJOR_MINOR}"
+WIN_PY_WINDOWS_PATH="C:/Program Files/${WIN_PY_DIR_NAME}/python.exe"
+WIN_PY_UNIX_PATH="${WINE_PREFIX}/drive_c/Program Files/${WIN_PY_DIR_NAME}/python.exe"
+MT5_WINE_DIR="${WINE_PREFIX}/drive_c/Program Files/MetaTrader 5"
+MT5_WINE_TERMINAL="${MT5_WINE_DIR}/terminal64.exe"
+MT5_INSTALL_CACHE="${PROJECT_ROOT:-$(pwd)}/.cache/mt5"
+MT5_CACHE_INSTALLER="${MT5_INSTALL_CACHE}/mt5setup.exe"
+
+ensure_wine_prefix() {
+    echo "Initialising Wine prefix at ${WINE_PREFIX} ..."
+    mkdir -p "${WINE_PREFIX}" >/dev/null 2>&1 || true
+    WINEPREFIX="${WINE_PREFIX}" WINEARCH=win64 wineboot -u >/dev/null 2>&1 || true
+    if command -v wineserver >/dev/null 2>&1; then
+        WINEPREFIX="${WINE_PREFIX}" wineserver -w >/dev/null 2>&1 || true
+    fi
+}
+
+install_windows_python() {
+    if [[ -f "${WIN_PY_UNIX_PATH}" ]]; then
+        return 0
+    fi
+
+    mkdir -p "${MT5_INSTALL_CACHE}" >/dev/null 2>&1 || true
+    local installer_path="${MT5_INSTALL_CACHE}/${WIN_PY_INSTALLER}"
+    if [[ ! -f "${installer_path}" ]]; then
+        echo "Downloading Windows Python ${WIN_PY_VERSION} ..."
+        if ! wget -O "${installer_path}" "https://www.python.org/ftp/python/${WIN_PY_VERSION}/${WIN_PY_INSTALLER}"; then
+            echo "Warning: Failed to download Windows Python ${WIN_PY_VERSION}." >&2
+            rm -f "${installer_path}"
+            return 1
+        fi
+    fi
+
+    echo "Installing Windows Python ${WIN_PY_VERSION} inside Wine ..."
+    if ! WINEPREFIX="${WINE_PREFIX}" wine "${installer_path}" /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1; then
+        echo "Warning: Windows Python installer exited with an error." >&2
+        return 1
+    fi
+    return 0
+}
+
+ensure_windows_python_ready() {
+    ensure_wine_prefix
+    install_windows_python || return 1
+
+    if [[ -f "${WIN_PY_UNIX_PATH}" ]]; then
+        echo "Upgrading pip inside the Wine Python environment ..."
+        WINEPREFIX="${WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade pip >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    echo "Warning: Windows Python executable not found at ${WIN_PY_UNIX_PATH}." >&2
+    return 1
+}
+
+install_mt5_terminal_wine() {
+    ensure_wine_prefix
+    mkdir -p "${MT5_INSTALL_CACHE}" >/dev/null 2>&1 || true
+
+    if [[ -f "${MT5_WINE_TERMINAL}" ]]; then
+        echo "MetaTrader 5 already installed in Wine prefix (${MT5_WINE_DIR})."
+        return 0
+    fi
+
+    local installer_path="${MT5_CACHE_INSTALLER}"
+    if [[ ! -f "${installer_path}" ]]; then
+        echo "Downloading MetaTrader 5 setup ..."
+        if ! wget -O "${installer_path}" "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"; then
+            echo "Warning: Failed to download MetaTrader 5 installer." >&2
+            rm -f "${installer_path}"
+            return 1
+        fi
+    fi
+
+    echo "Launching MetaTrader 5 installer under Wine. Complete the GUI setup to finish installation."
+    if ! WINEPREFIX="${WINE_PREFIX}" wine "${installer_path}" >/dev/null 2>&1; then
+        echo "Warning: MetaTrader 5 installer did not finish successfully." >&2
+        return 1
+    fi
+    return 0
+}
+
+ensure_mt5_python_packages() {
+    if [[ ! -f "${WIN_PY_UNIX_PATH}" ]]; then
+        echo "Warning: Windows Python is not available; skipping MetaTrader5 pip installation." >&2
+        return 1
+    fi
+
+    echo "Installing MetaTrader5 and pymt5linux inside the Wine Python environment ..."
+    if ! WINEPREFIX="${WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade MetaTrader5 pymt5linux >/dev/null 2>&1; then
+        echo "Warning: Failed to install MetaTrader5 inside Wine. Check the Wine logs for more details." >&2
+        return 1
+    fi
+    return 0
+}
+
+write_wine_login_instructions() {
+    local instructions_path="${PROJECT_ROOT}/LOGIN_INSTRUCTIONS_WINE.txt"
+    cat >"${instructions_path}" <<EOF
+MetaTrader 5 (Wine) login & bridge instructions
+===============================================
+
+Wine prefix : ${WINE_PREFIX}
+Windows Py  : ${WIN_PY_WINDOWS_PATH}
+Terminal    : ${MT5_WINE_TERMINAL}
+
+1. Launch the terminal and log in with your broker account:
+   WINEPREFIX="${WINE_PREFIX}" wine "${MT5_WINE_TERMINAL}"
+2. (Optional) Start the MetaTrader 5 installer again if you need to repair the
+   installation:
+   WINEPREFIX="${WINE_PREFIX}" wine "${MT5_CACHE_INSTALLER}"
+3. To use MetaTrader5 from Linux Python via pymt5linux:
+   a. On Linux, ensure pymt5linux is installed: ${PYTHON_BIN:-python3} -m pip install --upgrade pymt5linux
+   b. Start the bridge inside Wine:
+      WINEPREFIX="${WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pymt5linux --host localhost --port 8001 "${WIN_PY_WINDOWS_PATH}"
+   c. Connect from Linux Python:
+      from pymt5linux import MetaTrader5
+      mt5 = MetaTrader5(host="localhost", port=8001)
+      mt5.initialize()
+
+This file is generated by scripts/setup_ubuntu.sh. Re-run the script after
+updating the Wine prefix or Windows Python version to refresh the paths.
+EOF
+    echo "MetaTrader 5 Wine instructions saved to ${instructions_path}"
+}
+
+prompt_for_mt5_login() {
+    local prefix="$1"
+    local primary="$2"
+    local fallback="$3"
+
+    if [[ "${SKIP_MT5_LOGIN_PROMPT:-0}" == "1" ]]; then
+        return
+    fi
+
+    if [[ ! -t 0 ]]; then
+        echo "Skipping MetaTrader 5 login prompt because the script is running non-interactively." >&2
+        return
+    fi
+
+    local launch_target=""
+    if [[ -n "${primary}" && -f "${primary}" ]]; then
+        launch_target="${primary}"
+    elif [[ -n "${fallback}" && -f "${fallback}" ]]; then
+        launch_target="${fallback}"
+    fi
+
+    if [[ -z "${launch_target}" ]]; then
+        echo "MetaTrader 5 executable not found; skipping automatic login prompt." >&2
+        return
+    fi
+
+    if ! command -v wine >/dev/null 2>&1; then
+        echo "Wine is not available; skipping automatic MetaTrader 5 launch." >&2
+        return
+    fi
+
+    echo "Launching MetaTrader 5 so you can complete the initial login..."
+    WINEPREFIX="${prefix}" wine "${launch_target}" >/dev/null 2>&1 &
+    local wine_pid=$!
+    while true; do
+        if ! read -r -p "Did you log into MetaTrader 5 successfully? Type 'yes' to continue: " response; then
+            echo "Input closed before confirmation; continuing without verification." >&2
+            break
+        fi
+        response="${response,,}"
+        if [[ "${response}" == "yes" ]]; then
+            break
+        fi
+        echo "Please complete the login inside the MetaTrader 5 terminal before proceeding."
+    done
+    if command -v wineserver >/dev/null 2>&1; then
+        WINEPREFIX="${prefix}" wineserver -k >/dev/null 2>&1 || true
+    fi
+    if kill -0 "${wine_pid}" 2>/dev/null; then
+        wait "${wine_pid}" || true
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --services-only|--install-services-only)
@@ -60,7 +243,7 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
         fi
     fi
 
-    sudo apt-get install -y build-essential wine
+    sudo apt-get install -y build-essential wine64 wine winetricks cabextract
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-}"
@@ -107,24 +290,47 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
 fi
 
 if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
-    MT5_INSTALL_DIR="${MT5_INSTALL_DIR:-/opt/mt5}"
-    MT5_DOWNLOAD_URL="${MT5_DOWNLOAD_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
-    MT5_SETUP_PATH="$MT5_INSTALL_DIR/mt5setup.exe"
+    echo "Ensuring Linux-side pymt5linux helper is installed ..."
+    if ! "$PYTHON_BIN" -m pip install --upgrade pymt5linux >/dev/null 2>&1; then
+        echo "Warning: Failed to install pymt5linux in the Linux environment." >&2
+    fi
+fi
 
-    echo "Preparing MetaTrader 5 terminal under $MT5_INSTALL_DIR ..."
-    if [ ! -f "$MT5_INSTALL_DIR/terminal64.exe" ] && [ ! -f "$MT5_SETUP_PATH" ]; then
-        sudo mkdir -p "$MT5_INSTALL_DIR"
-        tmpfile="$(mktemp)"
-        echo "Downloading MetaTrader 5 setup from $MT5_DOWNLOAD_URL"
-        if wget -O "$tmpfile" "$MT5_DOWNLOAD_URL"; then
-            sudo mv "$tmpfile" "$MT5_SETUP_PATH"
-            sudo chown root:root "$MT5_SETUP_PATH"
-            sudo chmod 755 "$MT5_SETUP_PATH"
-            sudo tee "$MT5_INSTALL_DIR/LOGIN_INSTRUCTIONS.txt" >/dev/null <<'EOF'
+if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
+    MT5_INSTALL_DIR="${MT5_INSTALL_DIR:-${MT5_WINE_DIR}}"
+    if [[ "${MT5_INSTALL_DIR}" == "${MT5_WINE_DIR}" ]]; then
+        ensure_windows_python_ready || true
+        install_mt5_terminal_wine || true
+        ensure_mt5_python_packages || true
+        write_wine_login_instructions
+        prompt_for_mt5_login "${WINE_PREFIX}" "${MT5_WINE_TERMINAL}" "${MT5_CACHE_INSTALLER}"
+    else
+        MT5_DOWNLOAD_URL="${MT5_DOWNLOAD_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
+        MT5_SETUP_PATH="$MT5_INSTALL_DIR/mt5setup.exe"
+
+        echo "Preparing MetaTrader 5 terminal under $MT5_INSTALL_DIR ..."
+        if [ ! -f "$MT5_INSTALL_DIR/terminal64.exe" ] && [ ! -f "$MT5_SETUP_PATH" ]; then
+            if [[ "$MT5_INSTALL_DIR" == /opt/* ]]; then
+                sudo mkdir -p "$MT5_INSTALL_DIR"
+            else
+                mkdir -p "$MT5_INSTALL_DIR"
+            fi
+            tmpfile="$(mktemp)"
+            echo "Downloading MetaTrader 5 setup from $MT5_DOWNLOAD_URL"
+            if wget -O "$tmpfile" "$MT5_DOWNLOAD_URL"; then
+                if [[ "$MT5_INSTALL_DIR" == /opt/* ]]; then
+                    sudo mv "$tmpfile" "$MT5_SETUP_PATH"
+                    sudo chown root:root "$MT5_SETUP_PATH"
+                    sudo chmod 755 "$MT5_SETUP_PATH"
+                else
+                    mv "$tmpfile" "$MT5_SETUP_PATH"
+                    chmod 755 "$MT5_SETUP_PATH"
+                fi
+                cat >"$MT5_INSTALL_DIR/LOGIN_INSTRUCTIONS.txt" <<EOF
 MetaTrader 5 login instructions
 ================================
 
-1. Launch the installer once: `wine /opt/mt5/mt5setup.exe`.
+1. Launch the installer once: `wine "$MT5_SETUP_PATH"`.
 2. Complete the platform installation when prompted.
 3. Sign in with your broker credentials so historical data can be downloaded.
 4. Close the terminal once login succeeds. The training pipeline will reuse
@@ -133,55 +339,16 @@ MetaTrader 5 login instructions
 If you reinstall MetaTrader 5 elsewhere update MT5_INSTALL_DIR before running
 setup_ubuntu.sh.
 EOF
-            echo "MetaTrader 5 setup downloaded to $MT5_SETUP_PATH."
-        else
-            echo "Warning: Failed to download MetaTrader 5 setup." >&2
-            rm -f "$tmpfile"
-        fi
-    else
-        echo "MetaTrader 5 already installed at $MT5_INSTALL_DIR"
-    fi
-
-    if [[ "${SKIP_MT5_LOGIN_PROMPT:-0}" != "1" ]]; then
-        if [ -t 0 ]; then
-            launch_target=""
-            if [ -f "$MT5_INSTALL_DIR/terminal64.exe" ]; then
-                launch_target="$MT5_INSTALL_DIR/terminal64.exe"
-            elif [ -f "$MT5_SETUP_PATH" ]; then
-                launch_target="$MT5_SETUP_PATH"
-            fi
-
-            if [ -n "$launch_target" ]; then
-                if command -v wine >/dev/null 2>&1; then
-                    echo "Launching MetaTrader 5 so you can complete the initial login..."
-                    wine "$launch_target" >/dev/null 2>&1 &
-                    wine_pid=$!
-                    while true; do
-                        if ! read -r -p "Did you log into MetaTrader 5 successfully? Type 'yes' to continue: " response; then
-                            echo "Input closed before confirmation; continuing without verification." >&2
-                            break
-                        fi
-                        response="${response,,}"
-                        if [[ "$response" == "yes" ]]; then
-                            break
-                        fi
-                        echo "Please complete the login inside the MetaTrader 5 terminal before proceeding."
-                    done
-                    if command -v wineserver >/dev/null 2>&1; then
-                        wineserver -k >/dev/null 2>&1 || true
-                    fi
-                    if kill -0 "$wine_pid" 2>/dev/null; then
-                        wait "$wine_pid" || true
-                    fi
-                else
-                    echo "Wine is not available; skipping automatic MetaTrader 5 launch." >&2
-                fi
+                echo "MetaTrader 5 setup downloaded to $MT5_SETUP_PATH."
             else
-                echo "MetaTrader 5 executable not found; skipping automatic login prompt." >&2
+                echo "Warning: Failed to download MetaTrader 5 setup." >&2
+                rm -f "$tmpfile"
             fi
         else
-            echo "Skipping MetaTrader 5 login prompt because the script is running non-interactively." >&2
+            echo "MetaTrader 5 already installed at $MT5_INSTALL_DIR"
         fi
+
+        prompt_for_mt5_login "${WINE_PREFIX}" "$MT5_INSTALL_DIR/terminal64.exe" "$MT5_SETUP_PATH"
     fi
 
     # Optionally install CUDA drivers if an NVIDIA GPU is detected or WITH_CUDA=1

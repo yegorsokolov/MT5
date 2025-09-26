@@ -74,6 +74,22 @@ def _resolve_terminal_path(candidate: Path) -> Optional[Path]:
     return None
 
 
+def _default_mt5_dir() -> Path:
+    """Best effort guess at the MetaTrader 5 installation directory."""
+
+    env_override = os.getenv("MT5_TERMINAL_PATH")
+    if env_override:
+        return Path(env_override).expanduser()
+
+    # Wine deployments default to ``~/.wine-mt5`` in our automation.  When the
+    # script executes on Windows we fall back to the standard installation path
+    # so ``terminal64.exe`` can be discovered without extra configuration.
+    if sys.platform.startswith("win"):
+        return Path("C:/Program Files/MetaTrader 5")
+
+    return Path.home() / ".wine-mt5" / "drive_c" / "Program Files" / "MetaTrader 5"
+
+
 def _copy_heartbeat_script(mt5_dir: Path) -> Optional[Path]:
     """Install the ConnectionHeartbeat script for manual diagnostics."""
 
@@ -82,8 +98,16 @@ def _copy_heartbeat_script(mt5_dir: Path) -> Optional[Path]:
         return None
 
     target = mt5_dir / "MQL5" / "Scripts" / "MT5Bridge" / source.name
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    except PermissionError:
+        print(
+            "Unable to install heartbeat script because the MetaTrader 5 directory is not writable. "
+            "Re-run the command with sufficient permissions or point --mt5-dir to a writable location.",
+            file=sys.stderr,
+        )
+        return None
     return target
 
 
@@ -146,7 +170,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "mt5_dir",
         nargs="?",
-        default=os.getenv("MT5_TERMINAL_PATH", "/opt/mt5"),
+        default=str(_default_mt5_dir()),
         help="Path to the MT5 installation directory or terminal executable (default: %(default)s)",
     )
     parser.add_argument("--login", type=int, help="Broker login to authenticate with MetaTrader 5")
@@ -195,6 +219,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("Failed to establish a MetaTrader 5 session via Python.")
         if result.error:
             print(f"  Reason: {result.error}")
+            if result.error == "MetaTrader5 package not installed":
+                print(
+                    "  Hint: On Linux the MetaTrader5 wheel is only available under Wine. "
+                    "Run scripts/setup_ubuntu.sh to install the Wine-based toolchain or "
+                    "set MT5_TERMINAL_PATH to the Windows terminal and execute this command via Wine."
+                )
         print("Ensure the terminal is running and logged in, then retry. If the issue persists, run the ConnectionHeartbeat script inside MetaTrader 5.")
 
     if args.install_heartbeat:
