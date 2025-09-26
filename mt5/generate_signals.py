@@ -7,7 +7,6 @@ import datetime as _dt
 import os
 import json
 import logging
-import sys
 import importlib
 import joblib
 import pandas as pd
@@ -1074,8 +1073,23 @@ def main():
         logger.info("Market closed - running backtest and using historical data")
         backtest.run_rolling_backtest(cfg)
 
-    model_type = cfg.get("model_type", "lgbm").lower()
-    model_paths = cfg.get("ensemble_models", ["model.joblib"])
+    raw_model_type = str(cfg.get("model_type", "lgbm")).lower()
+    if raw_model_type == "autogluon":
+        logger.warning(
+            "The 'autogluon' model_type is deprecated. Using the new tabular "
+            "trainer instead."
+        )
+        model_type = "tabular"
+    else:
+        model_type = raw_model_type
+
+    configured_paths = cfg.get("ensemble_models")
+    if configured_paths:
+        model_paths = configured_paths
+    elif model_type == "tabular":
+        model_paths = ["models/tabular/model.joblib"]
+    else:
+        model_paths = ["model.joblib"]
     model_versions = cfg.get("model_versions", [])
     env_version = os.getenv("MODEL_VERSION_ID")
     if env_version:
@@ -1083,8 +1097,47 @@ def main():
     models, stored_features, meta_clf = load_models(
         model_paths, model_versions, return_meta=True
     )
-    if not models and model_type != "autogluon":
-        models = [joblib.load(Path(__file__).resolve().parent / "model.joblib")]
+
+    if not models:
+        default_relative = (
+            "models/tabular/model.joblib" if model_type == "tabular" else "model.joblib"
+        )
+        fallback_path = Path(__file__).resolve().parent / default_relative
+        if fallback_path.exists():
+            models = [joblib.load(fallback_path)]
+            if stored_features is None:
+                features_path = fallback_path.with_name("features.json")
+                if features_path.exists():
+                    try:
+                        stored_features = json.loads(
+                            features_path.read_text(encoding="utf-8")
+                        )
+                    except Exception:  # pragma: no cover - best effort logging
+                        logger.exception(
+                            "Failed to read stored features from %s", features_path
+                        )
+                if stored_features is None:
+                    metadata_path = fallback_path.with_name("model_metadata.json")
+                    if metadata_path.exists():
+                        try:
+                            metadata_blob = json.loads(
+                                metadata_path.read_text(encoding="utf-8")
+                            )
+                        except Exception:  # pragma: no cover - defensive guard
+                            logger.exception(
+                                "Failed to parse model metadata from %s", metadata_path
+                            )
+                        else:
+                            feats = metadata_blob.get("features") or metadata_blob.get(
+                                "training_features"
+                            )
+                            if isinstance(feats, list):
+                                stored_features = feats
+        elif model_type == "tabular":
+            raise RuntimeError(
+                "No tabular model is available. Train one with 'python -m mt5.train_tabular' "
+                "before generating signals."
+            )
 
     # Replay past trades through any newly enabled model versions
     new_versions = [v for v in model_versions if v not in prev_models]
@@ -1262,23 +1315,31 @@ def main():
         if "SymbolCode" in df.columns:
             features.append("SymbolCode")
 
-    if model_type == "autogluon":
-        try:
-            from autogluon.tabular import TabularPredictor
-        except ModuleNotFoundError as exc:  # pragma: no cover - defensive guard
+    if model_type == "tabular":
+        tabular_models = [
+            mdl for mdl in models if hasattr(mdl, "predict_proba")
+        ]
+        if not tabular_models:
             raise RuntimeError(
-                "AutoGluon support requires the optional 'heavy' dependencies "
-                "and a Python interpreter earlier than 3.13. "
-                f"Current interpreter: {sys.version.split()[0]}. "
-                "Re-run the setup under Python 3.12 or earlier or choose a "
-                "different model_type."
-            ) from exc
-
-        ag_path = Path(__file__).resolve().parent / "models" / "autogluon"
-        predictor = TabularPredictor.load(str(ag_path))
+                "Tabular model loading failed – ensure 'python -m mt5.train_tabular' "
+                "has been executed successfully."
+            )
 
         def _predict(data: pd.DataFrame) -> np.ndarray:
-            return predictor.predict_proba(data[features])[1].values
+            preds: list[np.ndarray] = []
+            for mdl in tabular_models:
+                try:
+                    output = mdl.predict_proba(data[features])
+                except Exception:  # pragma: no cover - best effort logging
+                    logger.exception("Tabular model prediction failed")
+                    continue
+                arr = np.asarray(output)
+                if arr.ndim == 2:
+                    arr = arr[:, -1]
+                preds.append(arr)
+            if not preds:
+                return np.zeros(len(data))
+            return np.mean(preds, axis=0)
 
     else:
         base_models: dict[str, Any] = {}
