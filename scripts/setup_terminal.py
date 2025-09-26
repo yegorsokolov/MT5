@@ -10,10 +10,31 @@ from pathlib import Path
 from typing import Optional
 
 
+try:
+    from utils.mt5_bridge import (
+        MetaTraderImportError,
+        describe_backend as describe_mt5_backend,
+        load_mt5_module,
+    )
+except Exception:  # pragma: no cover - fall back to direct imports during bootstrapping
+    MetaTraderImportError = RuntimeError  # type: ignore
+
+    def describe_mt5_backend():  # type: ignore
+        return {}
+
+    def load_mt5_module():  # type: ignore
+        import MetaTrader5 as _mt5  # type: ignore
+
+        return _mt5
+
+
 try:  # MetaTrader5 is an optional dependency during lint/unit-test runs
-    import MetaTrader5 as _mt5  # type: ignore
-except Exception:  # pragma: no cover - handled at runtime
+    _mt5 = load_mt5_module()
+except MetaTraderImportError:  # pragma: no cover - handled at runtime
     _mt5 = None  # type: ignore
+
+_BRIDGE_INFO = describe_mt5_backend() if _mt5 is not None else {}
+_BACKEND_NAME = _BRIDGE_INFO.get("backend") if isinstance(_BRIDGE_INFO, dict) else None
 
 try:  # Reuse the broker helper so we respect retry logic/teardown behaviour
     from brokers import mt5_direct
@@ -33,6 +54,7 @@ class ConnectionResult:
     balance: Optional[float] = None
     equity: Optional[float] = None
     error: Optional[str] = None
+    backend: Optional[str] = None
 
 
 def _last_error() -> str:
@@ -121,9 +143,17 @@ def attempt_connection(
     """Attempt to initialise the MetaTrader5 bridge."""
 
     if _mt5 is None:
-        return ConnectionResult(success=False, error="MetaTrader5 package not installed")
+        return ConnectionResult(
+            success=False,
+            error="MetaTrader5 package not installed",
+            backend=_BACKEND_NAME,
+        )
     if mt5_direct is None:
-        return ConnectionResult(success=False, error="brokers.mt5_direct unavailable")
+        return ConnectionResult(
+            success=False,
+            error="brokers.mt5_direct unavailable",
+            backend=_BACKEND_NAME,
+        )
 
     kwargs = {}
     if terminal is not None:
@@ -136,18 +166,30 @@ def attempt_connection(
         kwargs["server"] = server
 
     if not mt5_direct.initialize(**kwargs):  # pragma: no cover - requires live terminal
-        return ConnectionResult(success=False, error=_last_error())
+        return ConnectionResult(
+            success=False,
+            error=_last_error(),
+            backend=_BACKEND_NAME,
+        )
 
     try:
         info = _mt5.account_info()
     except Exception as exc:  # pragma: no cover - depends on terminal state
         _mt5.shutdown()
-        return ConnectionResult(success=False, error=f"account_info failed: {exc}")
+        return ConnectionResult(
+            success=False,
+            error=f"account_info failed: {exc}",
+            backend=_BACKEND_NAME,
+        )
 
     _mt5.shutdown()
 
     if info is None:
-        return ConnectionResult(success=False, error="No account info returned")
+        return ConnectionResult(
+            success=False,
+            error="No account info returned",
+            backend=_BACKEND_NAME,
+        )
 
     return ConnectionResult(
         success=True,
@@ -157,6 +199,7 @@ def attempt_connection(
         leverage=getattr(info, "leverage", None),
         balance=getattr(info, "balance", None),
         equity=getattr(info, "equity", None),
+        backend=_BACKEND_NAME,
     )
 
 

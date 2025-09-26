@@ -73,6 +73,146 @@ artifact.
   environment (`python -m venv .venv`)
   before installing requirements.
 
+## Complete Ubuntu 25.04 VPS setup (Wine + MetaTrader 5)
+
+The steps below recreate the full “from scratch” deployment we verified on an
+OVH VPS running Ubuntu 25.04. They install separate Wine prefixes for the
+MetaTrader 5 terminal and the Windows-side Python interpreter that ships the
+official `MetaTrader5` wheel. All commands are meant to be run from an SSH
+session unless stated otherwise.
+
+1. **Reset any stale environment (optional but recommended):**
+
+   ```bash
+   rm -rf ~/MT5 ~/.python-version ~/.wine-mt5 ~/.wine-py311
+   sudo rm -rf /opt/mt5 /opt/winpy
+   ```
+
+2. **System prerequisites:** enable multi-arch, install Wine (32/64) and build
+   tooling.
+
+   ```bash
+   sudo dpkg --add-architecture i386
+   sudo apt update
+   sudo apt install -y \
+     git curl build-essential ca-certificates \
+     libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+     libffi-dev libncursesw5-dev liblzma-dev tk-dev uuid-dev \
+     wine64 wine32:i386 winetricks cabextract winbind unzip wget nano \
+     wine-gecko2.47.4 wine-gecko2.47.4:i386 wine-mono
+   ```
+
+3. **Install `pyenv` and Python 3.11.9 for the Linux tooling:**
+
+   ```bash
+   curl https://pyenv.run | bash
+   export PYENV_ROOT="$HOME/.pyenv"
+   export PATH="$PYENV_ROOT/bin:$PATH"
+   eval "$(pyenv init - bash)"
+   eval "$(pyenv virtualenv-init -)"
+   pyenv install -l | grep 3.11.9 || pyenv update
+   pyenv install -s 3.11.9
+   ```
+
+4. **Clone the repo and create the virtual environment on 3.11.9:**
+
+   ```bash
+   cd ~
+   git clone git@github.com:yegorsokolov/MT5.git
+   cd MT5
+   pyenv local 3.11.9
+   python -m venv .venv
+   source .venv/bin/activate
+   python -V  # should be 3.11.9
+   grep -vi '^ *MetaTrader5' requirements.txt > requirements.nomt5.txt
+   pip install --upgrade pip wheel setuptools
+   pip install -r requirements.nomt5.txt
+   ```
+
+5. **Provision a dedicated Wine prefix for Windows Python + MetaTrader5:**
+
+   ```bash
+   export WINEARCH=win64
+   export WINEPREFIX="$HOME/.wine-py311"
+   wineboot --init
+   winetricks -q vcrun2019 corefonts msxml6 gdiplus
+   sudo mkdir -p /opt/winpy && sudo chown "$USER":"$USER" /opt/winpy
+   cd /opt/winpy
+   wget -O python-3.11.9-amd64.exe https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
+   wine python-3.11.9-amd64.exe /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=C:\\Python311 || true
+   WIN_PY=$(find "$WINEPREFIX/drive_c" -iname python.exe | grep 'Python311/python.exe' | head -n1)
+   WIN_PY_WINPATH=$(winepath -w "$WIN_PY")
+   wine "$WIN_PY_WINPATH" -m pip install --upgrade pip
+   wine "$WIN_PY_WINPATH" -m pip install MetaTrader5
+   ```
+
+6. **Install the MetaTrader 5 terminal in its own Wine prefix:** complete this
+   step from an XRDP desktop so you can interact with the GUI installer.
+
+   ```bash
+   export WINEARCH=win64
+   export WINEPREFIX="$HOME/.wine-mt5"
+   wineboot --init
+   winetricks -q vcrun2019 corefonts msxml6 gdiplus
+   sudo mkdir -p /opt/mt5 && sudo chown "$USER":"$USER" /opt/mt5
+   cd /opt/mt5
+   wget -O mt5setup.exe https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
+   wine mt5setup.exe  # finish the wizard and log into your broker
+   ```
+
+7. **Record the Wine locations and install the heartbeat script:**
+
+   ```bash
+   cd ~/MT5
+   cp -n .env.template .env
+   printf 'WINE_PYTHON="%s"\n' "$WIN_PY_WINPATH" >> .env
+   printf 'PYMT5LINUX_PYTHON="%s"\n' "$WIN_PY_WINPATH" >> .env
+   printf 'PYMT5LINUX_WINEPREFIX="%s"\n' "$HOME/.wine-mt5" >> .env
+   echo "WINEPREFIX=$HOME/.wine-mt5" >> .env
+   python scripts/detect_mt5_terminal.py
+   python scripts/setup_terminal.py --install-heartbeat
+   ```
+
+   In the MT5 GUI run *Navigator → Scripts → MT5Bridge → ConnectionHeartbeat* to
+   confirm the terminal is logged in. The Experts/Journal tabs should show a
+   clean status.
+
+8. **Verify the environment and connectivity:** keep the MT5 terminal open and
+   run:
+
+   ```bash
+   python -m utils.environment
+   ```
+
+   The check reports missing dependencies, validates that the Wine-based
+   `MetaTrader5` module loads, calls the Windows interpreter recorded in
+   `LOGIN_INSTRUCTIONS_WINE.txt` and confirms access to the authenticated
+   terminal. The bridge loader automatically seeds
+   `PYMT5LINUX_PYTHON`/`PYMT5LINUX_WINEPREFIX` from that cheat sheet, so the
+   `pymt5linux` helper can locate the Windows interpreter. If your package
+   mirror hosts the helper under a different URL, set `PYMT5LINUX_SOURCE`
+   before running `scripts/setup_ubuntu.sh` so both the Linux and Wine
+   environments install the correct wheel.
+
+9. **Daily routine once the environment is provisioned:**
+
+   ```bash
+   cd ~/MT5
+   export PYENV_ROOT="$HOME/.pyenv"; export PATH="$PYENV_ROOT/bin:$PATH"; eval "$(pyenv init - bash)"
+   source .venv/bin/activate
+   git pull
+   ./scripts/setup_ubuntu.sh
+   python -m utils.environment
+   ```
+
+The helper script `scripts/setup_ubuntu.sh` automates the heavy lifting above:
+it removes the unsupported deadsnakes PPA on Ubuntu 25.04, enables `i386`
+multi-arch support, installs Wine 32/64, ensures `winetricks` runtime
+components are applied to both prefixes, provisions Windows Python 3.11.9,
+installs `MetaTrader5`, downloads the MT5 terminal installer and writes a
+`LOGIN_INSTRUCTIONS_WINE.txt` cheat sheet summarising the detected paths.
+
+
 ### Resilient checkpoints and artifact tracking
 
 Checkpoints now load even when original dependencies are missing. Encrypted
@@ -239,8 +379,9 @@ failing. Set `AUTO_INSTALL_DEPENDENCIES=0` if you prefer to handle package
 installation manually. When requirements remain unresolved, the command raises
 an error explaining which dependencies still need to be installed. In addition
 to dependency validation, it now performs automated smoke tests that exercise
-MetaTrader connectivity, Git remotes, environment variable loading and the core
-FastAPI services, flagging any remaining manual steps in the summary output.
+MetaTrader connectivity, the Wine-hosted Windows Python bridge, Git remotes,
+environment variable loading and the core FastAPI services, flagging any
+remaining manual steps in the summary output.
 
 ### Connecting the bot to MetaTrader 5
 
@@ -267,6 +408,15 @@ FastAPI services, flagging any remaining manual steps in the summary output.
 5. Re-run `python -m utils.environment` after resolving any terminal issues to
    confirm the environment check sees an authenticated session. The trading
    services launched via `python -m mt5` will reuse that connectivity.
+
+> The runtime imports `MetaTrader5` through `utils.mt5_bridge`, which prefers
+> a native Linux wheel and falls back to the Wine-hosted `pymt5linux`
+> integration. The bridge seeds `PYMT5LINUX_PYTHON` and
+> `PYMT5LINUX_WINEPREFIX` automatically from `LOGIN_INSTRUCTIONS_WINE.txt` so
+> no manual exports are required. If your package index publishes the helper
+> under a different name, export `PYMT5LINUX_SOURCE` before running
+> `scripts/setup_ubuntu.sh` to point pip at the correct Git repository or
+> wheel URL.
 
 ### CPU Feature Detection and Acceleration
 

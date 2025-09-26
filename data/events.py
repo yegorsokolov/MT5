@@ -12,6 +12,16 @@ from typing import Dict, List
 import requests
 from dateutil import parser as date_parser
 
+try:
+    from utils.mt5_bridge import MetaTraderImportError, load_mt5_module
+except Exception:  # pragma: no cover - MT5 bridge optional when only using public feeds
+    MetaTraderImportError = RuntimeError  # type: ignore
+
+    def load_mt5_module():  # type: ignore
+        import MetaTrader5 as _mt5  # type: ignore
+
+        return _mt5
+
 logger = logging.getLogger(__name__)
 
 NEWS_SOURCES = [
@@ -98,8 +108,8 @@ def _get_tradays_events() -> List[dict]:
 @ttl_lru_cache(EVENT_CACHE_TTL)
 def _get_mql5_events() -> List[dict]:
     try:
-        import MetaTrader5 as mt5  # type: ignore
-    except Exception:
+        mt5 = load_mt5_module()
+    except (MetaTraderImportError, RuntimeError):
         return []
     if not mt5.initialize():
         logger.warning("Failed to initialize MetaTrader5 for events")

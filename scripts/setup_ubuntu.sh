@@ -56,31 +56,48 @@ fi
 SERVICES_ONLY=0
 SKIP_SERVICE_INSTALL=0
 
-WINE_PREFIX="${WINEPREFIX:-$HOME/.wine-mt5}"
-WIN_PY_VERSION="${WIN_PY_VERSION:-3.13.0}"
+MT5_WINE_PREFIX="${MT5_WINE_PREFIX:-${WINEPREFIX:-$HOME/.wine-mt5}}"
+WIN_PY_WINE_PREFIX="${WIN_PY_WINE_PREFIX:-$HOME/.wine-py311}"
+WIN_PY_VERSION="${WIN_PY_VERSION:-3.11.9}"
 WIN_PY_INSTALLER="python-${WIN_PY_VERSION}-amd64.exe"
 WIN_PY_MAJOR_MINOR="$(echo "${WIN_PY_VERSION}" | awk -F. '{printf "%d%d", $1, $2}')"
 WIN_PY_DIR_NAME="Python${WIN_PY_MAJOR_MINOR}"
-WIN_PY_WINDOWS_PATH="C:/Program Files/${WIN_PY_DIR_NAME}/python.exe"
-WIN_PY_UNIX_PATH="${WINE_PREFIX}/drive_c/Program Files/${WIN_PY_DIR_NAME}/python.exe"
-MT5_WINE_DIR="${WINE_PREFIX}/drive_c/Program Files/MetaTrader 5"
-MT5_WINE_TERMINAL="${MT5_WINE_DIR}/terminal64.exe"
+WIN_PY_UNIX_PATH=""
+WIN_PY_WINDOWS_PATH=""
 MT5_INSTALL_CACHE="${PROJECT_ROOT:-$(pwd)}/.cache/mt5"
 MT5_CACHE_INSTALLER="${MT5_INSTALL_CACHE}/mt5setup.exe"
+PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-pymt5linux}"
 
 ensure_wine_prefix() {
-    echo "Initialising Wine prefix at ${WINE_PREFIX} ..."
-    mkdir -p "${WINE_PREFIX}" >/dev/null 2>&1 || true
-    WINEPREFIX="${WINE_PREFIX}" WINEARCH=win64 wineboot -u >/dev/null 2>&1 || true
+    local prefix="$1"
+    echo "Initialising Wine prefix at ${prefix} ..."
+    mkdir -p "${prefix}" >/dev/null 2>&1 || true
+    WINEPREFIX="${prefix}" WINEARCH=win64 wineboot -u >/dev/null 2>&1 || true
     if command -v wineserver >/dev/null 2>&1; then
-        WINEPREFIX="${WINE_PREFIX}" wineserver -w >/dev/null 2>&1 || true
+        WINEPREFIX="${prefix}" wineserver -w >/dev/null 2>&1 || true
     fi
 }
 
-install_windows_python() {
-    if [[ -f "${WIN_PY_UNIX_PATH}" ]]; then
+resolve_windows_python_paths() {
+    local prefix="$1"
+    local candidate
+    candidate=$(find "${prefix}/drive_c" -maxdepth 6 -type f -name python.exe 2>/dev/null | \
+        grep -E "/${WIN_PY_DIR_NAME}/python.exe$" | head -n 1)
+    if [[ -z "${candidate}" ]]; then
+        candidate=$(find "${prefix}/drive_c" -maxdepth 6 -type f -name python.exe 2>/dev/null | \
+            grep -E '/Python311/python.exe$' | head -n 1)
+    fi
+    if [[ -n "${candidate}" ]]; then
+        WIN_PY_UNIX_PATH="${candidate}"
+        WIN_PY_WINDOWS_PATH="$(winepath -w "${candidate}")"
         return 0
     fi
+    return 1
+}
+
+install_windows_python() {
+    local prefix="$1"
+    resolve_windows_python_paths "${prefix}" && return 0
 
     mkdir -p "${MT5_INSTALL_CACHE}" >/dev/null 2>&1 || true
     local installer_path="${MT5_INSTALL_CACHE}/${WIN_PY_INSTALLER}"
@@ -93,34 +110,51 @@ install_windows_python() {
         fi
     fi
 
-    echo "Installing Windows Python ${WIN_PY_VERSION} inside Wine ..."
-    if ! WINEPREFIX="${WINE_PREFIX}" wine "${installer_path}" /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1; then
+    echo "Installing Windows Python ${WIN_PY_VERSION} inside Wine prefix ${prefix} ..."
+    if ! WINEPREFIX="${prefix}" wine "${installer_path}" /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1; then
         echo "Warning: Windows Python installer exited with an error." >&2
         return 1
     fi
-    return 0
+
+    resolve_windows_python_paths "${prefix}"
 }
 
 ensure_windows_python_ready() {
-    ensure_wine_prefix
-    install_windows_python || return 1
+    local prefix="${WIN_PY_WINE_PREFIX}"
+    ensure_wine_prefix "${prefix}"
+    ensure_winetricks_components "${prefix}"
+    install_windows_python "${prefix}" || return 1
 
-    if [[ -f "${WIN_PY_UNIX_PATH}" ]]; then
+    if [[ -n "${WIN_PY_UNIX_PATH}" ]]; then
         echo "Upgrading pip inside the Wine Python environment ..."
-        WINEPREFIX="${WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade pip >/dev/null 2>&1 || true
+        WINEPREFIX="${prefix}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade pip >/dev/null 2>&1 || true
         return 0
     fi
 
-    echo "Warning: Windows Python executable not found at ${WIN_PY_UNIX_PATH}." >&2
+    echo "Warning: Windows Python executable not found after installation." >&2
     return 1
 }
 
+ensure_winetricks_components() {
+    local prefix="$1"
+    if ! command -v winetricks >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "Installing core Wine runtime components into ${prefix} ..."
+    WINEPREFIX="${prefix}" WINEARCH=win64 winetricks -q corefonts gdiplus msxml6 vcrun2019 >/dev/null 2>&1 || true
+}
+
 install_mt5_terminal_wine() {
-    ensure_wine_prefix
+    local prefix="${MT5_WINE_PREFIX}"
+    local mt5_dir="${prefix}/drive_c/Program Files/MetaTrader 5"
+    local terminal="${mt5_dir}/terminal64.exe"
+
+    ensure_wine_prefix "${prefix}"
+    ensure_winetricks_components "${prefix}"
     mkdir -p "${MT5_INSTALL_CACHE}" >/dev/null 2>&1 || true
 
-    if [[ -f "${MT5_WINE_TERMINAL}" ]]; then
-        echo "MetaTrader 5 already installed in Wine prefix (${MT5_WINE_DIR})."
+    if [[ -f "${terminal}" ]]; then
+        echo "MetaTrader 5 already installed in Wine prefix (${mt5_dir})."
         return 0
     fi
 
@@ -135,7 +169,7 @@ install_mt5_terminal_wine() {
     fi
 
     echo "Launching MetaTrader 5 installer under Wine. Complete the GUI setup to finish installation."
-    if ! WINEPREFIX="${WINE_PREFIX}" wine "${installer_path}" >/dev/null 2>&1; then
+    if ! WINEPREFIX="${prefix}" wine "${installer_path}" >/dev/null 2>&1; then
         echo "Warning: MetaTrader 5 installer did not finish successfully." >&2
         return 1
     fi
@@ -143,14 +177,17 @@ install_mt5_terminal_wine() {
 }
 
 ensure_mt5_python_packages() {
-    if [[ ! -f "${WIN_PY_UNIX_PATH}" ]]; then
+    if [[ -z "${WIN_PY_UNIX_PATH}" || ! -f "${WIN_PY_UNIX_PATH}" ]]; then
         echo "Warning: Windows Python is not available; skipping MetaTrader5 pip installation." >&2
         return 1
     fi
 
-    echo "Installing MetaTrader5 and pymt5linux inside the Wine Python environment ..."
-    if ! WINEPREFIX="${WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade MetaTrader5 pymt5linux >/dev/null 2>&1; then
-        echo "Warning: Failed to install MetaTrader5 inside Wine. Check the Wine logs for more details." >&2
+    echo "Installing MetaTrader5 and bridge helper (${PYMT5LINUX_SOURCE}) inside the Wine Python environment ..."
+    if ! WINEPREFIX="${WIN_PY_WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade MetaTrader5 "${PYMT5LINUX_SOURCE}" >/dev/null 2>&1; then
+        echo "Warning: Failed to install MetaTrader5 or bridge helper inside Wine. Check the Wine logs for more details." >&2
+        if [[ "${PYMT5LINUX_SOURCE}" == "pymt5linux" ]]; then
+            echo "Hint: export PYMT5LINUX_SOURCE to an alternate package URL if the default is unavailable." >&2
+        fi
         return 1
     fi
     return 0
@@ -158,27 +195,35 @@ ensure_mt5_python_packages() {
 
 write_wine_login_instructions() {
     local instructions_path="${PROJECT_ROOT}/LOGIN_INSTRUCTIONS_WINE.txt"
+    local mt5_prefix="${MT5_WINE_PREFIX}"
+    local mt5_terminal="${mt5_prefix}/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+    if [[ -z "${WIN_PY_WINDOWS_PATH}" ]]; then
+        resolve_windows_python_paths "${WIN_PY_WINE_PREFIX}" || true
+    fi
     cat >"${instructions_path}" <<EOF
 MetaTrader 5 (Wine) login & bridge instructions
 ===============================================
 
-Wine prefix : ${WINE_PREFIX}
-Windows Py  : ${WIN_PY_WINDOWS_PATH}
-Terminal    : ${MT5_WINE_TERMINAL}
+Terminal prefix : ${mt5_prefix}
+Windows Python  : ${WIN_PY_WINDOWS_PATH:-<not detected>}
+Terminal path   : ${mt5_terminal}
+Bridge exports  : export PYMT5LINUX_PYTHON="${WIN_PY_WINDOWS_PATH:-<not detected>}"
+                  export PYMT5LINUX_WINEPREFIX="${WIN_PY_WINE_PREFIX}"
 
 1. Launch the terminal and log in with your broker account:
-   WINEPREFIX="${WINE_PREFIX}" wine "${MT5_WINE_TERMINAL}"
+   WINEARCH=win64 WINEPREFIX="${mt5_prefix}" wine "${mt5_terminal}"
 2. (Optional) Start the MetaTrader 5 installer again if you need to repair the
    installation:
-   WINEPREFIX="${WINE_PREFIX}" wine "${MT5_CACHE_INSTALLER}"
-3. To use MetaTrader5 from Linux Python via pymt5linux:
-   a. On Linux, ensure pymt5linux is installed: ${PYTHON_BIN:-python3} -m pip install --upgrade pymt5linux
-   b. Start the bridge inside Wine:
-      WINEPREFIX="${WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pymt5linux --host localhost --port 8001 "${WIN_PY_WINDOWS_PATH}"
-   c. Connect from Linux Python:
-      from pymt5linux import MetaTrader5
-      mt5 = MetaTrader5(host="localhost", port=8001)
-      mt5.initialize()
+   WINEARCH=win64 WINEPREFIX="${mt5_prefix}" wine "${MT5_CACHE_INSTALLER}"
+3. To call the MetaTrader 5 Python API directly from Linux, reuse the Windows
+   interpreter inside Wine:
+   a. Ensure the Windows Python path above is correct. If not, re-run
+      scripts/setup_ubuntu.sh to refresh it.
+   b. Start the Python bridge from Linux:
+      WINEARCH=win64 WINEPREFIX="${WIN_PY_WINE_PREFIX}" \
+        wine "${WIN_PY_WINDOWS_PATH:-C:/Python311/python.exe}" -m MetaTrader5 --version
+   c. When using helper wrappers (pymt5linux or custom bridge scripts), point
+      them at the Windows interpreter recorded above.
 
 This file is generated by scripts/setup_ubuntu.sh. Re-run the script after
 updating the Wine prefix or Windows Python version to refresh the paths.
@@ -218,7 +263,7 @@ prompt_for_mt5_login() {
     fi
 
     echo "Launching MetaTrader 5 so you can complete the initial login..."
-    WINEPREFIX="${prefix}" wine "${launch_target}" >/dev/null 2>&1 &
+    WINEARCH=win64 WINEPREFIX="${prefix}" wine "${launch_target}" >/dev/null 2>&1 &
     local wine_pid=$!
     while true; do
         if ! read -r -p "Did you log into MetaTrader 5 successfully? Type 'yes' to continue: " response; then
@@ -279,6 +324,9 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
         sudo rm -f /etc/apt/sources.list.d/*deadsnakes*
     fi
 
+    if ! dpkg --print-foreign-architectures | grep -q '^i386$'; then
+        sudo dpkg --add-architecture i386
+    fi
     sudo apt-get update
     sudo apt-get install -y software-properties-common
 
@@ -292,7 +340,8 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
         fi
     fi
 
-    sudo apt-get install -y build-essential wine64 wine winetricks cabextract
+    sudo apt-get install -y build-essential cabextract wine64 wine32:i386 winetricks
+    sudo apt-get install -y wine-gecko2.47.4 wine-gecko2.47.4:i386 wine-mono || true
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-}"
@@ -339,20 +388,25 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
 fi
 
 if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
-    echo "Ensuring Linux-side pymt5linux helper is installed ..."
-    if ! "$PYTHON_BIN" -m pip install --upgrade pymt5linux >/dev/null 2>&1; then
-        echo "Warning: Failed to install pymt5linux in the Linux environment." >&2
+    echo "Ensuring Linux-side bridge helper (${PYMT5LINUX_SOURCE}) is installed ..."
+    if ! "$PYTHON_BIN" -m pip install --upgrade "${PYMT5LINUX_SOURCE}" >/dev/null 2>&1; then
+        echo "Warning: Failed to install ${PYMT5LINUX_SOURCE} in the Linux environment." >&2
+        if [[ "${PYMT5LINUX_SOURCE}" == "pymt5linux" ]]; then
+            echo "Hint: export PYMT5LINUX_SOURCE to point at a Git repository or wheel URL." >&2
+        fi
     fi
 fi
 
 if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
-    MT5_INSTALL_DIR="${MT5_INSTALL_DIR:-${MT5_WINE_DIR}}"
-    if [[ "${MT5_INSTALL_DIR}" == "${MT5_WINE_DIR}" ]]; then
+    MT5_DEFAULT_DIR="${MT5_WINE_PREFIX}/drive_c/Program Files/MetaTrader 5"
+    MT5_INSTALL_DIR="${MT5_INSTALL_DIR:-${MT5_DEFAULT_DIR}}"
+    if [[ "${MT5_INSTALL_DIR}" == "${MT5_DEFAULT_DIR}" ]]; then
         ensure_windows_python_ready || true
         install_mt5_terminal_wine || true
         ensure_mt5_python_packages || true
         write_wine_login_instructions
-        prompt_for_mt5_login "${WINE_PREFIX}" "${MT5_WINE_TERMINAL}" "${MT5_CACHE_INSTALLER}"
+        mt5_terminal_path="${MT5_DEFAULT_DIR}/terminal64.exe"
+        prompt_for_mt5_login "${MT5_WINE_PREFIX}" "${mt5_terminal_path}" "${MT5_CACHE_INSTALLER}"
     else
         MT5_DOWNLOAD_URL="${MT5_DOWNLOAD_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
         MT5_SETUP_PATH="$MT5_INSTALL_DIR/mt5setup.exe"
@@ -397,7 +451,7 @@ EOF
             echo "MetaTrader 5 already installed at $MT5_INSTALL_DIR"
         fi
 
-        prompt_for_mt5_login "${WINE_PREFIX}" "$MT5_INSTALL_DIR/terminal64.exe" "$MT5_SETUP_PATH"
+        prompt_for_mt5_login "${MT5_WINE_PREFIX}" "$MT5_INSTALL_DIR/terminal64.exe" "$MT5_SETUP_PATH"
     fi
 
     # Optionally install CUDA drivers if an NVIDIA GPU is detected or WITH_CUDA=1
