@@ -54,6 +54,10 @@ class EntryPoint:
 
 
 ENTRY_POINTS: dict[str, EntryPoint] = {
+    "pipeline": EntryPoint(
+        module="mt5.pipeline_runner",
+        description="Full pipeline: training → backtest → strategy → realtime",
+    ),
     "train": EntryPoint(
         module="mt5.train",
         description="Classic tabular training pipeline",
@@ -70,6 +74,9 @@ ENTRY_POINTS: dict[str, EntryPoint] = {
 
 
 ALIASES: dict[str, str] = {
+    "auto": "pipeline",
+    "orchestrate": "pipeline",
+    "full": "pipeline",
     "training": "train",
     "classic": "train",
     "offline": "train",
@@ -147,7 +154,7 @@ def _select_mode(
         if mode:
             return mode
 
-    return "train"
+    return "pipeline"
 
 
 def _build_parser() -> argparse.ArgumentParser:
