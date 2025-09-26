@@ -59,3 +59,9 @@ class TimeSeriesMinMaxScaler:
 
     def fit_transform(self, data: np.ndarray) -> np.ndarray:
         return self.fit(data).transform(data)
+
+
+class TimeSeriesScalerMinMax(TimeSeriesMinMaxScaler):
+    """Backward compatible alias matching the ydata-synthetic API."""
+
+    pass
