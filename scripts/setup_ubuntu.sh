@@ -39,6 +39,14 @@ done
 cd "${PROJECT_ROOT}"
 
 if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
+    # Remove the unsupported deadsnakes PPA if it exists. Some legacy
+    # environments may have had the repository enabled which now causes apt
+    # update to fail on newer Ubuntu releases.  The project relies on the
+    # distribution provided Python packages, so the extra PPA is not needed.
+    if ls /etc/apt/sources.list.d/*deadsnakes* >/dev/null 2>&1; then
+        sudo rm -f /etc/apt/sources.list.d/*deadsnakes*
+    fi
+
     sudo apt-get update
     sudo apt-get install -y software-properties-common
 
