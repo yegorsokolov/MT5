@@ -3,7 +3,7 @@ pandas
 pandera
 pyarrow
 scikit-learn
-numpy<2.0.0
+numpy>=2.1
 MetaTrader5
 joblib
 pyyaml
@@ -52,7 +52,7 @@ opentelemetry-instrumentation-logging
 # Heavy optional dependencies
 ray; python_version < "3.13"
 torch-geometric; python_version < "3.13"
-autogluon>=1.1.1; python_version < "3.12"
+flaml>=2.3.6
 
 # Reinforcement learning dependencies
 stable-baselines3

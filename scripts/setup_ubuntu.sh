@@ -6,78 +6,26 @@ PROJECT_ROOT="${SCRIPT_DIR}/.."
 
 cd "${PROJECT_ROOT}"
 
-PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
-PYTHON_BIN="/usr/bin/python${PYTHON_VERSION}"
-
 sudo apt-get update
 sudo apt-get install -y software-properties-common
 
-install_python_from_apt() {
-    sudo apt-get install -y \
-        "python${PYTHON_VERSION}" \
-        "python${PYTHON_VERSION}-dev" \
-        "python${PYTHON_VERSION}-venv" \
-        "python${PYTHON_VERSION}-distutils"
-}
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Installing the distribution provided Python 3 interpreter..."
+    sudo apt-get install -y python3
+fi
 
-ensure_python_version() {
-    if command -v "python${PYTHON_VERSION}" >/dev/null 2>&1; then
-        return 0
-    fi
+sudo apt-get install -y python3-dev python3-venv python3-distutils build-essential wine
 
-    echo "Python ${PYTHON_VERSION} is not installed; attempting installation from default repositories..."
-    if install_python_from_apt; then
-        return 0
-    fi
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
 
-    # Capture the distribution codename in a best-effort manner. Older Ubuntu
-    # releases ship `lsb_release` while newer minimal images might only expose
-    # the data inside /etc/os-release.
-    distro_codename=""
-    if command -v lsb_release >/dev/null 2>&1; then
-        distro_codename="$(lsb_release -cs 2>/dev/null || true)"
-    fi
-    if [[ -z "${distro_codename}" && -r /etc/os-release ]]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        distro_codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
-    fi
-
-    supported_codenames=("focal" "jammy" "lunar" "mantic" "noble")
-    if [[ -n "${distro_codename}" ]]; then
-        for codename in "${supported_codenames[@]}"; do
-            if [[ "${distro_codename}" == "${codename}" ]]; then
-                echo "Adding deadsnakes PPA for ${distro_codename} to obtain Python ${PYTHON_VERSION}..."
-                sudo add-apt-repository -y ppa:deadsnakes/ppa
-                sudo apt-get update
-                if install_python_from_apt; then
-                    return 0
-                fi
-                break
-            fi
-        done
-    fi
-
-    cat <<EOF >&2
-Error: Unable to install Python ${PYTHON_VERSION}. The deadsnakes PPA does not
-provide packages for the current Ubuntu release (${distro_codename:-unknown}).
-Please install Python ${PYTHON_VERSION} manually and re-run this script.
-EOF
+if [[ -z "${PYTHON_BIN}" ]]; then
+    echo "python3 is not available after installation attempts." >&2
     exit 1
-}
-
-ensure_python_version
-
-sudo update-alternatives --install /usr/bin/python3 python3 "$PYTHON_BIN" 2
-sudo update-alternatives --set python3 "$PYTHON_BIN"
+fi
 
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
     "$PYTHON_BIN" -m ensurepip --upgrade
 fi
-
-sudo apt-mark hold python3 "python${PYTHON_VERSION}"
-
-sudo apt-get install -y python3-dev build-essential wine
 
 if ! command -v wget >/dev/null 2>&1; then
     sudo apt-get install -y wget

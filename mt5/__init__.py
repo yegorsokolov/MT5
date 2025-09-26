@@ -41,7 +41,7 @@ __all__ = [
     "telemetry",
     "train",
     "train_allocator",
-    "train_autogluon",
+    "train_automl",
     "train_tabular",
     "train_baseline",
     "train_cli",

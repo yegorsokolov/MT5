@@ -46,23 +46,22 @@ The solution is split into two components:
 
 ### Python runtime compatibility
 
-The project intentionally targets Python 3.11 because two critical dependencies –
-the official MetaTrader5 bridge and Great Expectations – do not ship wheels for
-newer interpreters yet. When Python 3.12/3.13 is used, `pip check` reports
-incompatible combinations such as `great-expectations 0.18.22 has requirement
-numpy<2.0.0,>=1.22.4; python_version >= "3.10", but you have numpy 2.3.3.` The
-setup script now pins Python 3.11.x, constrains NumPy to `<2.0.0` and holds the
-packages at the apt level so unattended upgrades cannot move the interpreter to
-an unsupported version.
+The project now follows the latest stable CPython release provided by your
+operating system instead of pinning to a specific minor version. The setup
+script installs the `python3` meta-package together with the matching development
+headers and virtual-environment tooling, then lets `pip` resolve the most recent
+compatible wheels. NumPy remains constrained to `<2.0.0` in
+`requirements.txt` to keep Great Expectations and other scientific packages
+happy while upstreams finish their Python 3.13 migration.
 
-* Linux: run `./scripts/setup_ubuntu.sh` to install `python3.11`, set it as the
-  system `python3` alternative and upgrade dependencies.
-* Windows/macOS: download Python 3.11.x from python.org, ensure it is the first
-  interpreter on your `PATH`, then create a virtual environment (`python -m venv
-  .venv`) before installing requirements.
+* Linux: run `./scripts/setup_ubuntu.sh` to install the distro-provided `python3`
+  interpreter, ensure `pip` is available and upgrade dependencies.
+* Windows/macOS: install the latest Python 3 release from python.org, ensure it
+  appears first on your `PATH`, then create a virtual environment (`python -m
+  venv .venv`) before installing requirements.
 
 You can re-run `python -m utils.environment` at any time; the diagnostic exits
-early if the interpreter drifts outside the supported 3.10–3.11 window.
+early if the interpreter drifts outside the supported 3.10+ window.
 
 ### MQL5 connectivity fallback
 
@@ -805,8 +804,8 @@ For a full pipeline combining all of these approaches run `mt5.train_combined`.
    python -m mt5.train_meta
    # train the tabular gradient-boosting model
    python -m mt5.train_tabular
-   # train the AutoGluon tabular ensemble
-   python -m mt5.train_autogluon
+   # train the AutoML tabular ensemble (FLAML backend)
+   python -m mt5.train_automl
    python -m mt5.train_rl
    # end-to-end training of all components
    python -m mt5.train_combined
@@ -858,9 +857,9 @@ The resulting model file (`model.joblib`) is consumed by the Python trading
 backend. When
 training with `mt5.train_tabular` the trained pipeline is stored under
 `models/tabular` and will be used when `model_type: tabular` is set in
-`config.yaml`. Running `mt5.train_autogluon` produces an AutoGluon predictor
-under `models/autogluon`, which is automatically selected when
-`model_type: autogluon` is configured.
+`config.yaml`. Running `mt5.train_automl` produces a FLAML-powered AutoML
+predictor under `models/automl`, which is automatically selected when
+`model_type: automl` (or the legacy `autogluon` alias) is configured.
 
 To run live training and keep the repository in sync:
 
