@@ -197,7 +197,7 @@ deployments.
 ## Deployment and Environment Checks
 
 The toolkit attempts to run even on minimal virtual machines. An environment
-check verifies that all required Python packages from `requirements-core.txt`
+check verifies that all required Python packages from `requirements.txt`
 are installed, checks available CPU cores and memory and adjusts the
 configuration when the host has limited resources. If the VM does not meet the
 minimum requirements the process aborts with a message describing the detected
@@ -317,7 +317,7 @@ match your environment.
      - Installs and pins Python 3.11.x using the `deadsnakes` packages, holds the interpreter packages so apt will not auto-upgrade to unsupported releases and ensures `python3` points to the pinned version.
      - Updates apt packages required by MetaTrader integration.
      - Upgrades `pip` inside the virtual environment.
-     - Installs the Python dependencies from `requirements-core.txt`.
+     - Installs the Python dependencies from `requirements.txt`.
      - Downloads the MetaTrader 5 setup executable into `/opt/mt5` (override
        with `MT5_INSTALL_DIR`) and writes login instructions to
        `/opt/mt5/LOGIN_INSTRUCTIONS.txt`. Run `wine /opt/mt5/mt5setup.exe`
@@ -364,7 +364,7 @@ match your environment.
 
 For cloud deployments (EC2, Proxmox or other Ubuntu instances) supply
 `deploy/cloud-init.yaml` as the user-data script. It installs apt dependencies,
-runs `pip install -r requirements-core.txt` and enables the `mt5bot.service` on
+runs `pip install -r requirements.txt` and enables the `mt5bot.service` on
 first boot so the service starts automatically after the VM finishes
 provisioning.
 
@@ -378,7 +378,7 @@ macOS:
 git clone https://github.com/USERNAME/MT5.git
 cd MT5
 touch .env  # create blank environment file and fill it using .env.template
-pip install -r requirements-core.txt
+pip install -r requirements.txt
 dvc pull  # fetch raw/history data
 python -m utils.environment  # verify deps and adjust config
 python -m mt5
@@ -390,7 +390,7 @@ Windows PowerShell:
 git clone https://github.com/USERNAME/MT5.git
 Set-Location MT5
 New-Item -Path . -Name .env -ItemType File -Force | Out-Null  # blank env file, fill from .env.template
-pip install -r requirements-core.txt
+pip install -r requirements.txt
 dvc pull  # fetch raw/history data
 python -m utils.environment
 python -m mt5
@@ -742,17 +742,23 @@ For a full pipeline combining all of these approaches run `mt5.train_combined`.
 1. Install Python dependencies:
 
    ```bash
-   pip install -r requirements-core.txt
+   pip install -r requirements.txt
    # optional extras
    pip install .[heavy]
    pip install .[rl]
    pip install .[nlp]
    ```
 
+   The consolidated `requirements.txt` replaces the previous segmented
+   requirement files and now includes the optional reinforcement learning,
+   natural language processing and documentation dependencies by default. If
+   you only need a subset of the stack, trim the file or rely on the
+   `pyproject.toml` extras before installation.
+
    Dependencies are pinned for reproducibility. After verifying changes and tests pass, regenerate the lists with:
 
    ```bash
-   pip freeze | sort > requirements-core.txt
+   pip freeze | sort > requirements.txt
    ```
 
 2. Place historical CSV files under `data/`, specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`, **or** define `api_history` entries to fetch ticks directly from your MetaTrader&nbsp;5 terminal. Existing CSV files can be converted to Parquet using `python scripts/migrate_to_parquet.py`.
@@ -904,7 +910,7 @@ to prepare a clean Windows PC or VPS.
    2. In GitHub Desktop choose **File → Clone repository…**; otherwise run `git clone <repo-url>` and press **Enter**.
 5. **Install dependencies** –
    1. Open **Command Prompt** and `cd` into the cloned folder.
-   2. Run `pip install -r requirements-core.txt`. After verifying any updates, refresh the pinned versions with `pip freeze | sort > requirements-core.txt`.
+   2. Run `pip install -r requirements.txt`. After verifying any updates, refresh the pinned versions with `pip freeze | sort > requirements.txt`.
    3. Install extras as needed, e.g. `pip install .[heavy]` or `pip install .[rl]`.
    4. For SHAP-based feature importance install `shap` with `pip install shap`.
       When the config option `feature_importance: true` is set, `mt5.train` and
