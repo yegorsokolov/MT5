@@ -7,14 +7,14 @@ name = "mt5"
 version = "0.1.0"
 description = "Trading utilities and strategies for MetaTrader5 automation."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10,<3.12"
 license = {text = "MIT"}
 authors = [{ name = "MT5 Contributors" }]
 dependencies = [
     "pandas",
     "pyarrow",
     "scikit-learn",
-    "numpy",
+    "numpy<2.0.0",
     "pyyaml",
     "pydantic>=2,<3",
     "GitPython",
@@ -26,7 +26,7 @@ dependencies = [
     "lightgbm",
     "torch",
     "tqdm",
-    "MetaTrader5",
+    "MetaTrader5<6",
     "scikit-optimize",
     "scipy",
     "river",
