@@ -1,3 +1,0 @@
-transformers
-# FinGPT is not available via pip
-diffusers

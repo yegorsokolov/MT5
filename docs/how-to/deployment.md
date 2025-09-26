@@ -42,10 +42,13 @@ Use the checklist below to provision a clean Windows machine or VPS.
 2. Open a command prompt in the cloned folder and install dependencies:
 
    ```bash
-   pip install -r requirements-core.txt
+   pip install -r requirements.txt
    ```
 
-   Install any extras you require, for example `pip install .[heavy]`.
+   The repository now ships a single consolidated `requirements.txt` that bundles
+   the previously separate dependency groups. Trim the file or install extras via
+   `pyproject.toml` if you prefer a leaner environment. Install any extras you
+   require, for example `pip install .[heavy]`.
 3. Generate the Protobuf bindings the signal publisher and trading backend
    consume:
 

@@ -9,5 +9,5 @@ packages:
   - wine
 runcmd:
   - [bash, -lc, "git clone https://github.com/USERNAME/MT5.git /opt/MT5"]
-  - [bash, -lc, "cd /opt/MT5 && pip3 install --upgrade pip && pip3 install -r requirements-core.txt"]
+  - [bash, -lc, "cd /opt/MT5 && pip3 install --upgrade pip && pip3 install -r requirements.txt"]
   - [bash, -lc, "/opt/MT5/scripts/install_service.sh"]
