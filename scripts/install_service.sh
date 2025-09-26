@@ -21,6 +21,20 @@ else
     echo "Found existing ${ENV_FILE}"
 fi
 
+# Verify the runtime environment before provisioning services.
+if [[ "${INSTALL_SKIP_ENV_CHECK:-0}" == "1" ]]; then
+    echo "Skipping environment diagnostics (INSTALL_SKIP_ENV_CHECK=1)"
+else
+    echo "Running environment diagnostics (utils.environment)"
+    if ! (
+        cd "${REPO_DIR}"
+        python3 -m utils.environment --no-auto-install --strict
+    ); then
+        echo "Environment diagnostics failed; resolve the issues above and rerun the installer." >&2
+        exit 1
+    fi
+fi
+
 # Ensure runtime controller/config secrets exist for the services.
 if [[ "${RUNTIME_SECRETS_SKIP:-0}" == "1" ]]; then
     echo "Skipping runtime secret generation (RUNTIME_SECRETS_SKIP=1)"
