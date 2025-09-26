@@ -123,6 +123,24 @@ the `mt5/` package so they can be invoked as Python modules (for example,
 This structure keeps the root directory readable while maintaining import
 compatibility through the `mt5` namespace package.
 
+## Unified command launcher
+
+The classic entry points (`python -m mt5.train`, `python -m mt5.backtest`,
+`python -m mt5.realtime_train`) remain available, but day-to-day operations can
+now start a single dispatcher instead:
+
+```bash
+python -m mt5              # defaults to the classic training pipeline
+python -m mt5 --list       # show the available modes and exit
+python -m mt5 backtest     # run the historical backtesting suite
+python -m mt5 --mode realtime -- <args>  # forward additional arguments
+```
+
+The dispatcher automatically resolves the desired mode based on CLI arguments,
+`MT5_MODE` / `MT5_DEFAULT_MODE` environment variables, or the configuration
+returned by `utils.load_config`. If none of those are set it safely falls back
+to the classic offline training routine.
+
 ## Deployment and Environment Checks
 
 The toolkit attempts to run even on minimal virtual machines. An environment
