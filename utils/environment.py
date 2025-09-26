@@ -9,7 +9,7 @@ import subprocess
 import sys
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from importlib import metadata
 from importlib.util import find_spec
 
@@ -648,7 +648,93 @@ def _check_feature_worker() -> dict[str, Any]:
     }
 
 
+def _check_model_configuration() -> dict[str, Any]:
+    """Warn when configuration still references the deprecated AutoGluon stack."""
+
+    instruction = (
+        "Update config.yaml to use 'model_type: tabular' and replace any "
+        "autogluon model paths with 'models/tabular/model.joblib'."
+    )
+    name = "Model configuration compatibility"
+
+    if load_config_data is None or not CONFIG_FILE.exists():
+        return {
+            "name": name,
+            "status": "passed",
+            "detail": "Configuration loader unavailable or config.yaml missing; skipping model compatibility check.",
+            "followup": None,
+        }
+
+    try:
+        cfg = load_config_data(path=CONFIG_FILE, resolve_secrets=True)
+    except Exception as exc:  # pragma: no cover - configuration errors vary
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": f"Unable to load config.yaml: {exc}",
+            "followup": "Resolve the configuration error before running the bot.",
+        }
+
+    def _extract_model_type(mapping: Mapping[str, Any] | None) -> str:
+        if not isinstance(mapping, Mapping):
+            return ""
+        value = mapping.get("model_type")
+        if value is None:
+            model_section = mapping.get("model")
+            if isinstance(model_section, Mapping):
+                value = model_section.get("type")
+        return str(value or "").lower()
+
+    primary_type = _extract_model_type(cfg if isinstance(cfg, Mapping) else None)
+    training_section = cfg.get("training") if isinstance(cfg, Mapping) else None
+    training_type = _extract_model_type(training_section if isinstance(training_section, Mapping) else None)
+    model_type = training_type or primary_type
+
+    if model_type == "autogluon":
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": "config.yaml still references model_type: autogluon.",
+            "followup": instruction,
+        }
+
+    ensemble = None
+    if isinstance(training_section, Mapping):
+        ensemble = training_section.get("ensemble_models")
+    if not ensemble and isinstance(cfg, Mapping):
+        ensemble = cfg.get("ensemble_models")
+
+    offending_paths: list[str] = []
+    if isinstance(ensemble, (list, tuple)):
+        offending_paths = [
+            str(item)
+            for item in ensemble
+            if isinstance(item, str) and "autogluon" in item.lower()
+        ]
+    elif isinstance(ensemble, str) and "autogluon" in ensemble.lower():
+        offending_paths = [ensemble]
+
+    if offending_paths:
+        preview = ", ".join(offending_paths[:3])
+        if len(offending_paths) > 3:
+            preview += f" (and {len(offending_paths) - 3} more)"
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": f"Configuration references deprecated AutoGluon model paths: {preview}.",
+            "followup": instruction,
+        }
+
+    return {
+        "name": name,
+        "status": "passed",
+        "detail": "Configuration compatible with the tabular trainer.",
+        "followup": None,
+    }
+
+
 _AUTOMATED_CHECKS: tuple[Callable[[], dict[str, Any]], ...] = (
+    _check_model_configuration,
     _check_mt5_login,
     _check_mt5_ping,
     _check_git_remote,
