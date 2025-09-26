@@ -2,13 +2,14 @@ pandas
 pandera
 pyarrow
 scikit-learn
-numpy
+numpy<2.0.0
+MetaTrader5
 joblib
 pyyaml
 psutil
 GitPython
 gdown
-great_expectations
+great_expectations<0.19
 duckdb
 dask[distributed]
 pandas_datareader
