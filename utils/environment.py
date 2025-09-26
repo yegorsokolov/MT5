@@ -690,11 +690,11 @@ def _check_python_runtime() -> dict[str, Any]:
 
 
 def _check_model_configuration() -> dict[str, Any]:
-    """Warn when configuration still references the deprecated AutoGluon stack."""
+    """Validate that model configuration references consistent artifacts."""
 
     instruction = (
-        "Update config.yaml to use 'model_type: tabular' and replace any "
-        "autogluon model paths with 'models/tabular/model.joblib'."
+        "Ensure config.yaml uses matching model_type entries and model paths for "
+        "the tabular or AutoGluon trainers."
     )
     name = "Model configuration compatibility"
 
@@ -731,14 +731,6 @@ def _check_model_configuration() -> dict[str, Any]:
     training_type = _extract_model_type(training_section if isinstance(training_section, Mapping) else None)
     model_type = training_type or primary_type
 
-    if model_type == "autogluon":
-        return {
-            "name": name,
-            "status": "failed",
-            "detail": "config.yaml still references model_type: autogluon.",
-            "followup": instruction,
-        }
-
     ensemble = None
     if isinstance(training_section, Mapping):
         ensemble = training_section.get("ensemble_models")
@@ -750,9 +742,15 @@ def _check_model_configuration() -> dict[str, Any]:
         offending_paths = [
             str(item)
             for item in ensemble
-            if isinstance(item, str) and "autogluon" in item.lower()
+            if isinstance(item, str)
+            and "autogluon" in item.lower()
+            and model_type != "autogluon"
         ]
-    elif isinstance(ensemble, str) and "autogluon" in ensemble.lower():
+    elif (
+        isinstance(ensemble, str)
+        and "autogluon" in ensemble.lower()
+        and model_type != "autogluon"
+    ):
         offending_paths = [ensemble]
 
     if offending_paths:
@@ -762,14 +760,25 @@ def _check_model_configuration() -> dict[str, Any]:
         return {
             "name": name,
             "status": "failed",
-            "detail": f"Configuration references deprecated AutoGluon model paths: {preview}.",
+            "detail": (
+                "Configuration references AutoGluon model paths but "
+                "model_type is not set to 'autogluon': "
+                f"{preview}."
+            ),
             "followup": instruction,
         }
+
+    if model_type == "autogluon":
+        detail = "Configuration targets the AutoGluon tabular ensemble."
+    elif model_type == "tabular":
+        detail = "Configuration targets the sklearn tabular pipeline."
+    else:
+        detail = "Configuration does not reference AutoGluon-specific paths."
 
     return {
         "name": name,
         "status": "passed",
-        "detail": "Configuration compatible with the tabular trainer.",
+        "detail": detail,
         "followup": None,
     }
 

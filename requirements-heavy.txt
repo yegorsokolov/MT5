@@ -1,2 +1,3 @@
 ray; python_version < "3.13"
 torch-geometric; python_version < "3.13"
+autogluon>=1.1.1; python_version < "3.12"

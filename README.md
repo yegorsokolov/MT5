@@ -792,6 +792,8 @@ For a full pipeline combining all of these approaches run `mt5.train_combined`.
    python -m mt5.train_meta
    # train the tabular gradient-boosting model
    python -m mt5.train_tabular
+   # train the AutoGluon tabular ensemble
+   python -m mt5.train_autogluon
    python -m mt5.train_rl
    # end-to-end training of all components
    python -m mt5.train_combined
@@ -835,8 +837,10 @@ is controlled by the `diffusion_epochs` configuration key.
 
 The resulting model file (`model.joblib`) can be loaded by the EA. When
 training with `mt5.train_tabular` the trained pipeline is stored under
-`models/tabular` and will be used when `model_type: tabular` (or the legacy
-`autogluon`) is set in `config.yaml`.
+`models/tabular` and will be used when `model_type: tabular` is set in
+`config.yaml`. Running `mt5.train_autogluon` produces an AutoGluon predictor
+under `models/autogluon`, which is automatically selected when
+`model_type: autogluon` is configured.
 
 To run live training and keep the repository in sync:
 
