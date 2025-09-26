@@ -1073,21 +1073,13 @@ def main():
         logger.info("Market closed - running backtest and using historical data")
         backtest.run_rolling_backtest(cfg)
 
-    raw_model_type = str(cfg.get("model_type", "lgbm")).lower()
-    if raw_model_type == "autogluon":
-        logger.warning(
-            "The 'autogluon' model_type is deprecated. Using the new tabular "
-            "trainer instead."
-        )
-        model_type = "tabular"
-    else:
-        model_type = raw_model_type
+    model_type = str(cfg.get("model_type", "lgbm")).lower()
 
     configured_paths = cfg.get("ensemble_models")
     if configured_paths:
         model_paths = configured_paths
-    elif model_type == "tabular":
-        model_paths = ["models/tabular/model.joblib"]
+    elif model_type in {"tabular", "autogluon"}:
+        model_paths = [f"models/{model_type}/model.joblib"]
     else:
         model_paths = ["model.joblib"]
     model_versions = cfg.get("model_versions", [])
@@ -1100,7 +1092,9 @@ def main():
 
     if not models:
         default_relative = (
-            "models/tabular/model.joblib" if model_type == "tabular" else "model.joblib"
+            f"models/{model_type}/model.joblib"
+            if model_type in {"tabular", "autogluon"}
+            else "model.joblib"
         )
         fallback_path = Path(__file__).resolve().parent / default_relative
         if fallback_path.exists():
@@ -1133,9 +1127,14 @@ def main():
                             )
                             if isinstance(feats, list):
                                 stored_features = feats
-        elif model_type == "tabular":
+        elif model_type in {"tabular", "autogluon"}:
+            train_cmd = (
+                "python -m mt5.train_autogluon"
+                if model_type == "autogluon"
+                else "python -m mt5.train_tabular"
+            )
             raise RuntimeError(
-                "No tabular model is available. Train one with 'python -m mt5.train_tabular' "
+                f"No {model_type} model is available. Train one with '{train_cmd}' "
                 "before generating signals."
             )
 
@@ -1315,23 +1314,26 @@ def main():
         if "SymbolCode" in df.columns:
             features.append("SymbolCode")
 
-    if model_type == "tabular":
-        tabular_models = [
-            mdl for mdl in models if hasattr(mdl, "predict_proba")
-        ]
-        if not tabular_models:
+    if model_type in {"tabular", "autogluon"}:
+        prob_models = [mdl for mdl in models if hasattr(mdl, "predict_proba")]
+        if not prob_models:
+            train_cmd = (
+                "python -m mt5.train_autogluon"
+                if model_type == "autogluon"
+                else "python -m mt5.train_tabular"
+            )
             raise RuntimeError(
-                "Tabular model loading failed – ensure 'python -m mt5.train_tabular' "
+                f"{model_type.capitalize()} model loading failed – ensure '{train_cmd}' "
                 "has been executed successfully."
             )
 
         def _predict(data: pd.DataFrame) -> np.ndarray:
             preds: list[np.ndarray] = []
-            for mdl in tabular_models:
+            for mdl in prob_models:
                 try:
                     output = mdl.predict_proba(data[features])
                 except Exception:  # pragma: no cover - best effort logging
-                    logger.exception("Tabular model prediction failed")
+                    logger.exception("Tabular-style model prediction failed")
                     continue
                 arr = np.asarray(output)
                 if arr.ndim == 2:
