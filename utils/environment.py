@@ -35,7 +35,7 @@ except Exception:  # pragma: no cover - handled later
     AppConfig = None  # type: ignore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-REQ_FILE = PROJECT_ROOT / "requirements-core.txt"
+REQ_FILE = PROJECT_ROOT / "requirements.txt"
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", PROJECT_ROOT / "config.yaml"))
 AUTO_INSTALL_DEPENDENCIES_DEFAULT = os.getenv("AUTO_INSTALL_DEPENDENCIES", "1").strip().lower() not in {
     "0",
@@ -970,7 +970,7 @@ def ensure_environment(
         raise EnvironmentCheckError(
             "Missing dependencies: "
             + ", ".join(missing_unique)
-            + ". Install with 'pip install -r requirements-core.txt' or the appropriate extras, then re-run the check.",
+            + ". Install with 'pip install -r requirements.txt' and re-run the check.",
             missing_dependencies=missing_unique,
             install_attempts=install_attempts,
             manual_tests=manual_tests,

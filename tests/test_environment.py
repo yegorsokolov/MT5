@@ -160,12 +160,13 @@ def test_check_dependencies_skips_comments_and_normalises(tmp_path, monkeypatch)
         "   ",
     ]
 
-    req_file = tmp_path / "requirements-core.txt"
+    req_file = tmp_path / "requirements.txt"
     req_file.write_text("\n".join(requirements))
 
     monkeypatch.setattr(environment, "REQ_FILE", req_file)
 
     requested: list[str] = []
+    fallback: list[str] = []
 
     def _fake_distribution(name: str):
         requested.append(name)
@@ -174,13 +175,19 @@ def test_check_dependencies_skips_comments_and_normalises(tmp_path, monkeypatch)
         return object()
 
     monkeypatch.setattr(environment.metadata, "distribution", _fake_distribution)
+    monkeypatch.setattr(
+        environment,
+        "find_spec",
+        lambda name: (fallback.append(name), None)[1],
+    )
 
     assert environment._check_dependencies() == ["rich"]
-    assert requested == ["requests", "uvicorn", "some-package", "rich"]
+    assert requested == ["requests", "uvicorn", "rich"]
+    assert fallback == ["rich"]
 
 
 def test_check_dependencies_falls_back_to_module_search(tmp_path, monkeypatch):
-    req_file = tmp_path / "requirements-core.txt"
+    req_file = tmp_path / "requirements.txt"
     req_file.write_text("example-pkg\n")
 
     monkeypatch.setattr(environment, "REQ_FILE", req_file)

@@ -13,8 +13,8 @@ RUN if ! command -v python >/dev/null; then \
     fi
 
 WORKDIR /app
-COPY requirements-core.txt pyproject.toml ./
-RUN pip install --no-cache-dir -r requirements-core.txt
+COPY requirements.txt pyproject.toml ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 RUN pip install --no-cache-dir --no-deps -e . \

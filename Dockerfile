@@ -11,7 +11,7 @@ RUN dpkg --add-architecture i386 && \
 
 WORKDIR /opt/bot
 COPY . /opt/bot
-RUN pip3 install --no-cache-dir -r requirements-core.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Optional MetaTrader 5 install under Wine
 RUN mkdir -p /opt/mt5 && \
