@@ -1073,13 +1073,21 @@ def main():
         logger.info("Market closed - running backtest and using historical data")
         backtest.run_rolling_backtest(cfg)
 
-    model_type = str(cfg.get("model_type", "lgbm")).lower()
+    requested_model_type = str(cfg.get("model_type", "lgbm")).lower()
+    if requested_model_type == "autogluon":
+        logger.warning(
+            "The 'autogluon' model_type is deprecated. Using the FLAML-based 'automl' backend instead."
+        )
+    model_type = "automl" if requested_model_type == "autogluon" else requested_model_type
 
     configured_paths = cfg.get("ensemble_models")
     if configured_paths:
         model_paths = configured_paths
-    elif model_type in {"tabular", "autogluon"}:
-        model_paths = [f"models/{model_type}/model.joblib"]
+    elif model_type in {"tabular", "automl"}:
+        default_paths = [f"models/{model_type}/model.joblib"]
+        if requested_model_type == "autogluon":
+            default_paths.insert(0, "models/autogluon/model.joblib")
+        model_paths = default_paths
     else:
         model_paths = ["model.joblib"]
     model_versions = cfg.get("model_versions", [])
@@ -1093,7 +1101,7 @@ def main():
     if not models:
         default_relative = (
             f"models/{model_type}/model.joblib"
-            if model_type in {"tabular", "autogluon"}
+            if model_type in {"tabular", "automl"}
             else "model.joblib"
         )
         fallback_path = Path(__file__).resolve().parent / default_relative
@@ -1127,10 +1135,10 @@ def main():
                             )
                             if isinstance(feats, list):
                                 stored_features = feats
-        elif model_type in {"tabular", "autogluon"}:
+        elif model_type in {"tabular", "automl"}:
             train_cmd = (
-                "python -m mt5.train_autogluon"
-                if model_type == "autogluon"
+                "python -m mt5.train_automl"
+                if model_type == "automl"
                 else "python -m mt5.train_tabular"
             )
             raise RuntimeError(
@@ -1314,12 +1322,12 @@ def main():
         if "SymbolCode" in df.columns:
             features.append("SymbolCode")
 
-    if model_type in {"tabular", "autogluon"}:
+    if model_type in {"tabular", "automl"}:
         prob_models = [mdl for mdl in models if hasattr(mdl, "predict_proba")]
         if not prob_models:
             train_cmd = (
-                "python -m mt5.train_autogluon"
-                if model_type == "autogluon"
+                "python -m mt5.train_automl"
+                if model_type == "automl"
                 else "python -m mt5.train_tabular"
             )
             raise RuntimeError(
