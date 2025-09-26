@@ -149,5 +149,8 @@ fi
 echo "Triggering an immediate MT5 bot update check..."
 "$PYTHON_BIN" -m services.auto_updater --force
 
+echo "Recording environment diagnostics for reproducibility..."
+"$PYTHON_BIN" -m utils.environment --json || true
+
 echo "AutoGluon has been replaced with the built-in tabular trainer."
 echo "Run 'python -m mt5.train_tabular' after setup to train the default model."
