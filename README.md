@@ -127,19 +127,27 @@ compatibility through the `mt5` namespace package.
 
 The classic entry points (`python -m mt5.train`, `python -m mt5.backtest`,
 `python -m mt5.realtime_train`) remain available, but day-to-day operations can
-now start a single dispatcher instead:
+now start a single dispatcher instead. By default it executes the full
+orchestration pipeline—training, backtesting, strategy creation and a bounded
+realtime run—in one go while reusing any high-quality artifacts from previous
+backtests to accelerate subsequent launches. If cached metrics fall below the
+configured quality threshold the pipeline will transparently recompute and
+overwrite them to keep the dataset healthy.
 
 ```bash
-python -m mt5              # defaults to the classic training pipeline
-python -m mt5 --list       # show the available modes and exit
-python -m mt5 backtest     # run the historical backtesting suite
+python -m mt5                       # run the orchestrated pipeline end-to-end
+python -m mt5 --list                # show the available modes and exit
+python -m mt5 backtest              # run only the historical backtesting suite
+python -m mt5 pipeline --skip-*     # selectively omit stages
+python -m mt5 pipeline --help       # inspect pipeline-specific options
 python -m mt5 --mode realtime -- <args>  # forward additional arguments
 ```
 
 The dispatcher automatically resolves the desired mode based on CLI arguments,
 `MT5_MODE` / `MT5_DEFAULT_MODE` environment variables, or the configuration
 returned by `utils.load_config`. If none of those are set it safely falls back
-to the classic offline training routine.
+to the orchestrated pipeline so the full workflow is executed with sensible
+defaults. Pass `--dry-run` to inspect the resolved module without executing it.
 
 ## Deployment and Environment Checks
 
