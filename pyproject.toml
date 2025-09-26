@@ -35,7 +35,6 @@ dependencies = [
     "mlflow",
     "shap",
     "statsmodels",
-    "ydata-synthetic",
     "tsfresh",
     "exchange-calendars",
     "yfinance",
