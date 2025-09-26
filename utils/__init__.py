@@ -5,7 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 from datetime import datetime
 from contextlib import contextmanager
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 import os
 import warnings
 try:
@@ -320,6 +320,18 @@ def mlflow_run(experiment: str, cfg):
         yield
 
 
+if TYPE_CHECKING:  # pragma: no cover - import only for static analysis
+    from .environment import ensure_environment as _ensure_environment  # noqa: F401
+
+
+def ensure_environment(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Lazily import :func:`utils.environment.ensure_environment`."""
+
+    from .environment import ensure_environment as _ensure_environment
+
+    return _ensure_environment(*args, **kwargs)
+
+
 __all__ = [
     "PROJECT_ROOT",
     "load_config_data",
@@ -328,8 +340,5 @@ __all__ = [
     "update_config",
     "sanitize_config",
     "mlflow_run",
+    "ensure_environment",
 ]
-
-from .environment import ensure_environment  # noqa: E402
-
-__all__.append("ensure_environment")
