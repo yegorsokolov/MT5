@@ -1,6 +1,7 @@
 from pathlib import Path
 import random
 import logging
+import sys
 import numpy as np
 import pandas as pd
 
@@ -82,7 +83,16 @@ def main():
     train_df = train_df.dropna(subset=["target"])
     test_df = test_df.dropna(subset=["target"])
 
-    from autogluon.tabular import TabularPredictor
+    try:
+        from autogluon.tabular import TabularPredictor
+    except ModuleNotFoundError as exc:  # pragma: no cover - defensive guard
+        raise RuntimeError(
+            "AutoGluon training is only available when the optional 'heavy' "
+            "dependencies are installed under Python versions earlier than "
+            "3.13. "
+            f"Current interpreter: {sys.version.split()[0]}. "
+            "Use Python 3.12 or earlier or skip the mt5.train_autogluon entry point."
+        ) from exc
 
     out_path = root / "models" / "autogluon"
     predictor = TabularPredictor(label="target", path=str(out_path))

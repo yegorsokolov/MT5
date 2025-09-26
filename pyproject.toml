@@ -66,9 +66,9 @@ baseline = "strategies:register_builtin_strategies"
 test = ["pytest", "pytest-cov", "pyyaml"]
 gpu = ["tensorflow"]
 heavy = [
-    "autogluon==1.4.0",
-    "ray==2.48.0",
-    "torch-geometric==2.6.1",
+    "autogluon==1.4.0; python_version < \"3.13\"",
+    "ray==2.48.0; python_version < \"3.13\"",
+    "torch-geometric==2.6.1; python_version < \"3.13\"",
 ]
 rl = [
     "stable-baselines3==2.7.0",
