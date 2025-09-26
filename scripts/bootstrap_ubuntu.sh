@@ -5,17 +5,37 @@ set -euo pipefail
 sudo apt-get update
 sudo apt-get install -y software-properties-common
 
-if ! command -v python3.13 >/dev/null 2>&1; then
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt-get update
+echo "Ensuring a supported Python interpreter is installed..."
+if ! sudo apt-get install -y python3 python3-venv python3-dev; then
+    echo "Warning: Failed to install python3 toolchain packages via apt; attempting to use any existing interpreter." >&2
+fi
+if apt-cache show python3-distutils >/dev/null 2>&1; then
+    if ! sudo apt-get install -y python3-distutils; then
+        echo "Warning: python3-distutils could not be installed; continuing without it." >&2
+    fi
 fi
 
-sudo apt-get install -y python3.13 python3.13-venv python3.13-dev python3.13-distutils build-essential git wine
+sudo apt-get install -y build-essential git wine
 
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3.13)}"
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+    for candidate in python3 python3.13 python3.12; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON_BIN="$(command -v "$candidate")"
+            break
+        fi
+    done
+fi
 
 if [[ -z "${PYTHON_BIN}" ]]; then
-    echo "python3.13 is required to bootstrap the environment" >&2
+    echo "A supported python3 interpreter is required to bootstrap the environment." >&2
+    exit 1
+fi
+
+PYTHON_MAJOR=$("${PYTHON_BIN}" -c 'import sys; print(sys.version_info.major)')
+PYTHON_MINOR=$("${PYTHON_BIN}" -c 'import sys; print(sys.version_info.minor)')
+if (( PYTHON_MAJOR < 3 || (PYTHON_MAJOR == 3 && PYTHON_MINOR < 10) )); then
+    echo "Python ${PYTHON_MAJOR}.${PYTHON_MINOR} is not supported. Please install Python 3.10 or newer." >&2
     exit 1
 fi
 
