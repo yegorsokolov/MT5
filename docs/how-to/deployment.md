@@ -1,6 +1,6 @@
 # Deployment Guide
 
-The live Expert Advisor depends on three separate applications:
+The live trading stack depends on three separate applications:
 
 * **MetaTrader 5 Terminal** – streams market data and executes orders.
 * **Git/GitHub** – stores configuration, datasets and trained models so they can be
@@ -17,8 +17,8 @@ Use the checklist below to provision a clean Windows machine or VPS.
      website and run it with the default options.
    - After installation, launch the terminal once to let it create the
      `MQL5` data directory.
-   - Log in with your trading account so the Expert Advisor can trade live or
-     on a demo environment.
+   - Log in with your trading account so the Python trading backend can execute
+     live or demo trades.
 2. **Git and GitHub tooling**
    - Install Git from [git-scm.com](https://git-scm.com/download/win). Accept the
      defaults and ensure “Git from the command line” is selected so the bot can
@@ -46,7 +46,8 @@ Use the checklist below to provision a clean Windows machine or VPS.
    ```
 
    Install any extras you require, for example `pip install .[heavy]`.
-3. Generate the Protobuf bindings the Expert Advisor consumes:
+3. Generate the Protobuf bindings the signal publisher and trading backend
+   consume:
 
    ```bash
    protoc --python_out=. proto/signals.proto
@@ -54,18 +55,23 @@ Use the checklist below to provision a clean Windows machine or VPS.
 
 ## 3. Connect the bot to MetaTrader 5
 
-1. Copy the Expert Advisor files into the terminal by running
-   `python scripts/setup_terminal.py "<path-to-terminal>"` or manually copying
-   `AdaptiveEA.mq5` and `RealtimeEA.mq5` into `MQL5/Experts`.
-2. Restart MetaTrader 5, open the MetaEditor and press **F7** to compile the
-   new Expert Advisors.
-3. In MetaTrader 5 enable **Tools → Options → Expert Advisors → Allow automated
-   trading** and toggle the **Algo Trading** button on the toolbar.
-4. Drag `AdaptiveEA` (or `RealtimeEA`) from the **Navigator** onto a chart and
-   verify the `ZmqAddress` input matches the URL used by the Python signal
-   publisher (`tcp://localhost:5555` by default).
-5. Check the **Experts** tab for a “Connected to signal socket” message – this
-   confirms the bot is receiving signals from Python.
+1. Launch the MetaTrader 5 terminal, log into the account you intend to trade
+   and keep the terminal running so the Python bridge can reuse the session.
+2. Ensure Python can discover the terminal by setting the `MT5_TERMINAL_PATH`
+   environment variable (point it at the installation directory or directly at
+   `terminal64.exe`) or by placing the terminal inside the repository `mt5/`
+   folder.
+3. Run `python scripts/setup_terminal.py --install-heartbeat` (add
+   `--path "<terminal-or-install-dir>"` if the helper cannot auto-detect the
+   executable). Provide `--login`, `--password` and `--server` to perform a
+   headless login or omit them to attach to the running terminal. The script
+   reports the connected account, balance and broker when successful.
+4. If the script fails, review the printed MetaTrader5 error and run the
+   installed `ConnectionHeartbeat` script inside MetaTrader 5 for detailed
+   diagnostics before retrying.
+5. Finally, open **Tools → Options → Expert Advisors** inside MetaTrader 5 and
+   enable **Allow automated trading**, then ensure the **Algo Trading** toggle on
+   the toolbar is green so the terminal accepts orders from Python.
 
 ## 4. Run the automation scripts
 
