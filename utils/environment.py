@@ -697,53 +697,74 @@ def _check_python_runtime() -> dict[str, Any]:
 
 
 def _check_distributed_dependencies() -> dict[str, Any]:
-    """Confirm Ray and torch-geometric are available when supported."""
+    """Confirm Ray, torch-geometric and uvloop are available when supported."""
 
-    name = "Distributed training dependencies"
-    followup = (
-        "Install Ray and torch-geometric packages: "
-        "pip install 'ray[default]' torch-geometric"
-    )
+    name = "Accelerated training dependencies"
     major, minor = _python_major_minor()
+    ray_supported = major < 3 or (major == 3 and minor <= 12)
+    uvloop_supported = not sys.platform.startswith("win")
 
-    if major > 3 or (major == 3 and minor >= 13):
+    followup_pkgs: list[str] = ["'ray[default]'", "torch-geometric"]
+    if uvloop_supported:
+        followup_pkgs.append("uvloop")
+
+    followup = (
+        "Install Ray, torch-geometric and uvloop packages: pip install "
+        + " ".join(followup_pkgs)
+    )
+
+    missing: list[str] = []
+    detail_parts: list[str] = []
+
+    if ray_supported:
+        for pkg, module in (("ray", "ray"), ("torch-geometric", "torch_geometric")):
+            if not _distribution_installed(pkg, module):
+                missing.append(pkg)
+    else:
+        detail_parts.append(
+            "Python "
+            f"{major}.{minor} currently lacks official Ray/torch-geometric wheels. "
+            "The distributed trainers will fall back to pure-Python implementations."
+        )
+
+    if uvloop_supported:
+        if not _distribution_installed("uvloop", "uvloop"):
+            missing.append("uvloop")
+    else:
+        detail_parts.append("uvloop is not supported on Windows and will be skipped.")
+
+    if missing:
+        display = ", ".join(missing)
+        detail = f"Missing packages: {display}."
+        if detail_parts:
+            detail += " " + " ".join(detail_parts)
         return {
             "name": name,
-            "status": "skipped",
-            "detail": (
-                "Python "
-                f"{major}.{minor} currently lacks official Ray/torch-geometric wheels. "
-                "The distributed trainers will fall back to pure-Python implementations."
-            ),
-            "followup": None,
+            "status": "failed",
+            "detail": detail,
+            "followup": followup,
         }
 
-    missing = [
-        pkg
-        for pkg, module in (
-            ("ray", "ray"),
-            ("torch-geometric", "torch_geometric"),
+    if ray_supported:
+        detail = (
+            "Ray, torch-geometric and uvloop available. Distributed and graph "
+            "trainers are fully enabled."
         )
-        if not _distribution_installed(pkg, module)
-    ]
-
-    if not missing:
         return {
             "name": name,
             "status": "passed",
-            "detail": (
-                "Ray and torch-geometric available. Distributed and graph trainers "
-                "are fully enabled."
-            ),
+            "detail": detail,
             "followup": None,
         }
 
-    display = ", ".join(missing)
+    detail = " ".join(detail_parts) or "Ray/torch-geometric skipped due to runtime."
+    if uvloop_supported:
+        detail = "uvloop available. " + detail
     return {
         "name": name,
-        "status": "failed",
-        "detail": f"Missing packages: {display}.",
-        "followup": followup,
+        "status": "skipped",
+        "detail": detail.strip(),
+        "followup": None,
     }
 
 
