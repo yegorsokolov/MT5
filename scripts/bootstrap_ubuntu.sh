@@ -50,7 +50,22 @@ fi
 
 # Post-install checks
 "${PYTHON_BIN}" - <<'PYTHON'
-import MetaTrader5 as mt5
+try:
+    from utils.mt5_bridge import MetaTraderImportError, load_mt5_module
+except Exception:
+    MetaTraderImportError = RuntimeError  # type: ignore
+
+    def load_mt5_module():  # type: ignore
+        import MetaTrader5 as _mt5  # type: ignore
+
+        return _mt5
+
+
+try:
+    mt5 = load_mt5_module()
+except MetaTraderImportError as exc:
+    raise SystemExit(f"MetaTrader5 import failed: {exc}") from exc
+
 if not mt5.initialize():
     raise SystemExit("MetaTrader5 initialization failed")
 mt5.shutdown()
