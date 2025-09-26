@@ -1,9 +1,12 @@
+import importlib
 import logging
 import os
 import re
+import subprocess
 import sys
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from importlib.util import find_spec
 
 try:
@@ -25,6 +28,11 @@ except Exception:  # pragma: no cover - handled later
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQ_FILE = PROJECT_ROOT / "requirements-core.txt"
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", PROJECT_ROOT / "config.yaml"))
+AUTO_INSTALL_DEPENDENCIES = os.getenv("AUTO_INSTALL_DEPENDENCIES", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 MIN_RAM_GB = 2
 REC_RAM_GB = 8
@@ -95,6 +103,44 @@ def _check_dependencies() -> list[str]:
     return missing
 
 
+def _collect_missing_dependencies() -> list[str]:
+    missing = _check_dependencies()
+    if find_spec("psutil") is None:
+        missing.append("psutil")
+    return sorted(set(missing))
+
+
+def _attempt_dependency_install(packages: Iterable[str]) -> dict[str, str]:
+    """Attempt to install the provided packages using ``pip``.
+
+    Returns a mapping of package name to installation status.
+    """
+
+    results: dict[str, str] = OrderedDict()
+    for package in packages:
+        cmd = [sys.executable, "-m", "pip", "install", package]
+        try:
+            completed = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            results[package] = f"error: {exc}"
+            continue
+
+        if completed.returncode == 0:
+            results[package] = "installed"
+        else:
+            stderr = completed.stderr.strip()
+            stdout = completed.stdout.strip()
+            diagnostic = stderr or stdout or "installation failed"
+            results[package] = f"failed: {diagnostic.splitlines()[0]}"
+
+    return results
+
+
 def _mt5_terminal_downloaded() -> bool:
     """Best-effort check that an MT5 terminal binary is available."""
 
@@ -141,13 +187,34 @@ def _render_manual_tests() -> list[str]:
     """Return instructions for manual pre-flight tests."""
 
     manual_tests = [
-        "Launch the MT5 terminal and verify the bot can log in using your broker credentials.",
-        "From the running bot, execute a simple ping to the MT5 terminal to confirm connectivity.",
-        "Validate that Git operations (clone/pull/push) succeed using the configured credentials.",
-        "Check that environment variables from the .env file are loaded before starting the bot.",
-        "Exercise the oracle scalper pipeline (e.g. collect() then assess_probabilities()) to confirm external market data APIs respond.",
-        "Start the inference FastAPI service (services.inference_server) and hit the /health endpoint to verify REST API integrations.",
-        "Spin up the feature worker FastAPI app and ensure background tasks can subscribe to the message bus/broker queue.",
+        (
+            "Launch the MT5 terminal and verify the bot can log in using your broker "
+            "credentials."
+        ),
+        (
+            "From the running bot, execute a simple ping to the MT5 terminal to confirm "
+            "connectivity."
+        ),
+        (
+            "Validate that Git operations (clone/pull/push) succeed using the configured "
+            "credentials."
+        ),
+        (
+            "Check that environment variables from the .env file are loaded before "
+            "starting the bot."
+        ),
+        (
+            "Exercise the oracle scalper pipeline (e.g. collect() then "
+            "assess_probabilities()) to confirm external market data APIs respond."
+        ),
+        (
+            "Start the inference FastAPI service (services.inference_server) and hit the "
+            "/health endpoint to verify REST API integrations."
+        ),
+        (
+            "Spin up the feature worker FastAPI app and ensure background tasks can "
+            "subscribe to the message bus/broker queue."
+        ),
     ]
 
     if not _mt5_terminal_downloaded():
@@ -262,17 +329,35 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
         strict_env = os.getenv("STRICT_ENV_CHECK", "").strip().lower()
         strict = strict_env in {"1", "true", "yes"}
 
-    missing = _check_dependencies()
-    if psutil is None:
-        missing.append("psutil")
+    missing_unique = _collect_missing_dependencies()
+    install_attempts: dict[str, str] = {}
 
-    missing_unique = sorted(set(missing))
+    if missing_unique:
+        if AUTO_INSTALL_DEPENDENCIES:
+            install_attempts = _attempt_dependency_install(missing_unique)
+        else:
+            install_attempts = {pkg: "auto-install disabled" for pkg in missing_unique}
+
+        missing_unique = _collect_missing_dependencies()
+
+        if find_spec("psutil") is not None and psutil is None:
+            try:
+                psutil_module = importlib.import_module("psutil")
+            except Exception:  # pragma: no cover - rely on runtime error below
+                psutil_module = None
+            else:
+                globals()["psutil"] = psutil_module
 
     if missing_unique:
         raise RuntimeError(
             "Missing dependencies: "
             + ", ".join(missing_unique)
             + ". Install with 'pip install -r requirements-core.txt' or the appropriate extras, then re-run the check."
+        )
+
+    if psutil is None:
+        raise RuntimeError(
+            "psutil is required for environment diagnostics but could not be imported."
         )
 
     manual_tests = _render_manual_tests()
@@ -301,6 +386,7 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
 
     return {
         "missing_dependencies": missing_unique,
+        "install_attempts": install_attempts,
         "hardware": hardware,
         "manual_tests": manual_tests,
     }
@@ -308,8 +394,10 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
 
 if __name__ == "__main__":
     report = ensure_environment()
-    if report["missing_dependencies"]:
-        print("Install missing dependencies:", ", ".join(report["missing_dependencies"]))
+    if report.get("install_attempts"):
+        print("Dependency auto-install attempts:")
+        for package, status in report["install_attempts"].items():
+            print(f"  - {package}: {status}")
     if report.get("hardware"):
         hardware = report["hardware"]
         print(
