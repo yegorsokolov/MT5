@@ -30,8 +30,8 @@ Use the checklist below to provision a clean Windows machine or VPS.
    - Configure your identity in Git by running `git config --global user.name
      "<Your Name>"` and `git config --global user.email "<you@example.com>"`.
 3. **Python environment**
-   - Install Python 3.13 from [python.org](https://www.python.org/downloads/)
-     and tick **Add Python to PATH**.
+   - Install a supported Python release (3.13 recommended) from
+     [python.org](https://www.python.org/downloads/) and tick **Add Python to PATH**.
    - Open “Command Prompt” and verify the installation with `python --version`
      and `pip --version`.
 

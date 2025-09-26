@@ -42,15 +42,14 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
     sudo apt-get update
     sudo apt-get install -y software-properties-common
 
-    if ! command -v python3.13 >/dev/null 2>&1; then
-        echo "Adding deadsnakes PPA for Python 3.13 packages..."
-        sudo add-apt-repository -y ppa:deadsnakes/ppa
-        sudo apt-get update
-        echo "Installing Python 3.13 toolchain..."
-        sudo apt-get install -y python3.13 python3.13-venv python3.13-dev python3.13-distutils
-    else
-        echo "Python 3.13 already present. Ensuring development headers and venv module are installed..."
-        sudo apt-get install -y python3.13-venv python3.13-dev python3.13-distutils
+    echo "Ensuring a supported Python toolchain is available..."
+    if ! sudo apt-get install -y python3 python3-venv python3-dev; then
+        echo "Warning: Failed to install python3 toolchain packages via apt; attempting to use any existing interpreter." >&2
+    fi
+    if apt-cache show python3-distutils >/dev/null 2>&1; then
+        if ! sudo apt-get install -y python3-distutils; then
+            echo "Warning: python3-distutils could not be installed; continuing without it." >&2
+        fi
     fi
 
     sudo apt-get install -y build-essential wine
@@ -58,15 +57,32 @@ fi
 
 PYTHON_BIN="${PYTHON_BIN:-}"
 if [[ -z "${PYTHON_BIN}" ]]; then
-    PYTHON_BIN="$(command -v python3.13 || true)"
+    for candidate in python3 python3.13 python3.12; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON_BIN="$(command -v "$candidate")"
+            break
+        fi
+    done
 fi
 
 if [[ -z "${PYTHON_BIN}" && "${SERVICES_ONLY}" -ne 1 ]]; then
-    PYTHON_BIN="$(command -v python3.13 || true)"
+    for candidate in python3 python3.13 python3.12; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON_BIN="$(command -v "$candidate")"
+            break
+        fi
+    done
 fi
 
 if [[ -z "${PYTHON_BIN}" ]]; then
-    echo "python3.13 is not available after installation attempts." >&2
+    echo "A supported python3 interpreter was not found after installation attempts." >&2
+    exit 1
+fi
+
+PYTHON_MAJOR=$("${PYTHON_BIN}" -c 'import sys; print(sys.version_info.major)')
+PYTHON_MINOR=$("${PYTHON_BIN}" -c 'import sys; print(sys.version_info.minor)')
+if (( PYTHON_MAJOR < 3 || (PYTHON_MAJOR == 3 && PYTHON_MINOR < 10) )); then
+    echo "Python ${PYTHON_MAJOR}.${PYTHON_MINOR} is not supported. Please use Python 3.10 or newer." >&2
     exit 1
 fi
 
