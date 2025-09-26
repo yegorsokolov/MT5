@@ -27,7 +27,8 @@ initial `/api/v2/setup` flow or simply ensure the bucket exists.  A bucket
 scoped token is created (or reused) and stored in `deploy/secrets/influx.env`,
 which systemd loads automatically via `EnvironmentFile`.  If you need to run
 the helper as part of provisioning, expose the following environment variables
-before executing `scripts/install_service.sh`:
+before executing `scripts/setup_ubuntu.sh --services-only` (or the compatibility
+wrapper `scripts/install_service.sh`):
 
 * `INFLUXDB_BOOTSTRAP_URL`
 * `INFLUXDB_BOOTSTRAP_ORG`
@@ -55,7 +56,7 @@ python -m deployment.runtime_secrets \
 
 The script is idempotent: rerunning it reuses the values already present in the
 target file unless `--rotate NAME` or `--force` is provided.  During unattended
-installs `scripts/install_service.sh` executes the helper automatically; set
+installs `scripts/setup_ubuntu.sh` executes the helper automatically; set
 `RUNTIME_SECRETS_SKIP=1` to disable the step or pass
 `RUNTIME_SECRETS_ROTATE="API_KEY"` to rotate specific entries while keeping the
 rest untouched.

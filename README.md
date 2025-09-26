@@ -428,35 +428,27 @@ in-process automation.
 
 ### Background services
 
-Run the bot as a systemd service to keep it alive after you log out. Perform
-the following steps on the Ubuntu machine after completing the deployment
-instructions above:
+Run the bot as a systemd service to keep it alive after you log out. The
+`./scripts/setup_ubuntu.sh` helper now provisions and enables both the
+`mt5bot` service and the `mt5bot-update` timer automatically. Re-run
+`./scripts/setup_ubuntu.sh --services-only` whenever you need to refresh the
+unit files without reinstalling dependencies. After the installer finishes you
+can validate the daemon and inspect logs with:
 
-1. **Copy the service definition into place.**
-   * In the terminal, type `sudo cp deploy/mt5bot.service /etc/systemd/system/mt5bot.service`
-     and press `Enter`.
-   * If asked for your password, type it and press `Enter` again. No characters
-     appear while you type.
-2. **Reload the systemd daemon so it notices the new file.**
-   * Type `sudo systemctl daemon-reload` and press `Enter`.
-3. **Enable and start the service immediately.**
-   * Type `sudo systemctl enable --now mt5bot` and press `Enter`.
-   * This command both enables the service on boot and starts it right away.
-4. **Verify that the service is running.**
-   * Type `sudo systemctl status mt5bot` and press `Enter`.
-   * Review the output; you should see `Active: active (running)`. Press `q` to
-     exit the status viewer and return to the prompt.
-5. **Watch the live logs (optional).**
-   * Type `journalctl -u mt5bot -f` and press `Enter` to follow the
-     service logs in real time. Press `Ctrl`+`C` to stop following the log.
+```bash
+sudo systemctl status mt5bot
+sudo systemctl status mt5bot-update.timer
+journalctl -u mt5bot -f  # Ctrl+C to stop tailing logs
+```
 
 You can override helper commands through the `service_cmds` block in
 `config.yaml` or by setting the `SERVICE_COMMANDS` environment variable. Each
-command should now be expressed in `python -m mt5.<module>` form to match the
-repository layout. To edit the systemd unit file later, run
-`sudo nano /etc/systemd/system/mt5bot.service`, make your changes, press
-`Ctrl`+`O` then `Enter` to save, `Ctrl`+`X` to exit, and repeat steps 2 and 3 to
-reload the updated unit.
+command should be expressed in `python -m mt5.<module>` form to match the
+repository layout. To edit the systemd unit file later, modify
+`deploy/mt5bot.service` and then run `sudo systemctl daemon-reload` followed by
+`sudo systemctl restart mt5bot`. Legacy automation that still calls
+`scripts/install_service.sh` continues to work because the wrapper now delegates
+to `setup_ubuntu.sh --services-only`.
 
 ### Pre-commit hooks
 
@@ -468,32 +460,6 @@ pip install pre-commit && pre-commit install
 
 After adding new data, track it with `dvc add` and upload it to the configured
 remote using `dvc push`.
-
-### Systemd service helper script
-
-The repository also ships with a helper script that performs the steps above
-automatically.
-
-1. Ensure you are inside the repository directory and (optionally) inside the
-   Python virtual environment.
-2. Type `sudo ./scripts/install_service.sh` and press `Enter`.
-   * If prompted for your password, type it and press `Enter`.
-   * If you see a `Permission denied` message, run `chmod +x scripts/install_service.sh`
-     once and rerun the previous command.
-3. When the script finishes, run `sudo systemctl status mt5bot` and press
-   `Enter` to confirm that it reports `Active: active (running)`. Press `q` to
-   exit the status viewer.
-
-This script copies the service file to `/etc/systemd/system`, reloads systemd
-and enables the service so it starts on each boot. Useful follow-up commands:
-
-```bash
-sudo systemctl start mt5bot     # start the service
-sudo systemctl stop mt5bot      # stop the service
-sudo systemctl restart mt5bot   # restart after updates
-sudo systemctl status mt5bot    # check service status (press q to exit)
-journalctl -u mt5bot -f         # follow service logs (press Ctrl+C to stop)
-```
 
 Application logs are also written to `logs/app.log` within the repository. Run
 the following command and press `Ctrl`+`C` when you want to stop watching:
@@ -1070,14 +1036,9 @@ Important runtime directories such as `logs/`, `checkpoints/`, `reports/` and
 `models/` are recreated after every pull so locally produced artifacts are not
 overwritten by files from the remote repository.
 
-Install the updater alongside the main service using `scripts/install_service.sh`
-or manually enable the timer:
-
-```bash
-sudo systemctl enable --now mt5bot-update.timer
-```
-
-The timer calls `python -m services.auto_updater` roughly every
+The `setup_ubuntu.sh` installer enables the updater timer automatically. If you
+need to reinstall the unit files separately, run `./scripts/setup_ubuntu.sh --services-only`
+and the timer will be refreshed alongside `mt5bot`. The timer calls `python -m services.auto_updater` roughly every
 `auto_update.check_interval_minutes` (15 minutes by default). Progress is written
 to `logs/auto_update.log` and also visible via `journalctl -u
 mt5bot-update.service`. To force an immediate update outside the schedule run:
