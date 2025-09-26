@@ -94,12 +94,15 @@ class TimeGAN:
         if data.shape[1] != self.seq_len or data.shape[2] != self.n_seq:
             raise ValueError("Input sequence dimensions do not match the model configuration")
 
-        tensor_data = torch.tensor(data, dtype=torch.float32)
+        tensor_data = torch.as_tensor(data, dtype=torch.float32)
         dataset = TensorDataset(tensor_data)
         loader = DataLoader(dataset, batch_size=self.config.batch_size, shuffle=True, drop_last=False)
 
         real_label = 0.9  # label smoothing for stability
         fake_label = 0.1
+
+        self.generator.train()
+        self.discriminator.train()
 
         for _ in range(max(epochs, 1)):
             for (real_batch,) in loader:

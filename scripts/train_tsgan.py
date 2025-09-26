@@ -99,7 +99,13 @@ def main() -> None:
         "latent_dim": 8,
         "learning_rate": 5e-4,
     }
-    gan = TimeGAN(model_params, seq_len=seq_len, n_seq=len(features))
+    gan_device = cfg.get("gan_device")
+    gan = TimeGAN(
+        model_params,
+        seq_len=seq_len,
+        n_seq=len(features),
+        device=gan_device,
+    )
     gan.train(X_scaled, cfg.get("gan_epochs", 5))
 
     n_samples = cfg.get("gan_num_samples", len(X))
