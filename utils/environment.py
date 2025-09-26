@@ -145,6 +145,9 @@ def _render_manual_tests() -> list[str]:
         "From the running bot, execute a simple ping to the MT5 terminal to confirm connectivity.",
         "Validate that Git operations (clone/pull/push) succeed using the configured credentials.",
         "Check that environment variables from the .env file are loaded before starting the bot.",
+        "Exercise the oracle scalper pipeline (e.g. collect() then assess_probabilities()) to confirm external market data APIs respond.",
+        "Start the inference FastAPI service (services.inference_server) and hit the /health endpoint to verify REST API integrations.",
+        "Spin up the feature worker FastAPI app and ensure background tasks can subscribe to the message bus/broker queue.",
     ]
 
     if not _mt5_terminal_downloaded():
@@ -241,9 +244,10 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
     Parameters
     ----------
     strict:
-        When ``True`` the function raises on missing dependencies or hardware
-        shortfalls. When ``False`` the function logs warnings instead. Defaults
-        to the ``STRICT_ENV_CHECK`` environment variable (``true``/``1``).
+        When ``True`` the function raises on hardware shortfalls. When
+        ``False`` the function logs warnings for hardware checks. This does not
+        affect dependency validation – required packages are always enforced.
+        Defaults to the ``STRICT_ENV_CHECK`` environment variable (``true``/``1``).
 
     Returns
     -------
@@ -262,30 +266,19 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
     if psutil is None:
         missing.append("psutil")
 
-    manual_tests = _render_manual_tests()
+    missing_unique = sorted(set(missing))
 
-    if missing and strict:
+    if missing_unique:
         raise RuntimeError(
             "Missing dependencies: "
-            + ", ".join(sorted(set(missing)))
-            + ". Install with 'pip install -r requirements-core.txt'"
-            " or the appropriate extras, then re-run the check."
+            + ", ".join(missing_unique)
+            + ". Install with 'pip install -r requirements-core.txt' or the appropriate extras, then re-run the check."
         )
 
-    if missing:
-        logger.warning(
-            "Missing optional dependencies detected: %s. Install them from requirements-core.txt or extras to unlock full functionality.",
-            ", ".join(sorted(set(missing))),
-        )
+    manual_tests = _render_manual_tests()
 
-    if psutil is None:
-        return {
-            "missing_dependencies": sorted(set(missing)),
-            "manual_tests": manual_tests,
-            "hardware": None,
-        }
-
-    mem_gb = psutil.virtual_memory().total / 1_000_000_000
+    mem_info = psutil.virtual_memory()
+    mem_gb = mem_info.total / 1_000_000_000
     cores = psutil.cpu_count() or 1
     hardware = {"memory_gb": mem_gb, "cpu_cores": cores}
 
@@ -307,7 +300,7 @@ def ensure_environment(strict: bool | None = None) -> dict[str, Any]:
         _adjust_config_for_low_spec()
 
     return {
-        "missing_dependencies": sorted(set(missing)),
+        "missing_dependencies": missing_unique,
         "hardware": hardware,
         "manual_tests": manual_tests,
     }
