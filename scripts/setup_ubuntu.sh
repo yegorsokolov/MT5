@@ -630,6 +630,9 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
         if ! "$PYTHON_BIN" -c "import torch_geometric" >/dev/null 2>&1; then
             missing_packages+=("torch-geometric")
         fi
+        if ! "$PYTHON_BIN" -c "import uvloop" >/dev/null 2>&1; then
+            missing_packages+=("uvloop")
+        fi
 
         if (( ${#missing_packages[@]} )); then
             echo "Installing distributed training dependencies: ${missing_packages[*]}"
@@ -638,7 +641,7 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
                 echo "Distributed and graph trainers will fall back to pure-Python implementations." >&2
             fi
         else
-            echo "Ray and torch-geometric already available; distributed trainers enabled."
+            echo "Ray, torch-geometric and uvloop already available; distributed trainers enabled."
         fi
     else
         echo "Skipping Ray/torch-geometric installation on Python ${PYTHON_MAJOR}.${PYTHON_MINOR}."
