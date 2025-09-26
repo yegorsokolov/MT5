@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import importlib
 import json
 import logging
@@ -8,7 +9,7 @@ import subprocess
 import sys
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from importlib import metadata
 from importlib.util import find_spec
 
@@ -16,6 +17,11 @@ try:
     import psutil  # type: ignore
 except Exception:  # pragma: no cover - handled later
     psutil = None  # type: ignore
+
+try:
+    from packaging.markers import Marker
+except Exception:  # pragma: no cover - packaging is optional
+    Marker = None  # type: ignore
 
 try:
     from . import load_config_data, save_config
@@ -45,6 +51,17 @@ REC_CORES = 4
 _SPECIFIER_SPLIT_RE = re.compile(r"\s*(?:==|!=|<=|>=|~=|===|<|>|=)")
 
 
+def _marker_allows(marker_text: str | None) -> bool:
+    if not marker_text:
+        return True
+    if Marker is not None:
+        try:
+            return Marker(marker_text).evaluate()
+        except Exception:
+            return True
+    return True
+
+
 class EnvironmentCheckError(RuntimeError):
     """Exception raised when environment diagnostics fail."""
 
@@ -56,20 +73,18 @@ class EnvironmentCheckError(RuntimeError):
         install_attempts: dict[str, str] | None = None,
         hardware: dict[str, Any] | None = None,
         manual_tests: Iterable[str] | None = None,
+        checks: Iterable[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(message)
         self.missing_dependencies = list(missing_dependencies or [])
         self.install_attempts = dict(install_attempts or {})
         self.hardware = dict(hardware or {})
         self.manual_tests = list(manual_tests or [])
+        self.check_results = list(checks or [])
 
 
 def _parse_requirement_line(line: str) -> tuple[str, str] | None:
-    """Extract the requirement and canonical module name from a line.
-
-    Returns ``None`` when the line does not represent an installable package
-    (empty strings, comments, options, etc.).
-    """
+    """Extract the requirement and canonical module name from a line."""
 
     if not line:
         return None
@@ -81,11 +96,15 @@ def _parse_requirement_line(line: str) -> tuple[str, str] | None:
     if candidate.startswith("#"):
         return None
 
-    candidate = candidate.split(";", 1)[0].strip()
-    if not candidate:
-        return None
+    marker_text: str | None = None
+    if ";" in candidate:
+        candidate, marker_text = candidate.split(";", 1)
+        candidate = candidate.strip()
+        marker_text = marker_text.strip() or None
+        if not _marker_allows(marker_text):
+            return None
 
-    if candidate.startswith("-"):
+    if not candidate or candidate.startswith("-"):
         return None
 
     candidate = candidate.split("@", 1)[0].strip()
@@ -221,57 +240,456 @@ def _has_env_file() -> bool:
     return any(path.exists() for path in candidates)
 
 
-def _render_manual_tests() -> list[str]:
-    """Return instructions for manual pre-flight tests."""
+def _read_env_pairs(path: Path) -> dict[str, str]:
+    """Return key/value pairs from ``path`` if the file exists."""
 
-    manual_tests = [
-        (
-            "Launch the MT5 terminal and verify the bot can log in using your broker "
-            "credentials."
-        ),
-        (
-            "From the running bot, execute a simple ping to the MT5 terminal to confirm "
-            "connectivity."
-        ),
-        (
-            "Validate that Git operations (clone/pull/push) succeed using the configured "
-            "credentials."
-        ),
-        (
-            "Check that environment variables from the .env file are loaded before "
-            "starting the bot."
-        ),
-        (
-            "Exercise the oracle scalper pipeline (e.g. collect() then "
-            "assess_probabilities()) to confirm external market data APIs respond."
-        ),
-        (
-            "Start the inference FastAPI service (services.inference_server) and hit the "
-            "/health endpoint to verify REST API integrations."
-        ),
-        (
-            "Spin up the feature worker FastAPI app and ensure background tasks can "
-            "subscribe to the message bus/broker queue."
-        ),
-    ]
+    try:
+        from deployment.runtime_secrets import _read_env_file as _secrets_read_env
+    except Exception:
+        values: dict[str, str] = {}
+        if not path.exists():
+            return values
+        with path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+        return values
+    else:
+        return _secrets_read_env(path)
 
+
+def _check_mt5_login() -> dict[str, Any]:
+    """Verify that the MetaTrader 5 terminal reports an authenticated session."""
+
+    instruction = (
+        "Launch the MT5 terminal and verify the bot can log in using your broker credentials."
+    )
     if not _mt5_terminal_downloaded():
-        manual_tests.insert(
-            0,
-            "Download and install the MetaTrader 5 terminal, then set MT5_TERMINAL_PATH or place it in the 'mt5/' folder.",
-        )
+        return {
+            "name": "MetaTrader 5 login",
+            "status": "failed",
+            "detail": "MetaTrader 5 terminal not found. Set MT5_TERMINAL_PATH or place the terminal under 'mt5/'.",
+            "followup": instruction,
+        }
 
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+        from brokers import mt5_direct
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return {
+            "name": "MetaTrader 5 login",
+            "status": "failed",
+            "detail": f"MetaTrader5 Python bindings unavailable: {exc}",
+            "followup": instruction,
+        }
+
+    try:
+        logged_in = mt5_direct.is_terminal_logged_in()
+    except Exception as exc:  # pragma: no cover - terminal errors vary
+        return {
+            "name": "MetaTrader 5 login",
+            "status": "failed",
+            "detail": f"MetaTrader5 login check failed: {exc}",
+            "followup": instruction,
+        }
+
+    if logged_in:
+        return {
+            "name": "MetaTrader 5 login",
+            "status": "passed",
+            "detail": "MetaTrader 5 terminal login detected.",
+            "followup": None,
+        }
+    return {
+        "name": "MetaTrader 5 login",
+        "status": "failed",
+        "detail": "MetaTrader 5 terminal not logged in.",
+        "followup": instruction,
+    }
+
+
+def _check_mt5_ping() -> dict[str, Any]:
+    """Ping the MetaTrader 5 terminal via the Python bridge."""
+
+    instruction = (
+        "From the running bot, execute a simple ping to the MT5 terminal to confirm connectivity."
+    )
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+        from brokers import mt5_direct
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return {
+            "name": "MetaTrader 5 connectivity",
+            "status": "failed",
+            "detail": f"MetaTrader5 Python bindings unavailable: {exc}",
+            "followup": instruction,
+        }
+
+    try:
+        if not mt5_direct.initialize():
+            return {
+                "name": "MetaTrader 5 connectivity",
+                "status": "failed",
+                "detail": "Failed to initialise MetaTrader 5 connection.",
+                "followup": instruction,
+            }
+        info = mt5.terminal_info()
+        version_fn = getattr(mt5, "version", None)
+        version = ""
+        if callable(version_fn):
+            try:
+                version_tuple = version_fn()
+                if isinstance(version_tuple, (tuple, list)) and version_tuple:
+                    version = f" build {version_tuple[-1]}"
+            except Exception:
+                version = ""
+    except Exception as exc:  # pragma: no cover - terminal errors vary
+        return {
+            "name": "MetaTrader 5 connectivity",
+            "status": "failed",
+            "detail": f"MetaTrader5 connectivity check failed: {exc}",
+            "followup": instruction,
+        }
+    finally:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+
+    if info is None:
+        return {
+            "name": "MetaTrader 5 connectivity",
+            "status": "failed",
+            "detail": "MetaTrader5.terminal_info returned no data.",
+            "followup": instruction,
+        }
+
+    connected = bool(getattr(info, "connected", True))
+    if connected:
+        return {
+            "name": "MetaTrader 5 connectivity",
+            "status": "passed",
+            "detail": f"Terminal responded successfully{version}.",
+            "followup": None,
+        }
+    return {
+        "name": "MetaTrader 5 connectivity",
+        "status": "failed",
+        "detail": "Terminal reported a disconnected state.",
+        "followup": instruction,
+    }
+
+
+def _check_git_remote() -> dict[str, Any]:
+    """Validate that Git credentials can access the configured remote."""
+
+    instruction = (
+        "Validate that Git operations (clone/pull/push) succeed using the configured credentials."
+    )
     if not _detect_git_credentials():
-        manual_tests.append(
-            "Configure Git remotes and ensure access tokens/SSH keys are available for GitHub operations.",
-        )
+        return {
+            "name": "Git remote access",
+            "status": "failed",
+            "detail": "No Git remote configured; run 'git remote add origin ...' and ensure credentials are valid.",
+            "followup": instruction,
+        }
 
-    if not _has_env_file():
-        manual_tests.append(
-            "Create a .env file with API keys, broker credentials, and database URIs as required by your deployment.",
+    try:
+        completed = subprocess.run(
+            ["git", "ls-remote", "--exit-code", "origin", "HEAD"],
+            cwd=PROJECT_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
+    except FileNotFoundError:
+        return {
+            "name": "Git remote access",
+            "status": "failed",
+            "detail": "git executable not found in PATH.",
+            "followup": instruction,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "name": "Git remote access",
+            "status": "failed",
+            "detail": "git ls-remote timed out; check network connectivity.",
+            "followup": instruction,
+        }
 
-    return manual_tests
+    if completed.returncode == 0:
+        return {
+            "name": "Git remote access",
+            "status": "passed",
+            "detail": "Verified access to the origin remote.",
+            "followup": None,
+        }
+
+    diagnostic = completed.stderr.strip() or completed.stdout.strip() or "git ls-remote failed"
+    return {
+        "name": "Git remote access",
+        "status": "failed",
+        "detail": diagnostic.splitlines()[0],
+        "followup": instruction,
+    }
+
+
+def _check_env_loaded() -> dict[str, Any]:
+    """Confirm that key/value pairs from .env are visible to the process."""
+
+    instruction = "Check that environment variables from the .env file are loaded before starting the bot."
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return {
+            "name": ".env availability",
+            "status": "failed",
+            "detail": "No .env file found at the project root.",
+            "followup": instruction,
+        }
+
+    values = _read_env_pairs(env_path)
+    if not values:
+        return {
+            "name": ".env availability",
+            "status": "failed",
+            "detail": ".env file contains no key/value pairs.",
+            "followup": instruction,
+        }
+
+    missing = [key for key, value in values.items() if os.environ.get(key) != value]
+    if missing:
+        preview = ", ".join(missing[:5])
+        more = "" if len(missing) <= 5 else f" (and {len(missing) - 5} more)"
+        return {
+            "name": ".env availability",
+            "status": "failed",
+            "detail": f"Environment missing exports for: {preview}{more}.",
+            "followup": instruction,
+        }
+
+    return {
+        "name": ".env availability",
+        "status": "passed",
+        "detail": f"Loaded {len(values)} environment variables from .env.",
+        "followup": None,
+    }
+
+
+def _check_oracle_pipeline() -> dict[str, Any]:
+    """Exercise the oracle scalper pipeline."""
+
+    instruction = (
+        "Exercise the oracle scalper pipeline (e.g. collect() then assess_probabilities()) to confirm external market data APIs respond."
+    )
+    try:
+        from oracles.oracle_scalper import OracleScalper
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return {
+            "name": "Oracle scalper pipeline",
+            "status": "failed",
+            "detail": f"oracle_scalper unavailable: {exc}",
+            "followup": instruction,
+        }
+
+    scalper = OracleScalper()
+    try:
+        symbols = ["EURUSD", "BTC", "ETH", "XAUUSD"]
+        events = scalper.collect(symbols)
+        summary = scalper.assess_probabilities(events)
+    except Exception as exc:  # pragma: no cover - network errors vary
+        return {
+            "name": "Oracle scalper pipeline",
+            "status": "failed",
+            "detail": f"Oracle pipeline raised an exception: {exc}",
+            "followup": instruction,
+        }
+
+    if not summary.empty:
+        return {
+            "name": "Oracle scalper pipeline",
+            "status": "passed",
+            "detail": f"Collected {len(summary)} probability rows from external oracles.",
+            "followup": None,
+        }
+
+    return {
+        "name": "Oracle scalper pipeline",
+        "status": "failed",
+        "detail": "Oracle pipeline returned no data; check API credentials and network access.",
+        "followup": instruction,
+    }
+
+
+def _check_inference_service() -> dict[str, Any]:
+    """Start the inference FastAPI service and query the /health endpoint."""
+
+    instruction = (
+        "Start the inference FastAPI service (services.inference_server) and hit the /health endpoint to verify REST API integrations."
+    )
+    try:
+        from fastapi.testclient import TestClient  # type: ignore
+        from services import inference_server
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return {
+            "name": "Inference service health",
+            "status": "failed",
+            "detail": f"FastAPI test client unavailable: {exc}",
+            "followup": instruction,
+        }
+
+    try:
+        with TestClient(inference_server.app) as client:
+            response = client.get("/health")
+    except Exception as exc:  # pragma: no cover - network/server errors vary
+        return {
+            "name": "Inference service health",
+            "status": "failed",
+            "detail": f"Failed to query /health: {exc}",
+            "followup": instruction,
+        }
+
+    if response.status_code == 200 and response.json().get("status") == "ok":
+        loaded = response.json().get("loaded_models", [])
+        detail = "Inference service healthy"
+        if loaded:
+            detail += f" with {len(loaded)} loaded model(s)."
+        return {
+            "name": "Inference service health",
+            "status": "passed",
+            "detail": detail,
+            "followup": None,
+        }
+
+    return {
+        "name": "Inference service health",
+        "status": "failed",
+        "detail": f"Unexpected response: HTTP {response.status_code} {response.text}",
+        "followup": instruction,
+    }
+
+
+def _check_feature_worker() -> dict[str, Any]:
+    """Ensure the feature worker FastAPI app and resource monitor queues start."""
+
+    instruction = (
+        "Spin up the feature worker FastAPI app and ensure background tasks can subscribe to the message bus/broker queue."
+    )
+    try:
+        from fastapi.testclient import TestClient  # type: ignore
+        from services import feature_worker
+        from utils.resource_monitor import monitor as resource_monitor
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return {
+            "name": "Feature worker service",
+            "status": "failed",
+            "detail": f"Feature worker dependencies unavailable: {exc}",
+            "followup": instruction,
+        }
+
+    received: Any | None = None
+    try:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            queue = resource_monitor.subscribe()
+            loop.run_until_complete(queue.put("diagnostic"))
+            received = loop.run_until_complete(queue.get())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+            resource_monitor.stop()
+    except Exception as exc:  # pragma: no cover - event loop failures vary
+        return {
+            "name": "Feature worker service",
+            "status": "failed",
+            "detail": f"Resource monitor subscription failed: {exc}",
+            "followup": instruction,
+        }
+
+    if received != "diagnostic":
+        return {
+            "name": "Feature worker service",
+            "status": "failed",
+            "detail": "Message bus echo test failed.",
+            "followup": instruction,
+        }
+
+    try:
+        with TestClient(feature_worker.app) as client:
+            response = client.post(
+                "/compute",
+                json={"symbol": "TEST", "start": "0", "end": "3"},
+            )
+    except Exception as exc:  # pragma: no cover - server errors vary
+        return {
+            "name": "Feature worker service",
+            "status": "failed",
+            "detail": f"Feature worker request failed: {exc}",
+            "followup": instruction,
+        }
+
+    if response.status_code == 200 and isinstance(response.json(), list):
+        return {
+            "name": "Feature worker service",
+            "status": "passed",
+            "detail": "Feature worker responded to /compute and queue subscription succeeded.",
+            "followup": None,
+        }
+
+    return {
+        "name": "Feature worker service",
+        "status": "failed",
+        "detail": f"Unexpected /compute response: HTTP {response.status_code} {response.text}",
+        "followup": instruction,
+    }
+
+
+_AUTOMATED_CHECKS: tuple[Callable[[], dict[str, Any]], ...] = (
+    _check_mt5_login,
+    _check_mt5_ping,
+    _check_git_remote,
+    _check_env_loaded,
+    _check_oracle_pipeline,
+    _check_inference_service,
+    _check_feature_worker,
+)
+
+
+def _run_automated_preflight() -> tuple[list[dict[str, Any]], list[str]]:
+    """Execute automated pre-flight checks and collect follow-up actions."""
+
+    results: list[dict[str, Any]] = []
+    manual: list[str] = []
+
+    for check in _AUTOMATED_CHECKS:
+        try:
+            result = check()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            result = {
+                "name": getattr(check, "__name__", "check"),
+                "status": "failed",
+                "detail": f"Unexpected error while running automated check: {exc}",
+                "followup": "Inspect logs to diagnose the failing automated check.",
+            }
+        results.append(result)
+        status = (result.get("status") or "").lower()
+        followup = result.get("followup")
+        if status != "passed" and followup:
+            manual.append(str(followup))
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_manual = []
+    for item in manual:
+        if item not in seen:
+            unique_manual.append(item)
+            seen.add(item)
+
+    return results, unique_manual
 
 
 def _greater_than(value: Any, threshold: int) -> bool:
@@ -377,7 +795,7 @@ def ensure_environment(
         strict_env = os.getenv("STRICT_ENV_CHECK", "").strip().lower()
         strict = strict_env in {"1", "true", "yes"}
 
-    manual_tests = _render_manual_tests()
+    check_results, manual_tests = _run_automated_preflight()
     missing_unique = _collect_missing_dependencies()
     install_attempts: dict[str, str] = {}
     auto_install_enabled = (
@@ -408,6 +826,7 @@ def ensure_environment(
             missing_dependencies=missing_unique,
             install_attempts=install_attempts,
             manual_tests=manual_tests,
+            checks=check_results,
         )
 
     if psutil is None:
@@ -415,6 +834,7 @@ def ensure_environment(
             "psutil is required for environment diagnostics but could not be imported.",
             install_attempts=install_attempts,
             manual_tests=manual_tests,
+            checks=check_results,
         )
 
     mem_info = psutil.virtual_memory()
@@ -432,6 +852,7 @@ def ensure_environment(
                 message,
                 hardware=hardware,
                 manual_tests=manual_tests,
+                checks=check_results,
             )
         logger.warning(message)
 
@@ -447,6 +868,7 @@ def ensure_environment(
         "missing_dependencies": missing_unique,
         "install_attempts": install_attempts,
         "hardware": hardware,
+        "automated_checks": check_results,
         "manual_tests": manual_tests,
     }
 
@@ -516,6 +938,20 @@ def _print_report(report: dict[str, Any]) -> None:
                 f"{memory_gb:.1f}GB RAM, {cpu_cores} cores"
             )
 
+    checks = report.get("automated_checks") or []
+    if checks:
+        print("Automated pre-run checks:")
+        for check in checks:
+            name = check.get("name", "Check")
+            status = check.get("status", "unknown")
+            detail = check.get("detail")
+            print(f"  - {name}: {status}")
+            if detail:
+                detail_str = detail if isinstance(detail, str) else str(detail)
+                wrapped = detail_str.splitlines() or [detail_str]
+                for line in wrapped:
+                    print(f"      {line}")
+
     manual_tests = report.get("manual_tests") or []
     if manual_tests:
         print("Manual pre-run checklist:")
@@ -536,6 +972,7 @@ def main(argv: list[str] | None = None) -> int:
             "install_attempts": exc.install_attempts,
             "hardware": exc.hardware,
             "manual_tests": exc.manual_tests,
+            "automated_checks": exc.check_results,
         }
         if args.json:
             print(json.dumps(payload, indent=2))
