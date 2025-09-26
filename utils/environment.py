@@ -694,7 +694,7 @@ def _check_model_configuration() -> dict[str, Any]:
 
     instruction = (
         "Ensure config.yaml uses matching model_type entries and model paths for "
-        "the tabular or AutoGluon trainers."
+        "the tabular or AutoML trainers."
     )
     name = "Model configuration compatibility"
 
@@ -729,7 +729,8 @@ def _check_model_configuration() -> dict[str, Any]:
     primary_type = _extract_model_type(cfg if isinstance(cfg, Mapping) else None)
     training_section = cfg.get("training") if isinstance(cfg, Mapping) else None
     training_type = _extract_model_type(training_section if isinstance(training_section, Mapping) else None)
-    model_type = training_type or primary_type
+    model_type_raw = training_type or primary_type
+    model_type = "automl" if model_type_raw == "autogluon" else model_type_raw
 
     ensemble = None
     if isinstance(training_section, Mapping):
@@ -738,18 +739,19 @@ def _check_model_configuration() -> dict[str, Any]:
         ensemble = cfg.get("ensemble_models")
 
     offending_paths: list[str] = []
+    automl_aliases = {"automl", "autogluon"}
     if isinstance(ensemble, (list, tuple)):
         offending_paths = [
             str(item)
             for item in ensemble
             if isinstance(item, str)
-            and "autogluon" in item.lower()
-            and model_type != "autogluon"
+            and any(alias in item.lower() for alias in automl_aliases)
+            and model_type not in automl_aliases
         ]
     elif (
         isinstance(ensemble, str)
-        and "autogluon" in ensemble.lower()
-        and model_type != "autogluon"
+        and any(alias in ensemble.lower() for alias in automl_aliases)
+        and model_type not in automl_aliases
     ):
         offending_paths = [ensemble]
 
@@ -761,19 +763,19 @@ def _check_model_configuration() -> dict[str, Any]:
             "name": name,
             "status": "failed",
             "detail": (
-                "Configuration references AutoGluon model paths but "
-                "model_type is not set to 'autogluon': "
+                "Configuration references AutoML model paths but "
+                "model_type is not set to 'automl': "
                 f"{preview}."
             ),
             "followup": instruction,
         }
 
-    if model_type == "autogluon":
-        detail = "Configuration targets the AutoGluon tabular ensemble."
+    if model_type == "automl":
+        detail = "Configuration targets the FLAML AutoML ensemble."
     elif model_type == "tabular":
         detail = "Configuration targets the sklearn tabular pipeline."
     else:
-        detail = "Configuration does not reference AutoGluon-specific paths."
+        detail = "Configuration does not reference AutoML-specific paths."
 
     return {
         "name": name,
