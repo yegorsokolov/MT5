@@ -32,6 +32,16 @@ from models.slimmable_network import SlimmableNetwork, select_width_multiplier
 from utils.resource_monitor import monitor
 
 logger = logging.getLogger(__name__)
+
+if os.name != "nt":  # pragma: no cover - depends on host event loop support
+    try:
+        import uvloop  # type: ignore
+
+        uvloop.install()
+        logger.info("uvloop event loop installed for inference server")
+    except Exception:  # pragma: no cover - uvloop optional
+        logger.debug("uvloop not available; continuing with default event loop", exc_info=True)
+
 app = FastAPI(title="Inference Server")
 
 # Cache of loaded models keyed by model name

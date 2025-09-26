@@ -218,20 +218,26 @@ def test_check_dependencies_falls_back_to_module_search(tmp_path, monkeypatch):
 
 def test_check_distributed_dependencies_skips_on_py313(monkeypatch):
     monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 13))
+    monkeypatch.setattr(environment.sys, "platform", "linux")
+    monkeypatch.setattr(environment, "_distribution_installed", lambda *a, **k: True)
     result = environment._check_distributed_dependencies()
 
     assert result["status"] == "skipped"
     detail = result["detail"].lower()
     assert "fall back" in detail or "fallback" in detail
+    assert "uvloop" in detail
 
 
 def test_check_distributed_dependencies_reports_missing(monkeypatch):
     monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 12))
-    monkeypatch.setattr(
-        environment,
-        "_distribution_installed",
-        lambda pkg, module: pkg != "ray",
-    )
+    monkeypatch.setattr(environment.sys, "platform", "linux")
+
+    def _fake_distribution(pkg: str, module: str) -> bool:
+        if pkg == "ray":
+            return False
+        return True
+
+    monkeypatch.setattr(environment, "_distribution_installed", _fake_distribution)
 
     result = environment._check_distributed_dependencies()
 
@@ -242,8 +248,24 @@ def test_check_distributed_dependencies_reports_missing(monkeypatch):
 
 def test_check_distributed_dependencies_passes(monkeypatch):
     monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 12))
+    monkeypatch.setattr(environment.sys, "platform", "linux")
     monkeypatch.setattr(environment, "_distribution_installed", lambda *a, **k: True)
 
     result = environment._check_distributed_dependencies()
 
     assert result["status"] == "passed"
+
+
+def test_check_distributed_dependencies_requires_uvloop(monkeypatch):
+    monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 12))
+    monkeypatch.setattr(environment.sys, "platform", "linux")
+
+    def _fake_distribution(pkg: str, module: str) -> bool:
+        return module != "uvloop"
+
+    monkeypatch.setattr(environment, "_distribution_installed", _fake_distribution)
+
+    result = environment._check_distributed_dependencies()
+
+    assert result["status"] == "failed"
+    assert "uvloop" in result["detail"].lower()
