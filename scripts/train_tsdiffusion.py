@@ -87,7 +87,7 @@ def main() -> None:
 
     X, _ = make_sequence_arrays(df, features, seq_len)
 
-    scaler = TimeSeriesScalerMinMax()
+    scaler = TimeSeriesMinMaxScaler()
     X_scaled = scaler.fit_transform(X)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
