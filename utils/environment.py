@@ -48,9 +48,9 @@ REC_RAM_GB = 8
 MIN_CORES = 1
 REC_CORES = 4
 
-MIN_PYTHON = (3, 10)
-MAX_PYTHON = (3, 12)
-RECOMMENDED_PYTHON = "3.11"
+MIN_PYTHON = (3, 13)
+MAX_PYTHON = (3, 14)
+RECOMMENDED_PYTHON = "3.13"
 
 _SPECIFIER_SPLIT_RE = re.compile(r"\s*(?:==|!=|<=|>=|~=|===|<|>|=)")
 
@@ -658,18 +658,18 @@ def _check_python_runtime() -> dict[str, Any]:
     version = sys.version_info
     runtime = f"{version.major}.{version.minor}.{version.micro}"
     instruction = (
-        "Install Python 3.11.x and rerun scripts/setup_ubuntu.sh to pin the interpreter before continuing."
+        "Install Python 3.13.x and rerun scripts/setup_ubuntu.sh to pin the interpreter before continuing."
     )
 
     if version < MIN_PYTHON or version >= MAX_PYTHON:
+        supported = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
         return {
             "name": "python-runtime",
             "status": "failed",
             "detail": (
                 "Python "
                 f"{runtime} is not supported. The project requires Python "
-                f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}-{MAX_PYTHON[0]}.{MAX_PYTHON[1]-1} "
-                f"with {RECOMMENDED_PYTHON}.x recommended for binary dependencies."
+                f"{supported}.x with {RECOMMENDED_PYTHON}.x recommended for binary dependencies."
             ),
             "followup": instruction,
         }
