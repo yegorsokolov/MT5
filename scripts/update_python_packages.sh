@@ -6,10 +6,25 @@ PROJECT_ROOT="${SCRIPT_DIR}/.."
 
 cd "${PROJECT_ROOT}"
 
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3.13)}"
+PYTHON_BIN="${PYTHON_BIN:-}" 
+if [[ -z "${PYTHON_BIN}" ]]; then
+    for candidate in python3 python3.13 python3.12; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON_BIN="$(command -v "$candidate")"
+            break
+        fi
+    done
+fi
 
 if [[ -z "${PYTHON_BIN}" ]]; then
-    echo "python3.13 is required to update dependencies" >&2
+    echo "A supported python3 interpreter is required to update dependencies." >&2
+    exit 1
+fi
+
+PYTHON_MAJOR=$("${PYTHON_BIN}" -c 'import sys; print(sys.version_info.major)')
+PYTHON_MINOR=$("${PYTHON_BIN}" -c 'import sys; print(sys.version_info.minor)')
+if (( PYTHON_MAJOR < 3 || (PYTHON_MAJOR == 3 && PYTHON_MINOR < 10) )); then
+    echo "Python ${PYTHON_MAJOR}.${PYTHON_MINOR} is not supported. Please use Python 3.10 or newer." >&2
     exit 1
 fi
 

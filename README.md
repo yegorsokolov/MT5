@@ -46,13 +46,13 @@ The solution is split into two components:
 
 ### Python runtime compatibility
 
-The toolkit now targets CPython 3.13 exclusively. Optional integrations such as
-LightGBM still degrade gracefully: when wheels are not available the training
-pipeline switches to a scikit-learn gradient boosting fallback and records the
-missing modules inside the checkpoint metadata for later recovery. Components
-that previously relied on `uvloop`, Ray or torch-geometric now ship with
-pure-Python fallbacks so the project remains fully operational without Python
-3.12-era wheels.
+The toolkit targets CPython 3.10 and newer, with 3.13 recommended. Optional
+integrations such as LightGBM still degrade gracefully: when wheels are not
+available the training pipeline switches to a scikit-learn gradient boosting
+fallback and records the missing modules inside the checkpoint metadata for
+later recovery. Components that previously relied on `uvloop`, Ray or
+torch-geometric now ship with pure-Python fallbacks so the project remains fully
+operational even when recent wheels are unavailable.
 
 Run `python -m utils.environment --json` to confirm both interpreter and
 hardware meet the minimum requirements. The training routine executes the same
@@ -60,10 +60,11 @@ diagnostic up front, persists the hardware snapshot alongside every model run
 and logs it to MLflow so you can audit the environment that produced each
 artifact.
 
-* Linux: run `./scripts/setup_ubuntu.sh` to provision Python 3.13, ensure `pip`
-  is available and upgrade dependencies.
-* Windows/macOS: install Python 3.13 from python.org, ensure it appears first on
-  your `PATH`, then create a virtual environment (`python -m venv .venv`)
+* Linux: run `./scripts/setup_ubuntu.sh` to provision a supported Python
+  interpreter, ensure `pip` is available and upgrade dependencies.
+* Windows/macOS: install Python 3.13 (or another supported version) from
+  python.org, ensure it appears first on your `PATH`, then create a virtual
+  environment (`python -m venv .venv`)
   before installing requirements.
 
 ### Resilient checkpoints and artifact tracking
@@ -301,7 +302,7 @@ match your environment.
    * Type the following command on a single line and press `Enter`:
 
      ```bash
-     sudo apt install -y git software-properties-common python3.13 python3.13-venv python3.13-dev python3.13-distutils build-essential curl
+     sudo apt install -y git software-properties-common python3 python3-venv python3-dev build-essential curl
      ```
 
    * If a prompt asks to continue, press `Y` and then `Enter`.
@@ -320,7 +321,7 @@ match your environment.
      the entries your deployment needs into `.env` and replace the placeholder
      values with your secrets before starting background services.
 8. **Create an isolated Python environment (recommended).**
-   * Type `python3.13 -m venv .venv` and press `Enter`. This creates a `.venv`
+   * Type `python3 -m venv .venv` and press `Enter`. This creates a `.venv`
      folder that keeps dependencies separate from the rest of the system.
    * Activate the environment by typing `source .venv/bin/activate` and
      pressing `Enter`. The prompt changes to show `(.venv)` on the left.
@@ -330,7 +331,7 @@ match your environment.
    * Ensure you are still inside the repository and the virtual environment is
      active.
    * Run `./scripts/setup_ubuntu.sh` and press `Enter`. This command:
-     - Installs and pins Python 3.13 using the `deadsnakes` packages, holds the interpreter packages so apt will not auto-upgrade to unsupported releases and ensures `python3.13` is available system-wide.
+    - Installs the Python toolchain (using the system packages when needed) and ensures the interpreter meets the minimum supported version.
      - Updates apt packages required by MetaTrader integration.
      - Upgrades `pip` inside the virtual environment.
      - Installs the Python dependencies from `requirements.txt`.
@@ -354,7 +355,7 @@ match your environment.
 11. **Verify the environment.**
     * Type `python -m utils.environment` and press `Enter`.
     * The command checks that all dependencies are available, verifies the
-      interpreter is pinned to Python 3.13 and prints the detected hardware. If something is missing
+      interpreter meets the minimum supported Python version and prints the detected hardware. If something is missing
       it explains how to fix it.
 12. **Start the orchestrated bot.**
     * Type `python -m mt5` and press `Enter`. This launches the unified
@@ -828,7 +829,7 @@ python scripts/train_tsdiffusion.py  # Diffusion model (TimeGrad-style)
 The GAN trainer uses the in-repo PyTorch implementation of TimeGAN found under
 ``synthetic/gan.py``. This lightweight model mirrors the bits of the
 ``ydata-synthetic`` API that the project relied on while remaining fully
-compatible with modern Python runtimes (3.13+). Scaling utilities were rewritten
+compatible with modern Python runtimes (3.10+). Scaling utilities were rewritten
 in NumPy to preserve backwards compatibility with older configuration files.
 
 Enable `use_data_augmentation: true` to include the GAN samples or `use_diffusion_aug: true` to
@@ -884,8 +885,9 @@ to prepare a clean Windows PC or VPS.
       git config --global user.email "<you@example.com>"
       ```
 
-   4. Download Python 3.13 from [python.org](https://www.python.org/downloads/).
-      During installation tick the **Add Python to PATH** checkbox and click **Install Now**.
+   4. Download a supported Python release (3.13 recommended) from
+      [python.org](https://www.python.org/downloads/). During installation tick the
+      **Add Python to PATH** checkbox and click **Install Now**.
 4. **Clone this repository** –
    1. Launch **Git Bash** or **GitHub Desktop**.
    2. In GitHub Desktop choose **File → Clone repository…**; otherwise run `git clone <repo-url>` and press **Enter**.
