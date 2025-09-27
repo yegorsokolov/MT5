@@ -64,6 +64,26 @@ die() { echo "[setup:ERROR] $*" | tee -a "$SETUP_LOG" >&2; exit 1; }
 need_root() { if [[ "$(id -u)" -ne 0 ]]; then die "Run with sudo"; fi; }
 run_as_user() { sudo -H -u "${PROJECT_USER}" bash -lc "$*"; }
 
+ensure_cached_download() {
+  local destination="$1"
+  local url="$2"
+  local label="$3"
+
+  if [[ -s "${destination}" ]]; then
+    log "Using cached ${label} at ${destination}"
+    return 0
+  fi
+
+  local tmp_file="${destination}.tmp"
+  rm -f "${tmp_file}"
+  log "Downloading ${label} from ${url}"
+  if ! curl -fsSL --retry 3 --retry-delay 2 -o "${tmp_file}" "${url}"; then
+    rm -f "${tmp_file}"
+    die "Failed to download ${label}"
+  fi
+  mv "${tmp_file}" "${destination}"
+}
+
 #####################################
 # Load .env if present
 #####################################
@@ -185,9 +205,10 @@ install_windows_python() {
   ensure_wineprefix "${prefix}"
   winetricks_quiet "${prefix}" vcrun2022 corefonts gdiplus
   mkdir -p "${CACHE_DIR}"
-  if [[ ! -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" ]]; then
-    curl -fsSL -o "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${PYTHON_WIN_URL}"
-  fi
+  ensure_cached_download \
+    "${CACHE_DIR}/${PYTHON_WIN_EXE}" \
+    "${PYTHON_WIN_URL}" \
+    "Windows Python ${PYTHON_WIN_VERSION} installer"
   run_as_user "mkdir -p '${prefix}/drive_c/_installers'"
   cp -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${prefix}/drive_c/_installers/"
   log "Installing Windows Python ${PYTHON_WIN_VERSION}..."
@@ -211,9 +232,10 @@ install_mt5() {
   ensure_wineprefix "${prefix}"
   winetricks_quiet "${prefix}" corefonts gdiplus
   mkdir -p "${CACHE_DIR}"
-  if [[ ! -f "${CACHE_DIR}/${MT5_SETUP_EXE}" ]]; then
-    curl -fsSL -o "${CACHE_DIR}/${MT5_SETUP_EXE}" "${MT5_SETUP_URL}"
-  fi
+  ensure_cached_download \
+    "${CACHE_DIR}/${MT5_SETUP_EXE}" \
+    "${MT5_SETUP_URL}" \
+    "MetaTrader 5 installer"
   if wine_cmd "${prefix}" wine cmd /c "dir C:\\Program^ Files\\MetaTrader^ 5" >/dev/null 2>&1; then
     log "MetaTrader 5 already installed."
     return 0
