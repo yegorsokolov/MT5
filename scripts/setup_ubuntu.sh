@@ -68,13 +68,73 @@ MT5_INSTALL_CACHE="${PROJECT_ROOT:-$(pwd)}/.cache/mt5"
 MT5_CACHE_INSTALLER="${MT5_INSTALL_CACHE}/mt5setup.exe"
 PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-pymt5linux}"
 
+HAS_GRAPHICAL_DISPLAY=1
+WINE_HEADLESS_WRAPPER=()
+
+detect_graphical_display() {
+    if [[ -z "${DISPLAY:-}" ]]; then
+        return 1
+    fi
+
+    if command -v xdpyinfo >/dev/null 2>&1; then
+        if xdpyinfo >/dev/null 2>&1; then
+            return 0
+        fi
+    elif command -v xset >/dev/null 2>&1; then
+        if xset -display "${DISPLAY}" q >/dev/null 2>&1; then
+            return 0
+        fi
+    else
+        # DISPLAY is set but no verification tool is available; assume usable.
+        return 0
+    fi
+
+    return 1
+}
+
+ensure_headless_wine_support() {
+    HAS_GRAPHICAL_DISPLAY=1
+    if detect_graphical_display; then
+        return
+    fi
+
+    HAS_GRAPHICAL_DISPLAY=0
+
+    if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
+        sudo apt-get install -y xvfb || {
+            echo "Warning: Failed to install xvfb; Wine may not run in headless mode." >&2
+            return
+        }
+    fi
+
+    if command -v xvfb-run >/dev/null 2>&1; then
+        WINE_HEADLESS_WRAPPER=(xvfb-run -a -n 95 -s "-screen 0 1024x768x24")
+    else
+        echo "Warning: xvfb-run is not available; Wine commands may fail without a display." >&2
+    fi
+}
+
+run_with_wine_wrapper() {
+    if (( HAS_GRAPHICAL_DISPLAY == 0 )) && ((${#WINE_HEADLESS_WRAPPER[@]} > 0)); then
+        "${WINE_HEADLESS_WRAPPER[@]}" "$@"
+    else
+        "$@"
+    fi
+}
+
+run_wine_command() {
+    local prefix="$1"
+    shift
+    run_with_wine_wrapper env WINEPREFIX="${prefix}" WINEARCH=win64 "$@"
+}
+
 ensure_wine_prefix() {
     local prefix="$1"
     echo "Initialising Wine prefix at ${prefix} ..."
     mkdir -p "${prefix}" >/dev/null 2>&1 || true
-    WINEPREFIX="${prefix}" WINEARCH=win64 wineboot -u >/dev/null 2>&1 || true
+    run_wine_command "${prefix}" wineboot -u >/dev/null 2>&1 || true
     if command -v wineserver >/dev/null 2>&1; then
-        WINEPREFIX="${prefix}" wineserver -w >/dev/null 2>&1 || true
+        run_wine_command "${prefix}" wineserver -w >/dev/null 2>&1 || true
     fi
 }
 
@@ -89,7 +149,7 @@ resolve_windows_python_paths() {
     fi
     if [[ -n "${candidate}" ]]; then
         WIN_PY_UNIX_PATH="${candidate}"
-        WIN_PY_WINDOWS_PATH="$(winepath -w "${candidate}")"
+        WIN_PY_WINDOWS_PATH="$(run_wine_command "${prefix}" winepath -w "${candidate}")"
         return 0
     fi
     return 1
@@ -111,7 +171,7 @@ install_windows_python() {
     fi
 
     echo "Installing Windows Python ${WIN_PY_VERSION} inside Wine prefix ${prefix} ..."
-    if ! WINEPREFIX="${prefix}" wine "${installer_path}" /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1; then
+    if ! run_wine_command "${prefix}" wine "${installer_path}" /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1; then
         echo "Warning: Windows Python installer exited with an error." >&2
         return 1
     fi
@@ -127,7 +187,7 @@ ensure_windows_python_ready() {
 
     if [[ -n "${WIN_PY_UNIX_PATH}" ]]; then
         echo "Upgrading pip inside the Wine Python environment ..."
-        WINEPREFIX="${prefix}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade pip >/dev/null 2>&1 || true
+        run_wine_command "${prefix}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade pip >/dev/null 2>&1 || true
         return 0
     fi
 
@@ -141,7 +201,38 @@ ensure_winetricks_components() {
         return 0
     fi
     echo "Installing core Wine runtime components into ${prefix} ..."
-    WINEPREFIX="${prefix}" WINEARCH=win64 winetricks -q corefonts gdiplus msxml6 vcrun2019 >/dev/null 2>&1 || true
+    run_wine_command "${prefix}" winetricks -q corefonts gdiplus msxml6 vcrun2019 >/dev/null 2>&1 || true
+}
+
+install_optional_wine_packages() {
+    local candidates pkg
+    local to_attempt=()
+    local seen=()
+
+    mapfile -t candidates < <(apt-cache search --names-only '^wine-gecko[0-9.]*$' 2>/dev/null | awk '{print $1}' | sort -Vr)
+    for pkg in "${candidates[@]}"; do
+        if [[ -n "${pkg}" ]]; then
+            to_attempt+=("${pkg}")
+            if dpkg --print-foreign-architectures | grep -q '^i386$'; then
+                to_attempt+=("${pkg}:i386")
+            fi
+        fi
+    done
+
+    to_attempt+=(wine-gecko2.47.4 wine-gecko2.47.4:i386 wine-gecko wine-gecko:i386 wine-mono)
+
+    for pkg in "${to_attempt[@]}"; do
+        if [[ -z "${pkg}" ]]; then
+            continue
+        fi
+        if [[ " ${seen[*]} " == *" ${pkg} "* ]]; then
+            continue
+        fi
+        seen+=("${pkg}")
+        if ! sudo apt-get install -y "${pkg}"; then
+            echo "Warning: Failed to install optional Wine component package ${pkg}." >&2
+        fi
+    done
 }
 
 install_mt5_terminal_wine() {
@@ -169,7 +260,7 @@ install_mt5_terminal_wine() {
     fi
 
     echo "Launching MetaTrader 5 installer under Wine. Complete the GUI setup to finish installation."
-    if ! WINEPREFIX="${prefix}" wine "${installer_path}" >/dev/null 2>&1; then
+    if ! run_wine_command "${prefix}" wine "${installer_path}" >/dev/null 2>&1; then
         echo "Warning: MetaTrader 5 installer did not finish successfully." >&2
         return 1
     fi
@@ -183,7 +274,7 @@ ensure_mt5_python_packages() {
     fi
 
     echo "Installing MetaTrader5 and bridge helper (${PYMT5LINUX_SOURCE}) inside the Wine Python environment ..."
-    if ! WINEPREFIX="${WIN_PY_WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade MetaTrader5 "${PYMT5LINUX_SOURCE}" >/dev/null 2>&1; then
+    if ! run_wine_command "${WIN_PY_WINE_PREFIX}" wine "${WIN_PY_WINDOWS_PATH}" -m pip install --upgrade MetaTrader5 "${PYMT5LINUX_SOURCE}" >/dev/null 2>&1; then
         echo "Warning: Failed to install MetaTrader5 or bridge helper inside Wine. Check the Wine logs for more details." >&2
         if [[ "${PYMT5LINUX_SOURCE}" == "pymt5linux" ]]; then
             echo "Hint: export PYMT5LINUX_SOURCE to an alternate package URL if the default is unavailable." >&2
@@ -197,6 +288,10 @@ write_wine_login_instructions() {
     local instructions_path="${PROJECT_ROOT}/LOGIN_INSTRUCTIONS_WINE.txt"
     local mt5_prefix="${MT5_WINE_PREFIX}"
     local mt5_terminal="${mt5_prefix}/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+    local wine_launcher="wine"
+    if (( HAS_GRAPHICAL_DISPLAY == 0 )) && ((${#WINE_HEADLESS_WRAPPER[@]} > 0)); then
+        wine_launcher="${WINE_HEADLESS_WRAPPER[*]} wine"
+    fi
     if [[ -z "${WIN_PY_WINDOWS_PATH}" ]]; then
         resolve_windows_python_paths "${WIN_PY_WINE_PREFIX}" || true
     fi
@@ -211,17 +306,17 @@ Bridge exports  : export PYMT5LINUX_PYTHON="${WIN_PY_WINDOWS_PATH:-<not detected
                   export PYMT5LINUX_WINEPREFIX="${WIN_PY_WINE_PREFIX}"
 
 1. Launch the terminal and log in with your broker account:
-   WINEARCH=win64 WINEPREFIX="${mt5_prefix}" wine "${mt5_terminal}"
+   WINEARCH=win64 WINEPREFIX="${mt5_prefix}" ${wine_launcher} "${mt5_terminal}"
 2. (Optional) Start the MetaTrader 5 installer again if you need to repair the
    installation:
-   WINEARCH=win64 WINEPREFIX="${mt5_prefix}" wine "${MT5_CACHE_INSTALLER}"
+   WINEARCH=win64 WINEPREFIX="${mt5_prefix}" ${wine_launcher} "${MT5_CACHE_INSTALLER}"
 3. To call the MetaTrader 5 Python API directly from Linux, reuse the Windows
    interpreter inside Wine:
    a. Ensure the Windows Python path above is correct. If not, re-run
       scripts/setup_ubuntu.sh to refresh it.
    b. Start the Python bridge from Linux:
       WINEARCH=win64 WINEPREFIX="${WIN_PY_WINE_PREFIX}" \
-        wine "${WIN_PY_WINDOWS_PATH:-C:/Python311/python.exe}" -m MetaTrader5 --version
+        ${wine_launcher} "${WIN_PY_WINDOWS_PATH:-C:/Python311/python.exe}" -m MetaTrader5 --version
    c. When using helper wrappers (pymt5linux or custom bridge scripts), point
       them at the Windows interpreter recorded above.
 
@@ -245,6 +340,11 @@ prompt_for_mt5_login() {
         return
     fi
 
+    if (( HAS_GRAPHICAL_DISPLAY == 0 )); then
+        echo "Skipping MetaTrader 5 login prompt because no graphical display is available." >&2
+        return
+    fi
+
     local launch_target=""
     if [[ -n "${primary}" && -f "${primary}" ]]; then
         launch_target="${primary}"
@@ -263,7 +363,7 @@ prompt_for_mt5_login() {
     fi
 
     echo "Launching MetaTrader 5 so you can complete the initial login..."
-    WINEARCH=win64 WINEPREFIX="${prefix}" wine "${launch_target}" >/dev/null 2>&1 &
+    run_wine_command "${prefix}" wine "${launch_target}" >/dev/null 2>&1 &
     local wine_pid=$!
     while true; do
         if ! read -r -p "Did you log into MetaTrader 5 successfully? Type 'yes' to continue: " response; then
@@ -277,7 +377,7 @@ prompt_for_mt5_login() {
         echo "Please complete the login inside the MetaTrader 5 terminal before proceeding."
     done
     if command -v wineserver >/dev/null 2>&1; then
-        WINEPREFIX="${prefix}" wineserver -k >/dev/null 2>&1 || true
+        run_wine_command "${prefix}" wineserver -k >/dev/null 2>&1 || true
     fi
     if kill -0 "${wine_pid}" 2>/dev/null; then
         wait "${wine_pid}" || true
@@ -334,15 +434,15 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
     if ! sudo apt-get install -y python3 python3-venv python3-dev; then
         echo "Warning: Failed to install python3 toolchain packages via apt; attempting to use any existing interpreter." >&2
     fi
-    if apt-cache show python3-distutils >/dev/null 2>&1; then
-        if ! sudo apt-get install -y python3-distutils; then
-            echo "Warning: python3-distutils could not be installed; continuing without it." >&2
-        fi
+    if ! sudo apt-get install -y python3-distutils; then
+        echo "Warning: python3-distutils could not be installed; continuing without it." >&2
     fi
 
     sudo apt-get install -y build-essential cabextract wine64 wine32:i386 winetricks
-    sudo apt-get install -y wine-gecko2.47.4 wine-gecko2.47.4:i386 wine-mono || true
+    install_optional_wine_packages
 fi
+
+ensure_headless_wine_support
 
 PYTHON_BIN="${PYTHON_BIN:-}"
 if [[ -z "${PYTHON_BIN}" ]]; then
