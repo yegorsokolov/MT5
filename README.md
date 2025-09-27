@@ -513,7 +513,7 @@ match your environment.
    directory. If you would like to store it elsewhere, navigate there now. To
    use the home directory type `cd ~` and press `Enter`.
 5. **Download the repository.**
-   * Type `git clone https://github.com/USERNAME/MT5.git` and press `Enter`.
+   * Type `git clone https://github.com/yegorsokolov/MT5.git` and press `Enter`.
    * Wait until you see the prompt again; the repository is now saved in a new
      `MT5` folder.
 6. **Enter the project directory.** Type `cd MT5` and press `Enter`.
@@ -594,7 +594,7 @@ background services or running automation scripts.
 macOS:
 
 ```bash
-git clone https://github.com/USERNAME/MT5.git
+git clone https://github.com/yegorsokolov/MT5.git
 cd MT5
 touch .env  # create blank environment file and fill it using .env.template
 pip install -r requirements.txt
@@ -606,7 +606,7 @@ python -m mt5
 Windows PowerShell:
 
 ```powershell
-git clone https://github.com/USERNAME/MT5.git
+git clone https://github.com/yegorsokolov/MT5.git
 Set-Location MT5
 New-Item -Path . -Name .env -ItemType File -Force | Out-Null  # blank env file, fill from .env.template
 pip install -r requirements.txt
