@@ -185,12 +185,18 @@ session unless stated otherwise.
    sudo mkdir -p /opt/winpy && sudo chown "$USER":"$USER" /opt/winpy
    cd /opt/winpy
    wget -O python-3.11.9-amd64.exe https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
-   wine python-3.11.9-amd64.exe /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=C:\\Python311 || true
-   WIN_PY=$(find "$WINEPREFIX/drive_c" -iname python.exe | grep 'Python311/python.exe' | head -n1)
-   WIN_PY_WINPATH=$(winepath -w "$WIN_PY")
-   wine "$WIN_PY_WINPATH" -m pip install --upgrade pip
-   wine "$WIN_PY_WINPATH" -m pip install MetaTrader5
-   ```
+  wine python-3.11.9-amd64.exe /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=C:\\Python311 || true
+  WIN_PY=$(find "$WINEPREFIX/drive_c" -maxdepth 6 -type f -iname python.exe | grep -Ei 'Python3(1[01]|[0-9]+)/python.exe$' | head -n1)
+  WIN_PY_WINPATH=$(winepath -w "$WIN_PY")
+  wine "$WIN_PY_WINPATH" -m pip install --upgrade pip
+  wine "$WIN_PY_WINPATH" -m pip install MetaTrader5
+  ```
+
+> **Note:** Recent Python installers sometimes ignore the legacy
+> `C:\Python311` target directory and instead place the interpreter under
+> `C:\Users\<user>\AppData\Local\Programs\Python`. The `find`/`winepath`
+> combination above locates the actual `python.exe` regardless of where the
+> installer put it.
 
 6. **Install the MetaTrader 5 terminal in its own Wine prefix:** complete this
    step from an XRDP desktop so you can interact with the GUI installer.
@@ -263,6 +269,11 @@ multi-arch support, installs Wine 32/64, ensures `winetricks` runtime
 components are applied to both prefixes, provisions Windows Python 3.11.9,
 installs `MetaTrader5`, downloads the MT5 terminal installer and writes a
 `LOGIN_INSTRUCTIONS_WINE.txt` cheat sheet summarising the detected paths.
+
+If an installation run appears to stall when reusing a cached `.exe`, rerun the
+helper with `./scripts/setup_ubuntu.sh --fresh-installers` (or export
+`FORCE_INSTALLER_REFRESH=1`) to force a clean download of the Windows Python and
+MetaTrader installers before retrying the Wine setup.
 
 
 ### Resilient checkpoints and artifact tracking

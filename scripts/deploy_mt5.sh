@@ -57,7 +57,14 @@ cd /opt/mt5
 wget -O "${WIN_PY_EXE}" "${WIN_PY_URL}"
 wine "${WIN_PY_EXE}" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
 # Find Windows-Python in this prefix
-WIN_PY=$(find "$WINEPREFIX/drive_c" -iname python.exe | grep 'Python311/python.exe' | head -n1)
+WIN_PY=$(find "$WINEPREFIX/drive_c" -maxdepth 6 -type f -iname python.exe | grep -Ei 'Python3(1[01]|[0-9]+)/python.exe$' | head -n1)
+if [[ -z "${WIN_PY}" ]]; then
+  WIN_PY=$(find "$WINEPREFIX/drive_c" -maxdepth 6 -type f -iname python.exe | head -n1)
+fi
+if [[ -z "${WIN_PY}" ]]; then
+  echo "Windows Python executable not found inside ${WINEPREFIX}" >&2
+  exit 1
+fi
 WIN_PY_WINPATH=$(winepath -w "$WIN_PY")
 
 echo ">>> Install MetaTrader5 (and pin NumPy for stability) inside Windows-Python"
