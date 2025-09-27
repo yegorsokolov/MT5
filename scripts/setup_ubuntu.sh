@@ -12,11 +12,14 @@ LOG_DIR="${USER_HOME}/Downloads"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/$(date +'%m.%d.%Y').log"
 
+# Ensure file exists (append mode will recreate, but safer to touch)
+[ -f "$LOG_FILE" ] || touch "$LOG_FILE"
+
 # Start logging if not already under 'script'
 if [ -z "${TERMINAL_LOGGING:-}" ]; then
   export TERMINAL_LOGGING=1
   echo "[logger] Recording session to $LOG_FILE"
-  exec script -q -f -a "$LOG_FILE" /bin/bash -c "$0 $*"
+  exec script -q -f -a "$LOG_FILE" -- /bin/bash "$0" "$@"
 fi
 
 #####################################
