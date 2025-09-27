@@ -63,7 +63,8 @@ Use the checklist below to provision a clean Windows machine or VPS.
    environment variable (point it at the installation directory or directly at
    `terminal64.exe`) or by placing the terminal inside the repository `mt5/`
    folder.
-3. Run `python scripts/setup_terminal.py --install-heartbeat` (add
+3. `scripts/setup_ubuntu.sh` now runs `python scripts/setup_terminal.py --install-heartbeat`
+   automatically once the terminal is detected, but you can run it manually (add
    `--path "<terminal-or-install-dir>"` if the helper cannot auto-detect the
    executable). Provide `--login`, `--password` and `--server` to perform a
    headless login or omit them to attach to the running terminal. The script
@@ -78,7 +79,8 @@ Use the checklist below to provision a clean Windows machine or VPS.
 ## 4. Run the automation scripts
 
 1. Publish predictions with `python -m mt5.generate_signals`.
-2. Start real-time training with `python -m mt5.realtime_train`.
-3. To keep GitHub in sync, schedule `python scripts/hourly_artifact_push.py`
-   and ensure your Git credentials are cached so pushes succeed without manual
-   prompts.
+2. The combined pipeline started via `python -m mt5` now launches the realtime
+   trainer and the hourly artifact sync helper automatically. Use the dedicated
+   commands (`python -m mt5.realtime_train` and `python scripts/hourly_artifact_push.py`)
+   only when you need to run those components standalone, and ensure your Git
+   credentials are cached so pushes succeed without manual prompts.

@@ -41,7 +41,14 @@ except Exception:  # pragma: no cover - fallback used in minimal environments.
             self._lock.release()
 
 
-PIPELINE_STAGES: tuple[str, ...] = ("training", "backtest", "strategy", "realtime")
+PIPELINE_STAGES: tuple[str, ...] = (
+    "preflight",
+    "training",
+    "backtest",
+    "strategy",
+    "optimise",
+    "realtime",
+)
 
 
 def _now() -> str:
