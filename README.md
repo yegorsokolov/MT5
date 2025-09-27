@@ -104,6 +104,20 @@ After the script instructs you to log into the MT5 terminal, return to the SSH
 session, press **Enter** and it will complete the Linux-side configuration
 automatically.
 
+### Automated teardown
+
+If you need to remove the services, Wine prefixes and cached artifacts that the
+deployment created, run the bundled cleanup helper:
+
+```bash
+chmod +x scripts/mt5_cleanup.sh
+SERVICE_NAME=mt5bot INSTALL_ROOT=/opt/mt5 ./scripts/mt5_cleanup.sh
+```
+
+The script disables the systemd services, removes the installation directory at
+`/opt/mt5`, wipes the Wine prefixes under `~/.wine-mt5` and `~/.wine-py311` and
+deletes the cached MT5 data under `~/.cache/mt5`.
+
 ## Complete Ubuntu 25.04 VPS setup (Wine + MetaTrader 5)
 
 The steps below recreate the full “from scratch” deployment we verified on an
