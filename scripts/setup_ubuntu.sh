@@ -12,14 +12,22 @@ LOG_DIR="${USER_HOME}/Downloads"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/$(date +'%m.%d.%Y').log"
 
-# Ensure file exists (append mode will recreate, but safer to touch)
-[ -f "$LOG_FILE" ] || touch "$LOG_FILE"
+# Ensure today’s file exists (append will also create it, but be explicit)
+[ -f "$LOG_FILE" ] || : >"$LOG_FILE"
 
 # Start logging if not already under 'script'
 if [ -z "${TERMINAL_LOGGING:-}" ]; then
   export TERMINAL_LOGGING=1
   echo "[logger] Recording session to $LOG_FILE"
-  exec script -q -f -a "$LOG_FILE" -- /bin/bash "$0" "$@"
+
+  # Get an absolute path to this script (sudo keeps $PWD but be safe)
+  SCRIPT_ABS="$(readlink -f "$0")"
+
+  # Build a safely-quoted command: /bin/bash <script> <args...>
+  printf -v _CMD '%q ' /bin/bash "$SCRIPT_ABS" "$@"
+
+  # Run the command inside 'script' using -c (avoid argument parsing issues)
+  exec script -q -f -a "$LOG_FILE" -c "$_CMD"
 fi
 
 #####################################
