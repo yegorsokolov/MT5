@@ -53,6 +53,28 @@ run_as_project_user() {
   sudo -H -u "${PROJECT_USER}" bash -lc "$*"
 }
 
+# Execute a Python script from the project directory using the virtualenv if present.
+project_python() {
+  local script_path="$1"
+  shift || true
+
+  local interpreter="${PROJECT_ROOT}/.venv/bin/python"
+  if [[ ! -x "${interpreter}" ]]; then
+    interpreter="$(command -v python3 || command -v python)"
+  fi
+  if [[ -z "${interpreter}" ]]; then
+    log "Warning: No Python interpreter available to execute ${script_path}"
+    return 1
+  fi
+
+  local args=""
+  if [[ $# -gt 0 ]]; then
+    args="$(printf ' %q' "$@")"
+  fi
+
+  run_as_project_user "cd '${PROJECT_ROOT}' && \"${interpreter}\" \"${script_path}\"${args}"
+}
+
 # Load .env (optional)
 load_env() {
   if [[ -f "${PROJECT_ROOT}/.env" ]]; then
@@ -258,6 +280,34 @@ install_linux_bridge() {
   fi
 }
 
+detect_mt5_terminal() {
+  local script="scripts/detect_mt5_terminal.py"
+  if [[ ! -f "${PROJECT_ROOT}/${script}" ]]; then
+    log "Skipping MetaTrader 5 terminal detection (script not found)."
+    return 0
+  fi
+
+  log "Detecting MetaTrader 5 terminal location..."
+  if ! project_python "${script}"; then
+    log "Warning: Unable to auto-detect MetaTrader 5 terminal; update MT5_TERMINAL_PATH manually if required."
+  fi
+}
+
+configure_mt5_terminal() {
+  [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
+
+  local script="scripts/setup_terminal.py"
+  if [[ ! -f "${PROJECT_ROOT}/${script}" ]]; then
+    log "Skipping MetaTrader 5 terminal verification (script not found)."
+    return 0
+  fi
+
+  log "Verifying MetaTrader 5 connectivity and installing heartbeat script..."
+  if ! project_python "${script}" --install-heartbeat; then
+    log "Warning: MetaTrader 5 verification failed. Ensure the terminal is logged in and rerun the installer if needed."
+  fi
+}
+
 ########## Misc outputs ##########
 
 write_instructions() {
@@ -294,6 +344,8 @@ main() {
   install_windows_python || log "Warning: Windows Python is not available; skipping MetaTrader5 pip installation."
 
   install_mt5
+  detect_mt5_terminal
+  configure_mt5_terminal
 
   # If no DISPLAY and headless, skip auto login prompt
   if [[ -z "${DISPLAY:-}" ]]; then

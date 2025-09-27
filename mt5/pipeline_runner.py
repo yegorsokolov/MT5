@@ -39,6 +39,11 @@ except Exception:  # pragma: no cover - optional dependency may be missing
     def setup_logging() -> None:
         logging.basicConfig(level=logging.INFO)
 
+try:  # runtime bootstrap is optional during tests
+    from mt5.runtime_bootstrap import ensure_runtime_bootstrap as _ensure_runtime_bootstrap
+except Exception:  # pragma: no cover - bootstrap optional in tests
+    _ensure_runtime_bootstrap = None
+
 from mt5.run_state import PIPELINE_STAGES, PipelineState
 from strategy.archive import StrategyArchive
 
@@ -374,6 +379,11 @@ def _resolve_artifact_dir(custom: str | None) -> Path:
 
 def main(argv: Sequence[str] | None = None) -> int:
     setup_logging()
+    if _ensure_runtime_bootstrap is not None:
+        try:
+            _ensure_runtime_bootstrap()
+        except Exception:  # pragma: no cover - best effort logging
+            logger.warning("Runtime bootstrap failed", exc_info=True)
     args = _build_parser().parse_args(list(argv) if argv is not None else None)
     artifact_dir = _resolve_artifact_dir(args.artifact_dir or None)
     artifact_dir.mkdir(parents=True, exist_ok=True)

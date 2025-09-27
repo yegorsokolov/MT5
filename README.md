@@ -620,15 +620,15 @@ environment and start a training run. Adjust the final command for backtesting
 or signal generation as needed. Optional components can be installed via
 extras, for example `pip install .[rl]` or `pip install .[heavy]`.
 
-After the initial training run you can expose monitoring dashboards or other
-services as needed. The `scripts/run_bot.sh` helper now launches the Streamlit
-dashboard automatically (unless `START_DASHBOARD=0`) so you can monitor the new
-training progress indicator, which is triggered as soon as the trainer starts,
-and review the runtime of the most recent model build without additional
-commands. The FastAPI management surface that
-previously launched via `python -m mt5.remote_api` has been retired; the core
-process-control features are implemented directly in `mt5.remote_api` for
-in-process automation.
+After the initial training run the runtime bootstrap invoked by `python -m mt5`
+automatically launches the Streamlit dashboard (unless `START_DASHBOARD=0`),
+starts the background artifact synchroniser and ensures the MetaTrader terminal
+is online before the realtime loop begins. These helpers replace the legacy
+`scripts/run_bot.sh` wrapper while remaining configurable through the same
+environment variables. The FastAPI management surface that previously launched
+via `python -m mt5.remote_api` has been retired; the core process-control
+features are implemented directly in `mt5.remote_api` for in-process
+automation.
 
 ### Background services
 
@@ -1182,7 +1182,10 @@ This command mints a random service account, stores it in your chosen env file
 and prints shell exports for immediate use.
 9. **Verify MetaTrader 5 connectivity** –
    1. Ensure the MetaTrader 5 terminal is running and logged into the account you intend to trade.
-   2. Run `python scripts/setup_terminal.py --install-heartbeat` (append `--path "<terminal-or-install-dir>"` if the helper cannot auto-detect the terminal). The script confirms Python can initialise MetaTrader 5 and prints the connected account details.
+   2. `scripts/setup_ubuntu.sh` now runs `python scripts/setup_terminal.py --install-heartbeat`
+      automatically, but you can execute it manually (append `--path "<terminal-or-install-dir>"`
+      when auto-detection fails) to confirm the bridge is healthy or to supply explicit
+      credentials. The script prints the connected account details on success.
    3. If the script reports an error, review the reason, open the terminal logs and run the installed `ConnectionHeartbeat` script from the Navigator tree for detailed diagnostics before retrying.
 10. **Enable automated trading** –
     1. In MetaTrader 5 open **Tools → Options → Expert Advisors** and tick **Allow automated trading**.
@@ -1212,18 +1215,19 @@ and prints shell exports for immediate use.
       chosen hyperparameters are tracked with MLflow. Any improvements are
       written back to `config.yaml` and logged under `logs/config_changes.csv`.
    2. To view experiment history run `scripts/mlflow_ui.sh` and open `http://localhost:5000`.
-14. **Upload artifacts** –
-    1. Start `python scripts/hourly_artifact_push.py` in a separate window. This
-      script mirrors `logs/`, `checkpoints/` and analytics outputs into
-      `synced_artifacts/` before committing them every hour so history is
-      archived automatically. Use Windows Task Scheduler to launch it at logon
-      for unattended operation.
-    2. If pushes fail interactively, run `git credential-manager configure` or `gh auth login` once to cache GitHub credentials for the service account.
+14. **Upload artifacts** – the runtime bootstrap launches the hourly artifact
+    synchroniser automatically (set `START_ARTIFACT_SYNC=0` to disable it).
+    Ensure `GITHUB_TOKEN` or the appropriate credentials are available in the
+    environment so `scripts/sync_artifacts.py` can push updates. If pushes fail
+    interactively, run `git credential-manager configure` or `gh auth login`
+    once to cache GitHub credentials for the service account. You can still run
+    `python scripts/hourly_artifact_push.py` manually when building custom
+    automation.
 
-15. **Keep it running** –
-    1. Create scheduled tasks that start both `python -m mt5.realtime_train` and the
-      hourly artifact uploader whenever the VPS boots or a user logs in. With these
-      tasks enabled the bot and artifact push service run indefinitely.
+15. **Keep it running** – create a scheduled task or systemd service that calls
+    `python -m mt5` when the VPS boots. The runtime bootstrap handles terminal
+    launches, artifact uploads and dashboard start-up so no companion scripts
+    are required.
 
 ### Automatic self-updates
 

@@ -54,6 +54,11 @@ try:  # optional dependency during lightweight tests
 except Exception:  # pragma: no cover - state manager optional in tests
     _load_latest_checkpoint = None
 
+try:  # runtime bootstrap is optional during unit tests
+    from mt5.runtime_bootstrap import ensure_runtime_bootstrap as _ensure_runtime_bootstrap
+except Exception:  # pragma: no cover - bootstrap optional in tests
+    _ensure_runtime_bootstrap = None
+
 
 @dataclass(frozen=True)
 class EntryPoint:
@@ -377,6 +382,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if parsed.dry_run:
         print(f"{resolved_mode}: {entry.module}")
         return 0
+
+    if (
+        _ensure_runtime_bootstrap is not None
+        and entry.module in {"mt5.pipeline_runner", "mt5.realtime_train"}
+    ):
+        try:
+            _ensure_runtime_bootstrap()
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            print(f"[mt5] Runtime bootstrap failed: {exc}", file=sys.stderr)
 
     remainder = _augment_args_for_resume(entry.module, remainder, tuple(config_candidates))
     _run_module(entry.module, remainder)

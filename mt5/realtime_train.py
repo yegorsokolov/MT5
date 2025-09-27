@@ -143,6 +143,11 @@ from mt5.model_registry import register_policy, get_policy_path, save_model
 from mt5 import train_online
 from mt5 import train_rl
 
+try:  # runtime bootstrap is optional during unit tests
+    from mt5.runtime_bootstrap import ensure_runtime_bootstrap as _ensure_runtime_bootstrap
+except Exception:  # pragma: no cover - bootstrap optional in tests
+    _ensure_runtime_bootstrap = None
+
 _empty_batch_count = 0
 
 _LOGGING_INITIALIZED = False
@@ -617,6 +622,11 @@ async def tick_worker(
 @log_exceptions
 async def train_realtime():
     init_logging()
+    if _ensure_runtime_bootstrap is not None:
+        try:
+            _ensure_runtime_bootstrap()
+        except Exception:  # pragma: no cover - defensive fallback
+            logger.warning("Runtime bootstrap failed", exc_info=True)
     cfg = load_config()
     artifact_override = cfg.get("artifact_dir")
     if artifact_override:
