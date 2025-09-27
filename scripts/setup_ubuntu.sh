@@ -4,7 +4,7 @@
 #   sudo bash scripts/setup_ubuntu.sh
 #   sudo bash scripts/setup_ubuntu.sh --services-only
 #   sudo bash scripts/setup_ubuntu.sh --headless=manual   # persistent Xvfb
-# Idempotent and safe to re-run.
+# Idempotent; safe to re-run.
 
 set -euo pipefail
 
@@ -23,17 +23,17 @@ WINEPREFIX_PY="${PROJECT_HOME}/.wine-py311"
 WINEPREFIX_MT5="${PROJECT_HOME}/.wine-mt5"
 WINEARCH="win64"
 
-# Defaults (override in .env or environment before running)
+# Defaults (override in .env or env before running)
 HEADLESS_MODE="${HEADLESS_MODE:-auto}"   # auto|manual
 PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-3.11.9}"
 PYTHON_WIN_DIR="C:\\Python311"
-PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-pymt5linux}"
+PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-}"   # leave empty to skip
+MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 
 CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
 PYTHON_WIN_EXE="python-${PYTHON_WIN_VERSION}-amd64.exe"
 PYTHON_WIN_URL="https://www.python.org/ftp/python/${PYTHON_WIN_VERSION}/${PYTHON_WIN_EXE}"
 MT5_SETUP_EXE="mt5setup.exe"
-MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 
 export WINEDEBUG="${WINE_DEBUG_CHANNEL:--all}"
 
@@ -79,7 +79,7 @@ ensure_system_packages() {
   apt-get install -y \
     software-properties-common build-essential \
     cabextract wine64 wine32:i386 winetricks xvfb curl unzip p7zip-full \
-    python3 python3-venv python3-dev python3-pip python3-setuptools
+    python3 python3-venv python3-dev python3-pip python3-setuptools wget
   log "System packages ensured."
 }
 
@@ -88,11 +88,16 @@ ensure_system_packages() {
 #####################################
 ensure_project_venv() {
   [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
+
+  # Fix ownership to prevent venv permission issues
+  chown -R "${PROJECT_USER}:${PROJECT_USER}" "${PROJECT_ROOT}" || true
+
   log "Creating/using project virtualenv (.venv)..."
   run_as_user "cd '${PROJECT_ROOT}' && python3 -m venv .venv || true"
   run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade pip setuptools wheel || true"
 }
 
+venv_python() { echo "${PROJECT_ROOT}/.venv/bin/python"; }
 venv_pip_install() {
   local pkg="$1"
   run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade '${pkg}'"
@@ -148,9 +153,11 @@ ensure_wineprefix() {
   run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; wineboot -u >/dev/null 2>&1 || true"
 }
 
+# Keep verbs minimal (Ubuntu winetricks may not support 'gecko'/'mono' verbs)
 winetricks_quiet() {
   local prefix="$1"; shift
   local pkgs=("$@")
+  [[ ${#pkgs[@]} -eq 0 ]] && return 0
   run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; winetricks -q -f ${pkgs[*]} >/dev/null 2>&1 || true"
 }
 
@@ -163,12 +170,6 @@ wine_cmd() {
   run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; $*"
 }
 
-wine_start_wait() {
-  local prefix="$1"; shift
-  wine_cmd "${prefix}" wine start /wait "$@"
-  wine_wait
-}
-
 #####################################
 # Install Windows Python 3.11
 #####################################
@@ -178,8 +179,8 @@ install_windows_python() {
   log "Initialising Wine prefix at ${prefix} ..."
   ensure_wineprefix "${prefix}"
 
-  log "Ensuring gecko, mono, and VC runtimes in ${prefix} ..."
-  winetricks_quiet "${prefix}" gecko mono vcrun2022 corefonts gdiplus
+  # Install minimal prereqs that are known to help Python/UCRT on Wine
+  winetricks_quiet "${prefix}" vcrun2022 corefonts gdiplus
 
   mkdir -p "${CACHE_DIR}"
   if [[ ! -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" ]]; then
@@ -187,14 +188,19 @@ install_windows_python() {
     curl -fsSL -o "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${PYTHON_WIN_URL}"
   fi
 
+  # Stage the installer inside the prefix (avoid Z:\)
+  run_as_user "mkdir -p '${prefix}/drive_c/_installers'"
+  cp -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${prefix}/drive_c/_installers/"
+
   log "Installing Windows Python ${PYTHON_WIN_VERSION}..."
   xvfb_start
-  with_display "$(wine_env_block); export WINEPREFIX='${prefix}'; wine start /wait Z:\\${CACHE_DIR//\//\\}\\${PYTHON_WIN_EXE} InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 TargetDir=${PYTHON_WIN_DIR} /quiet || true"
+  with_display "$(wine_env_block); export WINEPREFIX='${prefix}'; wine start /wait C:\\\\_installers\\\\${PYTHON_WIN_EXE} InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 TargetDir=${PYTHON_WIN_DIR} /quiet || true"
   wine_wait
   xvfb_stop
 
+  # Verify
   if ! wine_cmd "${prefix}" wine cmd /c "${PYTHON_WIN_DIR}\\python.exe -V" >/tmp/wpy.ver 2>&1; then
-    log "Warning: Windows Python installer exited with an error."
+    log "Warning: Windows Python installer exited with an error (or Python not found)."
   else
     log "Windows Python: $(cat /tmp/wpy.ver)"
   fi
@@ -209,8 +215,8 @@ install_mt5() {
   log "Initialising Wine prefix at ${prefix} ..."
   ensure_wineprefix "${prefix}"
 
-  log "Ensuring gecko/mono in ${prefix} ..."
-  winetricks_quiet "${prefix}" gecko mono
+  # Minimal fonts/GDI bits; let Wine handle gecko/mono automatically
+  winetricks_quiet "${prefix}" corefonts gdiplus
 
   mkdir -p "${CACHE_DIR}"
   if [[ ! -f "${CACHE_DIR}/${MT5_SETUP_EXE}" ]]; then
@@ -224,9 +230,13 @@ install_mt5() {
     return 0
   fi
 
+  # Stage inside C:\ and run
+  run_as_user "mkdir -p '${prefix}/drive_c/_installers'"
+  cp -f "${CACHE_DIR}/${MT5_SETUP_EXE}" "${prefix}/drive_c/_installers/"
+
   log "Installing MetaTrader 5..."
   xvfb_start
-  with_display "$(wine_env_block); export WINEPREFIX='${prefix}'; wine start /wait Z:\\${CACHE_DIR//\//\\}\\${MT5_SETUP_EXE} /silent || wine start /wait Z:\\${CACHE_DIR//\//\\}\\${MT5_SETUP_EXE}"
+  with_display "$(wine_env_block); export WINEPREFIX='${prefix}'; wine start /wait C:\\\\_installers\\\\${MT5_SETUP_EXE} /silent || wine start /wait C:\\\\_installers\\\\${MT5_SETUP_EXE}"
   wine_wait
   xvfb_stop
 
@@ -236,16 +246,16 @@ install_mt5() {
 }
 
 #####################################
-# Linux bridge helper
+# Linux bridge helper (optional)
 #####################################
 install_linux_bridge() {
   [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
+  [[ -z "${PYMT5LINUX_SOURCE}" ]] && { log "PYMT5LINUX_SOURCE not set; skipping Linux-side bridge helper."; return 0; }
+
   log "Ensuring Linux-side bridge helper (${PYMT5LINUX_SOURCE}) is installed..."
   if ! venv_pip_install "${PYMT5LINUX_SOURCE}"; then
     log "Warning: Failed to install ${PYMT5LINUX_SOURCE}."
-    if [[ "${PYMT5LINUX_SOURCE}" == "pymt5linux" ]]; then
-      log "Hint: export PYMT5LINUX_SOURCE to a Git URL or wheel."
-    fi
+    log "Hint: export PYMT5LINUX_SOURCE to a Git URL or wheel (e.g., https://github.com/you/pymt5linux.git#egg=pymt5linux)."
   fi
 }
 
@@ -255,20 +265,21 @@ install_linux_bridge() {
 write_instructions() {
   local file="${PROJECT_ROOT}/LOGIN_INSTRUCTIONS_WINE.txt"
   cat > "${file}" <<'TXT'
-MetaTrader 5 (Wine) — Login Instructions
+MetaTrader 5 (Wine) — Quick Usage
 
-1) If headless, either run setup with --headless=manual (persistent Xvfb) or use a real X session.
+1) Start MT5 (prefix ~/.wine-mt5):
+   WINEPREFIX="$HOME/.wine-mt5" wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
 
-2) Start MT5 manually:
-   export WINEPREFIX="$HOME/.wine-mt5"
-   wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+   - First time: File → Login to Trade Account → enter login/password/server → check “Save password”.
 
-3) Check Windows Python:
-   export WINEPREFIX="$HOME/.wine-py311"
-   wine cmd /c "C:\\Python311\\python.exe -V"
+2) Windows Python in Wine (prefix ~/.wine-py311):
+   WINEPREFIX="$HOME/.wine-py311" wine cmd /c "C:\\Python311\\python.exe -V"
 
-4) Run your Windows-side bridge script:
-   wine cmd /c "C:\\Python311\\python.exe Z:\\opt\\mt5\\utils\\mt_5_bridge.py"
+3) Run your Windows-side script from C:\ (avoid Z:\ on Wine 9):
+   - Copy your repo into C:\ once:
+     rsync -a --delete /opt/mt5/ "$HOME/.wine-py311/drive_c/mt5/"
+   - Then run:
+     WINEPREFIX="$HOME/.wine-py311" wine cmd /c "C:\\Python311\\python.exe C:\\mt5\\utils\\mt_5_bridge.py"
 TXT
   log "MetaTrader 5 Wine instructions saved to ${file}"
 }
@@ -285,14 +296,13 @@ main() {
   install_mt5
 
   if [[ -z "${DISPLAY:-}" && "${HEADLESS_MODE}" != "manual" ]]; then
-    log "Skipping MT5 login prompt (no graphical display)."
+    log "Skipping MT5 login prompt (no graphical display). Run the terminal once and save your credentials."
   fi
 
+  # Show venv status & basic info
   if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
     log "Checking for outdated Python packages in venv (no forced upgrades)..."
     run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip list --outdated || true"
-    log "Ensuring pip is current in venv..."
-    run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade pip || true"
   fi
 
   write_instructions
