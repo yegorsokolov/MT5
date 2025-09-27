@@ -75,7 +75,12 @@ discover_windows_python() {
   fi
 
   local finder
-  printf -v finder "find %q -maxdepth 6 -type f -iname 'python.exe' 2>/dev/null | sort" "${prefix}/drive_c"
+  # The per-user Windows Python installer places the interpreter below
+  # ``Users/<name>/AppData/Local/Programs/Python/<version>/python.exe`` which
+  # exceeds the previous ``-maxdepth 6`` search limit. Recent installers rely on
+  # that layout, so widen the traversal depth to ensure we pick it up while
+  # still avoiding an unbounded crawl of the Wine prefix.
+  printf -v finder "find %q -maxdepth 9 -type f -iname 'python.exe' 2>/dev/null | sort" "${prefix}/drive_c"
   local results
   results="$(run_as_user "${finder}" || true)"
   if [[ -z "${results}" ]]; then
