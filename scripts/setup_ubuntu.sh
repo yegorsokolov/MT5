@@ -45,7 +45,10 @@ WINEARCH="win64"
 
 HEADLESS_MODE="${HEADLESS_MODE:-auto}"   # auto|manual
 PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-3.11.9}"
-PYTHON_WIN_DIR="C:\\Python311"
+# Populated dynamically after installation so we do not rely on a hard coded
+# ``C:\\Python311`` target which newer installers sometimes ignore.
+WINDOWS_PYTHON_UNIX_PATH=""
+WINDOWS_PYTHON_WIN_PATH=""
 PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-}"
 MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 
@@ -53,6 +56,7 @@ CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
 PYTHON_WIN_EXE="python-${PYTHON_WIN_VERSION}-amd64.exe"
 PYTHON_WIN_URL="https://www.python.org/ftp/python/${PYTHON_WIN_VERSION}/${PYTHON_WIN_EXE}"
 MT5_SETUP_EXE="mt5setup.exe"
+FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
 
 export WINEDEBUG="${WINE_DEBUG_CHANNEL:--all}"
 
@@ -64,14 +68,58 @@ die() { echo "[setup:ERROR] $*" | tee -a "$SETUP_LOG" >&2; exit 1; }
 need_root() { if [[ "$(id -u)" -ne 0 ]]; then die "Run with sudo"; fi; }
 run_as_user() { sudo -H -u "${PROJECT_USER}" bash -lc "$*"; }
 
+discover_windows_python() {
+  local prefix="$1"
+  if [[ -z "${prefix}" ]]; then
+    return 1
+  fi
+
+  local finder
+  printf -v finder "find %q -maxdepth 6 -type f -iname 'python.exe' 2>/dev/null | sort" "${prefix}/drive_c"
+  local results
+  results="$(run_as_user "${finder}" || true)"
+  if [[ -z "${results}" ]]; then
+    return 1
+  fi
+
+  local preferred
+  preferred="$(printf '%s\n' "${results}" | grep -Ei 'Python3(1[01]|[0-9]+)/python.exe$' | head -n1 || true)"
+  if [[ -n "${preferred}" ]]; then
+    printf '%s' "${preferred}"
+    return 0
+  fi
+
+  printf '%s' "${results}" | head -n1
+}
+
+to_windows_path() {
+  local prefix="$1"
+  local unix_path="$2"
+  if [[ -z "${prefix}" || -z "${unix_path}" ]]; then
+    return 1
+  fi
+
+  local converter
+  printf -v converter "WINEPREFIX=%q winepath -w %q" "${prefix}" "${unix_path}"
+  local converted
+  converted="$(run_as_user "${converter}" 2>/dev/null || true)"
+  converted="${converted//$'\r'/}"
+  [[ -n "${converted}" ]] && printf '%s' "${converted}"
+}
+
 ensure_cached_download() {
   local destination="$1"
   local url="$2"
   local label="$3"
 
   if [[ -s "${destination}" ]]; then
-    log "Using cached ${label} at ${destination}"
-    return 0
+    if [[ "${FORCE_INSTALLER_REFRESH}" != "0" ]]; then
+      log "Refreshing cached ${label} at ${destination}"
+      rm -f "${destination}"
+    else
+      log "Using cached ${label} at ${destination}"
+      return 0
+    fi
   fi
 
   local tmp_file="${destination}.tmp"
@@ -103,6 +151,7 @@ for arg in "$@"; do
     --services-only) SERVICES_ONLY=1 ;;
     --headless=manual) HEADLESS_MODE="manual" ;;
     --headless=auto) HEADLESS_MODE="auto" ;;
+    --fresh-installers) FORCE_INSTALLER_REFRESH=1 ;;
     *) ;; # ignore unknown
   esac
 done
@@ -204,6 +253,14 @@ install_windows_python() {
   log "Initialising Wine prefix at ${prefix} ..."
   ensure_wineprefix "${prefix}"
   winetricks_quiet "${prefix}" vcrun2022 corefonts gdiplus
+
+  WINDOWS_PYTHON_UNIX_PATH="$(discover_windows_python "${prefix}" || true)"
+  if [[ -n "${WINDOWS_PYTHON_UNIX_PATH}" ]]; then
+    WINDOWS_PYTHON_WIN_PATH="$(to_windows_path "${prefix}" "${WINDOWS_PYTHON_UNIX_PATH}" || true)"
+    log "Windows Python already present at ${WINDOWS_PYTHON_WIN_PATH:-${WINDOWS_PYTHON_UNIX_PATH}}"
+    return 0
+  fi
+
   mkdir -p "${CACHE_DIR}"
   ensure_cached_download \
     "${CACHE_DIR}/${PYTHON_WIN_EXE}" \
@@ -215,12 +272,26 @@ install_windows_python() {
   xvfb_start
   local installer_path="${prefix}/drive_c/_installers/${PYTHON_WIN_EXE}"
   local install_cmd
-  printf -v install_cmd "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s' InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 TargetDir=%s /quiet" \
-    "$(wine_env_block)" "${prefix}" "${installer_path}" "${PYTHON_WIN_DIR}"
+  printf -v install_cmd "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s' InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 /quiet" \
+    "$(wine_env_block)" "${prefix}" "${installer_path}"
   with_display "${install_cmd} || true"
   wine_wait
   xvfb_stop
-  wine_cmd "${prefix}" wine cmd /c "${PYTHON_WIN_DIR}\\python.exe" -V || log "Windows Python not found"
+
+  WINDOWS_PYTHON_UNIX_PATH="$(discover_windows_python "${prefix}" || true)"
+  if [[ -z "${WINDOWS_PYTHON_UNIX_PATH}" ]]; then
+    log "Windows Python not found after installation"
+    return 1
+  fi
+
+  WINDOWS_PYTHON_WIN_PATH="$(to_windows_path "${prefix}" "${WINDOWS_PYTHON_UNIX_PATH}" || true)"
+  if [[ -z "${WINDOWS_PYTHON_WIN_PATH}" ]]; then
+    log "Unable to convert ${WINDOWS_PYTHON_UNIX_PATH} to a Windows path"
+    return 1
+  fi
+
+  log "Windows Python available at ${WINDOWS_PYTHON_WIN_PATH}"
+  wine_cmd "${prefix}" wine cmd /c "${WINDOWS_PYTHON_WIN_PATH}" -V || log "Windows Python not found"
 }
 
 #####################################
@@ -297,20 +368,22 @@ auto_configure_terminal() {
 #####################################
 write_instructions() {
   local file="${PROJECT_ROOT}/LOGIN_INSTRUCTIONS_WINE.txt"
-  cat > "${file}" <<'TXT'
+  local python_cmd
+  python_cmd="${WINDOWS_PYTHON_WIN_PATH:-C:\\Python311\\python.exe}"
+  cat > "${file}" <<TXT
 MetaTrader 5 (Wine) — Quick Usage
 ---------------------------------
 1) Start MT5:
-   WINEPREFIX="$HOME/.wine-mt5" wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+   WINEPREFIX="\$HOME/.wine-mt5" wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
 
    First time: Login → Save password
 
 2) Windows Python:
-   WINEPREFIX="$HOME/.wine-py311" wine cmd /c "C:\\Python311\\python.exe -V"
+   WINEPREFIX="\$HOME/.wine-py311" wine cmd /c "${python_cmd}" -V
 
 3) Run bridge:
-   rsync -a --delete /opt/mt5/ "$HOME/.wine-py311/drive_c/mt5/"
-   WINEPREFIX="$HOME/.wine-py311" wine cmd /c "C:\\Python311\\python.exe C:\\mt5\\utils\\mt_5_bridge.py"
+   rsync -a --delete /opt/mt5/ "\$HOME/.wine-py311/drive_c/mt5/"
+   WINEPREFIX="\$HOME/.wine-py311" wine cmd /c "${python_cmd}" C:\\mt5\\utils\\mt_5_bridge.py
 TXT
   log "Instructions written to ${file}"
 }
