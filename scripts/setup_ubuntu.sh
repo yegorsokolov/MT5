@@ -12,8 +12,8 @@ LOG_DIR="${USER_HOME}/Downloads"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/$(date +'%m.%d.%Y').log"
 
-# Ensure today’s file exists (append will also create it, but be explicit)
-[ -f "$LOG_FILE" ] || : >"$LOG_FILE"
+# Clean (truncate) today's log file before writing anything new
+: >"$LOG_FILE"
 
 # Start logging if not already under 'script'
 if [ -z "${TERMINAL_LOGGING:-}" ]; then
