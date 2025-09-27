@@ -167,9 +167,13 @@ wine_wait() { run_as_user "wineserver -w"; }
 wine_cmd() {
   local prefix="$1"
   shift || true
-  local cmd
-  printf -v cmd "%s; export WINEPREFIX='%s'; %s" "$(wine_env_block)" "${prefix}" "$*"
-  run_as_user "${cmd}"
+  local quoted
+  if [[ $# -eq 0 ]]; then
+    return 0
+  fi
+  printf -v quoted "%q " "$@"
+  quoted="${quoted% }"
+  run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; ${quoted}"
 }
 
 #####################################
