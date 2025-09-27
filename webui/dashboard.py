@@ -900,7 +900,7 @@ def main() -> None:
         rows = schema_table(current)
         st.subheader("Config Explorer")
         st.markdown(
-            "[Full config documentation](https://github.com/USERNAME/MT5/blob/main/docs/config.md)"
+            "[Full config documentation](https://github.com/yegorsokolov/MT5/blob/main/docs/config.md)"
         )
         st.table(rows)
         cards_dir = Path("reports/model_cards")
