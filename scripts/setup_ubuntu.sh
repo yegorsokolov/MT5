@@ -199,7 +199,7 @@ install_windows_python() {
   with_display "${install_cmd} || true"
   wine_wait
   xvfb_stop
-  wine_cmd "${prefix}" wine cmd /c "${PYTHON_WIN_DIR}\\python.exe -V" || log "Windows Python not found"
+  wine_cmd "${prefix}" wine cmd /c "${PYTHON_WIN_DIR}\\python.exe" -V || log "Windows Python not found"
 }
 
 #####################################
