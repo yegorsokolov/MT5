@@ -37,9 +37,10 @@ The solution is split into two components:
    backtests. Any improved settings are written back to `config.yaml` along with
    the reason in `logs/config_changes.csv` and logged to MLflow.
 5. **Feature evaluator** — iteratively tests optional features across rolling
-   backtests and disables those that hurt performance. Run
-   `python scripts/evaluate_features.py` after collecting enough data to update
-   `config.yaml` automatically.
+   backtests and disables those that hurt performance. The helper that previously
+   required running `python scripts/evaluate_features.py` is now executed
+   automatically as part of the unified `python -m mt5` pipeline so feature flags
+   stay in sync without extra steps.
 6. **Hyperparameter tuner** — pass `--tune` to the training scripts to launch
    an Optuna search over learning rate, model depth and RL discount factors. The
    best settings are logged to MLflow and persisted in `tuning/*.db`.
@@ -206,6 +207,12 @@ session unless stated otherwise.
    ```
 
 7. **Record the Wine locations and install the heartbeat script:**
+
+   The Ubuntu bootstrap now handles environment detection and heartbeat
+   deployment automatically. Running `sudo ./scripts/setup_ubuntu.sh` seeds the
+   `.env` file, resolves the MetaTrader 5 terminal path and installs the
+   `ConnectionHeartbeat.mq5` helper without additional commands. The manual
+   steps remain below for reference if you need to re-run them individually:
 
    ```bash
    cd ~/MT5
@@ -946,7 +953,7 @@ For a full pipeline combining all of these approaches run `mt5.train_combined`.
    pip freeze | sort > requirements.txt
    ```
 
-2. Place historical CSV files under `data/`, specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`, **or** define `api_history` entries to fetch ticks directly from your MetaTrader&nbsp;5 terminal. Existing CSV files can be converted to Parquet using `python scripts/migrate_to_parquet.py`.
+2. Place historical CSV files under `data/`, specify a mapping of symbols to their download URLs in `config.yaml` under `data_urls`, **or** define `api_history` entries to fetch ticks directly from your MetaTrader&nbsp;5 terminal. Existing CSV files are converted to Parquet automatically during the preflight phase of `python -m mt5`, so the `python scripts/migrate_to_parquet.py` helper is only required for ad-hoc migrations.
    The MT5 history center provides free tick data once you have logged in to a broker through the terminal. Programmatic access is also available via a helper that auto-selects symbols and handles chunked downloads:
 
    ```python
@@ -1182,7 +1189,7 @@ This command mints a random service account, stores it in your chosen env file
 and prints shell exports for immediate use.
 9. **Verify MetaTrader 5 connectivity** –
    1. Ensure the MetaTrader 5 terminal is running and logged into the account you intend to trade.
-   2. Run `python scripts/setup_terminal.py --install-heartbeat` (append `--path "<terminal-or-install-dir>"` if the helper cannot auto-detect the terminal). The script confirms Python can initialise MetaTrader 5 and prints the connected account details.
+   2. `scripts/setup_ubuntu.sh` now invokes `python scripts/setup_terminal.py --install-heartbeat` automatically, but you can re-run it manually (append `--path "<terminal-or-install-dir>"` if the helper cannot auto-detect the terminal) to double check connectivity.
    3. If the script reports an error, review the reason, open the terminal logs and run the installed `ConnectionHeartbeat` script from the Navigator tree for detailed diagnostics before retrying.
 10. **Enable automated trading** –
     1. In MetaTrader 5 open **Tools → Options → Expert Advisors** and tick **Allow automated trading**.
@@ -1198,32 +1205,33 @@ and prints shell exports for immediate use.
       is closed it runs a rolling backtest or falls back to historical data so
       analysis can continue. Pass `--simulate-closed-market` to manually test
       this behaviour.
-12. **Run realtime training** –
-   1. Back in the command prompt run `python -m mt5.realtime_train`.
-   2. Leave this window open; the script will keep updating `model.joblib` as new ticks arrive.
-13. **Optimise parameters** –
-   1. Periodically run `python -m mt5.auto_optimize`.
-      When `use_ray` is enabled the script leverages Ray Tune with
-      `OptunaSearch` to distribute trials. Configure resource limits under
-      `ray_resources` in `config.yaml`.
-      The optimiser performs a Bayesian search across thresholds,
-      walk‑forward window sizes and reinforcement‑learning parameters. Results
-      are cross‑validated over multiple market regimes and both the metrics and
-      chosen hyperparameters are tracked with MLflow. Any improvements are
-      written back to `config.yaml` and logged under `logs/config_changes.csv`.
-   2. To view experiment history run `scripts/mlflow_ui.sh` and open `http://localhost:5000`.
-14. **Upload artifacts** –
-    1. Start `python scripts/hourly_artifact_push.py` in a separate window. This
-      script mirrors `logs/`, `checkpoints/` and analytics outputs into
-      `synced_artifacts/` before committing them every hour so history is
-      archived automatically. Use Windows Task Scheduler to launch it at logon
-      for unattended operation.
-    2. If pushes fail interactively, run `git credential-manager configure` or `gh auth login` once to cache GitHub credentials for the service account.
+12. **Run realtime training** – The unified pipeline launched via `python -m mt5`
+    starts the realtime trainer automatically after the training, backtest and
+    strategy phases complete. It keeps the loop running for the configured
+    duration (`--realtime-duration`, default five seconds for smoke tests) and
+    can be adjusted to run indefinitely. Launch `python -m mt5.realtime_train`
+    manually only when you need an isolated session.
+13. **Optimise parameters** – Each `python -m mt5` run now triggers the
+    hyperparameter optimiser automatically. When `use_ray` is enabled the stage
+    leverages Ray Tune with `OptunaSearch` to distribute trials. Configure
+    resource limits under `ray_resources` in `config.yaml`. The optimiser
+    performs a Bayesian search across thresholds, walk‑forward window sizes and
+    reinforcement-learning parameters. Results are cross-validated over multiple
+    market regimes and both the metrics and chosen hyperparameters are tracked
+    with MLflow. Any improvements are written back to `config.yaml` and logged
+    under `logs/config_changes.csv`. You can still launch `python -m
+    mt5.auto_optimize` manually for dedicated tuning rounds. To view experiment
+    history run `scripts/mlflow_ui.sh` and open `http://localhost:5000`.
+14. **Upload artifacts** – The pipeline automatically spawns the background
+    `hourly_artifact_push.py` helper during the realtime stage so logs,
+    checkpoints and analytics are mirrored into `synced_artifacts/` without
+    additional commands. The uploader shuts down cleanly when the pipeline exits.
+    Manual execution remains available if you need to run the sync separately.
 
-15. **Keep it running** –
-    1. Create scheduled tasks that start both `python -m mt5.realtime_train` and the
-      hourly artifact uploader whenever the VPS boots or a user logs in. With these
-      tasks enabled the bot and artifact push service run indefinitely.
+15. **Keep it running** – Because the realtime trainer and artifact uploader are
+    now launched by `python -m mt5`, scheduling standalone tasks is optional.
+    Create systemd units or cron entries only if you require the components to
+    restart independently of the main pipeline.
 
 ### Automatic self-updates
 

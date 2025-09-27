@@ -19,6 +19,7 @@ import json
 import logging
 import runpy
 import shlex
+import subprocess
 import sys
 import time
 from datetime import date, datetime
@@ -45,6 +46,8 @@ from strategy.archive import StrategyArchive
 logger = logging.getLogger(__name__)
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = REPO_ROOT / "scripts"
 PIPELINE_ARTIFACT_SUBDIR = "pipeline"
 BACKTEST_ARTIFACT_NAME = "backtest_metrics.json"
 STRATEGY_ARTIFACT_NAME = "strategy.json"
@@ -105,6 +108,91 @@ def _save_artifact(path: Path, payload: Mapping[str, Any]) -> None:
     with tmp_path.open("w", encoding="utf8") as fh:
         json.dump(data, fh, indent=2, sort_keys=True)
     tmp_path.replace(path)
+
+
+def _run_helper_script(script_name: str, *args: str) -> None:
+    script = SCRIPTS_DIR / script_name
+    if not script.exists():
+        logger.debug("Helper script %s not found; skipping", script_name)
+        return
+    cmd = [sys.executable, str(script), *args]
+    logger.info("Executing helper script %s", script.name)
+    subprocess.run(cmd, check=True, cwd=str(REPO_ROOT))
+
+
+def _collect_preflight_artifacts() -> list[Path]:
+    artifacts: list[Path] = []
+    data_dir = REPO_ROOT / "data"
+    if data_dir.exists():
+        artifacts.extend(sorted(p for p in data_dir.glob("*.parquet")))
+    feature_log = LOG_DIR / "feature_eval.csv"
+    if feature_log.exists():
+        artifacts.append(feature_log)
+    return artifacts
+
+
+def _run_preflight_scripts() -> list[Path]:
+    for script_name in ("migrate_to_parquet.py", "evaluate_features.py"):
+        try:
+            _run_helper_script(script_name)
+        except subprocess.CalledProcessError:
+            logger.exception("Helper script %s failed during preflight", script_name)
+            raise
+    return _collect_preflight_artifacts()
+
+
+def _run_auto_optimisation() -> tuple[dict[str, Any], list[Path]]:
+    logger.info("Starting automated optimisation stage")
+    config_path = REPO_ROOT / "config.yaml"
+    changes_path = LOG_DIR / "config_changes.csv"
+    before_config = config_path.stat().st_mtime if config_path.exists() else None
+    before_changes = changes_path.stat().st_mtime if changes_path.exists() else None
+
+    _run_module("mt5.auto_optimize", [])
+
+    metrics: dict[str, Any] = {}
+    artifacts: list[Path] = []
+    if config_path.exists():
+        artifacts.append(config_path)
+        after_config = config_path.stat().st_mtime
+        metrics["config_updated"] = before_config is None or after_config > before_config
+    if changes_path.exists():
+        artifacts.append(changes_path)
+        after_changes = changes_path.stat().st_mtime
+        metrics["config_changes_updated"] = (
+            before_changes is None or after_changes > before_changes
+        )
+    return metrics, artifacts
+
+
+def _start_artifact_sync() -> subprocess.Popen[bytes] | None:
+    script = SCRIPTS_DIR / "hourly_artifact_push.py"
+    if not script.exists():
+        logger.debug("Artifact sync helper not found; skipping background uploader")
+        return None
+    logger.info("Launching background artifact sync helper")
+    return subprocess.Popen([sys.executable, str(script)], cwd=str(REPO_ROOT))
+
+
+def _stop_artifact_sync(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    logger.info("Stopping background artifact sync helper")
+    try:
+        process.terminate()
+        process.wait(timeout=10.0)
+    except subprocess.TimeoutExpired:
+        logger.warning("Artifact sync helper did not exit in time; forcing shutdown")
+        process.kill()
+        with contextlib.suppress(Exception):
+            process.wait(timeout=5.0)
+    except Exception:
+        logger.exception("Failed to terminate artifact sync helper cleanly")
+
+
+def _collect_realtime_artifacts() -> list[Path]:
+    sync_dir = REPO_ROOT / "synced_artifacts"
+    return [sync_dir] if sync_dir.exists() else []
 
 
 def _collect_training_artifacts() -> list[Path]:
@@ -344,6 +432,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip the training stage",
     )
     parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Skip dataset migration and feature evaluation preflight steps",
+    )
+    parser.add_argument(
         "--skip-backtest",
         action="store_true",
         help="Skip the backtesting stage",
@@ -352,6 +445,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--skip-strategy",
         action="store_true",
         help="Skip the strategy creation stage",
+    )
+    parser.add_argument(
+        "--skip-optimise",
+        action="store_true",
+        help="Skip automated hyperparameter optimisation",
     )
     parser.add_argument(
         "--skip-realtime",
@@ -388,9 +486,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger.info("Resuming pipeline from stage %s", resume_stage)
 
     stage_flags = {
+        "preflight": bool(args.skip_preflight),
         "training": bool(args.skip_training),
         "backtest": bool(args.skip_backtest),
         "strategy": bool(args.skip_strategy),
+        "optimise": bool(args.skip_optimise),
         "realtime": bool(args.skip_realtime),
     }
     if resume_stage:
@@ -402,10 +502,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     state.begin_run(args=vars(args), resume_from=resume_stage)
     archive = StrategyArchive()
 
+    preflight_artifacts: list[Path] | None = None
     backtest_metrics: Mapping[str, Any] | None = None
     strategy_artifact: Mapping[str, Any] | None = None
+    optimise_metrics: Mapping[str, Any] | None = None
 
     try:
+        if not stage_flags["preflight"]:
+            state.mark_stage_started("preflight")
+            try:
+                preflight_artifacts = _run_preflight_scripts()
+            except Exception as exc:
+                state.mark_stage_failed("preflight", exc)
+                raise
+            state.mark_stage_complete(
+                "preflight",
+                artifacts=preflight_artifacts or [],
+                resume=bool(preflight_artifacts),
+            )
+        else:
+            logger.info("Preflight stage skipped via CLI flag or resume")
+
         if not stage_flags["training"]:
             state.mark_stage_started("training")
             try:
@@ -477,14 +594,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             logger.info("Strategy creation stage skipped via CLI flag or resume")
 
+        optimise_artifacts: list[Path] = []
+        if not stage_flags["optimise"]:
+            state.mark_stage_started("optimise")
+            try:
+                optimise_metrics, optimise_artifacts = _run_auto_optimisation()
+            except Exception as exc:
+                state.mark_stage_failed("optimise", exc)
+                raise
+            state.mark_stage_complete(
+                "optimise",
+                artifacts=optimise_artifacts,
+                metrics=optimise_metrics or {},
+                resume=bool(optimise_artifacts),
+            )
+        else:
+            logger.info("Optimisation stage skipped via CLI flag or resume")
+
         if not stage_flags["realtime"]:
             state.mark_stage_started("realtime")
+            artifact_process: subprocess.Popen[bytes] | None = None
             try:
+                artifact_process = _start_artifact_sync()
                 _run_realtime(args.realtime_duration if args.realtime_duration > 0 else None)
             except Exception as exc:
                 state.mark_stage_failed("realtime", exc)
                 raise
-            state.mark_stage_complete("realtime", resume=False)
+            finally:
+                if artifact_process is not None:
+                    _stop_artifact_sync(artifact_process)
+            state.mark_stage_complete(
+                "realtime",
+                artifacts=_collect_realtime_artifacts(),
+                resume=False,
+            )
         else:
             logger.info("Realtime stage skipped via CLI flag or resume")
     except Exception as exc:
@@ -505,6 +648,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Strategy summary: action %s pnl %.4f",
             best.get("action"),
             best.get("pnl", 0.0),
+        )
+    if optimise_metrics:
+        logger.info(
+            "Optimisation summary: config_updated=%s, config_changes_updated=%s",
+            optimise_metrics.get("config_updated"),
+            optimise_metrics.get("config_changes_updated"),
         )
 
     return 0

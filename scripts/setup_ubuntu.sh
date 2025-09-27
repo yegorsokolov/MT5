@@ -212,6 +212,35 @@ install_linux_bridge() {
 }
 
 #####################################
+# MetaTrader terminal auto-config
+#####################################
+auto_configure_terminal() {
+  [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
+  if [[ ! -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
+    log "Virtualenv missing or inactive; skipping MetaTrader auto-configuration."
+    return 0
+  fi
+
+  local env_file="${PROJECT_ROOT}/.env"
+  if [[ ! -f "${env_file}" && -f "${PROJECT_ROOT}/.env.template" ]]; then
+    log "Seeding ${env_file} from template..."
+    run_as_user "cp -n '${PROJECT_ROOT}/.env.template' '${env_file}'" || true
+  fi
+
+  log "Auto-detecting MetaTrader 5 terminal path..."
+  local detect_cmd="cd '${PROJECT_ROOT}' && . .venv/bin/activate && python scripts/detect_mt5_terminal.py --env-file '${env_file}'"
+  if ! run_as_user "${detect_cmd}"; then
+    log "Warning: MetaTrader 5 terminal detection failed; review setup manually."
+  fi
+
+  log "Installing MetaTrader heartbeat script and verifying bridge..."
+  local heartbeat_cmd="cd '${PROJECT_ROOT}' && . .venv/bin/activate && python scripts/setup_terminal.py --install-heartbeat"
+  if ! run_as_user "${heartbeat_cmd}"; then
+    log "Warning: Heartbeat installation or bridge verification encountered an error."
+  fi
+}
+
+#####################################
 # Output instructions
 #####################################
 write_instructions() {
@@ -243,6 +272,9 @@ main() {
   install_linux_bridge
   install_windows_python || log "Windows Python install failed"
   install_mt5
+  codex/refactor-script-execution-for-automation
+  auto_configure_terminal
+main
   if [[ -z "${DISPLAY:-}" && "${HEADLESS_MODE}" != "manual" ]]; then
     log "Skipping MT5 login prompt (no display). Run once manually to save creds."
   fi

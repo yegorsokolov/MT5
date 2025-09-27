@@ -14,6 +14,11 @@ def test_pipeline_state_resume_flow(tmp_path):
     state = PipelineState(state_path, repo_root=tmp_path)
 
     state.begin_run(args={}, resume_from=None)
+    assert state.resume_stage() == "preflight"
+
+    preflight = tmp_path / "preflight.parquet"
+    preflight.write_text("ok")
+    state.mark_stage_complete("preflight", artifacts=[preflight])
     assert state.resume_stage() == "training"
 
     artifact = tmp_path / "model.joblib"
@@ -28,4 +33,4 @@ def test_pipeline_state_resume_flow(tmp_path):
     assert state.resume_stage() == "training"
 
     state.reset()
-    assert state.resume_stage() == "training"
+    assert state.resume_stage() == "preflight"
