@@ -16,7 +16,7 @@ LOG_FILE="${LOG_DIR}/$(date +'%m.%d.%Y').log"
 if [ -z "${TERMINAL_LOGGING:-}" ]; then
   export TERMINAL_LOGGING=1
   echo "[logger] Recording session to $LOG_FILE"
-  exec script -q -f -a "$LOG_FILE" "$0" "$@"
+  exec script -q -f -a "$LOG_FILE" /bin/bash -c "$0 $*"
 fi
 
 #####################################
