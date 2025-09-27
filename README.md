@@ -73,6 +73,37 @@ artifact.
   environment (`python -m venv .venv`)
   before installing requirements.
 
+## Automated Wine + MetaTrader 5 bootstrap
+
+If you are starting from a blank Ubuntu host the `scripts/deploy_mt5.sh` helper
+fully automates the combined Wine, MetaTrader 5 and Python setup described in
+the next section. It performs the following actions:
+
+1. Removes any existing Wine prefixes or project checkout at `~/MT5` so the
+   environment is reproducible.
+2. Installs Wine (32/64-bit), winetricks, cabextract, Git and the base Python
+   tooling required by the scripts.
+3. Creates a single Wine prefix that houses both the MetaTrader 5 terminal and
+   the Windows build of Python 3.11.9, including the official `MetaTrader5`
+   wheel and a `numpy<2.4` pin for stability.
+4. Clones this repository via SSH into `~/MT5`, bootstraps a local virtual
+   environment (using `pyenv` when available) and installs the Linux-side Python
+   dependencies while filtering out the Windows-only package.
+5. Writes an `.env` file with the Wine paths, copies the MT5 heartbeat script,
+   prompts you to sign in to the terminal, runs `scripts/setup_ubuntu.sh` and
+   finishes with a `python -m utils.environment` smoke test.
+
+Run the script directly after provisioning the VPS:
+
+```bash
+chmod +x scripts/deploy_mt5.sh
+./scripts/deploy_mt5.sh
+```
+
+After the script instructs you to log into the MT5 terminal, return to the SSH
+session, press **Enter** and it will complete the Linux-side configuration
+automatically.
+
 ## Complete Ubuntu 25.04 VPS setup (Wine + MetaTrader 5)
 
 The steps below recreate the full “from scratch” deployment we verified on an
