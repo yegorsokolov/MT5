@@ -138,11 +138,15 @@ xvfb_stop() {
   fi
 }
 with_display() {
-  local cmd="$1"
+  local cmd="$*"
+  if [[ -z "${cmd}" ]]; then
+    return 0
+  fi
+
   if [[ "${HEADLESS_MODE}" == "manual" ]]; then
-    run_as_user "DISPLAY='${DISPLAY}' bash -lc \"$cmd\""
+    run_as_user "DISPLAY='${DISPLAY}' bash -lc \"${cmd}\""
   else
-    run_as_user "xvfb-run -a bash -lc \"$cmd\""
+    run_as_user "xvfb-run -a bash -lc \"${cmd}\""
   fi
 }
 
@@ -151,9 +155,22 @@ with_display() {
 #####################################
 wine_env_block() { echo "export WINEARCH='${WINEARCH}'; export WINEDEBUG='${WINEDEBUG}'"; }
 ensure_wineprefix() { run_as_user "$(wine_env_block); export WINEPREFIX='$1'; wineboot -u >/dev/null 2>&1 || true"; }
-winetricks_quiet() { [[ $# -gt 1 ]] && run_as_user "$(wine_env_block); export WINEPREFIX='$1'; shift; winetricks -q -f $* >/dev/null 2>&1 || true"; }
+winetricks_quiet() {
+  local prefix="$1"
+  shift || true
+  [[ $# -eq 0 ]] && return 0
+  local cmd
+  printf -v cmd "%s; export WINEPREFIX='%s'; winetricks -q -f %s >/dev/null 2>&1 || true" "$(wine_env_block)" "${prefix}" "$*"
+  run_as_user "${cmd}"
+}
 wine_wait() { run_as_user "wineserver -w"; }
-wine_cmd() { local prefix="$1"; shift; run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; $*"; }
+wine_cmd() {
+  local prefix="$1"
+  shift || true
+  local cmd
+  printf -v cmd "%s; export WINEPREFIX='%s'; %s" "$(wine_env_block)" "${prefix}" "$*"
+  run_as_user "${cmd}"
+}
 
 #####################################
 # Install Windows Python
@@ -171,7 +188,11 @@ install_windows_python() {
   cp -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${prefix}/drive_c/_installers/"
   log "Installing Windows Python ${PYTHON_WIN_VERSION}..."
   xvfb_start
-  with_display "$(wine_env_block); export WINEPREFIX='${prefix}'; wine start /wait C:\\\\_installers\\\\${PYTHON_WIN_EXE} InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 TargetDir=${PYTHON_WIN_DIR} /quiet || true"
+  local installer_path="${prefix}/drive_c/_installers/${PYTHON_WIN_EXE}"
+  local install_cmd
+  printf -v install_cmd "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s' InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 TargetDir=%s /quiet" \
+    "$(wine_env_block)" "${prefix}" "${installer_path}" "${PYTHON_WIN_DIR}"
+  with_display "${install_cmd} || true"
   wine_wait
   xvfb_stop
   wine_cmd "${prefix}" wine cmd /c "${PYTHON_WIN_DIR}\\python.exe -V" || log "Windows Python not found"
@@ -197,7 +218,12 @@ install_mt5() {
   cp -f "${CACHE_DIR}/${MT5_SETUP_EXE}" "${prefix}/drive_c/_installers/"
   log "Installing MetaTrader 5..."
   xvfb_start
-  with_display "$(wine_env_block); export WINEPREFIX='${prefix}'; wine start /wait C:\\\\_installers\\\\${MT5_SETUP_EXE} /silent || wine start /wait C:\\\\_installers\\\\${MT5_SETUP_EXE}"
+  local mt5_installer="${prefix}/drive_c/_installers/${MT5_SETUP_EXE}"
+  local mt5_cmd
+  printf -v mt5_cmd "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s' /silent" "$(wine_env_block)" "${prefix}" "${mt5_installer}"
+  local mt5_fallback
+  printf -v mt5_fallback "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s'" "$(wine_env_block)" "${prefix}" "${mt5_installer}"
+  with_display "${mt5_cmd} || ${mt5_fallback}"
   wine_wait
   xvfb_stop
 }
@@ -272,9 +298,7 @@ main() {
   install_linux_bridge
   install_windows_python || log "Windows Python install failed"
   install_mt5
-  codex/refactor-script-execution-for-automation
   auto_configure_terminal
-main
   if [[ -z "${DISPLAY:-}" && "${HEADLESS_MODE}" != "manual" ]]; then
     log "Skipping MT5 login prompt (no display). Run once manually to save creds."
   fi
