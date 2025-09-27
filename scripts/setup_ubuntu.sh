@@ -253,6 +253,23 @@ wine_cmd() {
 #####################################
 # Install Windows Python
 #####################################
+_run_windows_python_installer() {
+  local prefix="$1"
+  shift || true
+  local installer_path="${prefix}/drive_c/_installers/${PYTHON_WIN_EXE}"
+  local quoted
+  printf -v quoted "%q " "$@"
+  quoted="${quoted% }"
+
+  xvfb_start
+  local install_cmd
+  printf -v install_cmd "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s' %s" \
+    "$(wine_env_block)" "${prefix}" "${installer_path}" "${quoted}"
+  with_display "${install_cmd} || true"
+  wine_wait
+  xvfb_stop
+}
+
 install_windows_python() {
   local prefix="${WINEPREFIX_PY}"
   log "Initialising Wine prefix at ${prefix} ..."
@@ -274,18 +291,25 @@ install_windows_python() {
   run_as_user "mkdir -p '${prefix}/drive_c/_installers'"
   cp -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${prefix}/drive_c/_installers/"
   log "Installing Windows Python ${PYTHON_WIN_VERSION}..."
-  xvfb_start
-  local installer_path="${prefix}/drive_c/_installers/${PYTHON_WIN_EXE}"
-  local install_cmd
-  printf -v install_cmd "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s' InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 /quiet" \
-    "$(wine_env_block)" "${prefix}" "${installer_path}"
-  with_display "${install_cmd} || true"
-  wine_wait
-  xvfb_stop
+
+  local default_args=(InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 /quiet)
+  _run_windows_python_installer "${prefix}" "${default_args[@]}"
 
   WINDOWS_PYTHON_UNIX_PATH="$(discover_windows_python "${prefix}" || true)"
   if [[ -z "${WINDOWS_PYTHON_UNIX_PATH}" ]]; then
-    log "Windows Python not found after installation"
+    log "Windows Python not found after installation; retrying with explicit target"
+    local py_major="${PYTHON_WIN_VERSION%%.*}"
+    local remainder="${PYTHON_WIN_VERSION#${py_major}.}"
+    local py_minor="${remainder%%.*}"
+    local py_tag="${py_major}${py_minor}"
+    local fallback_dir="C:\\Python${py_tag}"
+    local fallback_args=(InstallAllUsers=1 TargetDir="${fallback_dir}" DefaultAllUsersTargetDir="${fallback_dir}" PrependPath=1 Include_pip=1 Include_launcher=1 /quiet)
+    _run_windows_python_installer "${prefix}" "${fallback_args[@]}"
+    WINDOWS_PYTHON_UNIX_PATH="$(discover_windows_python "${prefix}" || true)"
+  fi
+
+  if [[ -z "${WINDOWS_PYTHON_UNIX_PATH}" ]]; then
+    log "Windows Python install failed"
     return 1
   fi
 
