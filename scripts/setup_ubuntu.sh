@@ -56,8 +56,14 @@ fi
 SERVICES_ONLY=0
 SKIP_SERVICE_INSTALL=0
 
-MT5_WINE_PREFIX="${MT5_WINE_PREFIX:-${WINEPREFIX:-$HOME/.wine-mt5}}"
-WIN_PY_WINE_PREFIX="${WIN_PY_WINE_PREFIX:-$HOME/.wine-py311}"
+PROJECT_USER="${SUDO_USER:-$(id -un)}"
+PROJECT_USER_HOME="$(getent passwd "${PROJECT_USER}" 2>/dev/null | awk -F: '{print $6}')"
+if [[ -z "${PROJECT_USER_HOME}" ]]; then
+    PROJECT_USER_HOME="${HOME}"
+fi
+
+MT5_WINE_PREFIX="${MT5_WINE_PREFIX:-${WINEPREFIX:-${PROJECT_USER_HOME}/.wine-mt5}}"
+WIN_PY_WINE_PREFIX="${WIN_PY_WINE_PREFIX:-${PROJECT_USER_HOME}/.wine-py311}"
 WIN_PY_VERSION="${WIN_PY_VERSION:-3.11.9}"
 WIN_PY_INSTALLER="python-${WIN_PY_VERSION}-amd64.exe"
 WIN_PY_MAJOR_MINOR="$(echo "${WIN_PY_VERSION}" | awk -F. '{printf "%d%d", $1, $2}')"
@@ -70,6 +76,15 @@ PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-pymt5linux}"
 
 HAS_GRAPHICAL_DISPLAY=1
 WINE_HEADLESS_WRAPPER=()
+WINE_DEBUG_CHANNEL="${WINE_DEBUG_CHANNEL:--all}"
+
+run_as_project_user() {
+    if [[ "$(id -un)" == "${PROJECT_USER}" ]]; then
+        "$@"
+    else
+        sudo -u "${PROJECT_USER}" -H "$@"
+    fi
+}
 
 detect_graphical_display() {
     if [[ -z "${DISPLAY:-}" ]]; then
@@ -116,22 +131,22 @@ ensure_headless_wine_support() {
 
 run_with_wine_wrapper() {
     if (( HAS_GRAPHICAL_DISPLAY == 0 )) && ((${#WINE_HEADLESS_WRAPPER[@]} > 0)); then
-        "${WINE_HEADLESS_WRAPPER[@]}" "$@"
+        run_as_project_user "${WINE_HEADLESS_WRAPPER[@]}" "$@"
     else
-        "$@"
+        run_as_project_user "$@"
     fi
 }
 
 run_wine_command() {
     local prefix="$1"
     shift
-    run_with_wine_wrapper env WINEPREFIX="${prefix}" WINEARCH=win64 "$@"
+    run_with_wine_wrapper env WINEPREFIX="${prefix}" WINEARCH=win64 WINEDEBUG="${WINE_DEBUG_CHANNEL}" "$@"
 }
 
 ensure_wine_prefix() {
     local prefix="$1"
     echo "Initialising Wine prefix at ${prefix} ..."
-    mkdir -p "${prefix}" >/dev/null 2>&1 || true
+    run_as_project_user mkdir -p "${prefix}" >/dev/null 2>&1 || true
     run_wine_command "${prefix}" wineboot -u >/dev/null 2>&1 || true
     if command -v wineserver >/dev/null 2>&1; then
         run_wine_command "${prefix}" wineserver -w >/dev/null 2>&1 || true
@@ -176,12 +191,17 @@ install_windows_python() {
         return 1
     fi
 
+    if command -v wineserver >/dev/null 2>&1; then
+        run_wine_command "${prefix}" wineserver -w >/dev/null 2>&1 || true
+    fi
+
     resolve_windows_python_paths "${prefix}"
 }
 
 ensure_windows_python_ready() {
     local prefix="${WIN_PY_WINE_PREFIX}"
     ensure_wine_prefix "${prefix}"
+    install_optional_wine_packages
     ensure_winetricks_components "${prefix}"
     install_windows_python "${prefix}" || return 1
 
@@ -201,37 +221,31 @@ ensure_winetricks_components() {
         return 0
     fi
     echo "Installing core Wine runtime components into ${prefix} ..."
-    run_wine_command "${prefix}" winetricks -q corefonts gdiplus msxml6 vcrun2019 >/dev/null 2>&1 || true
+    run_wine_command "${prefix}" winetricks -q -f corefonts gdiplus msxml6 vcrun2022 >/dev/null 2>&1 || true
 }
 
 install_optional_wine_packages() {
-    local candidates pkg
-    local to_attempt=()
+    if ! command -v winetricks >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local prefixes=("${MT5_WINE_PREFIX}" "${WIN_PY_WINE_PREFIX}")
     local seen=()
+    local prefix
 
-    mapfile -t candidates < <(apt-cache search --names-only '^wine-gecko[0-9.]*$' 2>/dev/null | awk '{print $1}' | sort -Vr)
-    for pkg in "${candidates[@]}"; do
-        if [[ -n "${pkg}" ]]; then
-            to_attempt+=("${pkg}")
-            if dpkg --print-foreign-architectures | grep -q '^i386$'; then
-                to_attempt+=("${pkg}:i386")
-            fi
-        fi
-    done
-
-    to_attempt+=(wine-gecko2.47.4 wine-gecko2.47.4:i386 wine-gecko wine-gecko:i386 wine-mono)
-
-    for pkg in "${to_attempt[@]}"; do
-        if [[ -z "${pkg}" ]]; then
+    for prefix in "${prefixes[@]}"; do
+        if [[ -z "${prefix}" ]]; then
             continue
         fi
-        if [[ " ${seen[*]} " == *" ${pkg} "* ]]; then
+        if [[ ! -d "${prefix}" ]]; then
             continue
         fi
-        seen+=("${pkg}")
-        if ! sudo apt-get install -y "${pkg}"; then
-            echo "Warning: Failed to install optional Wine component package ${pkg}." >&2
+        if [[ " ${seen[*]} " == *" ${prefix} "* ]]; then
+            continue
         fi
+        seen+=("${prefix}")
+        echo "Ensuring supplemental Wine components (gecko, mono) are available in ${prefix} ..."
+        run_wine_command "${prefix}" winetricks -q -f gecko mono >/dev/null 2>&1 || true
     done
 }
 
@@ -241,6 +255,7 @@ install_mt5_terminal_wine() {
     local terminal="${mt5_dir}/terminal64.exe"
 
     ensure_wine_prefix "${prefix}"
+    install_optional_wine_packages
     ensure_winetricks_components "${prefix}"
     mkdir -p "${MT5_INSTALL_CACHE}" >/dev/null 2>&1 || true
 
@@ -263,6 +278,9 @@ install_mt5_terminal_wine() {
     if ! run_wine_command "${prefix}" wine "${installer_path}" >/dev/null 2>&1; then
         echo "Warning: MetaTrader 5 installer did not finish successfully." >&2
         return 1
+    fi
+    if command -v wineserver >/dev/null 2>&1; then
+        run_wine_command "${prefix}" wineserver -w >/dev/null 2>&1 || true
     fi
     return 0
 }
@@ -431,15 +449,11 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
     sudo apt-get install -y software-properties-common
 
     echo "Ensuring a supported Python toolchain is available..."
-    if ! sudo apt-get install -y python3 python3-venv python3-dev; then
+    if ! sudo apt-get install -y python3 python3-venv python3-dev python3-pip python3-setuptools; then
         echo "Warning: Failed to install python3 toolchain packages via apt; attempting to use any existing interpreter." >&2
     fi
-    if ! sudo apt-get install -y python3-distutils; then
-        echo "Warning: python3-distutils could not be installed; continuing without it." >&2
-    fi
 
-    sudo apt-get install -y build-essential cabextract wine64 wine32:i386 winetricks
-    install_optional_wine_packages
+    sudo apt-get install -y build-essential cabextract wine64 wine32:i386 winetricks xvfb
 fi
 
 ensure_headless_wine_support
