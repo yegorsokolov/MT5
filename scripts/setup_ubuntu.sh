@@ -205,42 +205,34 @@ ensure_winetricks_components() {
 }
 
 install_optional_wine_packages() {
-    local candidates gecko_pkg
-    local packages=()
+    local candidates pkg
+    local to_attempt=()
+    local seen=()
 
     mapfile -t candidates < <(apt-cache search --names-only '^wine-gecko[0-9.]*$' 2>/dev/null | awk '{print $1}' | sort -Vr)
-    if ((${#candidates[@]} == 0)); then
-        candidates=(wine-gecko)
-    fi
     for pkg in "${candidates[@]}"; do
+        if [[ -n "${pkg}" ]]; then
+            to_attempt+=("${pkg}")
+            if dpkg --print-foreign-architectures | grep -q '^i386$'; then
+                to_attempt+=("${pkg}:i386")
+            fi
+        fi
+    done
+
+    to_attempt+=(wine-gecko2.47.4 wine-gecko2.47.4:i386 wine-gecko wine-gecko:i386 wine-mono)
+
+    for pkg in "${to_attempt[@]}"; do
         if [[ -z "${pkg}" ]]; then
             continue
         fi
-        if apt-cache policy "${pkg}" 2>/dev/null | grep -q 'Candidate: (none)'; then
+        if [[ " ${seen[*]} " == *" ${pkg} "* ]]; then
             continue
         fi
-        gecko_pkg="${pkg}"
-        break
-    done
-
-    if [[ -n "${gecko_pkg}" ]]; then
-        packages+=("${gecko_pkg}")
-        if dpkg --print-foreign-architectures | grep -q '^i386$'; then
-            if apt-cache policy "${gecko_pkg}:i386" 2>/dev/null | grep -vq 'Candidate: (none)'; then
-                packages+=("${gecko_pkg}:i386")
-            fi
+        seen+=("${pkg}")
+        if ! sudo apt-get install -y "${pkg}"; then
+            echo "Warning: Failed to install optional Wine component package ${pkg}." >&2
         fi
-    fi
-
-    if apt-cache policy wine-mono >/dev/null 2>&1 && ! apt-cache policy wine-mono | grep -q 'Candidate: (none)'; then
-        packages+=("wine-mono")
-    fi
-
-    if ((${#packages[@]} > 0)); then
-        sudo apt-get install -y "${packages[@]}" || true
-    else
-        echo "No optional wine-gecko or wine-mono packages available in apt repositories; skipping." >&2
-    fi
+    done
 }
 
 install_mt5_terminal_wine() {
@@ -442,12 +434,8 @@ if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
     if ! sudo apt-get install -y python3 python3-venv python3-dev; then
         echo "Warning: Failed to install python3 toolchain packages via apt; attempting to use any existing interpreter." >&2
     fi
-    if apt-cache show python3-distutils >/dev/null 2>&1 && ! apt-cache policy python3-distutils | grep -q 'Candidate: (none)'; then
-        if ! sudo apt-get install -y python3-distutils; then
-            echo "Warning: python3-distutils could not be installed; continuing without it." >&2
-        fi
-    else
-        echo "python3-distutils package is not available in current apt sources; skipping." >&2
+    if ! sudo apt-get install -y python3-distutils; then
+        echo "Warning: python3-distutils could not be installed; continuing without it." >&2
     fi
 
     sudo apt-get install -y build-essential cabextract wine64 wine32:i386 winetricks
