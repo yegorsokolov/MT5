@@ -1,33 +1,41 @@
 #!/usr/bin/env bash
 # setup_ubuntu.sh — MT5 + Wine + Windows Python 3.11 bootstrapper
-# Usage:
-#   sudo bash scripts/setup_ubuntu.sh
-#   sudo bash scripts/setup_ubuntu.sh --services-only
-#   sudo bash scripts/setup_ubuntu.sh --headless=manual   # persistent Xvfb
-# Idempotent; safe to re-run.
+# Logs all activity into ~/Downloads/mm.dd.yyyy.log before doing anything else.
 
 set -euo pipefail
+
+#####################################
+# Terminal logging (always enabled)
+#####################################
+USER_HOME="$(eval echo "~${SUDO_USER:-$USER}")"
+LOG_DIR="${USER_HOME}/Downloads"
+mkdir -p "$LOG_DIR"
+LOG_FILE="${LOG_DIR}/$(date +'%m.%d.%Y').log"
+
+# Start logging if not already under 'script'
+if [ -z "${TERMINAL_LOGGING:-}" ]; then
+  export TERMINAL_LOGGING=1
+  echo "[logger] Recording session to $LOG_FILE"
+  exec script -q -f -a "$LOG_FILE" "$0" "$@"
+fi
 
 #####################################
 # Paths, env, and defaults
 #####################################
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_FILE="${PROJECT_ROOT}/setup.log"
+SETUP_LOG="${PROJECT_ROOT}/setup.log"
 
-# When called with sudo, do Wine work as invoking user
 PROJECT_USER="${SUDO_USER:-$(whoami)}"
 PROJECT_HOME="$(eval echo "~${PROJECT_USER}")"
 
-# Wine prefixes (always user-owned; never /root)
 WINEPREFIX_PY="${PROJECT_HOME}/.wine-py311"
 WINEPREFIX_MT5="${PROJECT_HOME}/.wine-mt5"
 WINEARCH="win64"
 
-# Defaults (override in .env or env before running)
 HEADLESS_MODE="${HEADLESS_MODE:-auto}"   # auto|manual
 PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-3.11.9}"
 PYTHON_WIN_DIR="C:\\Python311"
-PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-}"   # leave empty to skip
+PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-}"
 MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 
 CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
@@ -40,9 +48,9 @@ export WINEDEBUG="${WINE_DEBUG_CHANNEL:--all}"
 SERVICES_ONLY=0
 DISPLAY_SET_MANUALLY=""
 
-log() { echo "[setup] $*" | tee -a "$LOG_FILE" >&2; }
-die() { echo "[setup:ERROR] $*" | tee -a "$LOG_FILE" >&2; exit 1; }
-need_root() { if [[ "$(id -u)" -ne 0 ]]; then die "Run with sudo: sudo bash scripts/setup_ubuntu.sh"; fi; }
+log() { echo "[setup] $*" | tee -a "$SETUP_LOG" >&2; }
+die() { echo "[setup:ERROR] $*" | tee -a "$SETUP_LOG" >&2; exit 1; }
+need_root() { if [[ "$(id -u)" -ne 0 ]]; then die "Run with sudo"; fi; }
 run_as_user() { sudo -H -u "${PROJECT_USER}" bash -lc "$*"; }
 
 #####################################
@@ -57,14 +65,14 @@ if [[ -f "${PROJECT_ROOT}/.env" ]]; then
 fi
 
 #####################################
-# Parse CLI args (simple & robust)
+# Parse CLI args
 #####################################
 for arg in "$@"; do
   case "$arg" in
     --services-only) SERVICES_ONLY=1 ;;
     --headless=manual) HEADLESS_MODE="manual" ;;
     --headless=auto) HEADLESS_MODE="auto" ;;
-    *) ;; # ignore unknowns
+    *) ;; # ignore unknown
   esac
 done
 
@@ -84,30 +92,22 @@ ensure_system_packages() {
 }
 
 #####################################
-# Linux-side venv (PEP 668-safe)
+# Linux-side venv
 #####################################
 ensure_project_venv() {
   [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
-
-  # Fix ownership to prevent venv permission issues
   chown -R "${PROJECT_USER}:${PROJECT_USER}" "${PROJECT_ROOT}" || true
-
   log "Creating/using project virtualenv (.venv)..."
   run_as_user "cd '${PROJECT_ROOT}' && python3 -m venv .venv || true"
   run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade pip setuptools wheel || true"
 }
-
 venv_python() { echo "${PROJECT_ROOT}/.venv/bin/python"; }
-venv_pip_install() {
-  local pkg="$1"
-  run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade '${pkg}'"
-}
+venv_pip_install() { run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade '$1'"; }
 
 #####################################
 # Xvfb helpers
 #####################################
 XVFB_PID_FILE="/tmp/xvfb_${PROJECT_USER}.pid"
-
 xvfb_start() {
   if [[ "${HEADLESS_MODE}" == "manual" ]]; then
     if [[ -z "${DISPLAY:-}" ]]; then
@@ -115,24 +115,18 @@ xvfb_start() {
       DISPLAY_SET_MANUALLY="${DISPLAY}"
     fi
     run_as_user "DISPLAY='${DISPLAY}' Xvfb '${DISPLAY}' -screen 0 1280x1024x24 >/tmp/xvfb_${PROJECT_USER}.log 2>&1 & echo \$! > '${XVFB_PID_FILE}'"
-    log "Started manual Xvfb on ${DISPLAY} (PID $(run_as_user "cat '${XVFB_PID_FILE}'"))"
+    log "Started manual Xvfb on ${DISPLAY}"
   fi
 }
-
 xvfb_stop() {
   if [[ -n "${DISPLAY_SET_MANUALLY}" ]] && [[ -f "${XVFB_PID_FILE}" ]]; then
     local pid
     pid="$(run_as_user "cat '${XVFB_PID_FILE}'" || true)"
-    if [[ -n "${pid}" ]]; then
-      log "Stopping Xvfb (PID ${pid})..."
-      run_as_user "kill '${pid}' || true"
-    fi
+    [[ -n "$pid" ]] && run_as_user "kill '${pid}' || true"
     rm -f "${XVFB_PID_FILE}" || true
   fi
 }
-
 with_display() {
-  # $1: command string to run
   local cmd="$1"
   if [[ "${HEADLESS_MODE}" == "manual" ]]; then
     run_as_user "DISPLAY='${DISPLAY}' bash -lc \"$cmd\""
@@ -144,66 +138,32 @@ with_display() {
 #####################################
 # Wine helpers
 #####################################
-wine_env_block() {
-  echo "export WINEARCH='${WINEARCH}'; export WINEDEBUG='${WINEDEBUG}'"
-}
-
-ensure_wineprefix() {
-  local prefix="$1"
-  run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; wineboot -u >/dev/null 2>&1 || true"
-}
-
-# Keep verbs minimal (Ubuntu winetricks may not support 'gecko'/'mono' verbs)
-winetricks_quiet() {
-  local prefix="$1"; shift
-  local pkgs=("$@")
-  [[ ${#pkgs[@]} -eq 0 ]] && return 0
-  run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; winetricks -q -f ${pkgs[*]} >/dev/null 2>&1 || true"
-}
-
-wine_wait() {
-  run_as_user "wineserver -w"
-}
-
-wine_cmd() {
-  local prefix="$1"; shift
-  run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; $*"
-}
+wine_env_block() { echo "export WINEARCH='${WINEARCH}'; export WINEDEBUG='${WINEDEBUG}'"; }
+ensure_wineprefix() { run_as_user "$(wine_env_block); export WINEPREFIX='$1'; wineboot -u >/dev/null 2>&1 || true"; }
+winetricks_quiet() { [[ $# -gt 1 ]] && run_as_user "$(wine_env_block); export WINEPREFIX='$1'; shift; winetricks -q -f $* >/dev/null 2>&1 || true"; }
+wine_wait() { run_as_user "wineserver -w"; }
+wine_cmd() { local prefix="$1"; shift; run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; $*"; }
 
 #####################################
-# Install Windows Python 3.11
+# Install Windows Python
 #####################################
 install_windows_python() {
   local prefix="${WINEPREFIX_PY}"
-
   log "Initialising Wine prefix at ${prefix} ..."
   ensure_wineprefix "${prefix}"
-
-  # Install minimal prereqs that are known to help Python/UCRT on Wine
   winetricks_quiet "${prefix}" vcrun2022 corefonts gdiplus
-
   mkdir -p "${CACHE_DIR}"
   if [[ ! -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" ]]; then
-    log "Downloading Windows Python ${PYTHON_WIN_VERSION}..."
     curl -fsSL -o "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${PYTHON_WIN_URL}"
   fi
-
-  # Stage the installer inside the prefix (avoid Z:\)
   run_as_user "mkdir -p '${prefix}/drive_c/_installers'"
   cp -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${prefix}/drive_c/_installers/"
-
   log "Installing Windows Python ${PYTHON_WIN_VERSION}..."
   xvfb_start
   with_display "$(wine_env_block); export WINEPREFIX='${prefix}'; wine start /wait C:\\\\_installers\\\\${PYTHON_WIN_EXE} InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 TargetDir=${PYTHON_WIN_DIR} /quiet || true"
   wine_wait
   xvfb_stop
-
-  # Verify
-  if ! wine_cmd "${prefix}" wine cmd /c "${PYTHON_WIN_DIR}\\python.exe -V" >/tmp/wpy.ver 2>&1; then
-    log "Warning: Windows Python installer exited with an error (or Python not found)."
-  else
-    log "Windows Python: $(cat /tmp/wpy.ver)"
-  fi
+  wine_cmd "${prefix}" wine cmd /c "${PYTHON_WIN_DIR}\\python.exe -V" || log "Windows Python not found"
 }
 
 #####################################
@@ -211,52 +171,33 @@ install_windows_python() {
 #####################################
 install_mt5() {
   local prefix="${WINEPREFIX_MT5}"
-
   log "Initialising Wine prefix at ${prefix} ..."
   ensure_wineprefix "${prefix}"
-
-  # Minimal fonts/GDI bits; let Wine handle gecko/mono automatically
   winetricks_quiet "${prefix}" corefonts gdiplus
-
   mkdir -p "${CACHE_DIR}"
   if [[ ! -f "${CACHE_DIR}/${MT5_SETUP_EXE}" ]]; then
-    log "Downloading MetaTrader 5 installer..."
     curl -fsSL -o "${CACHE_DIR}/${MT5_SETUP_EXE}" "${MT5_SETUP_URL}"
   fi
-
-  # Already installed?
   if wine_cmd "${prefix}" wine cmd /c "dir C:\\Program^ Files\\MetaTrader^ 5" >/dev/null 2>&1; then
-    log "MetaTrader 5 already installed in ${prefix}."
+    log "MetaTrader 5 already installed."
     return 0
   fi
-
-  # Stage inside C:\ and run
   run_as_user "mkdir -p '${prefix}/drive_c/_installers'"
   cp -f "${CACHE_DIR}/${MT5_SETUP_EXE}" "${prefix}/drive_c/_installers/"
-
   log "Installing MetaTrader 5..."
   xvfb_start
   with_display "$(wine_env_block); export WINEPREFIX='${prefix}'; wine start /wait C:\\\\_installers\\\\${MT5_SETUP_EXE} /silent || wine start /wait C:\\\\_installers\\\\${MT5_SETUP_EXE}"
   wine_wait
   xvfb_stop
-
-  if ! wine_cmd "${prefix}" wine cmd /c "dir C:\\Program^ Files\\MetaTrader^ 5" >/dev/null 2>&1; then
-    log 'Warning: MT5 may not have completed installation.'
-  fi
 }
 
 #####################################
-# Linux bridge helper (optional)
+# Linux bridge
 #####################################
 install_linux_bridge() {
   [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
-  [[ -z "${PYMT5LINUX_SOURCE}" ]] && { log "PYMT5LINUX_SOURCE not set; skipping Linux-side bridge helper."; return 0; }
-
-  log "Ensuring Linux-side bridge helper (${PYMT5LINUX_SOURCE}) is installed..."
-  if ! venv_pip_install "${PYMT5LINUX_SOURCE}"; then
-    log "Warning: Failed to install ${PYMT5LINUX_SOURCE}."
-    log "Hint: export PYMT5LINUX_SOURCE to a Git URL or wheel (e.g., https://github.com/you/pymt5linux.git#egg=pymt5linux)."
-  fi
+  [[ -z "${PYMT5LINUX_SOURCE}" ]] && { log "PYMT5LINUX_SOURCE not set"; return 0; }
+  venv_pip_install "${PYMT5LINUX_SOURCE}" || log "Failed to install bridge helper"
 }
 
 #####################################
@@ -266,22 +207,20 @@ write_instructions() {
   local file="${PROJECT_ROOT}/LOGIN_INSTRUCTIONS_WINE.txt"
   cat > "${file}" <<'TXT'
 MetaTrader 5 (Wine) — Quick Usage
-
-1) Start MT5 (prefix ~/.wine-mt5):
+---------------------------------
+1) Start MT5:
    WINEPREFIX="$HOME/.wine-mt5" wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
 
-   - First time: File → Login to Trade Account → enter login/password/server → check “Save password”.
+   First time: Login → Save password
 
-2) Windows Python in Wine (prefix ~/.wine-py311):
+2) Windows Python:
    WINEPREFIX="$HOME/.wine-py311" wine cmd /c "C:\\Python311\\python.exe -V"
 
-3) Run your Windows-side script from C:\ (avoid Z:\ on Wine 9):
-   - Copy your repo into C:\ once:
-     rsync -a --delete /opt/mt5/ "$HOME/.wine-py311/drive_c/mt5/"
-   - Then run:
-     WINEPREFIX="$HOME/.wine-py311" wine cmd /c "C:\\Python311\\python.exe C:\\mt5\\utils\\mt_5_bridge.py"
+3) Run bridge:
+   rsync -a --delete /opt/mt5/ "$HOME/.wine-py311/drive_c/mt5/"
+   WINEPREFIX="$HOME/.wine-py311" wine cmd /c "C:\\Python311\\python.exe C:\\mt5\\utils\\mt_5_bridge.py"
 TXT
-  log "MetaTrader 5 Wine instructions saved to ${file}"
+  log "Instructions written to ${file}"
 }
 
 #####################################
@@ -291,20 +230,14 @@ main() {
   ensure_system_packages
   ensure_project_venv
   install_linux_bridge
-
-  install_windows_python || log "Warning: Windows Python not available; continuing."
+  install_windows_python || log "Windows Python install failed"
   install_mt5
-
   if [[ -z "${DISPLAY:-}" && "${HEADLESS_MODE}" != "manual" ]]; then
-    log "Skipping MT5 login prompt (no graphical display). Run the terminal once and save your credentials."
+    log "Skipping MT5 login prompt (no display). Run once manually to save creds."
   fi
-
-  # Show venv status & basic info
   if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
-    log "Checking for outdated Python packages in venv (no forced upgrades)..."
     run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip list --outdated || true"
   fi
-
   write_instructions
   log "Setup complete."
 }
