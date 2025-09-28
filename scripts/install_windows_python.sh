@@ -37,7 +37,20 @@ log "Initialising Wine prefix at $WINEPREFIX ..."
 WINEDEBUG=-all WINEARCH="$WINEARCH" WINEPREFIX="$WINEPREFIX" wineboot -u
 # Install VC++ runtime needed by Python 3.11
 log "Ensuring VC++ runtime (vcrun2022) is installed ..."
-WINEPREFIX="$WINEPREFIX" winetricks -q vcrun2022 corefonts
+# winetricks bails out if another VC runtime (e.g. vcrun2019) is present.
+# Detect that situation and retry with --force so we don't fail setup when an
+# older runtime already exists in the prefix.
+if ! WINEPREFIX="$WINEPREFIX" winetricks -q vcrun2022 corefonts; then
+  if WINEPREFIX="$WINEPREFIX" winetricks list-installed 2>/dev/null | grep -qi 'vcrun2022'; then
+    log "VC++ runtime already present in prefix; continuing"
+  elif WINEPREFIX="$WINEPREFIX" winetricks list-installed 2>/dev/null | grep -qi 'vcrun2019'; then
+    log "vcrun2019 detected; retrying vcrun2022 install with --force"
+    WINEPREFIX="$WINEPREFIX" winetricks --force -q vcrun2022 corefonts || \
+      fail "Failed to install VC++ runtime (vcrun2022) even with --force"
+  else
+    fail "Failed to install VC++ runtime (vcrun2022)"
+  fi
+fi
 
 # 2) Guard: cached installer must exist
 [[ -f "$PY_WIN_EXE_CACHE" ]] || fail "Windows Python installer not found at $PY_WIN_EXE_CACHE"
