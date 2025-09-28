@@ -49,7 +49,7 @@ PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-3.11.9}"
 # ``C:\\Python311`` target which newer installers sometimes ignore.
 WINDOWS_PYTHON_UNIX_PATH=""
 WINDOWS_PYTHON_WIN_PATH=""
-PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-}"
+PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-${PROJECT_ROOT}}"
 MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 
 CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
