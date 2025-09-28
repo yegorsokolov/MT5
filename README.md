@@ -247,10 +247,12 @@ session unless stated otherwise.
    `LOGIN_INSTRUCTIONS_WINE.txt` and confirms access to the authenticated
    terminal. The bridge loader automatically seeds
    `PYMT5LINUX_PYTHON`/`PYMT5LINUX_WINEPREFIX` from that cheat sheet, so the
-   `pymt5linux` helper can locate the Windows interpreter. If your package
-   mirror hosts the helper under a different URL, set `PYMT5LINUX_SOURCE`
-   before running `scripts/setup_ubuntu.sh` so both the Linux and Wine
-   environments install the correct wheel.
+   `pymt5linux` helper can locate the Windows interpreter. The installer
+   defaults `PYMT5LINUX_SOURCE` to the repository root so the Linux virtualenv
+   installs the bundled helper automatically. If your package mirror hosts the
+   helper under a different URL, override the default by exporting
+   `PYMT5LINUX_SOURCE` before running `scripts/setup_ubuntu.sh` so both the
+   Linux and Wine environments install the correct wheel.
 
 9. **Daily routine once the environment is provisioned:**
 
@@ -476,10 +478,10 @@ remaining manual steps in the summary output.
 > a native Linux wheel and falls back to the Wine-hosted `pymt5linux`
 > integration. The bridge seeds `PYMT5LINUX_PYTHON` and
 > `PYMT5LINUX_WINEPREFIX` automatically from `LOGIN_INSTRUCTIONS_WINE.txt` so
-> no manual exports are required. If your package index publishes the helper
-> under a different name, export `PYMT5LINUX_SOURCE` before running
-> `scripts/setup_ubuntu.sh` to point pip at the correct Git repository or
-> wheel URL.
+> no manual exports are required. `scripts/setup_ubuntu.sh` now defaults
+> `PYMT5LINUX_SOURCE` to the repository root during installation; export the
+> variable before running the helper only when you need to point pip at an
+> alternative Git repository or wheel URL.
 
 ### CPU Feature Detection and Acceleration
 
