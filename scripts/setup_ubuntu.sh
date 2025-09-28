@@ -49,6 +49,7 @@ PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-3.11.9}"
 # ``C:\\Python311`` target which newer installers sometimes ignore.
 WINDOWS_PYTHON_UNIX_PATH=""
 WINDOWS_PYTHON_WIN_PATH=""
+WINDOWS_PYTHON_DEFAULT_WIN_PATH="C:\\Python311\\python.exe"
 PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-${PROJECT_ROOT}}"
 MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 
@@ -323,6 +324,43 @@ install_windows_python() {
   wine_cmd "${prefix}" wine cmd /c "${WINDOWS_PYTHON_WIN_PATH}" -V || log "Windows Python not found"
 }
 
+windows_python_win_path() {
+  if [[ -n "${WINDOWS_PYTHON_WIN_PATH}" ]]; then
+    printf '%s' "${WINDOWS_PYTHON_WIN_PATH}"
+  else
+    printf '%s' "${WINDOWS_PYTHON_DEFAULT_WIN_PATH}"
+  fi
+}
+
+verify_windows_python() {
+  local prefix="${WINEPREFIX_PY}"
+  local python_path
+  python_path="$(windows_python_win_path)"
+
+  log "Verifying Windows Python interpreter..."
+  if ! wine_cmd "${prefix}" wine "${python_path}" -V >/dev/null 2>&1; then
+    die "Windows Python install failed; aborting before mt5/terminal setup"
+  fi
+
+  log "Windows Python interpreter available at ${python_path}"
+}
+
+install_windows_python_packages() {
+  local prefix="${WINEPREFIX_PY}"
+  local python_path
+  python_path="$(windows_python_win_path)"
+
+  log "Upgrading pip inside Windows Python..."
+  if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install -U pip; then
+    die "Failed to upgrade pip inside Windows Python"
+  fi
+
+  log "Installing Windows mt5 dependencies (mt5>=1.26,<1.27, MetaTrader5<6)..."
+  if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install "mt5>=1.26,<1.27" "MetaTrader5<6"; then
+    die "Failed to install Windows mt5 dependencies"
+  fi
+}
+
 #####################################
 # Install MetaTrader 5
 #####################################
@@ -423,8 +461,12 @@ TXT
 main() {
   ensure_system_packages
   ensure_project_venv
+  if ! install_windows_python; then
+    die "Windows Python install failed"
+  fi
+  verify_windows_python
+  install_windows_python_packages
   install_linux_bridge
-  install_windows_python || log "Windows Python install failed"
   install_mt5
   auto_configure_terminal
   if [[ -z "${DISPLAY:-}" && "${HEADLESS_MODE}" != "manual" ]]; then
