@@ -45,17 +45,24 @@ WINEARCH="win64"
 
 HEADLESS_MODE="${HEADLESS_MODE:-auto}"   # auto|manual
 PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-3.11.9}"
+PYTHON_WIN_MAJOR="${PYTHON_WIN_VERSION%%.*}"
+PYTHON_WIN_REMAINDER="${PYTHON_WIN_VERSION#${PYTHON_WIN_MAJOR}.}"
+PYTHON_WIN_MINOR="${PYTHON_WIN_REMAINDER%%.*}"
+PYTHON_WIN_TAG="${PYTHON_WIN_MAJOR}${PYTHON_WIN_MINOR}"
+PYTHON_WIN_TARGET_DIR="C:\\Python${PYTHON_WIN_TAG}"
+PYTHON_WIN_EXE="python-${PYTHON_WIN_VERSION}-amd64.exe"
+PYTHON_WIN_EMBED_ZIP="python-${PYTHON_WIN_VERSION}-embed-amd64.zip"
+PYTHON_WIN_URL="https://www.python.org/ftp/python/${PYTHON_WIN_VERSION}/${PYTHON_WIN_EXE}"
+PYTHON_WIN_EMBED_URL="https://www.python.org/ftp/python/${PYTHON_WIN_VERSION}/${PYTHON_WIN_EMBED_ZIP}"
 # Populated dynamically after installation so we do not rely on a hard coded
-# ``C:\\Python311`` target which newer installers sometimes ignore.
+# path other than the helper’s configured target.
 WINDOWS_PYTHON_UNIX_PATH=""
 WINDOWS_PYTHON_WIN_PATH=""
-WINDOWS_PYTHON_DEFAULT_WIN_PATH="C:\\Python311\\python.exe"
+WINDOWS_PYTHON_DEFAULT_WIN_PATH="${PYTHON_WIN_TARGET_DIR}\\python.exe"
 PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-${PROJECT_ROOT}}"
 MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 
 CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
-PYTHON_WIN_EXE="python-${PYTHON_WIN_VERSION}-amd64.exe"
-PYTHON_WIN_URL="https://www.python.org/ftp/python/${PYTHON_WIN_VERSION}/${PYTHON_WIN_EXE}"
 MT5_SETUP_EXE="mt5setup.exe"
 FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
 
@@ -254,34 +261,12 @@ wine_cmd() {
 #####################################
 # Install Windows Python
 #####################################
-_run_windows_python_installer() {
-  local prefix="$1"
-  shift || true
-  local installer_path="${prefix}/drive_c/_installers/${PYTHON_WIN_EXE}"
-  local quoted
-  printf -v quoted "%q " "$@"
-  quoted="${quoted% }"
-
-  xvfb_start
-  local install_cmd
-  printf -v install_cmd "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s' %s" \
-    "$(wine_env_block)" "${prefix}" "${installer_path}" "${quoted}"
-  with_display "${install_cmd} || true"
-  wine_wait
-  xvfb_stop
-}
-
 install_windows_python() {
   local prefix="${WINEPREFIX_PY}"
-  log "Initialising Wine prefix at ${prefix} ..."
-  ensure_wineprefix "${prefix}"
-  winetricks_quiet "${prefix}" vcrun2022 corefonts gdiplus
+  local helper="${PROJECT_ROOT}/scripts/install_windows_python.sh"
 
-  WINDOWS_PYTHON_UNIX_PATH="$(discover_windows_python "${prefix}" || true)"
-  if [[ -n "${WINDOWS_PYTHON_UNIX_PATH}" ]]; then
-    WINDOWS_PYTHON_WIN_PATH="$(to_windows_path "${prefix}" "${WINDOWS_PYTHON_UNIX_PATH}" || true)"
-    log "Windows Python already present at ${WINDOWS_PYTHON_WIN_PATH:-${WINDOWS_PYTHON_UNIX_PATH}}"
-    return 0
+  if [[ ! -f "${helper}" ]]; then
+    die "Missing helper script at ${helper}"
   fi
 
   mkdir -p "${CACHE_DIR}"
@@ -289,28 +274,24 @@ install_windows_python() {
     "${CACHE_DIR}/${PYTHON_WIN_EXE}" \
     "${PYTHON_WIN_URL}" \
     "Windows Python ${PYTHON_WIN_VERSION} installer"
-  run_as_user "mkdir -p '${prefix}/drive_c/_installers'"
-  cp -f "${CACHE_DIR}/${PYTHON_WIN_EXE}" "${prefix}/drive_c/_installers/"
-  log "Installing Windows Python ${PYTHON_WIN_VERSION}..."
 
-  local default_args=(InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 /quiet)
-  _run_windows_python_installer "${prefix}" "${default_args[@]}"
+  ensure_cached_download \
+    "${CACHE_DIR}/${PYTHON_WIN_EMBED_ZIP}" \
+    "${PYTHON_WIN_EMBED_URL}" \
+    "Windows Python ${PYTHON_WIN_VERSION} embeddable ZIP"
+
+  local use_xvfb=1
+  if [[ "${HEADLESS_MODE}" == "manual" ]]; then
+    use_xvfb=0
+  fi
+
+  log "Invoking install_windows_python.sh for prefix ${prefix} ..."
+  run_as_user \
+    "cd '${PROJECT_ROOT}' && PY_WIN_VERSION='${PYTHON_WIN_VERSION}' PY_WIN_EXE_CACHE='${CACHE_DIR}/${PYTHON_WIN_EXE}' PY_WIN_ZIP_CACHE='${CACHE_DIR}/${PYTHON_WIN_EMBED_ZIP}' PY_WIN_DIR='${PYTHON_WIN_TARGET_DIR}' WINEPREFIX='${prefix}' WINEARCH='${WINEARCH}' USE_XVFB='${use_xvfb}' bash '${helper}'"
 
   WINDOWS_PYTHON_UNIX_PATH="$(discover_windows_python "${prefix}" || true)"
   if [[ -z "${WINDOWS_PYTHON_UNIX_PATH}" ]]; then
-    log "Windows Python not found after installation; retrying with explicit target"
-    local py_major="${PYTHON_WIN_VERSION%%.*}"
-    local remainder="${PYTHON_WIN_VERSION#${py_major}.}"
-    local py_minor="${remainder%%.*}"
-    local py_tag="${py_major}${py_minor}"
-    local fallback_dir="C:\\Python${py_tag}"
-    local fallback_args=(InstallAllUsers=1 TargetDir="${fallback_dir}" DefaultAllUsersTargetDir="${fallback_dir}" PrependPath=1 Include_pip=1 Include_launcher=1 /quiet)
-    _run_windows_python_installer "${prefix}" "${fallback_args[@]}"
-    WINDOWS_PYTHON_UNIX_PATH="$(discover_windows_python "${prefix}" || true)"
-  fi
-
-  if [[ -z "${WINDOWS_PYTHON_UNIX_PATH}" ]]; then
-    log "Windows Python install failed"
+    log "Windows Python install helper completed but interpreter was not found"
     return 1
   fi
 
@@ -320,8 +301,14 @@ install_windows_python() {
     return 1
   fi
 
+  if ! wine_cmd "${prefix}" wine "${WINDOWS_PYTHON_WIN_PATH}" -V >/dev/null 2>&1; then
+    log "Windows Python detected at ${WINDOWS_PYTHON_WIN_PATH} but failed to execute"
+    return 1
+  fi
+
+  winetricks_quiet "${prefix}" gdiplus
+
   log "Windows Python available at ${WINDOWS_PYTHON_WIN_PATH}"
-  wine_cmd "${prefix}" wine cmd /c "${WINDOWS_PYTHON_WIN_PATH}" -V || log "Windows Python not found"
 }
 
 windows_python_win_path() {
