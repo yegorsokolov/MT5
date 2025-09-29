@@ -483,6 +483,12 @@ remaining manual steps in the summary output.
 > variable before running the helper only when you need to point pip at an
 > alternative Git repository or wheel URL.
 
+> If you rely exclusively on the bundled MQL5 experts/scripts to bridge the
+> terminal (without the Windows `MetaTrader5`/`mt5` Python packages), set
+> `MT5_BRIDGE_BACKEND=mql5` in your `.env` before running `scripts/setup_ubuntu.sh`
+> or `ubuntu_setup.sh`. The installers then skip the Windows pip dependencies and
+> avoid version-resolution failures when new `mt5` wheels are unavailable.
+
 ### CPU Feature Detection and Acceleration
 
 At startup the resource monitor inspects `/proc/cpuinfo` for CPU flags such as

@@ -147,9 +147,22 @@ install_windows_python() {
 }
 
 install_pip_packages() {
+  local bridge_backend="${MT5_BRIDGE_BACKEND:-}"
+  bridge_backend="${bridge_backend,,}"
+  if [[ "${bridge_backend}" == "mql5" || "${bridge_backend}" == "grpc" ]]; then
+    echo "Skipping Windows MetaTrader5 pip packages (bridge backend: ${bridge_backend})."
+    return
+  fi
+
   echo "Ensuring required Windows pip packages..."
   WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install --upgrade pip
-  WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install --only-binary :all: "MetaTrader5<6" "numpy==1.26.4"
+  if ! WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install --only-binary :all: "MetaTrader5<6" "numpy==1.26.4"; then
+    echo "Falling back to source install for MetaTrader5<6" >&2
+    if ! WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install "MetaTrader5<6" "numpy==1.26.4"; then
+      echo "Failed to install Windows MetaTrader5 dependencies" >&2
+      exit 1
+    fi
+  fi
 }
 
 apply_winetricks() {
