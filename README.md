@@ -453,6 +453,10 @@ remaining manual steps in the summary output.
 1. Install the MetaTrader 5 terminal from your broker or the official MetaQuotes
    download and log in with your live or demo credentials. Keep the terminal
    running so the Python bridge can piggyback on the authenticated session.
+   Recent MetaQuotes installers sometimes place the terminal under
+   `%LOCALAPPDATA%\Programs\MetaTrader 5` instead of `C:\Program Files\MetaTrader 5`;
+   both locations are supported and the helper scripts now auto-detect whichever
+   directory the official installer chooses.
 2. Run `./scripts/setup_ubuntu.sh` (or rerun it with `--services-only`) after
    installing the terminal. The installer now launches
    `scripts/detect_mt5_terminal.py` automatically to populate `.env` with the
