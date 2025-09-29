@@ -337,14 +337,25 @@ install_windows_python_packages() {
   local python_path
   python_path="$(windows_python_win_path)"
 
+  local bridge_backend="${MT5_BRIDGE_BACKEND:-}"
+  bridge_backend="${bridge_backend,,}"
+  if [[ "${bridge_backend}" == "mql5" || "${bridge_backend}" == "grpc" ]]; then
+    log "Skipping Windows mt5 dependency installation (bridge backend: ${bridge_backend})."
+    return 0
+  fi
+
   log "Upgrading pip inside Windows Python..."
   if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install -U pip; then
     die "Failed to upgrade pip inside Windows Python"
   fi
 
-  log "Installing Windows mt5 dependencies (mt5>=1.26,<1.27, MetaTrader5<6)..."
-  if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install "mt5>=1.26,<1.27" "MetaTrader5<6"; then
-    die "Failed to install Windows mt5 dependencies"
+  local -a primary_requirements=("mt5>=1.26,<1.27" "MetaTrader5<6")
+  log "Installing Windows mt5 dependencies (${primary_requirements[*]})..."
+  if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install "${primary_requirements[@]}"; then
+    log "Primary Windows mt5 dependency install failed; attempting relaxed mt5 constraint..."
+    if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install --upgrade "mt5" "MetaTrader5<6"; then
+      die "Failed to install Windows mt5 dependencies"
+    fi
   fi
 }
 
