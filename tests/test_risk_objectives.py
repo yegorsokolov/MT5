@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import numpy as np
-
 from pathlib import Path
 import sys
 
+import pytest
+
 # Ensure repository root is importable when running tests standalone
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+np = pytest.importorskip("numpy")
 
 from analysis.risk_objectives import (
     cvar_penalty,
@@ -49,3 +51,20 @@ def test_combined_penalty_adds_components():
     p2 = risk_penalty(returns, mdd_target=0.1)
     combined = risk_penalty(returns, cvar_target=0.5, mdd_target=0.1, level=0.5)
     assert np.isclose(p1 + p2, combined)
+
+
+def test_penalties_return_zero_for_empty_input():
+    assert cvar_penalty([], target=0.1) == 0.0
+    assert max_drawdown_penalty([], target=0.1) == 0.0
+    assert risk_penalty([], cvar_target=0.1, mdd_target=0.1) == 0.0
+
+
+def test_torch_penalties_preserve_tensor_type():
+    torch = pytest.importorskip("torch")
+
+    returns = torch.tensor([0.02, -0.05, 0.01, -0.03], requires_grad=True)
+    penalty = risk_penalty(returns, cvar_target=0.05, mdd_target=0.02, level=0.5)
+
+    assert isinstance(penalty, torch.Tensor)
+    penalty.backward()
+    assert returns.grad is not None
