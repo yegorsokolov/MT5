@@ -10,6 +10,8 @@ mt5_cache_installer="${cache_dir}/mt5linux.sh"
 python_installer="${cache_dir}/python-3.11.9-amd64.exe"
 required_packages=("winehq-stable" "winetricks" "xvfb" "cabextract" "p7zip-full" "curl" "wget" "rsync" "jq" "unzip")
 
+FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
+
 PY_PREFIX="${HOME}/.wine-py311"
 FETCH_PREFIX="${HOME}/.mt5"
 MT5_INSTALL_SUBPATH="drive_c/Program Files/MetaTrader 5"
@@ -94,8 +96,13 @@ download_file() {
   local target="$2"
   local tmp="${target}.tmp"
   if [[ -s "${target}" ]]; then
-    echo "File ${target} already exists and is non-empty; skipping download."
-    return
+    if [[ "${FORCE_INSTALLER_REFRESH}" != "0" ]]; then
+      echo "Refreshing ${target} as FORCE_INSTALLER_REFRESH is set."
+      rm -f "${target}" "${tmp}" || true
+    else
+      echo "File ${target} already exists and is non-empty; skipping download."
+      return
+    fi
   fi
   echo "Downloading ${url} -> ${target}"
   curl -fsSL "${url}" -o "${tmp}"
@@ -304,6 +311,14 @@ run_bridge_client_test() {
 }
 
 main() {
+  for arg in "$@"; do
+    case "${arg}" in
+      --fresh-installers)
+        FORCE_INSTALLER_REFRESH=1
+        ;;
+    esac
+  done
+
   ensure_dirs
   setup_logging
   for pkg in wget curl tar gzip; do
