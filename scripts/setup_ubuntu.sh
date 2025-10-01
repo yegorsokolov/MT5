@@ -43,6 +43,10 @@ WINEPREFIX_PY="${PROJECT_HOME}/.wine-py311"
 WINEPREFIX_MT5="${PROJECT_HOME}/.wine-mt5"
 WINEARCH="win64"
 
+DOWNLOAD_CONNECT_TIMEOUT="${DOWNLOAD_CONNECT_TIMEOUT:-20}"
+DOWNLOAD_MAX_TIME="${DOWNLOAD_MAX_TIME:-600}"
+PIP_INSTALL_TIMEOUT="${PIP_INSTALL_TIMEOUT:-180}"
+
 HEADLESS_MODE="${HEADLESS_MODE:-auto}"   # auto|manual
 PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-3.11.9}"
 PYTHON_WIN_MAJOR="${PYTHON_WIN_VERSION%%.*}"
@@ -139,7 +143,10 @@ ensure_cached_download() {
   local tmp_file="${destination}.tmp"
   rm -f "${tmp_file}"
   log "Downloading ${label} from ${url}"
-  if ! curl -fsSL --retry 3 --retry-delay 2 -o "${tmp_file}" "${url}"; then
+  if ! curl -fsSL --retry 3 --retry-delay 2 \
+      --connect-timeout "${DOWNLOAD_CONNECT_TIMEOUT}" \
+      --max-time "${DOWNLOAD_MAX_TIME}" \
+      -o "${tmp_file}" "${url}"; then
     rm -f "${tmp_file}"
     die "Failed to download ${label}"
   fi
@@ -350,14 +357,114 @@ install_windows_python_packages() {
     die "Failed to upgrade pip inside Windows Python"
   fi
 
-  local -a primary_requirements=("mt5>=1.26,<1.27" "MetaTrader5<6")
+  local mt5_requirement
+  if ! mt5_requirement="$(resolve_mt5_requirement)" || [[ -z "${mt5_requirement}" ]]; then
+    log "Unable to resolve preferred mt5 version; falling back to unconstrained install"
+    mt5_requirement="mt5"
+  fi
+
+  local -a primary_requirements=("${mt5_requirement}" "MetaTrader5<6")
   log "Installing Windows mt5 dependencies (${primary_requirements[*]})..."
-  if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install "${primary_requirements[@]}"; then
+
+  local -a install_cmd=(
+    "env" "PIP_DEFAULT_TIMEOUT=${PIP_INSTALL_TIMEOUT}" "wine" "${python_path}" "-m" "pip" "install"
+  )
+  install_cmd+=("${primary_requirements[@]}")
+
+  if ! wine_cmd "${prefix}" "${install_cmd[@]}"; then
     log "Primary Windows mt5 dependency install failed; attempting relaxed mt5 constraint..."
-    if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install --upgrade "mt5" "MetaTrader5<6"; then
+    local -a fallback_cmd=(
+      "env" "PIP_DEFAULT_TIMEOUT=${PIP_INSTALL_TIMEOUT}" "wine" "${python_path}" "-m" "pip" "install" "--upgrade" "mt5" "MetaTrader5<6"
+    )
+    if ! wine_cmd "${prefix}" "${fallback_cmd[@]}"; then
       die "Failed to install Windows mt5 dependencies"
     fi
   fi
+}
+
+resolve_mt5_requirement() {
+  local override="${MT5_WINDOWS_MT5_REQUIREMENT:-}"
+  if [[ -n "${override}" ]]; then
+    printf '%s' "${override}"
+    return 0
+  fi
+
+  local resolver
+  resolver="$(
+python3 - <<'PY' 2>/dev/null || true
+import json
+import os
+import sys
+import urllib.request
+
+preferred_min = os.environ.get('MT5_WINDOWS_MT5_MIN_VERSION', '1.26')
+preferred_max = os.environ.get('MT5_WINDOWS_MT5_MAX_VERSION', '1.27')
+timeout = int(os.environ.get('MT5_PYPI_TIMEOUT', '15'))
+
+def parse_version(tag):
+    parts = []
+    for chunk in tag.replace('-', '.').split('.'):
+        if not chunk:
+            continue
+        digits = ''.join(ch for ch in chunk if ch.isdigit())
+        if not digits:
+            return None
+        parts.append(int(digits))
+    return tuple(parts) if parts else None
+
+def compare(left, right):
+    for index in range(max(len(left), len(right))):
+        l = left[index] if index < len(left) else 0
+        r = right[index] if index < len(right) else 0
+        if l != r:
+            return (l > r) - (l < r)
+    return 0
+
+def in_range(parsed):
+    minimum = parse_version(preferred_min) if preferred_min else None
+    maximum = parse_version(preferred_max) if preferred_max else None
+    if minimum is not None and compare(parsed, minimum) < 0:
+        return False
+    if maximum is not None and compare(parsed, maximum) >= 0:
+        return False
+    return True
+
+try:
+    with urllib.request.urlopen('https://pypi.org/pypi/mt5/json', timeout=timeout) as response:
+        payload = json.load(response)
+except Exception:
+    sys.exit(1)
+
+releases = payload.get('releases') or {}
+parsed = []
+for version, files in releases.items():
+    if not files:
+        continue
+    parsed_version = parse_version(version)
+    if parsed_version is None:
+        continue
+    parsed.append((parsed_version, version))
+
+if not parsed:
+    sys.exit(1)
+
+parsed.sort(reverse=True)
+
+for current in parsed:
+    if in_range(current[0]):
+        print(f"mt5=={current[1]}")
+        break
+else:
+    print(f"mt5=={parsed[0][1]}")
+PY
+)"
+
+  if [[ -n "${resolver}" ]]; then
+    printf '%s' "${resolver}"
+    return 0
+  fi
+
+  return 1
 }
 
 #####################################
@@ -380,7 +487,8 @@ install_mt5() {
   log "Downloading MetaTrader 5 installer script from ${installer_url}..."
   run_as_user "rm -f '${installer_script}'"
   local download_cmd
-  printf -v download_cmd "cd %q && wget -O mt5linux.sh %q" "${MT5_INSTALLER_STAGE}" "${installer_url}"
+  printf -v download_cmd "cd %q && wget --tries=3 --timeout=%q --waitretry=2 --retry-connrefused --retry-on-http-error=429,500,502,503,504 -O mt5linux.sh %q" \
+    "${MT5_INSTALLER_STAGE}" "${DOWNLOAD_CONNECT_TIMEOUT}" "${installer_url}"
   run_as_user "${download_cmd}"
 
   local chmod_cmd
