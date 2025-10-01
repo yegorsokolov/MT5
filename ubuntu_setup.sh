@@ -156,9 +156,11 @@ install_pip_packages() {
 
   echo "Ensuring required Windows pip packages..."
   WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install --upgrade pip
-  if ! WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install --only-binary :all: "MetaTrader5<6" "numpy==1.26.4"; then
-    echo "Falling back to source install for MetaTrader5<6" >&2
-    if ! WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install "MetaTrader5<6" "numpy==1.26.4"; then
+
+  local mt5_packages=("MetaTrader5")
+  if ! WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install --only-binary :all: "${mt5_packages[@]}"; then
+    echo "Falling back to default installation for ${mt5_packages[*]}" >&2
+    if ! WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -m pip install "${mt5_packages[@]}"; then
       echo "Failed to install Windows MetaTrader5 dependencies" >&2
       exit 1
     fi
