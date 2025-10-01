@@ -63,6 +63,7 @@ PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-${PROJECT_ROOT}}"
 MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 
 CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
+MT5_INSTALLER_STAGE="${CACHE_DIR}/installer"
 MT5_SETUP_EXE="mt5setup.exe"
 FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
 
@@ -367,27 +368,131 @@ install_mt5() {
   log "Initialising Wine prefix at ${prefix} ..."
   ensure_wineprefix "${prefix}"
   winetricks_quiet "${prefix}" corefonts gdiplus
-  mkdir -p "${CACHE_DIR}"
-  ensure_cached_download \
-    "${CACHE_DIR}/${MT5_SETUP_EXE}" \
-    "${MT5_SETUP_URL}" \
-    "MetaTrader 5 installer"
   if wine_cmd "${prefix}" wine cmd /c "dir C:\\Program^ Files\\MetaTrader^ 5" >/dev/null 2>&1; then
     log "MetaTrader 5 already installed."
     return 0
   fi
-  run_as_user "mkdir -p '${prefix}/drive_c/_installers'"
-  cp -f "${CACHE_DIR}/${MT5_SETUP_EXE}" "${prefix}/drive_c/_installers/"
-  log "Installing MetaTrader 5..."
+  run_as_user "mkdir -p '${CACHE_DIR}' '${MT5_INSTALLER_STAGE}'"
+
+  local installer_script="${MT5_INSTALLER_STAGE}/mt5linux.sh"
+  local installer_url="https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5linux.sh"
+
+  log "Downloading MetaTrader 5 installer script from ${installer_url}..."
+  run_as_user "rm -f '${installer_script}'"
+  local download_cmd
+  printf -v download_cmd "cd %q && wget -O mt5linux.sh %q" "${MT5_INSTALLER_STAGE}" "${installer_url}"
+  run_as_user "${download_cmd}"
+
+  local chmod_cmd
+  printf -v chmod_cmd "cd %q && chmod +x mt5linux.sh" "${MT5_INSTALLER_STAGE}"
+  run_as_user "${chmod_cmd}"
+
+  INSTALL_STAGE="${MT5_INSTALLER_STAGE}" MT5_PREFIX="${prefix}" python3 - <<'PY'
+import os
+from pathlib import Path
+
+stage_root = Path(os.environ["INSTALL_STAGE"])
+script_path = stage_root / "mt5linux.sh"
+if not script_path.exists():
+    raise SystemExit("MetaTrader installer script download failed")
+
+text = script_path.read_text()
+start_marker = "echo Update and install..."
+end_marker = "echo Download MetaTrader and WebView2 Runtime"
+start = text.find(start_marker)
+end = text.find(end_marker)
+if start != -1 and end != -1 and end > start:
+    text = text[:start] + text[end:]
+
+prefix = os.environ["MT5_PREFIX"]
+text = text.replace("WINEPREFIX=~/.mt5", f"WINEPREFIX='{prefix}'")
+
+script_path.write_text(text)
+script_path.chmod(0o755)
+PY
+  chown "${PROJECT_USER}:${PROJECT_USER}" "${installer_script}" || true
+
+  log "Running MetaTrader 5 installer script..."
   xvfb_start
-  local mt5_installer="${prefix}/drive_c/_installers/${MT5_SETUP_EXE}"
-  local mt5_cmd
-  printf -v mt5_cmd "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s' /silent" "$(wine_env_block)" "${prefix}" "${mt5_installer}"
-  local mt5_fallback
-  printf -v mt5_fallback "%s; export WINEPREFIX='%s'; wine start /wait /unix '%s'" "$(wine_env_block)" "${prefix}" "${mt5_installer}"
-  with_display "${mt5_cmd} || ${mt5_fallback}"
+  local install_cmd
+  printf -v install_cmd "cd %q && ./mt5linux.sh" "${MT5_INSTALLER_STAGE}"
+  with_display "${install_cmd}"
   wine_wait
   xvfb_stop
+
+  local cleanup_cmd
+  printf -v cleanup_cmd "cd %q && rm -f mt5setup.exe webview2.exe" "${MT5_INSTALLER_STAGE}"
+  run_as_user "${cleanup_cmd}" || true
+
+  if attempt_mt5_bridge_via_package; then
+    log "MetaTrader5 Python package successfully established the bridge."
+  else
+    log "MetaTrader5 package bridge failed; deploying MQL bridge assets as fallback."
+    install_mql_bridge_assets || log "Fallback MQL bridge deployment encountered an error"
+  fi
+}
+
+attempt_mt5_bridge_via_package() {
+  local python_prefix="${WINEPREFIX_PY}"
+  local python_path
+  python_path="$(windows_python_win_path)"
+
+  if [[ -z "${python_path}" ]]; then
+    log "Skipping MetaTrader5 package bridge attempt (Windows Python path unavailable)."
+    return 1
+  fi
+
+  local terminal_unix="${WINEPREFIX_MT5}/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+  if [[ ! -f "${terminal_unix}" ]]; then
+    log "MetaTrader terminal not found at ${terminal_unix}; cannot attempt package bridge."
+    return 1
+  fi
+
+  local terminal_win
+  terminal_win="$(to_windows_path "${python_prefix}" "${terminal_unix}" || true)"
+  if [[ -z "${terminal_win}" ]]; then
+    log "Failed to translate ${terminal_unix} for Windows; cannot attempt package bridge."
+    return 1
+  fi
+
+  local probe_host="${python_prefix}/drive_c/mt5_bridge_probe.py"
+  local writer
+  printf -v writer "python3 - <<'PY'\nfrom pathlib import Path\nscript = Path(r\"%s\")\nscript.write_text('''import json\\nimport os\\nimport sys\\nimport time\\n\\nimport MetaTrader5 as mt5\\n\\nTIMEOUT = int(os.environ.get(\"MT5_BRIDGE_TIMEOUT_MS\", \"90000\"))\\nTERMINAL_PATH = os.environ.get(\"MT5_TERMINAL_PATH\")\\nif not TERMINAL_PATH:\\n    print(json.dumps({\"status\": \"fail\", \"error\": \"missing terminal path\"}))\\n    sys.exit(1)\\nif not mt5.initialize(path=TERMINAL_PATH, timeout=TIMEOUT):\\n    code, message = mt5.last_error()\\n    print(json.dumps({\"status\": \"fail\", \"error\": [code, message]}))\\n    sys.exit(1)\\ntime.sleep(1)\\nmt5.shutdown()\\nprint(json.dumps({\"status\": \"ok\"}))\\n''', encoding='utf-8')\nPY" "${probe_host}"
+  if ! run_as_user "${writer}"; then
+    log "Unable to prepare MetaTrader bridge probe script."
+    return 1
+  fi
+
+  local python_cmd
+  printf -v python_cmd "MT5_TERMINAL_PATH=%q MT5_BRIDGE_TIMEOUT_MS=%q WINEPREFIX=%q wine %q %q" \
+    "${terminal_win}" "90000" "${python_prefix}" "${python_path}" "C:\\mt5_bridge_probe.py"
+
+  if run_as_user "${python_cmd}"; then
+    run_as_user "rm -f '${probe_host}'" || true
+    return 0
+  fi
+
+  run_as_user "rm -f '${probe_host}'" || true
+  return 1
+}
+
+install_mql_bridge_assets() {
+  local source_dir="${PROJECT_ROOT}/mt5_bridge_files/MQL5"
+  local target_dir="${WINEPREFIX_MT5}/drive_c/Program Files/MetaTrader 5/MQL5"
+
+  if [[ ! -d "${source_dir}" ]]; then
+    log "MQL bridge asset directory ${source_dir} missing; skipping fallback deployment."
+    return 1
+  fi
+
+  local copier
+  printf -v copier "SOURCE=%q DEST=%q python3 - <<'PY'\nimport os\nimport shutil\nfrom pathlib import Path\n\nsource = Path(os.environ['SOURCE'])\ndest = Path(os.environ['DEST'])\n\nif not source.exists():\n    raise SystemExit(1)\nfor path in source.rglob('*'):\n    rel = path.relative_to(source)\n    target = dest / rel\n    if path.is_dir():\n        target.mkdir(parents=True, exist_ok=True)\n    else:\n        target.parent.mkdir(parents=True, exist_ok=True)\n        shutil.copy2(path, target)\nprint(f"Copied MQL bridge assets to {dest}")\nPY" "${source_dir}" "${target_dir}"
+
+  if run_as_user "${copier}"; then
+    return 0
+  fi
+
+  return 1
 }
 
 #####################################
