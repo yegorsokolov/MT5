@@ -3,7 +3,7 @@ pandas
 pandera
 pyarrow
 scikit-learn
-numpy>=2.1
+numpy
 MetaTrader5
 joblib
 pyyaml
