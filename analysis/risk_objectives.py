@@ -28,14 +28,10 @@ def _to_tensor(x: np.ndarray | list[float]) -> "torch.Tensor":
     arr = np.asarray(x, dtype="float32")
     if _TORCH_AVAILABLE:
         if isinstance(x, torch.Tensor):
-            return x.float()
-        return torch.tensor(arr)
+            return x.to(dtype=torch.float32)
+        return torch.tensor(arr, dtype=torch.float32)
 
-    # Fallback: create a minimal tensor-like object using NumPy
-    class _ArrayWrapper(np.ndarray):
-        pass
-
-    return arr.view(_ArrayWrapper)
+    return arr
 
 
 def cvar(returns: np.ndarray | list[float] | "torch.Tensor", level: float = 0.05):
@@ -52,8 +48,12 @@ def cvar(returns: np.ndarray | list[float] | "torch.Tensor", level: float = 0.05
 
     r = _to_tensor(returns)
     if _TORCH_AVAILABLE and isinstance(r, torch.Tensor):
+        if r.numel() == 0:
+            return torch.tensor(0.0, dtype=torch.float32, device=r.device)
         var = torch.quantile(r, level)
         tail = r[r <= var]
+        if tail.numel() == 0:
+            return torch.tensor(0.0, dtype=r.dtype, device=r.device)
         return tail.mean()
     var = np.quantile(r, level)
     tail = r[r <= var]
@@ -65,6 +65,8 @@ def max_drawdown(returns: np.ndarray | list[float] | "torch.Tensor"):
 
     r = _to_tensor(returns)
     if _TORCH_AVAILABLE and isinstance(r, torch.Tensor):
+        if r.numel() == 0:
+            return torch.tensor(0.0, dtype=torch.float32, device=r.device)
         cumulative = torch.cumsum(r, dim=0)
         peak = torch.cummax(cumulative, dim=0)[0]
         drawdown = peak - cumulative
