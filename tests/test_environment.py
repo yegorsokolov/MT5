@@ -216,6 +216,43 @@ def test_check_dependencies_falls_back_to_module_search(tmp_path, monkeypatch):
     assert calls == ["example_pkg"]
 
 
+def test_read_env_pairs_normalises_quotes_and_escapes(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                'KEY="value"',
+                'ESCAPED="line\\nnext"',
+                "SINGLE=' spaced '",
+                "PLAIN=bare",
+            ]
+        )
+    )
+
+    monkeypatch.setattr(environment, "PROJECT_ROOT", tmp_path)
+
+    pairs = environment._read_env_pairs(env_path)
+
+    assert pairs["KEY"] == "value"
+    assert pairs["ESCAPED"] == "line\nnext"
+    assert pairs["SINGLE"] == " spaced "
+    assert pairs["PLAIN"] == "bare"
+
+
+def test_check_env_loaded_accepts_quoted_values(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text('KEY="value"\nESCAPED=line\\nnext\n')
+
+    monkeypatch.setattr(environment, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setenv("KEY", "value")
+    monkeypatch.setenv("ESCAPED", "line\nnext")
+
+    result = environment._check_env_loaded()
+
+    assert result["status"] == "passed"
+    assert "Loaded 2 environment variables" in result["detail"]
+
+
 def test_check_distributed_dependencies_skips_on_py313(monkeypatch):
     monkeypatch.setattr(environment, "_python_major_minor", lambda: (3, 13))
     monkeypatch.setattr(environment.sys, "platform", "linux")

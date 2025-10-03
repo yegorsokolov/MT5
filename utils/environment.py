@@ -277,25 +277,41 @@ def _has_env_file() -> bool:
     return any(path.exists() for path in candidates)
 
 
+def _normalise_env_value(value: str) -> str:
+    cleaned = value.strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {'"', "'"}:
+        cleaned = cleaned[1:-1]
+    if "\\" in cleaned:
+        try:
+            cleaned = bytes(cleaned, "utf-8").decode("unicode_escape")
+        except Exception:
+            return cleaned
+    return cleaned
+
+
 def _read_env_pairs(path: Path) -> dict[str, str]:
     """Return key/value pairs from ``path`` if the file exists."""
 
     try:
         from deployment.runtime_secrets import _read_env_file as _secrets_read_env
     except Exception:
-        values: dict[str, str] = {}
+        raw_values: dict[str, str] = {}
         if not path.exists():
-            return values
+            return raw_values
         with path.open("r", encoding="utf-8") as handle:
             for raw_line in handle:
                 line = raw_line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 key, value = line.split("=", 1)
-                values[key.strip()] = value.strip()
-        return values
+                raw_values[key.strip()] = value.strip()
     else:
-        return _secrets_read_env(path)
+        raw_values = _secrets_read_env(path)
+
+    normalised: dict[str, str] = {}
+    for key, value in raw_values.items():
+        normalised[key] = _normalise_env_value(str(value))
+    return normalised
 
 
 def _check_mt5_login() -> dict[str, Any]:
