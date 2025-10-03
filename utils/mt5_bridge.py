@@ -1,10 +1,18 @@
-"""Utilities for loading the MetaTrader5 module across native and Wine bridges."""
+"""Utilities for loading the MetaTrader5 module across native and Wine bridges.
+
+The bridge discovery helpers consult values in the following order:
+
+1. Process environment variables.
+2. Key/value pairs defined in the project ``.env`` file.
+3. Hints extracted from ``LOGIN_INSTRUCTIONS_WINE.txt``.
+"""
 
 from __future__ import annotations
 
 import importlib
 import logging
 import os
+from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, Optional, Tuple
@@ -13,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _LOGIN_INSTRUCTIONS = PROJECT_ROOT / "LOGIN_INSTRUCTIONS_WINE.txt"
+_DOTENV_PATH = PROJECT_ROOT / ".env"
 
 _MT5_MODULE: Optional[ModuleType] = None
 _BRIDGE_INFO: Dict[str, Any] = {}
@@ -40,6 +49,47 @@ def _normalize(value: str) -> str:
     return cleaned
 
 
+@lru_cache(maxsize=1)
+def _load_dotenv() -> Dict[str, str]:
+    if not _DOTENV_PATH.exists():
+        return {}
+    try:
+        content = _DOTENV_PATH.read_text(encoding="utf-8", errors="ignore")
+    except Exception:  # pragma: no cover - best effort only
+        return {}
+
+    data: Dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        data[key] = _normalize(value)
+    return data
+
+
+def _lookup_bridge_value(*keys: str) -> Optional[str]:
+    for key in keys:
+        value = os.getenv(key)
+        if value:
+            return _normalize(value)
+
+    dotenv = _load_dotenv()
+    for key in keys:
+        value = dotenv.get(key)
+        if value:
+            return value
+
+    return None
+
+
 def _discover_windows_python_path() -> Optional[str]:
     keys = (
         "PYMT5LINUX_PYTHON",
@@ -48,10 +98,9 @@ def _discover_windows_python_path() -> Optional[str]:
         "WIN_PYTHON",
         "WINE_PYTHON_PATH",
     )
-    for key in keys:
-        value = os.getenv(key)
-        if value:
-            return _normalize(value)
+    value = _lookup_bridge_value(*keys)
+    if value:
+        return value
 
     for line in _read_login_instructions():
         if line.lower().startswith("windows python"):
@@ -70,10 +119,9 @@ def _discover_wine_prefix() -> Optional[str]:
         "MT5_WINE_PREFIX",
         "WINEPREFIX",
     )
-    for key in keys:
-        value = os.getenv(key)
-        if value:
-            return _normalize(value)
+    value = _lookup_bridge_value(*keys)
+    if value:
+        return value
 
     for line in _read_login_instructions():
         if line.lower().startswith("terminal prefix"):
