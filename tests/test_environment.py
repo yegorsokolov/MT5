@@ -216,6 +216,38 @@ def test_check_dependencies_falls_back_to_module_search(tmp_path, monkeypatch):
     assert calls == ["example_pkg"]
 
 
+def test_collect_missing_dependencies_skips_mt5_with_bridge_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(environment, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(environment, "_check_dependencies", lambda: ["MetaTrader5"])
+    monkeypatch.setattr(environment.sys, "platform", "linux")
+    monkeypatch.setattr(environment, "find_spec", lambda name: object())
+    monkeypatch.setenv("WINE_PYTHON", "/fake/windows/python.exe")
+
+    assert environment._collect_missing_dependencies() == []
+
+
+def test_collect_missing_dependencies_skips_mt5_with_login_instructions(tmp_path, monkeypatch):
+    instructions = tmp_path / "LOGIN_INSTRUCTIONS_WINE.txt"
+    instructions.write_text("bridge configured")
+
+    monkeypatch.setattr(environment, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(environment, "_check_dependencies", lambda: ["MetaTrader5"])
+    monkeypatch.setattr(environment.sys, "platform", "linux")
+    monkeypatch.setattr(environment, "find_spec", lambda name: object())
+
+    assert environment._collect_missing_dependencies() == []
+
+
+def test_collect_missing_dependencies_requires_mt5_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(environment, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(environment, "_check_dependencies", lambda: ["MetaTrader5"])
+    monkeypatch.setattr(environment.sys, "platform", "win32")
+    monkeypatch.setattr(environment, "find_spec", lambda name: object())
+    monkeypatch.setenv("WINE_PYTHON", "/fake/windows/python.exe")
+
+    assert environment._collect_missing_dependencies() == ["MetaTrader5"]
+
+
 def test_read_env_pairs_normalises_quotes_and_escapes(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     env_path.write_text(
