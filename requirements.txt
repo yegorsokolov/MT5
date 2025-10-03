@@ -4,7 +4,7 @@ pandera
 pyarrow
 scikit-learn
 numpy
-MetaTrader5
+MetaTrader5; platform_system == "Windows"
 pymt5linux; platform_system != "Windows"
 joblib
 pyyaml
