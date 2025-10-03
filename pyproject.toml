@@ -27,6 +27,7 @@ dependencies = [
     "torch",
     "tqdm",
     "MetaTrader5<6; platform_system == \"Windows\"",
+    "pymt5linux; platform_system != \"Windows\"",
     "scikit-optimize",
     "scipy",
     "river",
