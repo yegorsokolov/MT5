@@ -63,7 +63,11 @@ Run `python -m utils.environment --json` to confirm both interpreter and
 hardware meet the minimum requirements. The training routine executes the same
 diagnostic up front, persists the hardware snapshot alongside every model run
 and logs it to MLflow so you can audit the environment that produced each
-artifact.
+artifact. On Windows the diagnostics still expect the native `MetaTrader5`
+wheel to be installed, whereas on Linux/macOS they treat a configured Wine
+bridge (for example when `WINE_PYTHON`/`WIN_PYTHON` is set or
+`LOGIN_INSTRUCTIONS_WINE.txt` exists) as satisfying the dependency so the
+Windows-only wheel is no longer reported as missing.
 
 * Linux: run `./scripts/setup_ubuntu.sh` to provision a supported Python
   interpreter, ensure `pip` is available and upgrade dependencies. The script
