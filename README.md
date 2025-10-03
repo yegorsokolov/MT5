@@ -174,9 +174,8 @@ session unless stated otherwise.
    python -m venv .venv
    source .venv/bin/activate
    python -V  # should be 3.11.9
-   grep -vi '^ *MetaTrader5' requirements.txt > requirements.nomt5.txt
    pip install --upgrade pip wheel setuptools
-   pip install -r requirements.nomt5.txt
+   pip install -r requirements.txt
    ```
 
 5. **Provision a dedicated Wine prefix for Windows Python + MetaTrader5:**
