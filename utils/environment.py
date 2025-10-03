@@ -55,6 +55,18 @@ except Exception:  # pragma: no cover - bridge helper optional in minimal builds
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQ_FILE = PROJECT_ROOT / "requirements.txt"
 CONFIG_FILE = Path(os.getenv("CONFIG_FILE", PROJECT_ROOT / "config.yaml"))
+_WINE_BRIDGE_HINT_ENV_VARS = (
+    "WINE_PYTHON",
+    "WIN_PYTHON",
+    "WINE_PYTHON_PATH",
+    "PYMT5LINUX_PYTHON",
+    "PYMT5LINUX_WINDOWS_PYTHON",
+    "WIN_PY_WINE_PREFIX",
+    "WINE_PY_WINE_PREFIX",
+    "MT5_WINE_PREFIX",
+    "PYMT5LINUX_WINEPREFIX",
+    "WINEPREFIX",
+)
 AUTO_INSTALL_DEPENDENCIES_DEFAULT = os.getenv("AUTO_INSTALL_DEPENDENCIES", "1").strip().lower() not in {
     "0",
     "false",
@@ -191,6 +203,15 @@ def _check_dependencies() -> list[str]:
 
 def _collect_missing_dependencies() -> list[str]:
     missing = _check_dependencies()
+    if "MetaTrader5" in missing:
+        if sys.platform.startswith("win"):
+            pass
+        elif any(os.getenv(key) for key in _WINE_BRIDGE_HINT_ENV_VARS):
+            missing = [pkg for pkg in missing if pkg != "MetaTrader5"]
+        else:
+            instructions = PROJECT_ROOT / "LOGIN_INSTRUCTIONS_WINE.txt"
+            if instructions.exists():
+                missing = [pkg for pkg in missing if pkg != "MetaTrader5"]
     if find_spec("psutil") is None:
         missing.append("psutil")
     return sorted(set(missing))
