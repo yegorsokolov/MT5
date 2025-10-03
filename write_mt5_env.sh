@@ -64,8 +64,8 @@ fi
 
 escape() {
   local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\n'/\\n}"
   printf '%s' "$value"
 }
 
@@ -78,7 +78,7 @@ for key in "${!kv[@]}"; do
   escaped_key="$(printf '%s' "$key" | sed 's/[.[\*^$]/\\&/g')"
   grep -v -E "^${escaped_key}=" "$tmp" > "${tmp}.new" || true
   mv "${tmp}.new" "$tmp"
-  printf '%s=\"%s\"\\n' "$key" "$(escape "${kv[$key]}")" >> "$tmp"
+  printf '%s=%s\n' "$key" "$(escape "${kv[$key]}")" >> "$tmp"
 done
 
 mv "$tmp" "$ENV_FILE"
