@@ -569,11 +569,13 @@ class ResourceMonitor:
                 self._usage_subscribers.discard((q, loop))
 
     def stop(self) -> None:
+        cancelled: list[tuple[FutureLike, Optional[asyncio.AbstractEventLoop]]] = []
         for attr in ("_task", "_watch_task"):
             task = getattr(self, attr, None)
             if task is None:
                 continue
             self._cancel_future(task, self._loop)
+            cancelled.append((task, self._loop))
             setattr(self, attr, None)
 
         with self._tasks_lock:
@@ -581,6 +583,9 @@ class ResourceMonitor:
             self._tasks.clear()
         for future, loop in tracked:
             self._cancel_future(future, loop)
+        cancelled.extend(tracked)
+
+        self._wait_for_shutdown(cancelled)
 
         def _drain(queue: asyncio.Queue[Any]) -> None:
             try:
@@ -602,6 +607,7 @@ class ResourceMonitor:
             queues.clear()
 
         if self._owns_loop and self._loop is not None:
+            self._drain_loop_tasks(self._loop)
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception:
@@ -615,6 +621,87 @@ class ResourceMonitor:
         self._loop = None
         self._loop_thread = None
         self._owns_loop = False
+
+    def _wait_for_shutdown(
+        self,
+        cancelled: list[tuple[FutureLike, Optional[asyncio.AbstractEventLoop]]],
+    ) -> None:
+        if not cancelled:
+            return
+
+        loop_groups: Dict[asyncio.AbstractEventLoop, list[asyncio.Future[Any]]] = {}
+        thread_futures: list[ThreadFuture] = []
+        other_futures: list[FutureLike] = []
+
+        for future, loop in cancelled:
+            if isinstance(future, ThreadFuture):
+                thread_futures.append(future)
+                continue
+            if isinstance(future, asyncio.Future):
+                target_loop = loop
+                if target_loop is None:
+                    try:
+                        target_loop = future.get_loop()
+                    except Exception:
+                        target_loop = None
+                if target_loop is not None:
+                    loop_groups.setdefault(target_loop, []).append(future)
+                    continue
+            other_futures.append(future)
+
+        for loop, futures in loop_groups.items():
+            if not futures:
+                continue
+            if loop.is_closed():
+                continue
+            gather_coro = asyncio.gather(*futures, return_exceptions=True)
+            try:
+                if loop.is_running():
+                    try:
+                        running_loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        running_loop = None
+                    if running_loop is loop:
+                        loop.create_task(gather_coro)
+                    else:
+                        future = asyncio.run_coroutine_threadsafe(gather_coro, loop)
+                        future.result()
+                else:
+                    loop.run_until_complete(gather_coro)
+            except Exception:
+                pass
+
+        for future in thread_futures:
+            try:
+                future.result()
+            except Exception:
+                pass
+
+        for future in other_futures:
+            try:
+                if hasattr(future, "result"):
+                    future.result()  # type: ignore[misc]
+            except Exception:
+                pass
+
+    def _drain_loop_tasks(self, loop: asyncio.AbstractEventLoop) -> None:
+        if loop.is_closed():
+            return
+        try:
+            pending = asyncio.run_coroutine_threadsafe(
+                self._gather_pending(loop), loop
+            )
+            pending.result()
+        except Exception:
+            pass
+
+    async def _gather_pending(
+        self, loop: asyncio.AbstractEventLoop
+    ) -> None:  # pragma: no cover - shutdown helper
+        current = asyncio.current_task()
+        tasks = [t for t in asyncio.all_tasks() if t is not current]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _read_net_bytes(self) -> tuple[int, int]:
         """Return total received and sent bytes across all interfaces."""
