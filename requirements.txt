@@ -5,6 +5,7 @@ pyarrow
 scikit-learn
 numpy
 MetaTrader5
+pymt5linux; platform_system != "Windows"
 joblib
 pyyaml
 psutil

@@ -4,6 +4,7 @@ pandera
 pyarrow
 scikit-learn
 numpy>=2.1
+pymt5linux; platform_system != "Windows"
 joblib
 pyyaml
 psutil
