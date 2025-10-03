@@ -1,0 +1,71 @@
+# Core data and pipeline dependencies
+pandas
+pandera
+pyarrow
+scikit-learn
+numpy>=2.1
+joblib
+pyyaml
+psutil
+GitPython
+gdown
+great_expectations<0.19
+duckdb
+dask[distributed]
+pandas_datareader
+lightgbm
+torch  # required for autoencoder features
+tqdm
+scikit-optimize
+scipy
+river
+kafka-python
+redis
+testcontainers[kafka,redis]
+filelock
+fastapi
+uvicorn
+uvloop; platform_system != "Windows"
+mlflow
+shap  # optional, used to compute SHAP feature importance
+statsmodels
+tsfresh
+exchange-calendars
+arch
+requests
+cryptography
+yfinance
+fredapi
+httpx
+grpcio
+grpcio-tools
+backtrader
+freqtrade
+PyWavelets
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-jaeger
+opentelemetry-exporter-prometheus
+opentelemetry-instrumentation-logging
+
+# Heavy optional dependencies
+# Ray and torch-geometric currently lack official Python 3.13 wheels; the
+# distributed and graph trainers gracefully fall back when they are absent.
+flaml>=2.3.6
+ray==2.48.0; python_version < "3.13"
+torch-geometric==2.6.1; python_version < "3.13"
+
+# Reinforcement learning dependencies
+stable-baselines3
+sb3-contrib
+gym
+
+# Natural language processing dependencies
+transformers
+diffusers
+
+# Documentation toolchain
+sphinx
+myst-parser
+sphinx-rtd-theme
+mkdocs
