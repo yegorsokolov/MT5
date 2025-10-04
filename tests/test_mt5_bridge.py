@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -13,6 +15,19 @@ def _reset_dotenv_cache():
     mt5_bridge._load_dotenv.cache_clear()  # type: ignore[attr-defined]
     yield
     mt5_bridge._load_dotenv.cache_clear()  # type: ignore[attr-defined]
+
+
+@pytest.fixture
+def _reset_bridge(monkeypatch):
+    monkeypatch.setattr(mt5_bridge, "_MT5_MODULE", None)
+    monkeypatch.setattr(mt5_bridge, "_BRIDGE_INFO", {})
+    for key in ("MT5_BRIDGE_BACKEND", "MT5_BRIDGE_MODULE"):
+        monkeypatch.delenv(key, raising=False)
+    yield
+    monkeypatch.setattr(mt5_bridge, "_MT5_MODULE", None)
+    monkeypatch.setattr(mt5_bridge, "_BRIDGE_INFO", {})
+    for name in ("MetaTrader5", "pymt5linux", "custom_backend"):
+        sys.modules.pop(name, None)
 
 
 def test_seed_bridge_environment_reads_dotenv(monkeypatch, tmp_path: Path) -> None:
@@ -68,3 +83,57 @@ def test_seed_bridge_environment_reads_dotenv(monkeypatch, tmp_path: Path) -> No
         "WINEPREFIX",
     ):
         monkeypatch.delenv(key, raising=False)
+
+
+def test_load_mt5_module_uses_wine_backend(monkeypatch, _reset_bridge):
+    monkeypatch.setenv("MT5_BRIDGE_BACKEND", "wine")
+    sys.modules.pop("MetaTrader5", None)
+
+    bridge_module = ModuleType("pymt5linux")
+    mt5_module = ModuleType("MetaTrader5")
+    calls: list[str] = []
+
+    def initializer() -> None:
+        calls.append("initialize")
+
+    bridge_module.initialize = initializer  # type: ignore[attr-defined]
+    bridge_module.MetaTrader5 = mt5_module  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pymt5linux", bridge_module)
+
+    module = mt5_bridge.load_mt5_module(force=True)
+
+    assert module is mt5_module
+    assert calls == ["initialize"]
+    backend_info = mt5_bridge.describe_backend()
+    assert backend_info["backend"] == "wine"
+    assert backend_info["bridge_package"] == "pymt5linux"
+    assert backend_info["requested_backend"] == "wine"
+
+
+def test_load_mt5_module_supports_custom_backend(monkeypatch, _reset_bridge):
+    sys.modules.pop("MetaTrader5", None)
+
+    backend_module = ModuleType("custom_backend")
+    mt5_module = ModuleType("MetaTrader5")
+    calls: list[str] = []
+
+    def initializer() -> None:
+        calls.append("initialize")
+
+    def loader() -> ModuleType:
+        calls.append("load")
+        return mt5_module
+
+    backend_module.initialize = initializer  # type: ignore[attr-defined]
+    backend_module.load_mt5 = loader  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "custom_backend", backend_module)
+    monkeypatch.setenv("MT5_BRIDGE_BACKEND", "custom_backend")
+
+    module = mt5_bridge.load_mt5_module(force=True)
+
+    assert module is mt5_module
+    assert calls == ["initialize", "load"]
+    backend_info = mt5_bridge.describe_backend()
+    assert backend_info["backend"] == "custom_backend"
+    assert backend_info["bridge_package"] == "custom_backend"
+    assert backend_info["requested_backend"] == "custom_backend"
