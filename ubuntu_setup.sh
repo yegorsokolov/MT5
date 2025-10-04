@@ -13,6 +13,12 @@ mt5_cache_installer="${cache_dir}/mt5linux.sh"
 python_installer="${cache_dir}/${MT5_PYTHON_INSTALLER}"
 required_packages=("winehq-stable" "winetricks" "xvfb" "cabextract" "p7zip-full" "curl" "wget" "rsync" "jq" "unzip")
 
+VENV_DIR="${SCRIPT_DIR}/.venv"
+LINUX_PYTHON="${VENV_DIR}/bin/python"
+CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints-mt5linux.txt"
+REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
+ENV_FILE="${SCRIPT_DIR}/.env"
+
 FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
 
 PY_PREFIX="${HOME}/${MT5_PYTHON_PREFIX_NAME}"
@@ -62,6 +68,16 @@ require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     echo "Missing required command: ${cmd}" >&2
+    exit 1
+  fi
+}
+
+run_step() {
+  local description="$1"
+  shift
+  echo "-- ${description}"
+  if ! "$@"; then
+    echo "ERROR: ${description} failed. Check ${log_file} for details." >&2
     exit 1
   fi
 }
@@ -313,6 +329,128 @@ run_bridge_client_test() {
   python3 "${BRIDGE_CLIENT}" || true
 }
 
+to_windows_path() {
+  local prefix="$1" path="$2"
+  require_command winepath
+  local converted
+  if ! converted=$(WINEPREFIX="${prefix}" winepath -w "${path}" 2>/dev/null | tr -d '\r'); then
+    echo "Failed to convert ${path} to a Windows path using winepath" >&2
+    exit 1
+  fi
+  if [[ -z "${converted}" ]]; then
+    echo "winepath returned an empty value when converting ${path}" >&2
+    exit 1
+  fi
+  printf '%s' "${converted}"
+}
+
+to_unix_path_from_windows() {
+  local prefix="$1" win_path="$2"
+  require_command winepath
+  local converted
+  if ! converted=$(WINEPREFIX="${prefix}" winepath -u "${win_path}" 2>/dev/null | tr -d '\r'); then
+    echo "Failed to convert ${win_path} to a Unix path using winepath" >&2
+    exit 1
+  fi
+  if [[ -z "${converted}" ]]; then
+    echo "winepath returned an empty value when converting ${win_path}" >&2
+    exit 1
+  fi
+  printf '%s' "${converted}"
+}
+
+ensure_linux_virtualenv() {
+  echo "Ensuring Linux virtual environment at ${VENV_DIR}..."
+  require_command python3
+  if [[ -d "${VENV_DIR}" ]]; then
+    run_step "Refreshing existing virtual environment" python3 -m venv --upgrade "${VENV_DIR}"
+  else
+    run_step "Creating Linux virtual environment" python3 -m venv "${VENV_DIR}"
+  fi
+  if [[ ! -x "${LINUX_PYTHON}" ]]; then
+    echo "Virtual environment at ${VENV_DIR} is missing a python binary" >&2
+    exit 1
+  fi
+}
+
+install_linux_requirements() {
+  echo "Installing Linux Python dependencies into ${VENV_DIR}..."
+  if [[ ! -f "${REQUIREMENTS_FILE}" ]]; then
+    echo "requirements.txt not found at ${REQUIREMENTS_FILE}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${CONSTRAINTS_FILE}" ]]; then
+    echo "Constraint file not found at ${CONSTRAINTS_FILE}" >&2
+    exit 1
+  fi
+  run_step "Upgrading pip in Linux virtual environment" "${LINUX_PYTHON}" -m pip install --upgrade pip setuptools wheel
+  run_step "Installing project requirements under MT5 constraints" "${LINUX_PYTHON}" -m pip install --requirement "${REQUIREMENTS_FILE}" --constraint "${CONSTRAINTS_FILE}"
+}
+
+install_programmatic_bridge_helpers() {
+  echo "Configuring MT5 programmatic bridge helpers..."
+  local python_unix_path terminal_unix_path bridge_host bridge_port server_dir python_winpath terminal_winpath server_dir_winpath
+  python_unix_path=$(to_unix_path_from_windows "${PY_PREFIX}" "${PYTHON_WIN_PATH}")
+  terminal_unix_path="${PY_PREFIX}/${MT5_INSTALL_SUBPATH}/terminal64.exe"
+  bridge_host="${MT5LINUX_HOST:-127.0.0.1}"
+  bridge_port="${MT5LINUX_PORT:-18812}"
+  server_dir="${PY_PREFIX}/drive_c/mt5linux-server"
+
+  if [[ ! -f "${python_unix_path}" ]]; then
+    echo "Unable to locate Windows python.exe at ${python_unix_path}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${terminal_unix_path}" ]]; then
+    echo "Unable to locate terminal64.exe at ${terminal_unix_path}" >&2
+    exit 1
+  fi
+
+  python_winpath=$(to_windows_path "${PY_PREFIX}" "${python_unix_path}")
+  terminal_winpath=$(to_windows_path "${PY_PREFIX}" "${terminal_unix_path}")
+  server_dir_winpath=$(to_windows_path "${PY_PREFIX}" "${server_dir}")
+
+  run_step "Installing programmatic bridge artifacts" \
+    env PATH="${VENV_DIR}/bin:${PATH}" \
+    "${SCRIPT_DIR}/install_programmatic_bridge.sh" \
+    --py-wine-prefix "${PY_PREFIX}" \
+    --mt5-wine-prefix "${PY_PREFIX}" \
+    --win-python "${python_unix_path}" \
+    --terminal "${terminal_unix_path}" \
+    --host "${bridge_host}" \
+    --port "${bridge_port}" \
+    --server-dir "${server_dir}"
+
+  run_step "Populating MT5 bridge environment" \
+    env PATH="${VENV_DIR}/bin:${PATH}" \
+    ENV_FILE="${ENV_FILE}" \
+    PY_WINE_PREFIX="${PY_PREFIX}" \
+    MT5_WINE_PREFIX="${PY_PREFIX}" \
+    WIN_PYTHON="${python_unix_path}" \
+    MT5_TERMINAL="${terminal_unix_path}" \
+    MT5LINUX_HOST="${bridge_host}" \
+    MT5LINUX_PORT="${bridge_port}" \
+    MT5LINUX_SERVER_DIR="${server_dir}" \
+    "${SCRIPT_DIR}/populate_mt5_bridge_env.sh"
+
+  run_step "Writing MT5 environment configuration" \
+    env PATH="${VENV_DIR}/bin:${PATH}" \
+    "${SCRIPT_DIR}/write_mt5_env.sh" \
+    --env-file "${ENV_FILE}" \
+    --win-python "${python_winpath}" \
+    --wine-prefix "${PY_PREFIX}" \
+    --terminal "${terminal_winpath}" \
+    --host "${bridge_host}" \
+    --port "${bridge_port}" \
+    --server-dir "${server_dir_winpath}"
+}
+
+verify_linux_environment() {
+  echo "Running Linux environment diagnostics..."
+  run_step "Executing utils.environment smoke test" \
+    env PATH="${VENV_DIR}/bin:${PATH}" \
+    "${LINUX_PYTHON}" -m utils.environment
+}
+
 main() {
   for arg in "$@"; do
     case "${arg}" in
@@ -342,6 +480,10 @@ main() {
   install_windows_python
   install_pip_packages
   apply_winetricks
+  ensure_linux_virtualenv
+  install_linux_requirements
+  install_programmatic_bridge_helpers
+  verify_linux_environment
   deploy_bridge_files
   compile_ea
   compile_auto_attach
