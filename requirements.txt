@@ -3,9 +3,9 @@ pandas
 pandera
 pyarrow
 scikit-learn
-numpy
+numpy>=2.1
 MetaTrader5; platform_system == "Windows"
-pymt5linux; platform_system != "Windows"
+pymt5linux; platform_system != "Windows" and python_version >= "3.13"
 joblib
 pyyaml
 psutil
