@@ -47,16 +47,16 @@ The solution is split into two components:
 
 ### Python runtime compatibility
 
-The toolkit targets CPython 3.13 and newer. Optional integrations such as
+The toolkit targets CPython 3.10 and newer. Optional integrations such as
 LightGBM still degrade gracefully: when wheels are not available the training
 pipeline switches to a scikit-learn gradient boosting fallback and records the
 missing modules inside the checkpoint metadata for later recovery. Components
 that previously relied on `uvloop`, Ray or torch-geometric now ship with
 pure-Python fallbacks so the project remains fully operational even when recent
-wheels are unavailable. With Python 3.13 now the baseline runtime, the setup
+wheels are unavailable. With Python 3.10 now the baseline runtime, the setup
 tooling reinstalls the accelerated `uvloop` integration automatically, and it
 will restore Ray and torch-geometric as soon as their Python 3.13 wheels ship;
-until then the environment diagnostics will highlight remediation steps whenever
+until then the environment diagnostics highlight remediation steps whenever
 these packages are missing.
 
 Run `python -m utils.environment --json` to confirm both interpreter and
@@ -73,7 +73,7 @@ Windows-only wheel is no longer reported as missing.
   interpreter, ensure `pip` is available and upgrade dependencies. The script
   now verifies that Ray, torch-geometric and `uvloop` are installed when the
   interpreter supports their binary wheels.
-* Windows/macOS: install Python 3.13 (or another supported version) from
+* Windows/macOS: install Python 3.10 (or another supported version) from
   python.org, ensure it appears first on your `PATH`, then create a virtual
   environment (`python -m venv .venv`)
   before installing requirements.
@@ -89,7 +89,7 @@ the next section. It performs the following actions:
 2. Installs Wine (32/64-bit), winetricks, cabextract, Git and the base Python
    tooling required by the scripts.
 3. Creates a single Wine prefix that houses both the MetaTrader 5 terminal and
-   the Windows build of Python 3.13.x (configurable via `MT5_PYTHON_SERIES`),
+   the Windows build of Python 3.10.x (configurable via `MT5_PYTHON_SERIES`),
    including the official `MetaTrader5` wheel and a `numpy<2.4` pin for
    stability.
 4. Clones this repository via SSH into `~/MT5`, bootstraps a local virtual
@@ -155,18 +155,18 @@ session unless stated otherwise.
   ```
 
    Before continuing, decide which Python series you want the automation to
-   target. The scripts default to Python 3.13.x; set `MT5_PYTHON_SERIES=3.11`
+   target. The scripts default to Python 3.10.x; set `MT5_PYTHON_SERIES=3.11`
    (and optionally `MT5_PYTHON_PATCH=3.11.9`) if you must run the 3.11 toolchain
    instead. The helper variables below make the remaining commands copy/paste
    friendly:
 
    ```bash
-   PY_SERIES=${MT5_PYTHON_SERIES:-3.13}
-   if [[ "$PY_SERIES" == "3.11" ]]; then
-     PY_PATCH=${MT5_PYTHON_PATCH:-3.11.9}
-   else
-     PY_PATCH=${MT5_PYTHON_PATCH:-3.13.1}
-   fi
+   PY_SERIES=${MT5_PYTHON_SERIES:-3.10}
+   case "$PY_SERIES" in
+     3.10) PY_PATCH=${MT5_PYTHON_PATCH:-3.10.16} ;;
+     3.11) PY_PATCH=${MT5_PYTHON_PATCH:-3.11.9} ;;
+     *) PY_PATCH=${MT5_PYTHON_PATCH:-${PY_SERIES}.0} ;;
+   esac
    PY_TAG=${PY_SERIES/./}
    export PY_SERIES PY_PATCH PY_TAG
    ```
@@ -268,13 +268,17 @@ session unless stated otherwise.
    `MetaTrader5` module loads, calls the Windows interpreter recorded in
    `LOGIN_INSTRUCTIONS_WINE.txt` and confirms access to the authenticated
    terminal. The bridge loader automatically seeds
-   `PYMT5LINUX_PYTHON`/`PYMT5LINUX_WINEPREFIX` from that cheat sheet, so the
-   `pymt5linux` helper can locate the Windows interpreter. The installer
-   defaults `PYMT5LINUX_SOURCE` to the repository root so the Linux virtualenv
-   installs the bundled helper automatically. If your package mirror hosts the
-   helper under a different URL, override the default by exporting
-   `PYMT5LINUX_SOURCE` before running `scripts/setup_ubuntu.sh` so both the
-   Linux and Wine environments install the correct wheel.
+   `PYMT5LINUX_PYTHON`/`PYMT5LINUX_WINEPREFIX` from that cheat sheet so the
+   `pymt5linux` helper (distributed via the `mt5linux` package) can locate the
+   Windows interpreter. The installer defaults `MT5LINUX_PACKAGE` (and the
+   legacy `PYMT5LINUX_SOURCE`) to the repository root so the Linux virtualenv
+   installs the bundled helper automatically. On Python 3.10 it pins
+   `mt5linux==0.1.7`, switching to `mt5linux==0.1.9` when `MT5_PYTHON_SERIES`
+   is set to 3.11. If your package mirror hosts the helper under a different
+   URL, override the default by exporting `MT5LINUX_PACKAGE` or
+   `PYMT5LINUX_SOURCE` before running
+   `scripts/setup_ubuntu.sh` so both the Linux and Wine environments install the
+   correct wheel.
 
 9. **Daily routine once the environment is provisioned:**
 
@@ -290,7 +294,7 @@ session unless stated otherwise.
 The helper script `scripts/setup_ubuntu.sh` automates the heavy lifting above:
 it removes the unsupported deadsnakes PPA on Ubuntu 25.04, enables `i386`
 multi-arch support, installs Wine 32/64, ensures `winetricks` runtime
-components are applied to both prefixes, provisions Windows Python 3.13.x by
+components are applied to both prefixes, provisions Windows Python 3.10.x by
 default (respecting `MT5_PYTHON_SERIES`), installs `MetaTrader5`, downloads the
 MT5 terminal installer and writes a
 `LOGIN_INSTRUCTIONS_WINE.txt` cheat sheet summarising the detected paths.
@@ -540,26 +544,26 @@ use Wine, making it clear that the requirement is “skipped”/“not applicabl
 instead of “failed”.
 
 To keep your main installation on CPython 3.11 while running the Wine bridge in
-its own 3.13 virtual environment:
+its own 3.10 virtual environment:
 
 1. Create the bridge environment and install the Wine connector there:
 
    ```bash
-   python3.13 -m venv ~/.venv/mt5-bridge
+   python3.10 -m venv ~/.venv/mt5-bridge
    source ~/.venv/mt5-bridge/bin/activate
    pip install --upgrade pip
-   pip install pymt5linux
+   pip install 'mt5linux==0.1.7'
    ```
 
 2. Provide a lightweight client module (for example,
-   `bridge_clients.pymt5_gateway`) that talks to the 3.13 environment via
+   `bridge_clients.pymt5_gateway`) that talks to the 3.10 environment via
    subprocess, IPC or gRPC. The module should expose a function such as
    `load()` returning the bridge-backed `MetaTrader5` proxy.
 
 3. In your primary 3.11 environment export
    `MT5_BRIDGE_BACKEND=bridge_clients.pymt5_gateway:load`. The loader will invoke
    the custom client instead of importing `pymt5linux` directly, letting you
-   keep system packages on 3.11 while the bridge runtime runs inside the 3.13
+   keep system packages on 3.11 while the bridge runtime runs inside the 3.10
    virtual environment.
 
 ### CPU Feature Detection and Acceleration
@@ -1131,7 +1135,7 @@ python scripts/train_tsdiffusion.py  # Diffusion model (TimeGrad-style)
 The GAN trainer uses the in-repo PyTorch implementation of TimeGAN found under
 ``synthetic/gan.py``. This lightweight model mirrors the bits of the
 ``ydata-synthetic`` API that the project relied on while remaining fully
-compatible with modern Python runtimes (3.13+). Scaling utilities were rewritten
+compatible with modern Python runtimes (3.10+). Scaling utilities were rewritten
 in NumPy to preserve backwards compatibility with older configuration files.
 
 Enable `use_data_augmentation: true` to include the GAN samples or `use_diffusion_aug: true` to
@@ -1187,7 +1191,7 @@ to prepare a clean Windows PC or VPS.
       git config --global user.email "<you@example.com>"
       ```
 
-   4. Download a supported Python release (3.13 recommended) from
+   4. Download a supported Python release (3.10 recommended) from
       [python.org](https://www.python.org/downloads/). During installation tick the
       **Add Python to PATH** checkbox and click **Install Now**.
 4. **Clone this repository** –

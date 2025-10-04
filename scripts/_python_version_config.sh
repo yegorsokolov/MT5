@@ -1,25 +1,27 @@
 # shellcheck shell=bash
 # Shared defaults for the Python interpreter versions used across onboarding scripts.
 #
-# MT5_PYTHON_SERIES controls the major.minor series (e.g. 3.13 or 3.11).
+# MT5_PYTHON_SERIES controls the major.minor series (e.g. 3.10 or 3.11).
 # MT5_PYTHON_PATCH may be set to pin an exact patch release. When unset we
 # automatically choose a stable patch for the configured series.
 #
 # Scripts consuming these defaults may rely on the following variables:
-#   MT5_PYTHON_SERIES        -> "3.13"
-#   MT5_PYTHON_PATCH         -> "3.13.1" (or series-specific default)
-#   MT5_PYTHON_TAG           -> "313" (digits only)
-#   MT5_PYTHON_PREFIX        -> default Wine prefix ("$HOME/.wine-py313")
-#   MT5_PYTHON_WIN_DIR       -> Windows installation target ("C:\\Python313")
+#   MT5_PYTHON_SERIES        -> "3.10"
+#   MT5_PYTHON_PATCH         -> "3.10.16" (or series-specific default)
+#   MT5_PYTHON_TAG           -> "310" (digits only)
+#   MT5_PYTHON_PREFIX        -> default Wine prefix ("$HOME/.wine-py310")
+#   MT5_PYTHON_WIN_DIR       -> Windows installation target ("C:\\Python310")
 #   MT5_PYTHON_INSTALLER     -> Windows installer filename
 #   MT5_PYTHON_EMBED_ZIP     -> Optional embeddable ZIP filename
 #   MT5_PYTHON_DOWNLOAD_ROOT -> Base URL for python.org artifacts
 
-: "${MT5_PYTHON_SERIES:=3.13}"
+: "${MT5_PYTHON_SERIES:=3.10}"
 
 if [[ -z "${MT5_PYTHON_PATCH:-}" ]]; then
   case "$MT5_PYTHON_SERIES" in
+    3.10) MT5_PYTHON_PATCH="3.10.16" ;;
     3.11) MT5_PYTHON_PATCH="3.11.9" ;;
+    3.12) MT5_PYTHON_PATCH="3.12.6" ;;
     3.13) MT5_PYTHON_PATCH="3.13.1" ;;
     *) MT5_PYTHON_PATCH="${MT5_PYTHON_SERIES}.0" ;;
   esac

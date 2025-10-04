@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, UTC
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC  # type: ignore[attr-defined]
+except ImportError:  # Python < 3.11
+    UTC = timezone.utc  # type: ignore[misc]
 from typing import List, Dict
 
 from bs4 import BeautifulSoup
