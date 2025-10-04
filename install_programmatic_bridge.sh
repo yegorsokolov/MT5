@@ -21,6 +21,14 @@ MT5_TERMINAL="${MT5_TERMINAL:-}"
 BRIDGE_TIMEOUT_MS="${MT5_BRIDGE_TIMEOUT_MS:-${DEFAULT_TIMEOUT_MS}}"
 PIP_TIMEOUT="${PIP_TIMEOUT:-${DEFAULT_PIP_TIMEOUT}}"
 
+if [[ -z "${MT5LINUX_PACKAGE:-}" ]]; then
+  case "${MT5_PYTHON_SERIES}" in
+    3.10) MT5LINUX_PACKAGE="mt5linux==0.1.7" ;;
+    3.11) MT5LINUX_PACKAGE="mt5linux==0.1.9" ;;
+    *) MT5LINUX_PACKAGE="mt5linux" ;;
+  esac
+fi
+
 usage() {
   cat <<'USAGE'
 Usage: install_programmatic_bridge.sh [options]
@@ -167,7 +175,7 @@ install_windows_packages() {
     die "Failed to upgrade pip in Windows environment"
   fi
 
-  local packages=(MetaTrader5 pymt5linux)
+  local packages=(MetaTrader5 "${MT5LINUX_PACKAGE}")
   log "Installing required packages: ${packages[*]}"
   if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --only-binary :all: "${packages[@]}" 1>&2; then
     log "Binary wheel installation failed; retrying without --only-binary"

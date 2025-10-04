@@ -25,7 +25,12 @@ returns the LLM response.  When omitted the function will attempt to use the
 """
 
 from pathlib import Path
-from datetime import datetime, UTC
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC  # type: ignore[attr-defined]
+except ImportError:  # Python < 3.11
+    UTC = timezone.utc  # type: ignore[misc]
 from typing import Iterable, Callable, Dict, List
 import json
 import os
