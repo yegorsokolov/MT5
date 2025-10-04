@@ -1,4 +1,5 @@
-mt5linux==0.1.9
+mt5linux==0.1.7; platform_system != "Windows" and python_version >= "3.10" and python_version < "3.11"
+mt5linux==0.1.9; platform_system != "Windows" and python_version >= "3.11" and python_version < "3.12"
 bleach==4.1.0
 certifi==2021.10.8
 cffi==1.15.0
