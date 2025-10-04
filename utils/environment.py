@@ -82,9 +82,9 @@ REC_RAM_GB = 8
 MIN_CORES = 1
 REC_CORES = 4
 
-MIN_PYTHON = (3, 11)
-MAX_PYTHON = (3, 14)
-RECOMMENDED_PYTHON = "3.13"
+MIN_PYTHON = (3, 10)
+MAX_PYTHON = (3, 12)
+RECOMMENDED_PYTHON = "3.10"
 
 _SPECIFIER_SPLIT_RE = re.compile(r"\s*(?:==|!=|<=|>=|~=|===|<|>|=)")
 
@@ -927,14 +927,19 @@ def _check_python_runtime() -> dict[str, Any]:
     )
 
     if version < MIN_PYTHON or version >= MAX_PYTHON:
-        supported = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
+        supported_min = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
+        if MIN_PYTHON[0] == MAX_PYTHON[0]:
+            supported_max = f"{MAX_PYTHON[0]}.{MAX_PYTHON[1] - 1}"
+        else:
+            supported_max = f"{MAX_PYTHON[0] - 1}.{MAX_PYTHON[1]}"
+        supported_range = f"{supported_min}.x through {supported_max}.x"
         return {
             "name": "python-runtime",
             "status": "failed",
             "detail": (
                 "Python "
                 f"{runtime} is not supported. The project requires Python "
-                f"{supported}.x or newer, with {RECOMMENDED_PYTHON}.x recommended for binary dependencies."
+                f"{supported_range}, with {RECOMMENDED_PYTHON}.x recommended for binary dependencies."
             ),
             "followup": instruction,
         }

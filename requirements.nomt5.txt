@@ -4,7 +4,8 @@ pandera
 pyarrow
 scikit-learn
 numpy>=2.1
-pymt5linux; platform_system != "Windows" and python_version >= "3.11" and python_version < "3.12"
+mt5linux==0.1.7; platform_system != "Windows" and python_version >= "3.10" and python_version < "3.11"
+mt5linux==0.1.9; platform_system != "Windows" and python_version >= "3.11" and python_version < "3.12"
 joblib
 pyyaml
 psutil
@@ -51,7 +52,8 @@ opentelemetry-instrumentation-logging
 
 # Heavy optional dependencies
 # Ray and torch-geometric currently lack official Python 3.13 wheels; the
-# distributed and graph trainers gracefully fall back when they are absent.
+# distributed and graph trainers gracefully fall back when they are absent,
+# so we remain on Python 3.10 by default until upstream support lands.
 flaml>=2.3.6
 ray==2.48.0; python_version < "3.13"
 torch-geometric==2.6.1; python_version < "3.13"

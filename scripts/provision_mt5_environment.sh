@@ -27,6 +27,13 @@ WIN_PY_VERSION="${WIN_PY_VERSION:-$MT5_PYTHON_PATCH}"
 WIN_PY_INSTALLER="${WIN_PY_INSTALLER:-$MT5_PYTHON_INSTALLER}"
 WIN_PY_URL="${WIN_PY_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${WIN_PY_INSTALLER}}"
 
+case "${MT5_PYTHON_SERIES}" in
+    3.10) MT5LINUX_DEFAULT="mt5linux==0.1.7" ;;
+    3.11) MT5LINUX_DEFAULT="mt5linux==0.1.9" ;;
+    *) MT5LINUX_DEFAULT="mt5linux" ;;
+esac
+MT5LINUX_PACKAGE="${PYMT5LINUX_SOURCE:-${MT5LINUX_DEFAULT}}"
+
 MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 MT5_INSTALLER_PATH="${CACHE_DIR}/mt5setup.exe"
 
@@ -311,15 +318,10 @@ install_mt5_windows_packages() {
     fi
 
     log "Installing MetaTrader5 and bridge helpers inside the Wine Python environment"
-    local packages=("MetaTrader5")
-    if [[ -n "${PYMT5LINUX_SOURCE:-}" ]]; then
-        packages+=("${PYMT5LINUX_SOURCE}")
-    else
-        packages+=("pymt5linux")
-    fi
+    local packages=("MetaTrader5" "${MT5LINUX_PACKAGE}")
 
     if ! WINEPREFIX="$WIN_PY_WINE_PREFIX" wine "$WIN_PY_WINDOWS_PATH" -m pip install --upgrade "${packages[@]}"; then
-        warn "Failed to install MetaTrader5/pymt5linux inside Wine Python."
+        warn "Failed to install MetaTrader5/mt5linux inside Wine Python."
     fi
 }
 
@@ -329,7 +331,7 @@ ensure_linux_python() {
         return
     fi
 
-    for candidate in python3 python3.13 python3.12 python3.11 python3.10; do
+    for candidate in python3 python3.10 python3.11 python3.12; do
         if command_exists "$candidate"; then
             LINUX_PYTHON_BIN="$(command -v "$candidate")"
             return
