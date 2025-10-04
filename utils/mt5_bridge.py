@@ -26,6 +26,10 @@ _DOTENV_PATH = PROJECT_ROOT / ".env"
 _MT5_MODULE: Optional[ModuleType] = None
 _BRIDGE_INFO: Dict[str, Any] = {}
 
+_DEFAULT_BACKEND = "auto"
+_WINE_BACKENDS = {"wine", "pymt5linux"}
+_NATIVE_BACKENDS = {"native"}
+
 
 class MetaTraderImportError(RuntimeError):
     """Raised when the MetaTrader5 module cannot be imported."""
@@ -88,6 +92,71 @@ def _lookup_bridge_value(*keys: str) -> Optional[str]:
             return value
 
     return None
+
+
+def _sanitize_env_key(value: str) -> str:
+    sanitized: list[str] = []
+    for char in value:
+        if char.isalnum():
+            sanitized.append(char.upper())
+        else:
+            sanitized.append("_")
+    return "".join(sanitized)
+
+
+def get_configured_backend(default: str = _DEFAULT_BACKEND) -> str:
+    """Return the configured bridge backend preference."""
+
+    value = _lookup_bridge_value("MT5_BRIDGE_BACKEND")
+    if value is None:
+        return default
+    cleaned = value.strip()
+    return cleaned or default
+
+
+def _normalize_backend_choice(value: Optional[str]) -> Tuple[str, str]:
+    if value is None:
+        return _DEFAULT_BACKEND, _DEFAULT_BACKEND
+    cleaned = value.strip() or _DEFAULT_BACKEND
+    normalized = cleaned.lower()
+    if normalized in {"", "default"}:
+        return _DEFAULT_BACKEND, _DEFAULT_BACKEND
+    if normalized in _WINE_BACKENDS:
+        return cleaned, "wine"
+    if normalized in _NATIVE_BACKENDS:
+        return cleaned, "native"
+    if normalized == _DEFAULT_BACKEND:
+        return cleaned, _DEFAULT_BACKEND
+    return cleaned, normalized
+
+
+def _split_module_spec(spec: str) -> Tuple[str, Optional[str]]:
+    module_name, _, attr = spec.partition(":")
+    module_name = module_name.strip()
+    attr = attr.strip() or None
+    return module_name, attr
+
+
+def _resolve_backend_module_spec(backend_raw: str, backend_key: str) -> Tuple[str, Optional[str]]:
+    override_keys: list[str] = []
+    if backend_raw:
+        override_keys.append(f"MT5_BRIDGE_MODULE_{_sanitize_env_key(backend_raw)}")
+    if backend_key and backend_key != backend_raw:
+        override_keys.append(f"MT5_BRIDGE_MODULE_{_sanitize_env_key(backend_key)}")
+    override_keys.append("MT5_BRIDGE_MODULE")
+
+    spec = _lookup_bridge_value(*override_keys)
+    if spec:
+        return _split_module_spec(spec)
+
+    alias_map = {"wine": "pymt5linux", "pymt5linux": "pymt5linux"}
+    module_name = alias_map.get(backend_key.lower()) if backend_key else None
+    if not module_name and backend_raw:
+        module_name = alias_map.get(backend_raw.lower())
+    if module_name:
+        return module_name, None
+
+    return _split_module_spec(backend_raw)
 
 
 def _discover_windows_python_path() -> Optional[str]:
@@ -159,11 +228,47 @@ def _attempt_native_import() -> ModuleType:
     return module
 
 
-def _attempt_bridge_import() -> Tuple[ModuleType, Dict[str, Any]]:
+def _extract_module_from_candidate(
+    candidate: Any,
+    *,
+    name: str,
+    errors: list[str],
+) -> Optional[ModuleType]:
+    if candidate is None:
+        return None
+    if isinstance(candidate, ModuleType):
+        return candidate
+    if callable(candidate):
+        try:
+            result = candidate()
+        except Exception as exc:  # pragma: no cover - depends on backend implementation
+            errors.append(f"{name}() call failed: {exc}")
+            return None
+        if isinstance(result, ModuleType):
+            return result
+        errors.append(f"{name}() did not return a module")
+    return None
+
+
+def _attempt_bridge_import(
+    module_name: str,
+    *,
+    backend: str,
+    configured_backend: str,
+    attr: Optional[str] = None,
+) -> Tuple[ModuleType, Dict[str, Any]]:
     errors: list[str] = []
-    bridge = importlib.import_module("pymt5linux")
+    try:
+        bridge = importlib.import_module(module_name)
+    except Exception as exc:  # pragma: no cover - relies on runtime availability
+        raise MetaTraderImportError(
+            f"Unable to import bridge backend '{configured_backend}' ({module_name}): {exc}"
+        ) from exc
+
     info: Dict[str, Any] = {
-        "backend": "pymt5linux",
+        "backend": backend,
+        "configured_backend": configured_backend,
+        "bridge_package": module_name,
         "bridge_module": getattr(bridge, "__file__", ""),
     }
 
@@ -172,24 +277,26 @@ def _attempt_bridge_import() -> Tuple[ModuleType, Dict[str, Any]]:
         try:
             initializer()
             info["initialized"] = True
-        except Exception as exc:  # pragma: no cover - depends on Wine runtime
+        except Exception as exc:  # pragma: no cover - depends on runtime
             info["initialize_error"] = str(exc)
             errors.append(f"initialize() failed: {exc}")
 
-    candidate = getattr(bridge, "MetaTrader5", None)
     module: Optional[ModuleType] = None
-    if isinstance(candidate, ModuleType):
-        module = candidate
-    elif callable(candidate):
-        try:
-            result = candidate()
-        except Exception as exc:  # pragma: no cover - depends on bridge implementation
-            errors.append(f"MetaTrader5() call failed: {exc}")
-        else:
-            if isinstance(result, ModuleType):
-                module = result
-            else:
-                errors.append("MetaTrader5() did not return a module")
+    if attr:
+        candidate = getattr(bridge, attr, None)
+        module = _extract_module_from_candidate(candidate, name=attr, errors=errors)
+        if module is None:
+            errors.append(f"Attribute '{attr}' did not yield a MetaTrader5 module")
+    else:
+        for candidate_name in ("MetaTrader5", "load_mt5", "load", "get_mt5_module"):
+            module = _extract_module_from_candidate(
+                getattr(bridge, candidate_name, None),
+                name=candidate_name,
+                errors=errors,
+            )
+            if module is not None:
+                info["bridge_entry"] = candidate_name
+                break
 
     if module is None:
         try:
@@ -197,7 +304,7 @@ def _attempt_bridge_import() -> Tuple[ModuleType, Dict[str, Any]]:
         except Exception as exc:  # pragma: no cover - rely on aggregated message
             errors.append(str(exc))
             raise MetaTraderImportError(
-                "MetaTrader5 import via pymt5linux failed: " + "; ".join(errors)
+                "MetaTrader5 import via {0} failed: {1}".format(configured_backend, "; ".join(errors))
             ) from exc
 
     info["module_path"] = getattr(module, "__file__", "")
@@ -215,22 +322,51 @@ def load_mt5_module(*, force: bool = False, prefer_bridge: bool = False) -> Modu
 
     attempts: list[str] = []
     _seed_bridge_environment()
+    configured = get_configured_backend()
+    configured_raw, backend_key = _normalize_backend_choice(configured)
 
-    if not prefer_bridge:
+    attempt_native = backend_key == "native" or (backend_key == "auto" and not prefer_bridge)
+
+    if attempt_native:
         try:
             module = _attempt_native_import()
         except Exception as exc:
             attempts.append(f"native import failed: {exc}")
+            if backend_key == "native":
+                message = "; ".join(attempts)
+                raise MetaTraderImportError(
+                    "MetaTrader5 import via native backend failed" + (f": {message}" if message else "")
+                ) from exc
         else:
             _MT5_MODULE = module
             _BRIDGE_INFO = {
                 "backend": "native",
+                "configured_backend": configured_raw,
+                "requested_backend": configured_raw,
                 "module_path": getattr(module, "__file__", ""),
             }
             return module
 
+    if backend_key == "auto":
+        bridge_backend = "wine"
+        module_name, attr = _resolve_backend_module_spec("wine", "wine")
+        configured_descriptor = configured_raw if configured_raw != _DEFAULT_BACKEND else bridge_backend
+    elif backend_key == "wine":
+        bridge_backend = "wine"
+        module_name, attr = _resolve_backend_module_spec(configured_raw, "wine")
+        configured_descriptor = configured_raw
+    else:
+        bridge_backend = backend_key or configured_raw
+        module_name, attr = _resolve_backend_module_spec(configured_raw, backend_key)
+        configured_descriptor = configured_raw
+
     try:
-        module, info = _attempt_bridge_import()
+        module, info = _attempt_bridge_import(
+            module_name,
+            backend=bridge_backend,
+            configured_backend=configured_descriptor,
+            attr=attr,
+        )
     except Exception as exc:
         attempts.append(str(exc))
         message = "; ".join(attempts)
@@ -238,6 +374,7 @@ def load_mt5_module(*, force: bool = False, prefer_bridge: bool = False) -> Modu
             "Unable to import MetaTrader5 via any backend" + (f": {message}" if message else "")
         ) from exc
 
+    info.setdefault("requested_backend", configured_raw)
     _MT5_MODULE = module
     _BRIDGE_INFO = info
     logger.debug("MetaTrader5 module loaded via bridge: %s", info)
