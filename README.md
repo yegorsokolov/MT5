@@ -80,6 +80,23 @@ Windows-only wheel is no longer reported as missing.
 
 ## Automated Wine + MetaTrader 5 bootstrap
 
+### One-command Ubuntu setup
+
+Run the repository-level `ubuntu_setup.sh` to provision Wine, install the Windows
+Python runtime, build the Linux virtual environment and configure the MT5 bridge
+in a single pass:
+
+```bash
+chmod +x ubuntu_setup.sh
+./ubuntu_setup.sh
+```
+
+The helper logs progress to `/opt/mt5/setup.log`, refreshes the `.venv`
+environment with the MT5 constraint file, applies the programmatic bridge
+scripts (`install_programmatic_bridge.sh`, `populate_mt5_bridge_env.sh` and
+`write_mt5_env.sh`) and finishes with `python -m utils.environment` so you can
+immediately verify the installation succeeded.
+
 If you are starting from a blank Ubuntu host the `scripts/deploy_mt5.sh` helper
 fully automates the combined Wine, MetaTrader 5 and Python setup described in
 the next section. It performs the following actions:
