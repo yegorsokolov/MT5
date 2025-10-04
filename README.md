@@ -246,12 +246,14 @@ session unless stated otherwise.
    cd ~/MT5
    cp -n .env.template .env
    printf 'WINE_PYTHON="%s"\n' "$WIN_PY_WINPATH" >> .env
-   printf 'PYMT5LINUX_PYTHON="%s"\n' "$WIN_PY_WINPATH" >> .env
-   printf 'PYMT5LINUX_WINEPREFIX="%s"\n' "$HOME/.wine-mt5" >> .env
-   echo "WINEPREFIX=$HOME/.wine-mt5" >> .env
-   python scripts/detect_mt5_terminal.py
-   python scripts/setup_terminal.py --install-heartbeat
-   ```
+  printf 'PYMT5LINUX_PYTHON="%s"\n' "$WIN_PY_WINPATH" >> .env
+  printf 'PYMT5LINUX_WINEPREFIX="%s"\n' "$HOME/.wine-mt5" >> .env
+  echo "WINEPREFIX=$HOME/.wine-mt5" >> .env
+  printf 'MT5LINUX_HOST=127.0.0.1\n' >> .env
+  printf 'MT5LINUX_PORT=18812\n' >> .env
+  python scripts/detect_mt5_terminal.py
+  python scripts/setup_terminal.py --install-heartbeat
+  ```
 
    In the MT5 GUI run *Navigator → Scripts → MT5Bridge → ConnectionHeartbeat* to
    confirm the terminal is logged in. The Experts/Journal tabs should show a
@@ -264,21 +266,24 @@ session unless stated otherwise.
    python -m utils.environment
    ```
 
-   The check reports missing dependencies, validates that the Wine-based
-   `MetaTrader5` module loads, calls the Windows interpreter recorded in
-   `LOGIN_INSTRUCTIONS_WINE.txt` and confirms access to the authenticated
-   terminal. The bridge loader automatically seeds
-   `PYMT5LINUX_PYTHON`/`PYMT5LINUX_WINEPREFIX` from that cheat sheet so the
-   `pymt5linux` helper (distributed via the `mt5linux` package) can locate the
-   Windows interpreter. The installer defaults `MT5LINUX_PACKAGE` (and the
-   legacy `PYMT5LINUX_SOURCE`) to the repository root so the Linux virtualenv
-   installs the bundled helper automatically. On Python 3.10 it pins
-   `mt5linux==0.1.7`, switching to `mt5linux==0.1.9` when `MT5_PYTHON_SERIES`
-   is set to 3.11. If your package mirror hosts the helper under a different
-   URL, override the default by exporting `MT5LINUX_PACKAGE` or
-   `PYMT5LINUX_SOURCE` before running
-   `scripts/setup_ubuntu.sh` so both the Linux and Wine environments install the
-   correct wheel.
+   The check reports missing dependencies, validates that the `mt5linux`
+   RPyC server recorded in `.env` responds at `MT5LINUX_HOST:MT5LINUX_PORT`,
+   and imports the Windows `MetaTrader5` module through that bridge before
+   confirming the authenticated terminal is reachable. The provisioning
+   scripts install the Linux-side `mt5linux` package using the upstream PyPI
+   guidance and launch the server via
+
+   ```bash
+   WINEPREFIX="$WIN_PY_WINE_PREFIX" \
+     wine "$WIN_PY_WINPATH" -m mt5linux \
+     --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" \
+     --server "$WIN_PY_WINE_PREFIX/drive_c/mt5linux-server"
+   ```
+
+   before persisting the connection details into `.env`. Override the
+   `MT5LINUX_HOST`, `MT5LINUX_PORT` or `MT5LINUX_SERVER_DIR` values prior to
+   running `scripts/setup_ubuntu.sh` if you host the bridge on a different
+   interface or need to relocate the generated assets.
 
 9. **Daily routine once the environment is provisioned:**
 
@@ -506,13 +511,14 @@ remaining manual steps in the summary output.
    services launched via `python -m mt5` will reuse that connectivity.
 
 > The runtime imports `MetaTrader5` through `utils.mt5_bridge`, which prefers
-> a native Linux wheel and falls back to the Wine-hosted `pymt5linux`
-> integration. The bridge seeds `PYMT5LINUX_PYTHON` and
-> `PYMT5LINUX_WINEPREFIX` automatically from `LOGIN_INSTRUCTIONS_WINE.txt` so
-> no manual exports are required. `scripts/setup_ubuntu.sh` now defaults
-> `PYMT5LINUX_SOURCE` to the repository root during installation; export the
-> variable before running the helper only when you need to point pip at an
-> alternative Git repository or wheel URL.
+> a native Linux wheel and falls back to the Wine-hosted `mt5linux`
+> RPyC client. The bridge seeds `PYMT5LINUX_PYTHON`,
+> `PYMT5LINUX_WINEPREFIX`, `MT5LINUX_HOST` and `MT5LINUX_PORT` automatically
+> from `LOGIN_INSTRUCTIONS_WINE.txt` so no manual exports are required.
+> `scripts/setup_ubuntu.sh` defaults `MT5LINUX_PACKAGE` (and the legacy
+> `PYMT5LINUX_SOURCE`) to the repository root during installation; export
+> these variables before running the helper only when you need to point pip at
+> an alternative Git repository or wheel URL.
 
 > If you rely exclusively on the bundled MQL5 experts/scripts to bridge the
 > terminal (without the Windows `MetaTrader5`/`mt5` Python packages), set
@@ -526,9 +532,9 @@ remaining manual steps in the summary output.
 `MT5_BRIDGE_BACKEND`:
 
 * `auto` (default) – try the native Linux `MetaTrader5` wheel first and fall back
-  to the Wine bridge (`pymt5linux`) when the native import fails.
-* `wine`/`pymt5linux` – skip the native probe and immediately initialise the
-  Wine bridge.
+  to the Wine-backed `mt5linux` bridge when the native import fails.
+* `wine`/`mt5linux` – skip the native probe and immediately initialise the
+  mt5linux bridge client.
 * `native` – only attempt the native Linux wheel.
 * `<module>` or `<module>:<attribute>` – import a fully custom loader. The named
   attribute can expose either a ready-made `MetaTrader5` module or a callable
@@ -556,13 +562,14 @@ its own 3.10 virtual environment:
    ```
 
 2. Provide a lightweight client module (for example,
-   `bridge_clients.pymt5_gateway`) that talks to the 3.10 environment via
+   `bridge_clients.mt5_gateway`) that talks to the 3.10 environment via
    subprocess, IPC or gRPC. The module should expose a function such as
    `load()` returning the bridge-backed `MetaTrader5` proxy.
 
 3. In your primary 3.11 environment export
-   `MT5_BRIDGE_BACKEND=bridge_clients.pymt5_gateway:load`. The loader will invoke
-   the custom client instead of importing `pymt5linux` directly, letting you
+   `MT5_BRIDGE_BACKEND=bridge_clients.mt5_gateway:load`. The loader will invoke
+   the custom client instead of importing `utils.bridge_clients.mt5linux_client`
+   directly, letting you
    keep system packages on 3.11 while the bridge runtime runs inside the 3.10
    virtual environment.
 

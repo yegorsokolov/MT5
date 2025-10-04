@@ -27,8 +27,10 @@ _MT5_MODULE: Optional[ModuleType] = None
 _BRIDGE_INFO: Dict[str, Any] = {}
 
 _DEFAULT_BACKEND = "auto"
-_WINE_BACKENDS = {"wine", "pymt5linux"}
+_WINE_BACKENDS = {"wine", "pymt5linux", "mt5linux"}
 _NATIVE_BACKENDS = {"native"}
+_MT5LINUX_DEFAULT_HOST = "127.0.0.1"
+_MT5LINUX_DEFAULT_PORT = 18812
 
 
 class MetaTraderImportError(RuntimeError):
@@ -94,6 +96,22 @@ def _lookup_bridge_value(*keys: str) -> Optional[str]:
     return None
 
 
+def _lookup_bridge_value_with_source(*keys: str) -> tuple[Optional[str], Optional[str]]:
+    for key in keys:
+        if key in os.environ:
+            value = os.environ.get(key)
+            if value:
+                return _normalize(value), f"env:{key}"
+
+    dotenv = _load_dotenv()
+    for key in keys:
+        value = dotenv.get(key)
+        if value:
+            return value, f".env:{key}"
+
+    return None, None
+
+
 def _sanitize_env_key(value: str) -> str:
     sanitized: list[str] = []
     for char in value:
@@ -149,7 +167,11 @@ def _resolve_backend_module_spec(backend_raw: str, backend_key: str) -> Tuple[st
     if spec:
         return _split_module_spec(spec)
 
-    alias_map = {"wine": "pymt5linux", "pymt5linux": "pymt5linux"}
+    alias_map = {
+        "wine": "utils.bridge_clients.mt5linux_client",
+        "mt5linux": "utils.bridge_clients.mt5linux_client",
+        "pymt5linux": "utils.bridge_clients.mt5linux_client",
+    }
     module_name = alias_map.get(backend_key.lower()) if backend_key else None
     if not module_name and backend_raw:
         module_name = alias_map.get(backend_raw.lower())
@@ -157,6 +179,50 @@ def _resolve_backend_module_spec(backend_raw: str, backend_key: str) -> Tuple[st
         return module_name, None
 
     return _split_module_spec(backend_raw)
+
+
+def get_mt5linux_connection_settings() -> Dict[str, Any]:
+    """Return mt5linux connection settings derived from environment hints."""
+
+    host_value, host_source = _lookup_bridge_value_with_source(
+        "MT5LINUX_HOST",
+        "PYMT5LINUX_HOST",
+        "MT5_BRIDGE_HOST",
+    )
+    port_value, port_source = _lookup_bridge_value_with_source(
+        "MT5LINUX_PORT",
+        "PYMT5LINUX_PORT",
+        "MT5_BRIDGE_PORT",
+    )
+    timeout_value, timeout_source = _lookup_bridge_value_with_source(
+        "MT5LINUX_TIMEOUT",
+        "MT5LINUX_TIMEOUT_SECONDS",
+    )
+
+    settings: Dict[str, Any] = {
+        "host": host_value or _MT5LINUX_DEFAULT_HOST,
+        "host_source": host_source or "default",
+        "port_source": port_source or "default",
+    }
+
+    if port_value is None:
+        settings["port"] = _MT5LINUX_DEFAULT_PORT
+    else:
+        settings["port_raw"] = port_value
+        try:
+            settings["port"] = int(port_value)
+        except ValueError:
+            settings["port_error"] = f"Invalid mt5linux port value: {port_value}"
+
+    if timeout_value:
+        settings["timeout_source"] = timeout_source or "default"
+        settings["timeout_raw"] = timeout_value
+        try:
+            settings["timeout"] = float(timeout_value)
+        except ValueError:
+            settings["timeout_error"] = f"Invalid mt5linux timeout value: {timeout_value}"
+
+    return settings
 
 
 def _discover_windows_python_path() -> Optional[str]:
@@ -281,6 +347,16 @@ def _attempt_bridge_import(
             info["initialize_error"] = str(exc)
             errors.append(f"initialize() failed: {exc}")
 
+    bridge_info_getter = getattr(bridge, "bridge_info", None)
+    if callable(bridge_info_getter):
+        try:
+            bridge_details = bridge_info_getter()
+        except Exception as exc:  # pragma: no cover - depends on backend
+            errors.append(f"bridge_info() failed: {exc}")
+        else:
+            if isinstance(bridge_details, dict):
+                info.update({k: v for k, v in bridge_details.items() if v is not None})
+
     module: Optional[ModuleType] = None
     if attr:
         candidate = getattr(bridge, attr, None)
@@ -373,6 +449,9 @@ def load_mt5_module(*, force: bool = False, prefer_bridge: bool = False) -> Modu
         raise MetaTraderImportError(
             "Unable to import MetaTrader5 via any backend" + (f": {message}" if message else "")
         ) from exc
+
+    if bridge_backend == "wine":
+        info.setdefault("mt5linux", get_mt5linux_connection_settings())
 
     info.setdefault("requested_backend", configured_raw)
     _MT5_MODULE = module
