@@ -78,7 +78,7 @@ REC_RAM_GB = 8
 MIN_CORES = 1
 REC_CORES = 4
 
-MIN_PYTHON = (3, 13)
+MIN_PYTHON = (3, 11)
 MAX_PYTHON = (3, 14)
 RECOMMENDED_PYTHON = "3.13"
 
@@ -890,7 +890,9 @@ def _check_python_runtime() -> dict[str, Any]:
     version = sys.version_info
     runtime = f"{version.major}.{version.minor}.{version.micro}"
     instruction = (
-        f"Install Python {RECOMMENDED_PYTHON}.x or another supported interpreter and rerun scripts/setup_ubuntu.sh before continuing."
+        "Install a supported Python interpreter and rerun scripts/setup_ubuntu.sh. "
+        f"Set MT5_PYTHON_SERIES={RECOMMENDED_PYTHON} (and optionally MT5_PYTHON_PATCH) before rerunning the automation to "
+        "align with the default toolchain."
     )
 
     if version < MIN_PYTHON or version >= MAX_PYTHON:
@@ -910,14 +912,21 @@ def _check_python_runtime() -> dict[str, Any]:
         f"Python runtime detected: {runtime}. Recommended interpreter: {RECOMMENDED_PYTHON}.x."
     )
 
+    followup = None
+
     if version.minor != int(RECOMMENDED_PYTHON.split(".")[1]):
-        detail += " Some third-party wheels may be missing; pin to the recommended version if package installs fail."
+        detail += (
+            " Some third-party wheels may be missing; pin to the recommended version if package installs fail."
+        )
+        followup = (
+            f"Set MT5_PYTHON_SERIES={RECOMMENDED_PYTHON} before running scripts/setup_ubuntu.sh to maximise wheel availability."
+        )
 
     return {
         "name": "python-runtime",
         "status": "passed",
         "detail": detail,
-        "followup": None,
+        "followup": followup,
     }
 
 

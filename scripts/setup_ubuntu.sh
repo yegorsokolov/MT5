@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup_ubuntu.sh — MT5 + Wine + Windows Python 3.11 bootstrapper
+# setup_ubuntu.sh — MT5 + Wine + Windows Python bootstrapper
 # Logs all activity into ~/Downloads/mm.dd.yyyy.log before doing anything else.
 
 set -euo pipefail
@@ -33,13 +33,17 @@ fi
 #####################################
 # Paths, env, and defaults
 #####################################
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_python_version_config.sh
+source "${SCRIPT_DIR}/_python_version_config.sh"
+
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SETUP_LOG="${PROJECT_ROOT}/setup.log"
 
 PROJECT_USER="${SUDO_USER:-$(whoami)}"
 PROJECT_HOME="$(eval echo "~${PROJECT_USER}")"
 
-WINEPREFIX_PY="${PROJECT_HOME}/.wine-py311"
+WINEPREFIX_PY="${WINEPREFIX_PY:-${PROJECT_HOME}/${MT5_PYTHON_PREFIX_NAME}}"
 WINEPREFIX_MT5="${PROJECT_HOME}/.wine-mt5"
 WINEARCH="win64"
 
@@ -48,16 +52,16 @@ DOWNLOAD_MAX_TIME="${DOWNLOAD_MAX_TIME:-600}"
 PIP_INSTALL_TIMEOUT="${PIP_INSTALL_TIMEOUT:-180}"
 
 HEADLESS_MODE="${HEADLESS_MODE:-auto}"   # auto|manual
-PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-3.11.9}"
+PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-$MT5_PYTHON_PATCH}"
 PYTHON_WIN_MAJOR="${PYTHON_WIN_VERSION%%.*}"
 PYTHON_WIN_REMAINDER="${PYTHON_WIN_VERSION#${PYTHON_WIN_MAJOR}.}"
 PYTHON_WIN_MINOR="${PYTHON_WIN_REMAINDER%%.*}"
 PYTHON_WIN_TAG="${PYTHON_WIN_MAJOR}${PYTHON_WIN_MINOR}"
-PYTHON_WIN_TARGET_DIR="C:\\Python${PYTHON_WIN_TAG}"
-PYTHON_WIN_EXE="python-${PYTHON_WIN_VERSION}-amd64.exe"
-PYTHON_WIN_EMBED_ZIP="python-${PYTHON_WIN_VERSION}-embed-amd64.zip"
-PYTHON_WIN_URL="https://www.python.org/ftp/python/${PYTHON_WIN_VERSION}/${PYTHON_WIN_EXE}"
-PYTHON_WIN_EMBED_URL="https://www.python.org/ftp/python/${PYTHON_WIN_VERSION}/${PYTHON_WIN_EMBED_ZIP}"
+PYTHON_WIN_TARGET_DIR="${PYTHON_WIN_TARGET_DIR:-$MT5_PYTHON_WIN_DIR}"
+PYTHON_WIN_EXE="${PYTHON_WIN_EXE:-$MT5_PYTHON_INSTALLER}"
+PYTHON_WIN_EMBED_ZIP="${PYTHON_WIN_EMBED_ZIP:-$MT5_PYTHON_EMBED_ZIP}"
+PYTHON_WIN_URL="${PYTHON_WIN_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${PYTHON_WIN_EXE}}"
+PYTHON_WIN_EMBED_URL="${PYTHON_WIN_EMBED_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${PYTHON_WIN_EMBED_ZIP}}"
 # Populated dynamically after installation so we do not rely on a hard coded
 # path other than the helper’s configured target.
 WINDOWS_PYTHON_UNIX_PATH=""
@@ -101,7 +105,7 @@ discover_windows_python() {
   fi
 
   local preferred
-  preferred="$(printf '%s\n' "${results}" | grep -Ei 'Python3(1[01]|[0-9]+)/python.exe$' | head -n1 || true)"
+  preferred="$(printf '%s\n' "${results}" | grep -Ei 'Python3[0-9]{2}/python.exe$' | head -n1 || true)"
   if [[ -n "${preferred}" ]]; then
     printf '%s' "${preferred}"
     return 0
@@ -647,7 +651,7 @@ auto_configure_terminal() {
 write_instructions() {
   local file="${PROJECT_ROOT}/LOGIN_INSTRUCTIONS_WINE.txt"
   local python_cmd
-  python_cmd="${WINDOWS_PYTHON_WIN_PATH:-C:\\Python311\\python.exe}"
+  python_cmd="${WINDOWS_PYTHON_WIN_PATH:-${MT5_PYTHON_WIN_DIR}\\python.exe}"
   cat > "${file}" <<TXT
 MetaTrader 5 (Wine) — Quick Usage
 ---------------------------------
@@ -657,11 +661,11 @@ MetaTrader 5 (Wine) — Quick Usage
    First time: Login → Save password
 
 2) Windows Python:
-   WINEPREFIX="\$HOME/.wine-py311" wine cmd /c "${python_cmd}" -V
+   WINEPREFIX="\$HOME/${MT5_PYTHON_PREFIX_NAME}" wine cmd /c "${python_cmd}" -V
 
 3) Run bridge:
-   rsync -a --delete /opt/mt5/ "\$HOME/.wine-py311/drive_c/mt5/"
-   WINEPREFIX="\$HOME/.wine-py311" wine cmd /c "${python_cmd}" C:\\mt5\\utils\\mt_5_bridge.py
+   rsync -a --delete /opt/mt5/ "\$HOME/${MT5_PYTHON_PREFIX_NAME}/drive_c/mt5/"
+   WINEPREFIX="\$HOME/${MT5_PYTHON_PREFIX_NAME}" wine cmd /c "${python_cmd}" C:\\mt5\\utils\\mt_5_bridge.py
 TXT
   log "Instructions written to ${file}"
 }

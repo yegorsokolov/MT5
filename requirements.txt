@@ -5,7 +5,7 @@ pyarrow
 scikit-learn
 numpy>=2.1
 MetaTrader5; platform_system == "Windows"
-pymt5linux; platform_system != "Windows" and python_version >= "3.13"
+pymt5linux; platform_system != "Windows" and python_version >= "3.11" and python_version < "3.12"
 joblib
 pyyaml
 psutil

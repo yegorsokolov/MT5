@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_python_version_config.sh
+source "${SCRIPT_DIR}/_python_version_config.sh"
+
 SERVICE_NAME=${SERVICE_NAME:-mt5bot}
 UPDATE_SERVICE=${UPDATE_SERVICE:-mt5bot-update}
 UPDATE_TIMER="${UPDATE_SERVICE}.timer"
@@ -33,6 +37,6 @@ sudo rm -rf "${INSTALL_ROOT}/.cache/mt5" 2>/dev/null || true
 sudo rm -rf "${INSTALL_ROOT}"
 
 echo "Removing Wine prefixes and caches..."
-rm -rf "$HOME/.wine-mt5" "$HOME/.wine-py311" "$HOME/.cache/mt5"
+rm -rf "$HOME/.wine-mt5" "$HOME/${MT5_PYTHON_PREFIX_NAME}" "$HOME/.cache/mt5"
 
 echo "Cleanup complete."

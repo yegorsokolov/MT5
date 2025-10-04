@@ -7,7 +7,7 @@ name = "mt5"
 version = "0.1.0"
 description = "Trading utilities and strategies for MetaTrader5 automation."
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.11,<3.14"
 license = {text = "MIT"}
 authors = [{ name = "MT5 Contributors" }]
 dependencies = [
@@ -27,7 +27,7 @@ dependencies = [
     "torch",
     "tqdm",
     "MetaTrader5<6; platform_system == \"Windows\"",
-    "pymt5linux; platform_system != \"Windows\" and python_version >= \"3.13\"",
+    "pymt5linux; platform_system != \"Windows\" and python_version >= \"3.11\" and python_version < \"3.12\"",
     "scikit-optimize",
     "scipy",
     "river",

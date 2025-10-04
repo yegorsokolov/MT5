@@ -89,8 +89,9 @@ the next section. It performs the following actions:
 2. Installs Wine (32/64-bit), winetricks, cabextract, Git and the base Python
    tooling required by the scripts.
 3. Creates a single Wine prefix that houses both the MetaTrader 5 terminal and
-   the Windows build of Python 3.11.9, including the official `MetaTrader5`
-   wheel and a `numpy<2.4` pin for stability.
+   the Windows build of Python 3.13.x (configurable via `MT5_PYTHON_SERIES`),
+   including the official `MetaTrader5` wheel and a `numpy<2.4` pin for
+   stability.
 4. Clones this repository via SSH into `~/MT5`, bootstraps a local virtual
    environment (using `pyenv` when available) and installs the Linux-side Python
    dependencies while filtering out the Windows-only package.
@@ -120,8 +121,9 @@ SERVICE_NAME=mt5bot INSTALL_ROOT=/opt/mt5 ./scripts/mt5_cleanup.sh
 ```
 
 The script disables the systemd services, removes the installation directory at
-`/opt/mt5`, wipes the Wine prefixes under `~/.wine-mt5` and `~/.wine-py311` and
-deletes the cached MT5 data under `~/.cache/mt5`.
+`/opt/mt5`, wipes the Wine prefixes under `~/.wine-mt5` and
+`~/.wine-py<series>` (for example `~/.wine-py313` by default) and deletes the
+cached MT5 data under `~/.cache/mt5`.
 
 ## Complete Ubuntu 25.04 VPS setup (Wine + MetaTrader 5)
 
@@ -134,69 +136,86 @@ session unless stated otherwise.
 1. **Reset any stale environment (optional but recommended):**
 
    ```bash
-   rm -rf ~/MT5 ~/.python-version ~/.wine-mt5 ~/.wine-py311
+   rm -rf ~/MT5 ~/.python-version ~/.wine-mt5 ~/.wine-py${PY_TAG}
    sudo rm -rf /opt/mt5 /opt/winpy
    ```
 
 2. **System prerequisites:** enable multi-arch, install Wine (32/64) and build
    tooling.
 
+ ```bash
+  sudo dpkg --add-architecture i386
+  sudo apt update
+  sudo apt install -y \
+    git curl build-essential ca-certificates \
+    libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+    libffi-dev libncursesw5-dev liblzma-dev tk-dev uuid-dev \
+    wine64 wine32:i386 winetricks cabextract winbind unzip wget nano \
+    wine-gecko2.47.4 wine-gecko2.47.4:i386 wine-mono
+  ```
+
+   Before continuing, decide which Python series you want the automation to
+   target. The scripts default to Python 3.13.x; set `MT5_PYTHON_SERIES=3.11`
+   (and optionally `MT5_PYTHON_PATCH=3.11.9`) if you must run the 3.11 toolchain
+   instead. The helper variables below make the remaining commands copy/paste
+   friendly:
+
    ```bash
-   sudo dpkg --add-architecture i386
-   sudo apt update
-   sudo apt install -y \
-     git curl build-essential ca-certificates \
-     libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
-     libffi-dev libncursesw5-dev liblzma-dev tk-dev uuid-dev \
-     wine64 wine32:i386 winetricks cabextract winbind unzip wget nano \
-     wine-gecko2.47.4 wine-gecko2.47.4:i386 wine-mono
+   PY_SERIES=${MT5_PYTHON_SERIES:-3.13}
+   if [[ "$PY_SERIES" == "3.11" ]]; then
+     PY_PATCH=${MT5_PYTHON_PATCH:-3.11.9}
+   else
+     PY_PATCH=${MT5_PYTHON_PATCH:-3.13.1}
+   fi
+   PY_TAG=${PY_SERIES/./}
+   export PY_SERIES PY_PATCH PY_TAG
    ```
 
-3. **Install `pyenv` and Python 3.11.9 for the Linux tooling:**
+3. **Install `pyenv` and Python ${PY_PATCH} for the Linux tooling:**
 
-   ```bash
+  ```bash
    curl https://pyenv.run | bash
    export PYENV_ROOT="$HOME/.pyenv"
    export PATH="$PYENV_ROOT/bin:$PATH"
    eval "$(pyenv init - bash)"
    eval "$(pyenv virtualenv-init -)"
-   pyenv install -l | grep 3.11.9 || pyenv update
-   pyenv install -s 3.11.9
-   ```
+   pyenv install -l | grep "$PY_PATCH" || pyenv update
+   pyenv install -s "$PY_PATCH"
+  ```
 
-4. **Clone the repo and create the virtual environment on 3.11.9:**
+4. **Clone the repo and create the virtual environment on ${PY_PATCH}:**
 
-   ```bash
+  ```bash
    cd ~
    git clone git@github.com:yegorsokolov/MT5.git
    cd MT5
-   pyenv local 3.11.9
+   pyenv local "$PY_PATCH"
    python -m venv .venv
    source .venv/bin/activate
-   python -V  # should be 3.11.9
+   python -V  # should be ${PY_PATCH}
    pip install --upgrade pip wheel setuptools
    pip install -r requirements.txt
-   ```
+  ```
 
 5. **Provision a dedicated Wine prefix for Windows Python + MetaTrader5:**
 
-   ```bash
+  ```bash
    export WINEARCH=win64
-   export WINEPREFIX="$HOME/.wine-py311"
+   export WINEPREFIX="$HOME/.wine-py${PY_TAG}"
    wineboot --init
    winetricks -q vcrun2019 corefonts msxml6 gdiplus
    sudo mkdir -p /opt/winpy && sudo chown "$USER":"$USER" /opt/winpy
    cd /opt/winpy
-   wget -O python-3.11.9-amd64.exe https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
-  wine python-3.11.9-amd64.exe /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=C:\\Python311 || true
-  WIN_PY=$(find "$WINEPREFIX/drive_c" -maxdepth 6 -type f -iname python.exe | grep -Ei 'Python3(1[01]|[0-9]+)/python.exe$' | head -n1)
+   wget -O "python-${PY_PATCH}-amd64.exe" "https://www.python.org/ftp/python/${PY_PATCH}/python-${PY_PATCH}-amd64.exe"
+  wine "python-${PY_PATCH}-amd64.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 "TargetDir=C:\\Python${PY_TAG}" || true
+  WIN_PY=$(find "$WINEPREFIX/drive_c" -maxdepth 6 -type f -iname python.exe | grep -Ei 'Python3[0-9]{2}/python.exe$' | head -n1)
   WIN_PY_WINPATH=$(winepath -w "$WIN_PY")
   wine "$WIN_PY_WINPATH" -m pip install --upgrade pip
   wine "$WIN_PY_WINPATH" -m pip install MetaTrader5
   ```
 
 > **Note:** Recent Python installers sometimes ignore the legacy
-> `C:\Python311` target directory and instead place the interpreter under
+> `C:\Python${PY_TAG}` target directory and instead place the interpreter under
 > `C:\Users\<user>\AppData\Local\Programs\Python`. The `find`/`winepath`
 > combination above locates the actual `python.exe` regardless of where the
 > installer put it.
@@ -271,8 +290,9 @@ session unless stated otherwise.
 The helper script `scripts/setup_ubuntu.sh` automates the heavy lifting above:
 it removes the unsupported deadsnakes PPA on Ubuntu 25.04, enables `i386`
 multi-arch support, installs Wine 32/64, ensures `winetricks` runtime
-components are applied to both prefixes, provisions Windows Python 3.11.9,
-installs `MetaTrader5`, downloads the MT5 terminal installer and writes a
+components are applied to both prefixes, provisions Windows Python 3.13.x by
+default (respecting `MT5_PYTHON_SERIES`), installs `MetaTrader5`, downloads the
+MT5 terminal installer and writes a
 `LOGIN_INSTRUCTIONS_WINE.txt` cheat sheet summarising the detected paths.
 
 If an installation run appears to stall when reusing a cached `.exe`, rerun the
