@@ -2,11 +2,15 @@
 set -euo pipefail
 
 # -------- configurable inputs --------
-PY_WIN_VERSION="3.11.9"
-PY_WIN_DIR="C:\\Python311"                          # TargetDir for the EXE
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_python_version_config.sh
+source "${SCRIPT_DIR}/_python_version_config.sh"
+
+PY_WIN_VERSION="${PY_WIN_VERSION:-$MT5_PYTHON_PATCH}"
+PY_WIN_DIR="${PY_WIN_DIR:-$MT5_PYTHON_WIN_DIR}"        # TargetDir for the EXE
 PY_WIN_EXE_CACHE="/opt/mt5/.cache/mt5/python-${PY_WIN_VERSION}-amd64.exe"
 PY_WIN_ZIP_CACHE="/opt/mt5/.cache/mt5/python-${PY_WIN_VERSION}-embed-amd64.zip"  # optional fallback
-WINEPREFIX="${WINEPREFIX:-$HOME/.wine-py311}"
+WINEPREFIX="${WINEPREFIX:-$MT5_PYTHON_PREFIX}"
 WINEARCH="${WINEARCH:-win64}"
 USE_XVFB="${USE_XVFB:-1}"                           # set 0 if you have a GUI display
 # -------------------------------------
@@ -35,7 +39,7 @@ wrun() {
 # 1) Prepare Wine prefix
 log "Initialising Wine prefix at $WINEPREFIX ..."
 WINEDEBUG=-all WINEARCH="$WINEARCH" WINEPREFIX="$WINEPREFIX" wineboot -u
-# Install VC++ runtime needed by Python 3.11
+# Install VC++ runtime needed by Windows Python ${MT5_PYTHON_SERIES}
 log "Ensuring VC++ runtime (vcrun2022) is installed ..."
 # winetricks bails out if another VC runtime (e.g. vcrun2019) is present.
 # Detect that situation and retry with --force so we don't fail setup when an
@@ -73,7 +77,7 @@ if ! WINEPREFIX="$WINEPREFIX" wrun "${PY_WIN_DIR}\\python.exe" -V >/dev/null 2>&
   log "EXE install did not produce ${PY_WIN_DIR}\\python.exe; trying embeddable ZIP fallback ..."
   # 5a) Fallback to embeddable ZIP if available
   if [[ -f "$PY_WIN_ZIP_CACHE" ]]; then
-    # Expand the ZIP under C:\Python311
+    # Expand the ZIP under ${PY_WIN_DIR}
     # Use Windows cmd to create the target dir
     WINEPREFIX="$WINEPREFIX" wrun cmd /c "if not exist ${PY_WIN_DIR} mkdir ${PY_WIN_DIR}" || true
     # Unzip via PowerShell (present in recent Wine prefixes) or 7z if mapped; try both
