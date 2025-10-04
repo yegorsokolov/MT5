@@ -516,6 +516,52 @@ remaining manual steps in the summary output.
 > or `ubuntu_setup.sh`. The installers then skip the Windows pip dependencies and
 > avoid version-resolution failures when new `mt5` wheels are unavailable.
 
+#### Bridge backend selection
+
+`utils.mt5_bridge.load_mt5_module` now honours an explicit backend selection via
+`MT5_BRIDGE_BACKEND`:
+
+* `auto` (default) – try the native Linux `MetaTrader5` wheel first and fall back
+  to the Wine bridge (`pymt5linux`) when the native import fails.
+* `wine`/`pymt5linux` – skip the native probe and immediately initialise the
+  Wine bridge.
+* `native` – only attempt the native Linux wheel.
+* `<module>` or `<module>:<attribute>` – import a fully custom loader. The named
+  attribute can expose either a ready-made `MetaTrader5` module or a callable
+  that returns one. This allows you to plug in an MQL5 Expert Advisor bridge,
+  gRPC proxy, or any other integration without editing the core code.
+
+Set backend-specific overrides with `MT5_BRIDGE_MODULE` or
+`MT5_BRIDGE_MODULE_<BACKEND>` (for example,
+`MT5_BRIDGE_BACKEND=mql5` alongside
+`MT5_BRIDGE_MODULE_MQL5=bridge_clients.mql5:load`). The environment diagnostics
+skip the Wine health check automatically when the configured backend does not
+use Wine, making it clear that the requirement is “skipped”/“not applicable”
+instead of “failed”.
+
+To keep your main installation on CPython 3.11 while running the Wine bridge in
+its own 3.13 virtual environment:
+
+1. Create the bridge environment and install the Wine connector there:
+
+   ```bash
+   python3.13 -m venv ~/.venv/mt5-bridge
+   source ~/.venv/mt5-bridge/bin/activate
+   pip install --upgrade pip
+   pip install pymt5linux
+   ```
+
+2. Provide a lightweight client module (for example,
+   `bridge_clients.pymt5_gateway`) that talks to the 3.13 environment via
+   subprocess, IPC or gRPC. The module should expose a function such as
+   `load()` returning the bridge-backed `MetaTrader5` proxy.
+
+3. In your primary 3.11 environment export
+   `MT5_BRIDGE_BACKEND=bridge_clients.pymt5_gateway:load`. The loader will invoke
+   the custom client instead of importing `pymt5linux` directly, letting you
+   keep system packages on 3.11 while the bridge runtime runs inside the 3.13
+   virtual environment.
+
 ### CPU Feature Detection and Acceleration
 
 At startup the resource monitor inspects `/proc/cpuinfo` for CPU flags such as
