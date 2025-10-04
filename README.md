@@ -47,17 +47,17 @@ The solution is split into two components:
 
 ### Python runtime compatibility
 
-The toolkit targets CPython 3.10 and newer, with 3.13 recommended. Optional
-integrations such as LightGBM still degrade gracefully: when wheels are not
-available the training pipeline switches to a scikit-learn gradient boosting
-fallback and records the missing modules inside the checkpoint metadata for
-later recovery. Components that previously relied on `uvloop`, Ray or
-torch-geometric now ship with pure-Python fallbacks so the project remains fully
-operational even when recent wheels are unavailable. With Python 3.11.9 available
-again the setup tooling reinstalls the accelerated Ray, torch-geometric and
-`uvloop` integrations automatically on Python 3.10–3.12 interpreters, and the
-environment diagnostics will highlight remediation steps whenever these
-packages are missing.
+The toolkit targets CPython 3.13 and newer. Optional integrations such as
+LightGBM still degrade gracefully: when wheels are not available the training
+pipeline switches to a scikit-learn gradient boosting fallback and records the
+missing modules inside the checkpoint metadata for later recovery. Components
+that previously relied on `uvloop`, Ray or torch-geometric now ship with
+pure-Python fallbacks so the project remains fully operational even when recent
+wheels are unavailable. With Python 3.13 now the baseline runtime, the setup
+tooling reinstalls the accelerated `uvloop` integration automatically, and it
+will restore Ray and torch-geometric as soon as their Python 3.13 wheels ship;
+until then the environment diagnostics will highlight remediation steps whenever
+these packages are missing.
 
 Run `python -m utils.environment --json` to confirm both interpreter and
 hardware meet the minimum requirements. The training routine executes the same
@@ -1065,7 +1065,7 @@ python scripts/train_tsdiffusion.py  # Diffusion model (TimeGrad-style)
 The GAN trainer uses the in-repo PyTorch implementation of TimeGAN found under
 ``synthetic/gan.py``. This lightweight model mirrors the bits of the
 ``ydata-synthetic`` API that the project relied on while remaining fully
-compatible with modern Python runtimes (3.10+). Scaling utilities were rewritten
+compatible with modern Python runtimes (3.13+). Scaling utilities were rewritten
 in NumPy to preserve backwards compatibility with older configuration files.
 
 Enable `use_data_augmentation: true` to include the GAN samples or `use_diffusion_aug: true` to
