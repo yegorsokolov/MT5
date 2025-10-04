@@ -39,6 +39,7 @@ try:
     from utils.mt5_bridge import (
         MetaTraderImportError,
         describe_backend as describe_mt5_backend,
+        get_configured_backend,
         load_mt5_module,
     )
 except Exception:  # pragma: no cover - bridge helper optional in minimal builds
@@ -46,6 +47,9 @@ except Exception:  # pragma: no cover - bridge helper optional in minimal builds
 
     def describe_mt5_backend() -> dict[str, Any]:  # type: ignore
         return {}
+
+    def get_configured_backend(default: str = "auto") -> str:  # type: ignore
+        return default
 
     def load_mt5_module():  # type: ignore
         import MetaTrader5 as _mt5  # type: ignore
@@ -523,11 +527,38 @@ def _check_wine_bridge() -> dict[str, Any]:
         "export WINE_PYTHON (or regenerate LOGIN_INSTRUCTIONS_WINE.txt) and keep the terminal logged in."
     )
 
+    backend_pref = get_configured_backend()
+    backend_alias = backend_pref.strip().lower().split(":", 1)[0]
+
     if sys.platform.startswith("win"):
         return {
             "name": name,
             "status": "skipped",
             "detail": "Native Windows runtime detected; Wine bridge validation not required.",
+            "followup": None,
+        }
+
+    if backend_alias in {"native"}:
+        detail = (
+            "Wine bridge validation skipped because MT5_BRIDGE_BACKEND is set to a native loader"
+        )
+        if backend_pref:
+            detail += f" ({backend_pref})."
+        return {
+            "name": name,
+            "status": "skipped",
+            "detail": detail,
+            "followup": None,
+        }
+
+    if backend_alias not in {"auto", "wine", "pymt5linux"}:
+        detail = "Configured MetaTrader backend does not rely on Wine."
+        if backend_pref:
+            detail += f" (MT5_BRIDGE_BACKEND={backend_pref})."
+        return {
+            "name": name,
+            "status": "skipped",
+            "detail": detail,
             "followup": None,
         }
 
