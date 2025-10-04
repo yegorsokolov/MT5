@@ -26,6 +26,9 @@ WIN_PY_WINE_PREFIX="${WIN_PY_WINE_PREFIX:-${WIN_PY_WINE_PREFIX_DEFAULT}}"
 WIN_PY_VERSION="${WIN_PY_VERSION:-$MT5_PYTHON_PATCH}"
 WIN_PY_INSTALLER="${WIN_PY_INSTALLER:-$MT5_PYTHON_INSTALLER}"
 WIN_PY_URL="${WIN_PY_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${WIN_PY_INSTALLER}}"
+MT5LINUX_HOST="${MT5LINUX_HOST:-127.0.0.1}"
+MT5LINUX_PORT="${MT5LINUX_PORT:-18812}"
+MT5LINUX_SERVER_DIR="${MT5LINUX_SERVER_DIR:-${WIN_PY_WINE_PREFIX}/drive_c/mt5linux-server}"
 
 case "${MT5_PYTHON_SERIES}" in
     3.10) MT5LINUX_DEFAULT="mt5linux==0.1.7" ;;
@@ -61,6 +64,9 @@ Options:
   --skip-linux-env           Only prepare the Wine/Windwos side (skip Linux deps install).
   --skip-service-install     Do not install systemd services (mirrors setup_ubuntu.sh option).
   --skip-connectivity-check  Skip the final MetaTrader bridge verification step.
+  --mt5linux-host HOST       Override the mt5linux server host (default: $MT5LINUX_HOST).
+  --mt5linux-port PORT       Override the mt5linux server port (default: $MT5LINUX_PORT).
+  --mt5linux-server-dir PATH Directory inside the Wine prefix for mt5linux assets (default: $MT5LINUX_SERVER_DIR).
   -h, --help                 Display this help message.
 USAGE
 }
@@ -90,6 +96,18 @@ while [[ $# -gt 0 ]]; do
         --skip-connectivity-check)
             SKIP_CONNECTIVITY_CHECK=1
             shift
+            ;;
+        --mt5linux-host)
+            MT5LINUX_HOST="$2"
+            shift 2
+            ;;
+        --mt5linux-port)
+            MT5LINUX_PORT="$2"
+            shift 2
+            ;;
+        --mt5linux-server-dir)
+            MT5LINUX_SERVER_DIR="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -325,6 +343,41 @@ install_mt5_windows_packages() {
     fi
 }
 
+stop_mt5linux_server() {
+    local pid_file="${MT5LINUX_SERVER_DIR}/mt5linux.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
+            log "Stopping existing mt5linux server (pid $pid)"
+            kill "$pid" >/dev/null 2>&1 || true
+            sleep 2
+        fi
+        rm -f "$pid_file"
+    fi
+}
+
+launch_mt5linux_server() {
+    if [[ -z "${WIN_PY_WINDOWS_PATH:-}" ]]; then
+        warn "Windows Python path unknown; skipping mt5linux server launch."
+        return 1
+    fi
+
+    ensure_directory "$MT5LINUX_SERVER_DIR"
+    stop_mt5linux_server
+
+    local log_file="${MT5LINUX_SERVER_DIR}/mt5linux.log"
+    log "Starting mt5linux server via Wine at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
+    if ! WINEPREFIX="$WIN_PY_WINE_PREFIX" nohup wine "$WIN_PY_WINDOWS_PATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_DIR" >>"$log_file" 2>&1 & then
+        warn "Failed to launch mt5linux server; review ${log_file} for details."
+        return 1
+    fi
+    local pid=$!
+    echo "$pid" >"${MT5LINUX_SERVER_DIR}/mt5linux.pid"
+    sleep 5
+    return 0
+}
+
 ensure_linux_python() {
     if [[ -n "$LINUX_PYTHON_BIN" ]]; then
         require_command "$LINUX_PYTHON_BIN"
@@ -382,6 +435,9 @@ install_linux_requirements() {
     else
         warn "requirements.txt not found; skipping Python dependency installation."
     fi
+
+    log "Installing mt5linux client dependencies in the Linux environment"
+    python -m pip install --upgrade "$MT5LINUX_PACKAGE" rpyc
 }
 
 write_env_file() {
@@ -400,6 +456,9 @@ PYMT5LINUX_WINEPREFIX=${WIN_PY_WINE_PREFIX}
 WIN_PY_WINE_PREFIX=${WIN_PY_WINE_PREFIX}
 WINE_PYTHON=${win_py_path_escaped}
 MT5_TERMINAL_PATH=${terminal_winpath}
+MT5LINUX_HOST=${MT5LINUX_HOST}
+MT5LINUX_PORT=${MT5LINUX_PORT}
+MT5LINUX_SERVER_DIR=${MT5LINUX_SERVER_DIR}
 ENVFILE
     log "Wrote Wine/MetaTrader environment configuration to $ENV_FILE"
 }
@@ -412,13 +471,19 @@ MetaTrader 5 (Wine) login & bridge instructions
 Terminal prefix : ${MT5_WINE_PREFIX}
 Windows Python  : ${WIN_PY_WINDOWS_PATH:-<not detected>}
 Terminal path   : ${MT5_TERMINAL}
-Bridge exports  : export PYMT5LINUX_PYTHON="${WIN_PY_WINDOWS_PATH:-<not detected>}"
-                  export PYMT5LINUX_WINEPREFIX="${WIN_PY_WINE_PREFIX}"
+Bridge host     : ${MT5LINUX_HOST}:${MT5LINUX_PORT}
+Bridge assets   : ${MT5LINUX_SERVER_DIR}
+
+Restart server  : WINEPREFIX="${WIN_PY_WINE_PREFIX}" \
+                  wine "${WIN_PY_WINDOWS_PATH:-python}" -m mt5linux \
+                       --host "${MT5LINUX_HOST}" --port "${MT5LINUX_PORT}" \
+                       --server "${MT5LINUX_SERVER_DIR}"
 
 1. Launch the terminal and log in with your broker account:
    WINEARCH=win64 WINEPREFIX="${MT5_WINE_PREFIX}" wine "${MT5_TERMINAL}"
-2. Re-run this script whenever you update the Wine prefix or upgrade Python.
-3. Use scripts/setup_terminal.py for detailed diagnostics.
+2. Ensure the mt5linux server above is running before starting the bot.
+3. Re-run this script whenever you update the Wine prefix or upgrade Python.
+4. Use python -m utils.environment for diagnostics once the terminal is logged in.
 LOGINFILE
     log "Saved login instructions to $LOGIN_INSTRUCTIONS"
 }
@@ -490,16 +555,13 @@ verify_mt5_bridge() {
         return
     fi
 
-    if [[ ! -f "${PROJECT_ROOT}/scripts/setup_terminal.py" ]]; then
-        warn "setup_terminal.py not found; cannot verify bridge."
-        return
-    fi
-
-    log "Verifying MetaTrader 5 bridge from the Python environment"
-    if command_exists python; then
-        python "${PROJECT_ROOT}/scripts/setup_terminal.py" --install-heartbeat || warn "MetaTrader 5 connectivity check failed. Ensure the terminal is running and logged in."
+    log "Verifying MetaTrader 5 bridge via python -m utils.environment"
+    if command_exists python3; then
+        if ! (cd "$PROJECT_ROOT" && PYTHONPATH="$PROJECT_ROOT" python3 -m utils.environment); then
+            warn "utils.environment reported connectivity issues; ensure the mt5linux server is running and the terminal is logged in."
+        fi
     else
-        warn "python command not available; skipping bridge verification."
+        warn "python3 command not available; skipping bridge verification."
     fi
 }
 
@@ -540,10 +602,16 @@ main() {
     log "Provisioning MetaTrader 5 environment from ${PROJECT_ROOT}"
     ensure_directory "$CACHE_DIR"
 
+    [[ -n "$MT5LINUX_HOST" ]] || die "MT5LINUX_HOST must not be empty"
+    if ! [[ "$MT5LINUX_PORT" =~ ^[0-9]+$ ]]; then
+        die "MT5LINUX_PORT must be an integer"
+    fi
+
     ensure_apt_packages
     install_windows_python || warn "Windows Python provisioning reported errors"
     install_mt5_terminal || warn "MetaTrader terminal provisioning reported errors"
     install_mt5_windows_packages
+    launch_mt5linux_server || warn "mt5linux server launch reported warnings"
     write_env_file
     write_login_instructions
     install_heartbeat_script

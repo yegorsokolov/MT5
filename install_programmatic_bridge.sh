@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/_python_version_config.sh"
 
 log() { printf '[bridge] %s\n' "$*" >&2; }
+warn() { printf '[bridge:WARN] %s\n' "$*" >&2; }
 error() { printf '[bridge:ERROR] %s\n' "$*" >&2; }
 die() { error "$*"; exit 1; }
 
@@ -20,6 +21,12 @@ WIN_PYTHON="${WIN_PYTHON:-}"
 MT5_TERMINAL="${MT5_TERMINAL:-}"
 BRIDGE_TIMEOUT_MS="${MT5_BRIDGE_TIMEOUT_MS:-${DEFAULT_TIMEOUT_MS}}"
 PIP_TIMEOUT="${PIP_TIMEOUT:-${DEFAULT_PIP_TIMEOUT}}"
+MT5LINUX_HOST_DEFAULT="127.0.0.1"
+MT5LINUX_PORT_DEFAULT="18812"
+MT5LINUX_SERVER_DIR_DEFAULT="${PY_WINE_PREFIX}/drive_c/mt5linux-server"
+MT5LINUX_HOST="${MT5LINUX_HOST:-${MT5LINUX_HOST_DEFAULT}}"
+MT5LINUX_PORT="${MT5LINUX_PORT:-${MT5LINUX_PORT_DEFAULT}}"
+MT5LINUX_SERVER_DIR="${MT5LINUX_SERVER_DIR:-${MT5LINUX_SERVER_DIR_DEFAULT}}"
 
 if [[ -z "${MT5LINUX_PACKAGE:-}" ]]; then
   case "${MT5_PYTHON_SERIES}" in
@@ -38,6 +45,9 @@ Options:
   --mt5-wine-prefix PATH    Wine prefix containing MetaTrader terminal (default: $MT5_WINE_PREFIX)
   --win-python PATH         Override path to Windows python.exe inside the Wine prefix
   --terminal PATH           Override path to terminal64.exe inside the MT5 prefix
+  --host HOST               Hostname for the mt5linux RPyC server (default: $MT5LINUX_HOST)
+  --port PORT               TCP port for the mt5linux RPyC server (default: $MT5LINUX_PORT)
+  --server-dir PATH         Directory inside the Wine prefix for mt5linux server assets (default: $MT5LINUX_SERVER_DIR)
   --timeout-ms N            Override MetaTrader bridge timeout in milliseconds (default: $BRIDGE_TIMEOUT_MS)
   --pip-timeout N           Override pip network timeout in seconds (default: $PIP_TIMEOUT)
   -h, --help                Show this help message
@@ -65,6 +75,21 @@ parse_args() {
       --terminal)
         [[ $# -ge 2 ]] || die "--terminal requires a value"
         MT5_TERMINAL="$2"
+        shift 2
+        ;;
+      --host)
+        [[ $# -ge 2 ]] || die "--host requires a value"
+        MT5LINUX_HOST="$2"
+        shift 2
+        ;;
+      --port)
+        [[ $# -ge 2 ]] || die "--port requires a value"
+        MT5LINUX_PORT="$2"
+        shift 2
+        ;;
+      --server-dir)
+        [[ $# -ge 2 ]] || die "--server-dir requires a value"
+        MT5LINUX_SERVER_DIR="$2"
         shift 2
         ;;
       --timeout-ms)
@@ -183,58 +208,96 @@ install_windows_packages() {
   fi
 }
 
-write_probe_script() {
-  local path="$1"
-  cat <<'PY' >"$path"
-import json
-import os
-import sys
-import time
+install_linux_mt5linux() {
+  log "Installing mt5linux package in the Linux environment (${MT5LINUX_PACKAGE})"
+  if ! command -v python3 >/dev/null 2>&1; then
+    die "python3 command not found on the Linux host"
+  fi
 
-import MetaTrader5 as mt5
+  if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" python3 -m pip install --upgrade "$MT5LINUX_PACKAGE" rpyc 1>&2; then
+    die "Failed to install mt5linux on the Linux host"
+  fi
+}
 
-TIMEOUT = int(os.environ.get("MT5_BRIDGE_TIMEOUT_MS", "90000"))
-TERMINAL_PATH = os.environ.get("MT5_TERMINAL_PATH")
+stop_mt5linux_server() {
+  local pid_file="$MT5LINUX_SERVER_DIR/mt5linux.pid"
+  if [[ -f "$pid_file" ]]; then
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
+      log "Stopping existing mt5linux server (pid $pid)"
+      kill "$pid" >/dev/null 2>&1 || true
+      sleep 2
+    fi
+    rm -f "$pid_file"
+  fi
+}
 
-if not TERMINAL_PATH:
-    print(json.dumps({"status": "fail", "error": "missing terminal path"}))
-    sys.exit(1)
+launch_mt5linux_server() {
+  mkdir -p "$MT5LINUX_SERVER_DIR"
+  stop_mt5linux_server
 
-if not mt5.initialize(path=TERMINAL_PATH, timeout=TIMEOUT):
-    code, message = mt5.last_error()
-    print(json.dumps({"status": "fail", "error": [code, message]}))
-    sys.exit(1)
-
-time.sleep(1)
-mt5.shutdown()
-print(json.dumps({"status": "ok"}))
-PY
+  local log_file="$MT5LINUX_SERVER_DIR/mt5linux.log"
+  log "Launching mt5linux RPyC server at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
+  if ! WINEPREFIX="$PY_WINE_PREFIX" nohup wine "$WIN_PYTHON_WINPATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_DIR" >>"$log_file" 2>&1 & then
+    die "Failed to launch mt5linux server via Wine"
+  fi
+  local server_pid=$!
+  echo "$server_pid" >"$MT5LINUX_SERVER_DIR/mt5linux.pid"
+  sleep 5
 }
 
 run_probe() {
-  local probe_host="$1"
-  local probe_win="$2"
-
-  log "Running MetaTrader bridge probe via Windows Python..."
-  local output
-  if ! output=$(WINEPREFIX="$PY_WINE_PREFIX" MT5_TERMINAL_PATH="$MT5_TERMINAL_WINPATH" MT5_BRIDGE_TIMEOUT_MS="$BRIDGE_TIMEOUT_MS" wine "$WIN_PYTHON_WINPATH" "$probe_win" 2>&1); then
-    printf '%s\n' "$output" >&2
-    die "Bridge probe execution failed"
-  fi
-
-  output="$(printf '%s' "$output" | tr -d '\r')"
-  log "Probe output: $output"
-  if ! python3 - "$output" <<'PY'; then
-import json
+  log "Validating mt5linux bridge connectivity from Linux Python..."
+  local host="$MT5LINUX_HOST" port="$MT5LINUX_PORT" timeout_ms="$BRIDGE_TIMEOUT_MS"
+  if ! python3 - "$host" "$port" "$timeout_ms" <<'PY'
 import sys
+import time
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+timeout_ms = int(sys.argv[3]) if len(sys.argv) > 3 else 90000
+timeout = max(5.0, timeout_ms / 1000.0)
+
 try:
-    data = json.loads(sys.argv[1])
+    import rpyc
 except Exception as exc:  # noqa: BLE001
-    raise SystemExit("invalid JSON from probe: %s" % exc)
-if data.get("status") != "ok":
-    raise SystemExit("probe reported failure: %s" % data)
+    raise SystemExit(f"rpyc import failed: {exc}") from exc
+
+last_error = None
+for attempt in range(1, 11):
+    try:
+        conn = rpyc.classic.connect(host, port=port, config={
+            "sync_request_timeout": timeout,
+            "connection_timeout": timeout,
+            "allow_public_attrs": True,
+        })
+        try:
+            version = conn.eval("import MetaTrader5 as mt5; getattr(mt5, '__version__', '')")
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        last_error = exc
+        time.sleep(2)
+    else:
+        print(version or "ok")
+        sys.exit(0)
+
+raise SystemExit(f"mt5linux bridge connection failed: {last_error}")
 PY
-    die "Bridge probe validation failed"
+  then
+    die "mt5linux bridge validation failed"
+  fi
+}
+
+smoke_check_environment() {
+  if [[ -f "${SCRIPT_DIR}/utils/environment.py" ]]; then
+    log "Running python -m utils.environment smoke check"
+    if ! (cd "$SCRIPT_DIR" && PYTHONPATH="$SCRIPT_DIR" python3 -m utils.environment); then
+      warn "python -m utils.environment reported issues; review the diagnostics above."
+    fi
+  else
+    warn "utils.environment module not found; skipping environment smoke check."
   fi
 }
 
@@ -247,6 +310,11 @@ main() {
 
   [[ -d "$PY_WINE_PREFIX" ]] || die "Python Wine prefix not found: $PY_WINE_PREFIX"
   [[ -d "$MT5_WINE_PREFIX" ]] || die "MetaTrader Wine prefix not found: $MT5_WINE_PREFIX"
+
+  [[ -n "$MT5LINUX_HOST" ]] || die "mt5linux host must not be empty"
+  if ! [[ "$MT5LINUX_PORT" =~ ^[0-9]+$ ]]; then
+    die "mt5linux port must be an integer"
+  fi
 
   WIN_PYTHON="$(detect_windows_python "$PY_WINE_PREFIX" "$WIN_PYTHON")"
   MT5_TERMINAL="$(detect_terminal "$MT5_WINE_PREFIX" "$MT5_TERMINAL")"
@@ -261,20 +329,16 @@ main() {
   log "Discovered MetaTrader terminal: $MT5_TERMINAL (winpath: $MT5_TERMINAL_WINPATH)"
 
   install_windows_packages
-
-  local probe_host="$PY_WINE_PREFIX/drive_c/mt5_bridge_probe.py"
-  write_probe_script "$probe_host"
-  trap 'rm -f "$probe_host"' EXIT
-  local probe_win
-  probe_win="$(to_windows_path "$PY_WINE_PREFIX" "$probe_host")"
-  [[ -n "$probe_win" ]] || die "Unable to translate probe script path"
-
-  run_probe "$probe_host" "$probe_win"
-
-  rm -f "$probe_host" || true
+  install_linux_mt5linux
+  launch_mt5linux_server
+  run_probe
+  smoke_check_environment
 
   printf 'WIN_PYTHON_WINPATH=%s\n' "$WIN_PYTHON_WINPATH"
   printf 'MT5_TERMINAL_WINPATH=%s\n' "$MT5_TERMINAL_WINPATH"
+  printf 'MT5LINUX_HOST=%s\n' "$MT5LINUX_HOST"
+  printf 'MT5LINUX_PORT=%s\n' "$MT5LINUX_PORT"
+  printf 'MT5LINUX_SERVER_DIR=%s\n' "$MT5LINUX_SERVER_DIR"
 }
 
 main "$@"
