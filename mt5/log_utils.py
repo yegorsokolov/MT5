@@ -16,7 +16,12 @@ from typing import NamedTuple
 import requests
 from functools import wraps
 from pathlib import Path
-from datetime import datetime, UTC
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC  # type: ignore[attr-defined]
+except ImportError:  # Python < 3.11
+    UTC = timezone.utc  # type: ignore[misc]
 
 import pandas as pd
 from mt5.metrics import ERROR_COUNT, TRADE_COUNT
