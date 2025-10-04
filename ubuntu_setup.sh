@@ -5,17 +5,20 @@ log_dir="/opt/mt5"
 log_file="${log_dir}/setup.log"
 cache_dir="${log_dir}/.cache/mt5"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_python_version_config.sh
+source "${SCRIPT_DIR}/scripts/_python_version_config.sh"
+
 BRIDGE_ASSETS_DIR="${SCRIPT_DIR}/mt5_bridge_files"
 mt5_cache_installer="${cache_dir}/mt5linux.sh"
-python_installer="${cache_dir}/python-3.11.9-amd64.exe"
+python_installer="${cache_dir}/${MT5_PYTHON_INSTALLER}"
 required_packages=("winehq-stable" "winetricks" "xvfb" "cabextract" "p7zip-full" "curl" "wget" "rsync" "jq" "unzip")
 
 FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
 
-PY_PREFIX="${HOME}/.wine-py311"
+PY_PREFIX="${HOME}/${MT5_PYTHON_PREFIX_NAME}"
 FETCH_PREFIX="${HOME}/.mt5"
 MT5_INSTALL_SUBPATH="drive_c/Program Files/MetaTrader 5"
-PYTHON_WIN_PATH="C:\\Python311\\python.exe"
+PYTHON_WIN_PATH="${MT5_PYTHON_WIN_DIR}\\python.exe"
 MT5_TERMINAL="C:\\Program Files\\MetaTrader 5\\terminal64.exe"
 MT5_METAEDITOR="C:\\Program Files\\MetaTrader 5\\metaeditor64.exe"
 BRIDGE_SUBDIR="MQL5/Files/bridge"
@@ -149,7 +152,7 @@ install_windows_python() {
     return
   fi
   echo "Running Python installer under Wine..."
-  WINEPREFIX="${PY_PREFIX}" ${WINE} "${python_installer}" /quiet InstallAllUsers=1 PrependPath=1 TargetDir=C:\\Python311 Include_launcher=0 Include_test=0
+  WINEPREFIX="${PY_PREFIX}" ${WINE} "${python_installer}" /quiet InstallAllUsers=1 PrependPath=1 "TargetDir=${MT5_PYTHON_WIN_DIR}" Include_launcher=0 Include_test=0
   WINEPREFIX="${PY_PREFIX}" ${WINE} "${PYTHON_WIN_PATH}" -V
 }
 
@@ -328,7 +331,7 @@ main() {
   prepare_prefix "${PY_PREFIX}"
   prepare_prefix "${FETCH_PREFIX}"
   download_file "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5linux.sh" "${mt5_cache_installer}"
-  download_file "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" "${python_installer}"
+  download_file "${MT5_PYTHON_DOWNLOAD_ROOT}/${MT5_PYTHON_INSTALLER}" "${python_installer}"
   run_mt5_installer
   local terminal_source
   if ! terminal_source=$(find_terminal_path); then

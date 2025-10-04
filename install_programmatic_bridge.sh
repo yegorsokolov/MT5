@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_python_version_config.sh
+source "${SCRIPT_DIR}/scripts/_python_version_config.sh"
+
 log() { printf '[bridge] %s\n' "$*" >&2; }
 error() { printf '[bridge:ERROR] %s\n' "$*" >&2; }
 die() { error "$*"; exit 1; }
 
-PY_WINE_PREFIX_DEFAULT="${HOME}/.wine-py311"
+PY_WINE_PREFIX_DEFAULT="${HOME}/${MT5_PYTHON_PREFIX_NAME}"
 MT5_WINE_PREFIX_DEFAULT="${HOME}/.mt5"
 DEFAULT_TIMEOUT_MS="90000"
 DEFAULT_PIP_TIMEOUT="180"
@@ -100,7 +104,7 @@ detect_windows_python() {
   fi
 
   local candidate
-  local versions=(313 312 311 310 39 38)
+  local versions=("${MT5_PYTHON_TAG}" 313 312 311 310 39 38)
   for version in "${versions[@]}"; do
     candidate="$prefix/drive_c/Python${version}/python.exe"
     if [[ -f "$candidate" ]]; then
