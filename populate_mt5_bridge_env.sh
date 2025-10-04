@@ -2,9 +2,13 @@
 set -euo pipefail
 
 # Defaults match the layout produced by the programmatic bridge step.
-PY_WINE_PREFIX="${PY_WINE_PREFIX:-$HOME/.wine-py311}"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_python_version_config.sh
+source "${SCRIPT_ROOT}/scripts/_python_version_config.sh"
+
+PY_WINE_PREFIX="${PY_WINE_PREFIX:-$MT5_PYTHON_PREFIX}"
 MT5_WINE_PREFIX="${MT5_WINE_PREFIX:-$HOME/.mt5}"
-WIN_PYTHON="${WIN_PYTHON:-$PY_WINE_PREFIX/drive_c/Python311/python.exe}"
+WIN_PYTHON="${WIN_PYTHON:-$PY_WINE_PREFIX/drive_c/Python${MT5_PYTHON_TAG}/python.exe}"
 MT5_TERMINAL="${MT5_TERMINAL:-$MT5_WINE_PREFIX/drive_c/Program Files/MetaTrader 5/terminal64.exe}"
 ENV_FILE="${ENV_FILE:-.env}"
 WRITER_SCRIPT="${WRITER_SCRIPT:-./write_mt5_env.sh}"

@@ -12,17 +12,20 @@ set -euo pipefail
 # recoverable errors.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_python_version_config.sh
+source "${SCRIPT_DIR}/_python_version_config.sh"
+
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
 
 MT5_WINE_PREFIX_DEFAULT="$HOME/.wine-mt5"
-WIN_PY_WINE_PREFIX_DEFAULT="$HOME/.wine-py311"
+WIN_PY_WINE_PREFIX_DEFAULT="$HOME/${MT5_PYTHON_PREFIX_NAME}"
 
 MT5_WINE_PREFIX="${MT5_WINE_PREFIX:-${MT5_WINE_PREFIX_DEFAULT}}"
 WIN_PY_WINE_PREFIX="${WIN_PY_WINE_PREFIX:-${WIN_PY_WINE_PREFIX_DEFAULT}}"
-WIN_PY_VERSION="${WIN_PY_VERSION:-3.11.9}"
-WIN_PY_INSTALLER="python-${WIN_PY_VERSION}-amd64.exe"
-WIN_PY_URL="https://www.python.org/ftp/python/${WIN_PY_VERSION}/${WIN_PY_INSTALLER}"
+WIN_PY_VERSION="${WIN_PY_VERSION:-$MT5_PYTHON_PATCH}"
+WIN_PY_INSTALLER="${WIN_PY_INSTALLER:-$MT5_PYTHON_INSTALLER}"
+WIN_PY_URL="${WIN_PY_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${WIN_PY_INSTALLER}}"
 
 MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 MT5_INSTALLER_PATH="${CACHE_DIR}/mt5setup.exe"
@@ -209,7 +212,7 @@ REGFILE
 
 wine_find_python() {
     local prefix="$1"
-    find "$prefix/drive_c" -maxdepth 6 -type f -name python.exe 2>/dev/null | grep -Ei 'Python3(1[01]|\d+)/python.exe$' | head -n1
+    find "$prefix/drive_c" -maxdepth 6 -type f -name python.exe 2>/dev/null | grep -Ei 'Python3[0-9]{2}/python.exe$' | head -n1
 }
 
 download_file() {

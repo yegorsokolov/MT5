@@ -9,7 +9,7 @@ usage() {
 Usage: ./write_mt5_env.sh [--env-file PATH] [--win-python PATH] [--wine-prefix PATH] [--terminal PATH]
 
   --env-file     Target .env file (default: .env in the current directory)
-  --win-python   Windows-style python.exe path (e.g. Z:\opt\mt5\Python311\python.exe)
+  --win-python   Windows-style python.exe path (e.g. Z:\opt\mt5\Python313\python.exe)
   --wine-prefix  Wine prefix directory hosting MT5 (e.g. /home/user/.mt5)
   --terminal     Windows-style path to terminal64.exe (optional; adds MT5_TERMINAL_PATH)
 

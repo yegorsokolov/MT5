@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_python_version_config.sh
+source "${SCRIPT_DIR}/_python_version_config.sh"
+
 # --------- SETTINGS ---------
 export WINEARCH=win64
 export WINEDEBUG=-all
 MT5_PREFIX="$HOME/.wine-mt5"                # single prefix for MT5 + Windows-Python
 REPO_SSH="git@github.com:yegorsokolov/MT5.git"
 PROJ_DIR="$HOME/MT5"
-WIN_PY_VER="3.11.9"
+WIN_PY_VER="${WIN_PY_VER:-$MT5_PYTHON_PATCH}"
 WIN_PY_EXE="python-${WIN_PY_VER}-amd64.exe"
 WIN_PY_URL="https://www.python.org/ftp/python/${WIN_PY_VER}/${WIN_PY_EXE}"
+LINUX_PY_VERSION="${LINUX_PY_VERSION:-$MT5_PYTHON_PATCH}"
 MT5_SETUP_URL="https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
 # Helper that searches the active Wine prefix for a terminal64.exe. MetaTrader 5
 # occasionally installs under per-user directories (for example under
@@ -49,7 +54,7 @@ find_mt5_terminal() {
 
 echo ">>> Cleanup"
 cd "$HOME"
-rm -rf "${MT5_PREFIX}" ~/.wine ~/.wine-py311 || true
+rm -rf "${MT5_PREFIX}" ~/.wine "$HOME/${MT5_PYTHON_PREFIX_NAME}" || true
 sudo rm -rf /opt/mt5 || true
 rm -rf "$PROJ_DIR" || true
 
@@ -102,7 +107,7 @@ cd /opt/mt5
 wget -O "${WIN_PY_EXE}" "${WIN_PY_URL}"
 wine "${WIN_PY_EXE}" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
 # Find Windows-Python in this prefix
-WIN_PY=$(find "$WINEPREFIX/drive_c" -maxdepth 6 -type f -iname python.exe | grep -Ei 'Python3(1[01]|[0-9]+)/python.exe$' | head -n1)
+WIN_PY=$(find "$WINEPREFIX/drive_c" -maxdepth 6 -type f -iname python.exe | grep -Ei 'Python3[0-9]{2}/python.exe$' | head -n1)
 if [[ -z "${WIN_PY}" ]]; then
   WIN_PY=$(find "$WINEPREFIX/drive_c" -maxdepth 6 -type f -iname python.exe | head -n1)
 fi
@@ -121,13 +126,13 @@ cd "$HOME"
 git clone "$REPO_SSH" "$PROJ_DIR"
 cd "$PROJ_DIR"
 
-echo ">>> Create Linux venv (prefer pyenv 3.11.9 if available)"
+echo ">>> Create Linux venv (prefer pyenv ${LINUX_PY_VERSION} if available)"
 if command -v pyenv >/dev/null 2>&1; then
   eval "$(pyenv init - bash)" 2>/dev/null || true
-  pyenv install -s 3.11.9
-  pyenv local 3.11.9
-  PY311=$(pyenv which python)
-  "$PY311" -m venv .venv
+  pyenv install -s "${LINUX_PY_VERSION}"
+  pyenv local "${LINUX_PY_VERSION}"
+  PYENV_PY="$(pyenv which python)"
+  "$PYENV_PY" -m venv .venv
 else
   python3 -m venv .venv
 fi
