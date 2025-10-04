@@ -78,6 +78,11 @@ Windows-only wheel is no longer reported as missing.
   environment (`python -m venv .venv`)
   before installing requirements.
 
+Regardless of platform, keep the `packaging` library at `23.2` or newer. The
+mt5linux installer now relies on the `strip_trailing_zero` argument added in
+that release, so both `constraints.txt` and `constraints-mt5linux.txt` pin the
+minimum accordingly to avoid metadata resolution failures.
+
 ## Automated Wine + MetaTrader 5 bootstrap
 
 ### One-command Ubuntu setup
