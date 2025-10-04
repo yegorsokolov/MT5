@@ -7,7 +7,6 @@ import os
 import re
 import subprocess
 import sys
-import shutil
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -36,6 +35,7 @@ except Exception:  # pragma: no cover - handled later
     AppConfig = None  # type: ignore
 
 try:
+    from utils import mt5_bridge
     from utils.mt5_bridge import (
         MetaTraderImportError,
         describe_backend as describe_mt5_backend,
@@ -70,6 +70,10 @@ _WINE_BRIDGE_HINT_ENV_VARS = (
     "MT5_WINE_PREFIX",
     "PYMT5LINUX_WINEPREFIX",
     "WINEPREFIX",
+    "MT5LINUX_HOST",
+    "MT5LINUX_PORT",
+    "MT5LINUX_TIMEOUT",
+    "MT5LINUX_TIMEOUT_SECONDS",
 )
 AUTO_INSTALL_DEPENDENCIES_DEFAULT = os.getenv("AUTO_INSTALL_DEPENDENCIES", "1").strip().lower() not in {
     "0",
@@ -519,12 +523,11 @@ def _discover_wine_prefix() -> tuple[str | None, str | None]:
 
 
 def _check_wine_bridge() -> dict[str, Any]:
-    """Exercise the Wine-hosted MetaTrader bridge via Windows Python."""
+    """Validate the mt5linux bridge by connecting to the RPyC server."""
 
-    name = "Wine MetaTrader bridge"
+    name = "mt5linux bridge"
     instruction = (
-        "Re-run scripts/setup_ubuntu.sh to install Windows Python under Wine, "
-        "export WINE_PYTHON (or regenerate LOGIN_INSTRUCTIONS_WINE.txt) and keep the terminal logged in."
+        "Ensure the mt5linux RPyC server is running (rerun install_programmatic_bridge.sh or restart the bridge service)."
     )
 
     backend_pref = get_configured_backend()
@@ -534,14 +537,12 @@ def _check_wine_bridge() -> dict[str, Any]:
         return {
             "name": name,
             "status": "skipped",
-            "detail": "Native Windows runtime detected; Wine bridge validation not required.",
+            "detail": "Native Windows runtime detected; mt5linux bridge validation not required.",
             "followup": None,
         }
 
     if backend_alias in {"native"}:
-        detail = (
-            "Wine bridge validation skipped because MT5_BRIDGE_BACKEND is set to a native loader"
-        )
+        detail = "mt5linux bridge validation skipped because MT5_BRIDGE_BACKEND is set to a native loader"
         if backend_pref:
             detail += f" ({backend_pref})."
         return {
@@ -551,8 +552,8 @@ def _check_wine_bridge() -> dict[str, Any]:
             "followup": None,
         }
 
-    if backend_alias not in {"auto", "wine", "pymt5linux"}:
-        detail = "Configured MetaTrader backend does not rely on Wine."
+    if backend_alias not in {"auto", "wine", "pymt5linux", "mt5linux"}:
+        detail = "Configured MetaTrader backend does not rely on the mt5linux bridge."
         if backend_pref:
             detail += f" (MT5_BRIDGE_BACKEND={backend_pref})."
         return {
@@ -562,86 +563,91 @@ def _check_wine_bridge() -> dict[str, Any]:
             "followup": None,
         }
 
-    wine_executable = shutil.which("wine")
-    if wine_executable is None:
-        detail = "wine executable not found in PATH. Install Wine to enable the MetaTrader bridge."
+    settings = mt5_bridge.get_mt5linux_connection_settings()
+    if settings.get("port_error"):
         return {
             "name": name,
-            "status": "failed" if sys.platform.startswith("linux") else "skipped",
-            "detail": detail,
-            "followup": instruction if sys.platform.startswith("linux") else None,
+            "status": "failed",
+            "detail": settings["port_error"],
+            "followup": instruction,
+        }
+    if settings.get("timeout_error"):
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": settings["timeout_error"],
+            "followup": instruction,
         }
 
+    host = settings["host"]
+    port = settings.get("port", 0)
+    timeout = settings.get("timeout", 30.0)
+
     try:
-        importlib.import_module("pymt5linux")
+        importlib.import_module("mt5linux")
     except Exception as exc:  # pragma: no cover - optional dependency
         return {
             "name": name,
             "status": "failed",
-            "detail": f"pymt5linux module unavailable: {exc}",
+            "detail": f"mt5linux package unavailable: {exc}",
             "followup": instruction,
         }
-
-    wine_python, source = _discover_wine_python_path()
-    if not wine_python:
-        detail = "Windows Python path for Wine bridge not configured."
-        if source:
-            detail += f" (Checked {source}.)"
-        return {
-            "name": name,
-            "status": "failed",
-            "detail": detail,
-            "followup": instruction,
-        }
-
-    prefix, prefix_source = _discover_wine_prefix()
-    env = os.environ.copy()
-    if prefix:
-        env["WINEPREFIX"] = prefix
 
     try:
-        completed = subprocess.run(
-            [wine_executable, wine_python, "-m", "MetaTrader5", "--version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=45,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
+        import rpyc  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover - optional dependency
         return {
             "name": name,
             "status": "failed",
-            "detail": "Timed out while invoking MetaTrader5 via Wine. Ensure the terminal is running and responsive.",
-            "followup": instruction,
-        }
-    except FileNotFoundError:
-        return {
-            "name": name,
-            "status": "failed",
-            "detail": f"Windows Python executable not accessible at {wine_python}.",
+            "detail": f"rpyc dependency missing: {exc}",
             "followup": instruction,
         }
 
-    if completed.returncode != 0:
-        diagnostic = completed.stderr.strip() or completed.stdout.strip()
-        if not diagnostic:
-            diagnostic = f"wine exited with status {completed.returncode}"
-        if prefix and prefix_source:
-            diagnostic += f" (WINEPREFIX from {prefix_source}: {prefix})"
+    config = {
+        "sync_request_timeout": timeout,
+        "connection_timeout": timeout,
+        "allow_public_attrs": True,
+    }
+
+    try:
+        conn = rpyc.classic.connect(host, port=port, config=config)
+    except OSError as exc:
         return {
             "name": name,
             "status": "failed",
-            "detail": diagnostic.splitlines()[0],
+            "detail": f"Unable to connect to mt5linux at {host}:{port}: {exc}",
             "followup": instruction,
         }
 
-    output = completed.stdout.strip() or completed.stderr.strip()
-    detail = output.splitlines()[0] if output else "MetaTrader5 responded via Wine."
-    if prefix and prefix_source:
-        detail += f" (Using WINEPREFIX from {prefix_source}.)"
-    if source:
-        detail += f" Windows Python discovered via {source}."
+    try:
+        try:
+            version = conn.eval("import MetaTrader5 as mt5; getattr(mt5, '__version__', '')")
+        except Exception as exc:
+            return {
+                "name": name,
+                "status": "failed",
+                "detail": f"MetaTrader5 import via mt5linux failed: {exc}",
+                "followup": instruction,
+            }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    version_text = f"MetaTrader5 {version}" if version else "MetaTrader5 module available"
+    host_source = settings.get("host_source")
+    port_source = settings.get("port_source")
+
+    detail_parts = [f"Connected to mt5linux at {host}:{port}", version_text]
+    if host_source and host_source != "default":
+        detail_parts.append(f"host from {host_source}")
+    if port_source and port_source != "default":
+        detail_parts.append(f"port from {port_source}")
+    if timeout and settings.get("timeout_source") not in {None, "default"}:
+        detail_parts.append(f"timeout from {settings['timeout_source']}")
+
+    detail = "; ".join(detail_parts)
     return {
         "name": name,
         "status": "passed",
