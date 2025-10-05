@@ -1,12 +1,10 @@
-# Core data and pipeline dependencies
+# Core data and pipeline dependencies (mt5linux installed separately via mt5linux-lock.txt)
 pandas
 pandera
 pyarrow
 scikit-learn
 numpy>=1.21.4,<2.0; platform_system != "Windows" and python_version < "3.12"
 numpy>=2.1.3,<3.0; platform_system == "Windows" or python_version >= "3.12"
-mt5linux==0.1.7; platform_system != "Windows" and python_version >= "3.10" and python_version < "3.11"
-mt5linux==0.1.9; platform_system != "Windows" and python_version >= "3.11" and python_version < "3.12"
 joblib
 pyyaml
 psutil

@@ -87,7 +87,12 @@ Windows or Python 3.12+ where the mt5linux bridge is not installed. When
 upgrading mt5linux revisit `constraints.txt`,
 `constraints-mt5linux.txt` and `mt5linux-lock.txt` together to ensure the
 packaging pin continues to match the vendor requirements before raising the
-upper interpreter bound.
+upper interpreter bound. The Ubuntu bootstrap now installs the core
+`requirements.nomt5.txt` (or `requirements.txt`) set without the bridge
+constraint, then applies `constraints-mt5linux.txt` only while replaying the
+locked bridge dependencies from `mt5linux-lock.txt`. This prevents pip from
+backtracking unrelated packages such as `jupyter_server` on hosts that already
+ship JupyterLab.
 
 The MT5 bridge currently ships wheels that are only validated against the
 NumPy 1.21 line on Linux for Python 3.10–3.11, so the requirements now accept

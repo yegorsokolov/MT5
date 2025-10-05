@@ -1,3 +1,6 @@
+# This constraint file is applied only when installing the mt5linux bridge
+# via mt5linux-lock.txt. The core Python environment is installed without it
+# to avoid resolver backtracking with unrelated packages (e.g. JupyterLab).
 pkginfo==1.7.1
 plumbum==1.7.0
 readme-renderer==30.0
