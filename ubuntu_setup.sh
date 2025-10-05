@@ -16,7 +16,9 @@ required_packages=("winehq-stable" "winetricks" "xvfb" "cabextract" "p7zip-full"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 LINUX_PYTHON="${VENV_DIR}/bin/python"
 CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints-mt5linux.txt"
+MAIN_REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.nomt5.txt"
 REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
+MT5LINUX_LOCK_FILE="${SCRIPT_DIR}/mt5linux-lock.txt"
 ENV_FILE="${SCRIPT_DIR}/.env"
 
 FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
@@ -375,8 +377,27 @@ ensure_linux_virtualenv() {
 
 install_linux_requirements() {
   echo "Installing Linux Python dependencies into ${VENV_DIR}..."
-  if [[ ! -f "${REQUIREMENTS_FILE}" ]]; then
-    echo "requirements.txt not found at ${REQUIREMENTS_FILE}" >&2
+  local requirements_path=""
+  if [[ -f "${MAIN_REQUIREMENTS_FILE}" ]]; then
+    requirements_path="${MAIN_REQUIREMENTS_FILE}"
+  elif [[ -f "${REQUIREMENTS_FILE}" ]]; then
+    requirements_path="${REQUIREMENTS_FILE}"
+  else
+    echo "Unable to locate a requirements file. Checked ${MAIN_REQUIREMENTS_FILE} and ${REQUIREMENTS_FILE}." >&2
+    exit 1
+  fi
+  local filtered_requirements_path="${requirements_path}"
+  local temp_requirements_file=""
+  if [[ "${requirements_path}" == "${REQUIREMENTS_FILE}" ]]; then
+    temp_requirements_file="${cache_dir}/requirements.nomt5.bootstrap.txt"
+    if ! grep -vi '^mt5linux' "${requirements_path}" >"${temp_requirements_file}"; then
+      echo "Failed to filter mt5linux pins from ${requirements_path}" >&2
+      exit 1
+    fi
+    filtered_requirements_path="${temp_requirements_file}"
+  fi
+  if [[ ! -f "${MT5LINUX_LOCK_FILE}" ]]; then
+    echo "mt5linux lock file not found at ${MT5LINUX_LOCK_FILE}" >&2
     exit 1
   fi
   if [[ ! -f "${CONSTRAINTS_FILE}" ]]; then
@@ -384,7 +405,8 @@ install_linux_requirements() {
     exit 1
   fi
   run_step "Upgrading pip in Linux virtual environment" "${LINUX_PYTHON}" -m pip install --upgrade pip setuptools wheel
-  run_step "Installing project requirements under MT5 constraints" "${LINUX_PYTHON}" -m pip install --requirement "${REQUIREMENTS_FILE}" --constraint "${CONSTRAINTS_FILE}"
+  run_step "Installing project requirements (excluding mt5linux bridge)" "${LINUX_PYTHON}" -m pip install --upgrade --requirement "${filtered_requirements_path}"
+  run_step "Installing mt5linux bridge dependencies" "${LINUX_PYTHON}" -m pip install --upgrade --requirement "${MT5LINUX_LOCK_FILE}" --constraint "${CONSTRAINTS_FILE}" --no-deps
 }
 
 install_programmatic_bridge_helpers() {
