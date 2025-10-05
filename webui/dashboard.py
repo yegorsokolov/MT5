@@ -2,9 +2,9 @@ import json
 import os
 import subprocess
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict
-from datetime import timedelta
 
 import pandas as pd
 import requests
@@ -31,6 +31,7 @@ from mt5 import risk_manager as rm_mod
 API_URL = os.getenv("REMOTE_API_URL", "https://localhost:8000")
 CERT_PATH = os.getenv("API_CERT", "certs/api.crt")
 PROGRESS_PATH = Path("reports/training/progress.json")
+AUTO_UPDATE_STATUS_PATH = Path("logs/last_sync.json")
 
 
 @st.cache_data
@@ -81,6 +82,28 @@ def load_training_progress() -> Dict[str, Any] | None:
     except Exception:
         return None
     return None
+
+
+def load_last_sync_info() -> Dict[str, Any]:
+    try:
+        if AUTO_UPDATE_STATUS_PATH.exists():
+            return json.loads(AUTO_UPDATE_STATUS_PATH.read_text())
+    except Exception:
+        return {}
+    return {}
+
+
+def _format_sync_time(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        text = value
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    except Exception:
+        return value
 
 
 def _format_bytes(num_bytes: float) -> str:
@@ -271,17 +294,13 @@ def main() -> None:
         "Total drawdown limit",
         value=float(risk_cfg["total_drawdown"]),
     )
-    hedge = st.sidebar.checkbox(
-        "Enable hedging",
-        value=bool(risk_cfg.get("allow_hedging", False)),
-    )
     if st.sidebar.button("Update risk limits"):
         state_manager.save_user_risk(
-            dd, td, risk_cfg.get("news_blackout_minutes", 0), hedge
+            dd, td, risk_cfg.get("news_blackout_minutes", 0), risk_cfg.get("allow_hedging", False)
         )
         rm_mod.risk_manager.update_drawdown_limits(dd, td)
-        rm_mod.risk_manager.set_allow_hedging(hedge)
         st.sidebar.success("Risk limits updated")
+        risk_cfg = state_manager.load_user_risk()
 
     if st.sidebar.button("Export state"):
         try:
@@ -348,6 +367,41 @@ def main() -> None:
         col5.metric("Funding Cost", fund_val)
         col6.metric("Margin Req.", margin_req_val)
         col7.metric("Free Margin", margin_avail_val)
+
+        st.subheader("Repository Sync Status")
+        sync_info = load_last_sync_info()
+        if sync_info:
+            last_sync = _format_sync_time(sync_info.get("synced_at"))
+            commit_message = (sync_info.get("message", "") or "").splitlines()[0:1]
+            commit_summary = commit_message[0] if commit_message else ""
+            commit_hash = sync_info.get("commit")
+            st.metric("Last Sync", last_sync or "Unknown", commit_summary)
+            if commit_hash:
+                st.caption(f"Commit: {commit_hash}")
+        else:
+            st.info("No automatic sync has been recorded yet.")
+
+        st.subheader("Hedging Controls")
+        current_allow_hedging = bool(risk_cfg.get("allow_hedging", False))
+        with st.form("hedging_controls"):
+            hedging_toggle = st.checkbox(
+                "Allow hedging",
+                value=current_allow_hedging,
+            )
+            hedging_submit = st.form_submit_button("Update hedging")
+        if hedging_submit and hedging_toggle != current_allow_hedging:
+            latest_risk = state_manager.load_user_risk()
+            state_manager.save_user_risk(
+                latest_risk["daily_drawdown"],
+                latest_risk["total_drawdown"],
+                latest_risk.get("news_blackout_minutes", 0),
+                hedging_toggle,
+            )
+            rm_mod.risk_manager.set_allow_hedging(hedging_toggle)
+            st.success("Hedging preference updated")
+            risk_cfg = state_manager.load_user_risk()
+        elif hedging_submit:
+            st.info("Hedging preference unchanged.")
 
         render_vps_health_section()
 
