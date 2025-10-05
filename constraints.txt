@@ -1,5 +1,6 @@
-mt5linux==0.1.7; platform_system != "Windows" and python_version >= "3.10" and python_version < "3.11"
-mt5linux==0.1.9; platform_system != "Windows" and python_version >= "3.11" and python_version < "3.12"
+# Legacy mt5linux pins now live exclusively in mt5linux-lock.txt, which is
+# replayed into the auxiliary .mt5linux-venv. This placeholder file remains so
+# older provisioning notes that reference constraints.txt continue to resolve.
 bleach==4.1.0
 certifi==2021.10.8
 cffi==1.15.0

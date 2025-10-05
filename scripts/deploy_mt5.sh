@@ -149,6 +149,13 @@ else
   pip install -r requirements.txt
 fi
 
+echo ">>> Prepare mt5linux auxiliary environment"
+# shellcheck source=./_mt5linux_env.sh
+source "${PROJ_DIR}/scripts/_mt5linux_env.sh"
+if ! refresh_mt5linux_venv "${PYTHON_BIN:-}"; then
+  echo "Failed to prepare the mt5linux auxiliary environment. Review mt5linux-lock.txt and rerun ./use-mt5linux.sh." >&2
+fi
+
 echo ">>> Write .env with Wine/MT5 paths"
 MT5_TERMINAL_ESCAPED=$(echo "${MT5_TERMINAL_WIN}" | sed 's/\\\\/\\\\\\\\/g')
 cat > .env <<EOF

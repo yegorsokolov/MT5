@@ -27,8 +27,6 @@ dependencies = [
     "torch",
     "tqdm",
     "MetaTrader5<6; platform_system == \"Windows\"",
-    "mt5linux==0.1.7; platform_system != \"Windows\" and python_version >= \"3.10\" and python_version < \"3.11\"",
-    "mt5linux==0.1.9; platform_system != \"Windows\" and python_version >= \"3.11\" and python_version < \"3.12\"",
     "scikit-optimize",
     "scipy",
     "river",
@@ -51,6 +49,7 @@ dependencies = [
     "skl2onnx",
     "onnxmltools",
     "gplearn",
+    "rpyc>=5.3",
 ]
 
 [project.scripts]
