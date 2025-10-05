@@ -438,11 +438,14 @@ install_linux_requirements() {
         warn "requirements.txt not found; skipping Python dependency installation."
     fi
 
-    log "Installing mt5linux client dependencies in the Linux environment"
-    python -m pip install --upgrade rpyc
-
     log "Preparing auxiliary mt5linux virtual environment at ${MT5LINUX_VENV_PATH}"
-    refresh_mt5linux_venv "$LINUX_PYTHON_BIN"
+    if refresh_mt5linux_venv "$LINUX_PYTHON_BIN"; then
+        local lock_display
+        lock_display="$(basename "${MT5LINUX_LOCK_FILE:-mt5linux-lock.txt}")"
+        log "mt5linux auxiliary environment refreshed from ${lock_display}"
+    else
+        warn "Failed to refresh the mt5linux auxiliary environment; bridge helpers may be unavailable."
+    fi
 }
 
 write_env_file() {

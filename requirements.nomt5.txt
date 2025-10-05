@@ -24,6 +24,7 @@ kafka-python
 redis
 testcontainers[kafka,redis]
 filelock
+rpyc>=5.3
 fastapi
 uvicorn
 uvloop; platform_system != "Windows"

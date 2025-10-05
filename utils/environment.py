@@ -627,7 +627,7 @@ def _check_wine_bridge() -> dict[str, Any]:
                 detail = (
                     "mt5linux package unavailable in active interpreter. "
                     f"Auxiliary environment check ({aux_source}) failed: {aux_exc}. "
-                    "Activate the helper via ./use-mt5linux.sh before rerunning."
+                    "Refresh the helper via ./use-mt5linux.sh so mt5linux-lock.txt can be replayed."
                 )
                 return {
                     "name": name,
@@ -638,7 +638,7 @@ def _check_wine_bridge() -> dict[str, Any]:
         else:
             detail = (
                 "mt5linux package unavailable in active interpreter and auxiliary virtualenv not detected. "
-                "Run ./use-mt5linux.sh to create the bridge client environment."
+                "Run ./use-mt5linux.sh to create the bridge client environment from mt5linux-lock.txt."
             )
             return {
                 "name": name,
