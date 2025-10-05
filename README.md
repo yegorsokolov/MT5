@@ -84,26 +84,22 @@ Windows-only wheel is no longer reported as missing.
 > Python 3.11.9 so the Windows installer download continues to succeed.
 
 Both `mt5linux==0.1.7` (Python 3.10) and `mt5linux==0.1.9` (Python 3.11) vendor
-the same dependency set, including a hard pin on `packaging==21.2`. The
-constraint files therefore keep `packaging` at that version for non-Windows
-interpreters in the supported `3.10`–`3.11` range so pip satisfies the wheel
-metadata without a resolver conflict, while allowing `packaging==23.2` on
-Windows or Python 3.12+ where the mt5linux bridge is not installed. When
-upgrading mt5linux revisit `constraints.txt`,
-`constraints-mt5linux.txt` and `mt5linux-lock.txt` together to ensure the
-packaging pin continues to match the vendor requirements before raising the
-upper interpreter bound. The Ubuntu bootstrap now installs the core
-`requirements.nomt5.txt` (or `requirements.txt`) set without the bridge
-constraint, installs only `rpyc` into the primary `.venv`, then replays the
-locked bridge dependencies from `mt5linux-lock.txt` inside a dedicated
-`.mt5linux-venv`. This prevents pip from backtracking unrelated packages such as
-`jupyter_server` on hosts that already ship JupyterLab while keeping the legacy
-bridge isolated from the rest of the project dependencies.
+the same dependency set, including a hard pin on `packaging==21.2`. To stop the
+resolver from backtracking the main `.venv`, the core requirement sets now omit
+`mt5linux` entirely and install only the modern scientific stack (including
+`rpyc`, which the Linux client uses to speak to the bridge). When you upgrade
+mt5linux revisit `constraints-mt5linux.txt` and `mt5linux-lock.txt` together to
+keep the vendor pins aligned before raising the supported Python series. The
+Ubuntu bootstrap refreshes `.venv` from `requirements.txt` and then replays the
+locked bridge dependencies into a dedicated `.mt5linux-venv`. This keeps the
+legacy `numpy==1.21.4` wheel isolated from the main interpreter while avoiding
+resolver conflicts with tools like JupyterLab that expect newer NumPy builds.
 
 Activate the auxiliary environment with `./use-mt5linux.sh` whenever you need to
 run helpers that import the upstream `mt5linux` package (for example
-`install_programmatic_bridge.sh`). The script bootstraps `.mt5linux-venv` on
-demand, ensuring the lock file stays in sync with the published bridge wheels.
+`install_programmatic_bridge.sh`). The script bootstraps/refreshes
+`.mt5linux-venv` on demand so `mt5linux-lock.txt` remains the single source of
+truth for the bridge dependencies.
 
 The MT5 bridge currently ships wheels that are only validated against the
 NumPy 1.21 line on Linux for Python 3.10–3.11, so the requirements now accept
