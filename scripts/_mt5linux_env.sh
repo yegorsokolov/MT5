@@ -66,7 +66,11 @@ refresh_mt5linux_venv() {
 
     if [[ -f "$MT5LINUX_LOCK_FILE" ]]; then
         _mt5linux_env_log "Replaying locked mt5linux dependencies from $(basename "$MT5LINUX_LOCK_FILE")"
-        python -m pip install --upgrade -r "$MT5LINUX_LOCK_FILE"
+        # mt5linux still vendors an older NumPy pin in its metadata; install the
+        # packages enumerated in the lock file directly so newer wheels selected
+        # via environment markers (e.g. NumPy 1.26+ on Python 3.11) are honoured
+        # without the resolver attempting to downgrade them.
+        python -m pip install --no-deps --upgrade -r "$MT5LINUX_LOCK_FILE"
     else
         _mt5linux_env_log "Lock file $MT5LINUX_LOCK_FILE missing; installing mt5linux and rpyc from PyPI"
         python -m pip install --upgrade mt5linux rpyc
