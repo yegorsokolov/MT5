@@ -271,6 +271,7 @@ class AutoUpdater:
                 logger.exception("Failed to reapply stashed changes; manual resolution required")
                 raise
 
+        self._record_sync_event()
         self._ensure_protected_paths()
         self._restart_service()
 
@@ -304,6 +305,29 @@ class AutoUpdater:
                 path.mkdir(parents=True, exist_ok=True)
             except Exception:
                 logger.exception("Failed to ensure protected path %s", path)
+
+    # ------------------------------------------------------------------
+    def _record_sync_event(self) -> None:
+        """Persist metadata about the most recent successful sync."""
+
+        path = self.repo_path / "logs" / "last_sync.json"
+        try:
+            commit = (
+                self._git(["rev-parse", "HEAD"], capture_output=True).stdout.strip()
+            )
+            commit_message = (
+                self._git(["log", "-1", "--pretty=%B"], capture_output=True)
+                .stdout.strip()
+            )
+            payload = {
+                "synced_at": self._format_timestamp(self._now()),
+                "commit": commit,
+                "message": commit_message,
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, indent=2))
+        except Exception:
+            logger.exception("Failed to record sync metadata")
 
     # ------------------------------------------------------------------
     def _load_state(self) -> UpdateState | None:
