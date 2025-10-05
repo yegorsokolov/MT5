@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_python_version_config.sh"
 
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=./_mt5linux_env.sh
+source "${SCRIPT_DIR}/_mt5linux_env.sh"
 CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
 
 MT5_WINE_PREFIX_DEFAULT="$HOME/.wine-mt5"
@@ -437,7 +439,10 @@ install_linux_requirements() {
     fi
 
     log "Installing mt5linux client dependencies in the Linux environment"
-    python -m pip install --upgrade "$MT5LINUX_PACKAGE" rpyc
+    python -m pip install --upgrade rpyc
+
+    log "Preparing auxiliary mt5linux virtual environment at ${MT5LINUX_VENV_PATH}"
+    refresh_mt5linux_venv "$LINUX_PYTHON_BIN"
 }
 
 write_env_file() {
