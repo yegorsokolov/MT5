@@ -6,20 +6,20 @@
 # automatically choose a stable patch for the configured series.
 #
 # Scripts consuming these defaults may rely on the following variables:
-#   MT5_PYTHON_SERIES        -> "3.10"
-#   MT5_PYTHON_PATCH         -> "3.10.16" (or series-specific default)
-#   MT5_PYTHON_TAG           -> "310" (digits only)
-#   MT5_PYTHON_PREFIX        -> default Wine prefix ("$HOME/.wine-py310")
-#   MT5_PYTHON_WIN_DIR       -> Windows installation target ("C:\\Python310")
+#   MT5_PYTHON_SERIES        -> "3.11"
+#   MT5_PYTHON_PATCH         -> "3.11.9" (or series-specific default)
+#   MT5_PYTHON_TAG           -> "311" (digits only)
+#   MT5_PYTHON_PREFIX        -> default Wine prefix ("$HOME/.wine-py311")
+#   MT5_PYTHON_WIN_DIR       -> Windows installation target ("C:\\Python311")
 #   MT5_PYTHON_INSTALLER     -> Windows installer filename
 #   MT5_PYTHON_EMBED_ZIP     -> Optional embeddable ZIP filename
 #   MT5_PYTHON_DOWNLOAD_ROOT -> Base URL for python.org artifacts
 
-: "${MT5_PYTHON_SERIES:=3.10}"
+: "${MT5_PYTHON_SERIES:=3.11}"
 
 if [[ -z "${MT5_PYTHON_PATCH:-}" ]]; then
   case "$MT5_PYTHON_SERIES" in
-    3.10) MT5_PYTHON_PATCH="3.10.16" ;;
+    3.10) MT5_PYTHON_PATCH="3.10.11" ;;
     3.11) MT5_PYTHON_PATCH="3.11.9" ;;
     3.12) MT5_PYTHON_PATCH="3.12.6" ;;
     3.13) MT5_PYTHON_PATCH="3.13.1" ;;
