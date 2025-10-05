@@ -53,7 +53,7 @@ pipeline switches to a scikit-learn gradient boosting fallback and records the
 missing modules inside the checkpoint metadata for later recovery. Components
 that previously relied on `uvloop`, Ray or torch-geometric now ship with
 pure-Python fallbacks so the project remains fully operational even when recent
-wheels are unavailable. With Python 3.10 now the baseline runtime, the setup
+wheels are unavailable. With Python 3.11 now the baseline runtime, the setup
 tooling reinstalls the accelerated `uvloop` integration automatically, and it
 will restore Ray and torch-geometric as soon as their Python 3.13 wheels ship;
 until then the environment diagnostics highlight remediation steps whenever
@@ -73,10 +73,15 @@ Windows-only wheel is no longer reported as missing.
   interpreter, ensure `pip` is available and upgrade dependencies. The script
   now verifies that Ray, torch-geometric and `uvloop` are installed when the
   interpreter supports their binary wheels.
-* Windows/macOS: install Python 3.10 (or another supported version) from
+* Windows/macOS: install Python 3.11 (or another supported version) from
   python.org, ensure it appears first on your `PATH`, then create a virtual
   environment (`python -m venv .venv`)
   before installing requirements.
+
+> **Note:** Python 3.10 security releases are published as source-only builds.
+> Override `MT5_PYTHON_SERIES=3.10` (and provide a matching `MT5_PYTHON_PATCH`
+> or mirror) if you must stay on that series—the onboarding scripts default to
+> Python 3.11.9 so the Windows installer download continues to succeed.
 
 Both `mt5linux==0.1.7` (Python 3.10) and `mt5linux==0.1.9` (Python 3.11) vendor
 the same dependency set, including a hard pin on `packaging==21.2`. The
@@ -131,7 +136,8 @@ the next section. It performs the following actions:
 2. Installs Wine (32/64-bit), winetricks, cabextract, Git and the base Python
    tooling required by the scripts.
 3. Creates a single Wine prefix that houses both the MetaTrader 5 terminal and
-   the Windows build of Python 3.10.x (configurable via `MT5_PYTHON_SERIES`),
+   the Windows build of Python 3.11.x by default (configurable via
+   `MT5_PYTHON_SERIES`),
    including the official `MetaTrader5` wheel and a `numpy<2.4` pin for
    stability.
 4. Clones this repository via SSH into `~/MT5`, bootstraps a local virtual
@@ -197,15 +203,16 @@ session unless stated otherwise.
   ```
 
    Before continuing, decide which Python series you want the automation to
-   target. The scripts default to Python 3.10.x; set `MT5_PYTHON_SERIES=3.11`
-   (and optionally `MT5_PYTHON_PATCH=3.11.9`) if you must run the 3.11 toolchain
-   instead. The helper variables below make the remaining commands copy/paste
-   friendly:
+   target. The scripts default to Python 3.11.x so the bundled Windows
+   installer remains available; set `MT5_PYTHON_SERIES=3.10` and provide
+   `MT5_PYTHON_PATCH=3.10.11` (or point to your own mirror) if you must stay on
+   the 3.10 line. The helper variables below make the remaining commands
+   copy/paste friendly:
 
    ```bash
-   PY_SERIES=${MT5_PYTHON_SERIES:-3.10}
+   PY_SERIES=${MT5_PYTHON_SERIES:-3.11}
    case "$PY_SERIES" in
-     3.10) PY_PATCH=${MT5_PYTHON_PATCH:-3.10.16} ;;
+     3.10) PY_PATCH=${MT5_PYTHON_PATCH:-3.10.11} ;;
      3.11) PY_PATCH=${MT5_PYTHON_PATCH:-3.11.9} ;;
      *) PY_PATCH=${MT5_PYTHON_PATCH:-${PY_SERIES}.0} ;;
    esac
@@ -341,7 +348,7 @@ session unless stated otherwise.
 The helper script `scripts/setup_ubuntu.sh` automates the heavy lifting above:
 it removes the unsupported deadsnakes PPA on Ubuntu 25.04, enables `i386`
 multi-arch support, installs Wine 32/64, ensures `winetricks` runtime
-components are applied to both prefixes, provisions Windows Python 3.10.x by
+components are applied to both prefixes, provisions Windows Python 3.11.x by
 default (respecting `MT5_PYTHON_SERIES`), installs `MetaTrader5`, downloads the
 MT5 terminal installer and writes a
 `LOGIN_INSTRUCTIONS_WINE.txt` cheat sheet summarising the detected paths.
