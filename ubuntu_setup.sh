@@ -386,27 +386,12 @@ install_linux_requirements() {
     echo "Unable to locate a requirements file. Checked ${MAIN_REQUIREMENTS_FILE} and ${REQUIREMENTS_FILE}." >&2
     exit 1
   fi
-  local filtered_requirements_path="${requirements_path}"
-  local temp_requirements_file=""
-  if [[ "${requirements_path}" == "${REQUIREMENTS_FILE}" ]]; then
-    temp_requirements_file="${cache_dir}/requirements.nomt5.bootstrap.txt"
-    if ! grep -vi '^mt5linux' "${requirements_path}" >"${temp_requirements_file}"; then
-      echo "Failed to filter mt5linux pins from ${requirements_path}" >&2
-      exit 1
-    fi
-    filtered_requirements_path="${temp_requirements_file}"
-  fi
-  if [[ ! -f "${MT5LINUX_LOCK_FILE}" ]]; then
-    echo "mt5linux lock file not found at ${MT5LINUX_LOCK_FILE}" >&2
-    exit 1
-  fi
   if [[ ! -f "${CONSTRAINTS_FILE}" ]]; then
     echo "Constraint file not found at ${CONSTRAINTS_FILE}" >&2
     exit 1
   fi
   run_step "Upgrading pip in Linux virtual environment" "${LINUX_PYTHON}" -m pip install --upgrade pip setuptools wheel
-  run_step "Installing project requirements (excluding mt5linux bridge)" "${LINUX_PYTHON}" -m pip install --upgrade --requirement "${filtered_requirements_path}"
-  run_step "Installing mt5linux bridge dependencies" "${LINUX_PYTHON}" -m pip install --upgrade --requirement "${MT5LINUX_LOCK_FILE}" --constraint "${CONSTRAINTS_FILE}" --no-deps
+  run_step "Installing project requirements" "${LINUX_PYTHON}" -m pip install --upgrade --requirement "${requirements_path}" --constraint "${CONSTRAINTS_FILE}"
 }
 
 install_programmatic_bridge_helpers() {
