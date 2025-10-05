@@ -78,12 +78,16 @@ Windows-only wheel is no longer reported as missing.
   environment (`python -m venv .venv`)
   before installing requirements.
 
-On Python 3.10 the `mt5linux==0.1.7` backend still depends on the legacy
-`packaging==21.2` release shipped with that build, so the constraint files pin
-that version when `python_version < "3.11"`. Newer interpreters should keep
-`packaging` at `23.2` or above to retain the `strip_trailing_zero` metadata
-parsing required by more recent mt5linux installers, and the constraints apply
-that minimum automatically.
+Both `mt5linux==0.1.7` (Python 3.10) and `mt5linux==0.1.9` (Python 3.11) vendor
+the same dependency set, including a hard pin on `packaging==21.2`. The
+constraint files therefore keep `packaging` at that version for non-Windows
+interpreters in the supported `3.10`–`3.11` range so pip satisfies the wheel
+metadata without a resolver conflict, while allowing `packaging==23.2` on
+Windows or Python 3.12+ where the mt5linux bridge is not installed. When
+upgrading mt5linux revisit `constraints.txt`,
+`constraints-mt5linux.txt` and `mt5linux-lock.txt` together to ensure the
+packaging pin continues to match the vendor requirements before raising the
+upper interpreter bound.
 
 The MT5 bridge currently ships wheels that are only validated against the
 NumPy 1.21 line on Linux for Python 3.10–3.11, so the requirements now accept
