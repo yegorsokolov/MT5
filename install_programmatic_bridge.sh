@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/_python_version_config.sh
 source "${SCRIPT_DIR}/scripts/_python_version_config.sh"
 
+PROJECT_ROOT="${PROJECT_ROOT:-${SCRIPT_DIR}}"
+# shellcheck source=scripts/_mt5linux_env.sh
+source "${PROJECT_ROOT}/scripts/_mt5linux_env.sh"
+
 log() { printf '[bridge] %s\n' "$*" >&2; }
 warn() { printf '[bridge:WARN] %s\n' "$*" >&2; }
 error() { printf '[bridge:ERROR] %s\n' "$*" >&2; }
@@ -27,6 +31,10 @@ MT5LINUX_SERVER_DIR_DEFAULT="${PY_WINE_PREFIX}/drive_c/mt5linux-server"
 MT5LINUX_HOST="${MT5LINUX_HOST:-${MT5LINUX_HOST_DEFAULT}}"
 MT5LINUX_PORT="${MT5LINUX_PORT:-${MT5LINUX_PORT_DEFAULT}}"
 MT5LINUX_SERVER_DIR="${MT5LINUX_SERVER_DIR:-${MT5LINUX_SERVER_DIR_DEFAULT}}"
+MT5LINUX_VENV_PATH_DEFAULT="${PROJECT_ROOT}/.mt5linux-venv"
+MT5LINUX_VENV_PATH="${MT5LINUX_VENV_PATH:-${MT5LINUX_VENV_PATH_DEFAULT}}"
+MT5LINUX_BOOTSTRAP_PYTHON="${MT5LINUX_BOOTSTRAP_PYTHON:-}"
+MT5LINUX_PYTHON="${MT5LINUX_PYTHON:-}"
 
 if [[ -z "${MT5LINUX_PACKAGE:-}" ]]; then
   case "${MT5_PYTHON_SERIES}" in
@@ -209,13 +217,13 @@ install_windows_packages() {
 }
 
 install_linux_mt5linux() {
-  log "Installing mt5linux package in the Linux environment (${MT5LINUX_PACKAGE})"
-  if ! command -v python3 >/dev/null 2>&1; then
-    die "python3 command not found on the Linux host"
+  log "Preparing mt5linux auxiliary environment at ${MT5LINUX_VENV_PATH}"
+  if ! refresh_mt5linux_venv "${MT5LINUX_BOOTSTRAP_PYTHON}"; then
+    die "Failed to prepare mt5linux auxiliary environment"
   fi
 
-  if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" python3 -m pip install --upgrade "$MT5LINUX_PACKAGE" rpyc 1>&2; then
-    die "Failed to install mt5linux on the Linux host"
+  if ! MT5LINUX_PYTHON="$(mt5linux_env_python_path)"; then
+    die "mt5linux auxiliary python interpreter missing from ${MT5LINUX_VENV_PATH}"
   fi
 }
 
@@ -250,7 +258,12 @@ launch_mt5linux_server() {
 run_probe() {
   log "Validating mt5linux bridge connectivity from Linux Python..."
   local host="$MT5LINUX_HOST" port="$MT5LINUX_PORT" timeout_ms="$BRIDGE_TIMEOUT_MS"
-  if ! python3 - "$host" "$port" "$timeout_ms" <<'PY'
+  local probe_python="${MT5LINUX_PYTHON:-}"
+  if [[ -z "$probe_python" ]]; then
+    die "Probe interpreter not configured (mt5linux auxiliary environment missing?)"
+  fi
+
+  if ! "$probe_python" - "$host" "$port" "$timeout_ms" <<'PY'
 import sys
 import time
 

@@ -94,10 +94,16 @@ upgrading mt5linux revisit `constraints.txt`,
 packaging pin continues to match the vendor requirements before raising the
 upper interpreter bound. The Ubuntu bootstrap now installs the core
 `requirements.nomt5.txt` (or `requirements.txt`) set without the bridge
-constraint, then applies `constraints-mt5linux.txt` only while replaying the
-locked bridge dependencies from `mt5linux-lock.txt`. This prevents pip from
-backtracking unrelated packages such as `jupyter_server` on hosts that already
-ship JupyterLab.
+constraint, installs only `rpyc` into the primary `.venv`, then replays the
+locked bridge dependencies from `mt5linux-lock.txt` inside a dedicated
+`.mt5linux-venv`. This prevents pip from backtracking unrelated packages such as
+`jupyter_server` on hosts that already ship JupyterLab while keeping the legacy
+bridge isolated from the rest of the project dependencies.
+
+Activate the auxiliary environment with `./use-mt5linux.sh` whenever you need to
+run helpers that import the upstream `mt5linux` package (for example
+`install_programmatic_bridge.sh`). The script bootstraps `.mt5linux-venv` on
+demand, ensuring the lock file stays in sync with the published bridge wheels.
 
 The MT5 bridge currently ships wheels that are only validated against the
 NumPy 1.21 line on Linux for Python 3.10–3.11, so the requirements now accept
