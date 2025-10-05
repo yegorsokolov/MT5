@@ -85,13 +85,14 @@ that version when `python_version < "3.11"`. Newer interpreters should keep
 parsing required by more recent mt5linux installers, and the constraints apply
 that minimum automatically.
 
-The MT5 bridge currently ships wheels that require `numpy==1.21.4` on Linux for
-Python 3.10–3.11, so the requirements files pin that build when the platform
-markers indicate mt5linux will be installed. Newer interpreters and Windows
-installations continue to use the modern NumPy wheels (`2.1.3` at the time of
-writing) so the rest of the analytics stack remains compatible. Before
-bootstrapping the environment, confirm the interpreter you plan to run with can
-install the pinned NumPy wheel for its platform.
+The MT5 bridge currently ships wheels that are only validated against the
+NumPy 1.21 line on Linux for Python 3.10–3.11, so the requirements now accept
+any build from `>=1.21.4,<2.0` in those environments while keeping the modern
+`>=2.1.3,<3.0` range for Windows and Python 3.12+. This keeps mt5linux compatible
+without preventing projects that need newer numerical features from upgrading
+inside the supported bands. Before bootstrapping the environment, confirm the
+interpreter you plan to run can install an allowed NumPy wheel for its platform
+and Python version.
 
 ## Automated Wine + MetaTrader 5 bootstrap
 
