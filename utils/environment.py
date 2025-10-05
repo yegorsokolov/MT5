@@ -522,6 +522,29 @@ def _discover_wine_prefix() -> tuple[str | None, str | None]:
     return None, None
 
 
+def _discover_mt5linux_aux_python() -> tuple[Path | None, str | None]:
+    """Return the Python interpreter from the auxiliary mt5linux virtualenv."""
+
+    candidates: list[tuple[Path, str]] = []
+    env_path = os.getenv("MT5LINUX_VENV_PATH")
+    if env_path:
+        candidates.append((Path(env_path), "MT5LINUX_VENV_PATH"))
+
+    default_path = PROJECT_ROOT / ".mt5linux-venv"
+    candidates.append((default_path, "project default"))
+
+    for base, source in candidates:
+        if not base:
+            continue
+        scripts_dir = "Scripts" if os.name == "nt" else "bin"
+        python_name = "python.exe" if os.name == "nt" else "python"
+        candidate = base / scripts_dir / python_name
+        if candidate.exists():
+            return candidate, source
+
+    return None, None
+
+
 def _check_wine_bridge() -> dict[str, Any]:
     """Validate the mt5linux bridge by connecting to the RPyC server."""
 
@@ -583,15 +606,46 @@ def _check_wine_bridge() -> dict[str, Any]:
     port = settings.get("port", 0)
     timeout = settings.get("timeout", 30.0)
 
+    mt5linux_import_error: Exception | None = None
     try:
         importlib.import_module("mt5linux")
     except Exception as exc:  # pragma: no cover - optional dependency
-        return {
-            "name": name,
-            "status": "failed",
-            "detail": f"mt5linux package unavailable: {exc}",
-            "followup": instruction,
-        }
+        mt5linux_import_error = exc
+
+    if mt5linux_import_error is not None:
+        aux_python, aux_source = _discover_mt5linux_aux_python()
+        if aux_python is not None:
+            try:
+                subprocess.run(
+                    [str(aux_python), "-c", "import mt5linux"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except Exception as aux_exc:  # pragma: no cover - auxiliary validation is best-effort
+                detail = (
+                    "mt5linux package unavailable in active interpreter. "
+                    f"Auxiliary environment check ({aux_source}) failed: {aux_exc}. "
+                    "Activate the helper via ./use-mt5linux.sh before rerunning."
+                )
+                return {
+                    "name": name,
+                    "status": "failed",
+                    "detail": detail,
+                    "followup": instruction,
+                }
+        else:
+            detail = (
+                "mt5linux package unavailable in active interpreter and auxiliary virtualenv not detected. "
+                "Run ./use-mt5linux.sh to create the bridge client environment."
+            )
+            return {
+                "name": name,
+                "status": "failed",
+                "detail": detail,
+                "followup": instruction,
+            }
 
     try:
         import rpyc  # type: ignore[import-not-found]
