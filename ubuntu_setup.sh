@@ -451,6 +451,34 @@ install_programmatic_bridge_helpers() {
     --server-dir "${server_dir_winpath}"
 }
 
+configure_shell_env_autoload() {
+  local shell_rc="${HOME}/.bashrc"
+  local env_path="${ENV_FILE}"
+  local marker_start="# >>> MT5 environment auto-load >>>"
+  local marker_end="# <<< MT5 environment auto-load <<<"
+
+  if [[ ! -f "${env_path}" ]]; then
+    echo "Skipping shell auto-load configuration; ${env_path} not found."
+    return
+  fi
+
+  if [[ -f "${shell_rc}" ]] && grep -Fq "${marker_start}" "${shell_rc}"; then
+    echo ".env auto-load snippet already present in ${shell_rc}."
+    return
+  fi
+
+  echo "Adding .env auto-load snippet to ${shell_rc}"
+  cat >>"${shell_rc}" <<EOF
+${marker_start}
+if [ -f "${env_path}" ]; then
+  set -a
+  . "${env_path}"
+  set +a
+fi
+${marker_end}
+EOF
+}
+
 verify_linux_environment() {
   echo "Running Linux environment diagnostics..."
   run_step "Executing utils.environment smoke test" \
@@ -490,6 +518,7 @@ main() {
   ensure_linux_virtualenv
   install_linux_requirements
   install_programmatic_bridge_helpers
+  configure_shell_env_autoload
   verify_linux_environment
   deploy_bridge_files
   compile_ea
