@@ -95,11 +95,20 @@ locked bridge dependencies into a dedicated `.mt5linux-venv`. This keeps the
 legacy `numpy==1.21.4` wheel isolated from the main interpreter while avoiding
 resolver conflicts with tools like JupyterLab that expect newer NumPy builds.
 
+For the auxiliary bridge environments, `cffi` stays pinned to 1.15.0 when the
+interpreter is older than Python 3.11 so the mt5linux vendor set continues to
+resolve against prebuilt wheels. Python 3.11+ deployments instead allow the
+maintained `>=1.15.1,<2.0` range so the Windows pip install can pick up the
+newer binary wheels without attempting to compile `cffi` from source.
+
 Activate the auxiliary environment with `./use-mt5linux.sh` whenever you need to
 run helpers that import the upstream `mt5linux` package (for example
 `install_programmatic_bridge.sh`). The script bootstraps/refreshes
 `.mt5linux-venv` on demand so `mt5linux-lock.txt` remains the single source of
-truth for the bridge dependencies.
+truth for the bridge dependencies. When invoked without overrides the bridge
+installer now exports `PY_WINE_PREFIX` and `MT5_WINE_PREFIX`, defaulting both to
+`~/.wine-mt5` when the per-series prefixes are absent so the Windows Python
+runtime and MetaTrader terminal can be located automatically.
 
 The MT5 bridge currently ships wheels that are only validated against the
 NumPy 1.21 line on Linux for Python 3.10–3.11, so the requirements now accept

@@ -1,6 +1,7 @@
 bleach==4.1.0
 certifi==2021.10.8
-cffi==1.15.0
+cffi==1.15.0; python_version < "3.11"
+cffi>=1.15.1,<2.0; python_version >= "3.11"
 charset-normalizer==2.0.7
 colorama==0.4.4
 cryptography==35.0.0
