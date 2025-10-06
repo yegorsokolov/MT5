@@ -12,3 +12,5 @@ nav:
       - Configuration Models: reference/configuration.md
       - Indicators: reference/indicators.md
       - Purged Time-Series CV: reference/purged-cv.md
+  - Tasks:
+      - Fix mt5linux Wine launcher: tasks/mt5linux-bridge.md

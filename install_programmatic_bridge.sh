@@ -313,8 +313,35 @@ launch_mt5linux_server() {
   stop_mt5linux_server
 
   local log_file="$MT5LINUX_SERVER_DIR/mt5linux.log"
+  local python_arg_winpath="${WIN_PYTHON_WINPATH}"
+
+  if [[ -n "${MT5LINUX_BOOTSTRAP_PYTHON:-}" ]]; then
+    local bootstrap_winpath
+    bootstrap_winpath="$(to_windows_path "$PY_WINE_PREFIX" "$MT5LINUX_BOOTSTRAP_PYTHON" 2>/dev/null || true)"
+    if [[ -n "$bootstrap_winpath" ]]; then
+      python_arg_winpath="$bootstrap_winpath"
+    else
+      warn "Unable to translate MT5LINUX_BOOTSTRAP_PYTHON path '${MT5LINUX_BOOTSTRAP_PYTHON}' to a Windows path; falling back to $WIN_PYTHON_WINPATH"
+    fi
+  fi
+
   log "Launching mt5linux RPyC server at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
-  if ! with_wine_env "$PY_WINE_PREFIX" nohup wine "$WIN_PYTHON_WINPATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_WINPATH" "$WIN_PYTHON_WINPATH" >>"$log_file" 2>&1 & then
+  local -a launch_cmd=(
+    nohup
+    wine
+    "$WIN_PYTHON_WINPATH"
+    -m
+    mt5linux
+    --host
+    "$MT5LINUX_HOST"
+    --port
+    "$MT5LINUX_PORT"
+    --server
+    "$MT5LINUX_SERVER_WINPATH"
+    "$python_arg_winpath"
+  )
+
+  if ! with_wine_env "$PY_WINE_PREFIX" "${launch_cmd[@]}" >>"$log_file" 2>&1 & then
     die "Failed to launch mt5linux server via Wine"
   fi
   local server_pid=$!
