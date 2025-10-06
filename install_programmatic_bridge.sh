@@ -159,9 +159,21 @@ require_command() {
   command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
 }
 
+with_wine_env() {
+  local prefix="$1"
+  shift
+  WINEDLLOVERRIDES="ucrtbase=native,builtin" WINEPREFIX="$prefix" "$@"
+}
+
+run_wine() {
+  local prefix="$1"
+  shift
+  with_wine_env "$prefix" wine "$@"
+}
+
 to_windows_path() {
   local prefix="$1" path="$2"
-  WINEPREFIX="$prefix" winepath -w "$path" 2>/dev/null | tr -d '\r'
+  with_wine_env "$prefix" winepath -w "$path" 2>/dev/null | tr -d '\r'
 }
 
 detect_windows_python() {
@@ -233,7 +245,7 @@ detect_terminal() {
 
 install_windows_packages() {
   log "Ensuring Windows pip is up-to-date..."
-  if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade pip 1>&2; then
+  if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade pip 1>&2; then
     die "Failed to upgrade pip in Windows environment"
   fi
 
@@ -249,24 +261,24 @@ install_windows_packages() {
     req_winpath="$(to_windows_path "$PY_WINE_PREFIX" "$req_source")"
     [[ -n "$req_winpath" ]] || die "Unable to translate mt5linux dependency lock file path"
     log "Pre-installing mt5linux dependency pins from $(basename "$req_source")"
-    if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps --only-binary :all: -r "$req_winpath" 1>&2; then
+    if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps --only-binary :all: -r "$req_winpath" 1>&2; then
       log "Binary wheel installation for mt5linux dependency pins failed; retrying without --only-binary"
-      WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps -r "$req_winpath" 1>&2 || die "Failed to install mt5linux dependency pins in Windows environment"
+      PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps -r "$req_winpath" 1>&2 || die "Failed to install mt5linux dependency pins in Windows environment"
     fi
   else
     warn "mt5linux dependency lock file not found; skipping pre-install step"
   fi
 
   log "Ensuring MetaTrader5 wheel is installed"
-  if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --only-binary :all: MetaTrader5 1>&2; then
+  if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --only-binary :all: MetaTrader5 1>&2; then
     log "Binary wheel installation for MetaTrader5 failed; retrying without --only-binary"
-    WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade MetaTrader5 1>&2 || die "Failed to install MetaTrader5 in Windows environment"
+    PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade MetaTrader5 1>&2 || die "Failed to install MetaTrader5 in Windows environment"
   fi
 
   log "Installing ${MT5LINUX_PACKAGE} without dependencies"
-  if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps --only-binary :all: "${MT5LINUX_PACKAGE}" 1>&2; then
+  if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps --only-binary :all: "${MT5LINUX_PACKAGE}" 1>&2; then
     log "Binary wheel installation for ${MT5LINUX_PACKAGE} failed; retrying without --only-binary"
-    WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps "${MT5LINUX_PACKAGE}" 1>&2 || die "Failed to install ${MT5LINUX_PACKAGE} in Windows environment"
+    PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps "${MT5LINUX_PACKAGE}" 1>&2 || die "Failed to install ${MT5LINUX_PACKAGE} in Windows environment"
   fi
 }
 
@@ -301,7 +313,7 @@ launch_mt5linux_server() {
 
   local log_file="$MT5LINUX_SERVER_DIR/mt5linux.log"
   log "Launching mt5linux RPyC server at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
-  if ! WINEPREFIX="$PY_WINE_PREFIX" nohup wine "$WIN_PYTHON_WINPATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_WINPATH" >>"$log_file" 2>&1 & then
+  if ! with_wine_env "$PY_WINE_PREFIX" nohup wine "$WIN_PYTHON_WINPATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_WINPATH" >>"$log_file" 2>&1 & then
     die "Failed to launch mt5linux server via Wine"
   fi
   local server_pid=$!
