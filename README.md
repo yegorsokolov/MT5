@@ -110,6 +110,28 @@ installer now exports `PY_WINE_PREFIX` and `MT5_WINE_PREFIX`, defaulting both to
 `~/.wine-mt5` when the per-series prefixes are absent so the Windows Python
 runtime and MetaTrader terminal can be located automatically.
 
+### Manual regression check
+
+Bridge updates should be smoke-tested against both supported Windows Python
+series so the preinstalled dependency pins work for each interpreter. Run the
+installer twice—once for the Python 3.10 prefix and again for Python 3.11—after
+ensuring each Wine prefix contains the matching Windows interpreter:
+
+```bash
+# Python 3.10 bridge validation
+MT5_PYTHON_SERIES=3.10 PY_WINE_PREFIX="$HOME/.wine-py310" \
+  ./install_programmatic_bridge.sh --timeout-ms 60000
+
+# Python 3.11 bridge validation
+MT5_PYTHON_SERIES=3.11 PY_WINE_PREFIX="$HOME/.wine-py311" \
+  ./install_programmatic_bridge.sh --timeout-ms 60000
+```
+
+Override `PY_WINE_PREFIX`/`MT5_WINE_PREFIX` if your installation lives outside
+the defaults. Both runs should complete without triggering the fallback build
+path, confirming that the locked dependencies and `mt5linux` wheel install
+cleanly.
+
 The MT5 bridge currently ships wheels that are only validated against the
 NumPy 1.21 line on Linux for Python 3.10–3.11, so the requirements now accept
 any build from `>=1.21.4,<2.0` in those environments while keeping the modern
