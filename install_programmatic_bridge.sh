@@ -9,6 +9,9 @@ PROJECT_ROOT="${PROJECT_ROOT:-${SCRIPT_DIR}}"
 # shellcheck source=scripts/_mt5linux_env.sh
 source "${PROJECT_ROOT}/scripts/_mt5linux_env.sh"
 
+MT5LINUX_WINDOWS_CONSTRAINTS_DEFAULT="${PROJECT_ROOT}/constraints-mt5linux.txt"
+MT5LINUX_WINDOWS_CONSTRAINTS="${MT5LINUX_WINDOWS_CONSTRAINTS:-${MT5LINUX_WINDOWS_CONSTRAINTS_DEFAULT}}"
+
 log() { printf '[bridge] %s\n' "$*" >&2; }
 warn() { printf '[bridge:WARN] %s\n' "$*" >&2; }
 error() { printf '[bridge:ERROR] %s\n' "$*" >&2; }
@@ -233,11 +236,36 @@ install_windows_packages() {
     die "Failed to upgrade pip in Windows environment"
   fi
 
-  local packages=(MetaTrader5 "${MT5LINUX_PACKAGE}")
-  log "Installing required packages: ${packages[*]}"
-  if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --only-binary :all: "${packages[@]}" 1>&2; then
-    log "Binary wheel installation failed; retrying without --only-binary"
-    WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade "${packages[@]}" 1>&2 || die "Failed to install Windows MetaTrader dependencies"
+  local req_source=""
+  if [[ -n "${MT5LINUX_WINDOWS_CONSTRAINTS:-}" && -f "$MT5LINUX_WINDOWS_CONSTRAINTS" ]]; then
+    req_source="$MT5LINUX_WINDOWS_CONSTRAINTS"
+  elif [[ -f "${MT5LINUX_LOCK_FILE:-}" ]]; then
+    req_source="$MT5LINUX_LOCK_FILE"
+  fi
+
+  if [[ -n "$req_source" ]]; then
+    local req_winpath
+    req_winpath="$(to_windows_path "$PY_WINE_PREFIX" "$req_source")"
+    [[ -n "$req_winpath" ]] || die "Unable to translate mt5linux dependency lock file path"
+    log "Pre-installing mt5linux dependency pins from $(basename "$req_source")"
+    if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps --only-binary :all: -r "$req_winpath" 1>&2; then
+      log "Binary wheel installation for mt5linux dependency pins failed; retrying without --only-binary"
+      WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps -r "$req_winpath" 1>&2 || die "Failed to install mt5linux dependency pins in Windows environment"
+    fi
+  else
+    warn "mt5linux dependency lock file not found; skipping pre-install step"
+  fi
+
+  log "Ensuring MetaTrader5 wheel is installed"
+  if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --only-binary :all: MetaTrader5 1>&2; then
+    log "Binary wheel installation for MetaTrader5 failed; retrying without --only-binary"
+    WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade MetaTrader5 1>&2 || die "Failed to install MetaTrader5 in Windows environment"
+  fi
+
+  log "Installing ${MT5LINUX_PACKAGE} without dependencies"
+  if ! WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps --only-binary :all: "${MT5LINUX_PACKAGE}" 1>&2; then
+    log "Binary wheel installation for ${MT5LINUX_PACKAGE} failed; retrying without --only-binary"
+    WINEPREFIX="$PY_WINE_PREFIX" PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" wine "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps "${MT5LINUX_PACKAGE}" 1>&2 || die "Failed to install ${MT5LINUX_PACKAGE} in Windows environment"
   fi
 }
 
