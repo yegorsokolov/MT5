@@ -162,7 +162,7 @@ require_command() {
 with_wine_env() {
   local prefix="$1"
   shift
-  local overrides="ucrtbase,api-ms-win-crt-*=native,builtin"
+  local overrides="ucrtbase=native,builtin;api-ms-win-crt-*=native,builtin"
   WINEDLLOVERRIDES="$overrides" WINEPREFIX="$prefix" "$@"
 }
 
