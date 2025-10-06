@@ -328,6 +328,23 @@ stage_bridge_assets() {
   fi
 }
 
+ensure_windows_posix_utils() {
+  local system32_dir="$PY_WINE_PREFIX/drive_c/windows/system32"
+  local mkdir_wrapper_path="$system32_dir/mkdir.bat"
+
+  mkdir -p "$system32_dir"
+
+  if [[ ! -f "$mkdir_wrapper_path" ]] || ! grep -q 'if /I "%~1"=="-p"' "$mkdir_wrapper_path" 2>/dev/null; then
+    log "Installing POSIX-compatible mkdir wrapper in Windows prefix"
+    cat <<'EOF' >"$mkdir_wrapper_path"
+@echo off
+if /I "%~1"=="-p" shift
+mkdir %*
+exit /b 0
+EOF
+  fi
+}
+
 stop_mt5linux_server() {
   local pid_file="$MT5LINUX_SERVER_DIR/mt5linux.pid"
   if [[ -f "$pid_file" ]]; then
@@ -585,6 +602,8 @@ main() {
 
   [[ -d "$PY_WINE_PREFIX" ]] || die "Python Wine prefix not found: $PY_WINE_PREFIX"
   [[ -d "$MT5_WINE_PREFIX" ]] || die "MetaTrader Wine prefix not found: $MT5_WINE_PREFIX"
+
+  ensure_windows_posix_utils
 
   [[ -n "$MT5LINUX_HOST" ]] || die "mt5linux host must not be empty"
   if ! [[ "$MT5LINUX_PORT" =~ ^[0-9]+$ ]]; then
