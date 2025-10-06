@@ -14,13 +14,38 @@ warn() { printf '[bridge:WARN] %s\n' "$*" >&2; }
 error() { printf '[bridge:ERROR] %s\n' "$*" >&2; }
 die() { error "$*"; exit 1; }
 
+resolve_wine_prefix() {
+  local explicit="$1" default_path="$2" fallback="$3" label="$4"
+
+  if [[ -n "$explicit" ]]; then
+    printf '%s\n' "$explicit"
+    return 0
+  fi
+
+  if [[ -n "$default_path" && -d "$default_path" ]]; then
+    printf '%s\n' "$default_path"
+    return 0
+  fi
+
+  if [[ -n "$fallback" && -d "$fallback" ]]; then
+    log "Auto-detected ${label} Wine prefix at ${fallback}"
+    printf '%s\n' "$fallback"
+    return 0
+  fi
+
+  printf '%s\n' "$default_path"
+}
+
 PY_WINE_PREFIX_DEFAULT="${HOME}/${MT5_PYTHON_PREFIX_NAME}"
 MT5_WINE_PREFIX_DEFAULT="${HOME}/.mt5"
+PY_WINE_PREFIX_FALLBACK="${HOME}/.wine-mt5"
+MT5_WINE_PREFIX_FALLBACK="${HOME}/.wine-mt5"
 DEFAULT_TIMEOUT_MS="90000"
 DEFAULT_PIP_TIMEOUT="180"
 
-PY_WINE_PREFIX="${PY_WINE_PREFIX:-${PY_WINE_PREFIX_DEFAULT}}"
-MT5_WINE_PREFIX="${MT5_WINE_PREFIX:-${MT5_WINE_PREFIX_DEFAULT}}"
+PY_WINE_PREFIX="$(resolve_wine_prefix "${PY_WINE_PREFIX:-}" "$PY_WINE_PREFIX_DEFAULT" "$PY_WINE_PREFIX_FALLBACK" "Python")"
+MT5_WINE_PREFIX="$(resolve_wine_prefix "${MT5_WINE_PREFIX:-}" "$MT5_WINE_PREFIX_DEFAULT" "$MT5_WINE_PREFIX_FALLBACK" "MetaTrader")"
+export PY_WINE_PREFIX MT5_WINE_PREFIX
 WIN_PYTHON="${WIN_PYTHON:-}"
 MT5_TERMINAL="${MT5_TERMINAL:-}"
 BRIDGE_TIMEOUT_MS="${MT5_BRIDGE_TIMEOUT_MS:-${DEFAULT_TIMEOUT_MS}}"
