@@ -409,13 +409,16 @@ PY
     )
   fi
 
-  if ! with_wine_env "$PY_WINE_PREFIX" "${launch_cmd[@]}" >>"$log_file" 2>&1 & then
+  with_wine_env "$PY_WINE_PREFIX" "${launch_cmd[@]}" >>"$log_file" 2>&1 &
+  local server_pid=$!
+  sleep 2
+  if ! kill -0 "$server_pid" >/dev/null 2>&1; then
     error "Failed to launch ${BRIDGE_BACKEND} server via Wine"
+    wait "$server_pid" 2>/dev/null || true
     return 1
   fi
-  local server_pid=$!
   echo "$server_pid" >"$MT5LINUX_SERVER_DIR/mt5linux.pid"
-  sleep 5
+  sleep 3
 }
 
 apply_appdll_overrides() {
