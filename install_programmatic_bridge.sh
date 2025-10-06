@@ -59,6 +59,7 @@ MT5LINUX_SERVER_DIR_DEFAULT="${PY_WINE_PREFIX}/drive_c/mt5linux-server"
 MT5LINUX_HOST="${MT5LINUX_HOST:-${MT5LINUX_HOST_DEFAULT}}"
 MT5LINUX_PORT="${MT5LINUX_PORT:-${MT5LINUX_PORT_DEFAULT}}"
 MT5LINUX_SERVER_DIR="${MT5LINUX_SERVER_DIR:-${MT5LINUX_SERVER_DIR_DEFAULT}}"
+MT5LINUX_SERVER_WINPATH=""
 MT5LINUX_VENV_PATH_DEFAULT="${PROJECT_ROOT}/.mt5linux-venv"
 MT5LINUX_VENV_PATH="${MT5LINUX_VENV_PATH:-${MT5LINUX_VENV_PATH_DEFAULT}}"
 MT5LINUX_BOOTSTRAP_PYTHON="${MT5LINUX_BOOTSTRAP_PYTHON:-}"
@@ -300,7 +301,7 @@ launch_mt5linux_server() {
 
   local log_file="$MT5LINUX_SERVER_DIR/mt5linux.log"
   log "Launching mt5linux RPyC server at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
-  if ! WINEPREFIX="$PY_WINE_PREFIX" nohup wine "$WIN_PYTHON_WINPATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_DIR" >>"$log_file" 2>&1 & then
+  if ! WINEPREFIX="$PY_WINE_PREFIX" nohup wine "$WIN_PYTHON_WINPATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_WINPATH" >>"$log_file" 2>&1 & then
     die "Failed to launch mt5linux server via Wine"
   fi
   local server_pid=$!
@@ -391,8 +392,12 @@ main() {
   MT5_TERMINAL_WINPATH="$(to_windows_path "$PY_WINE_PREFIX" "$MT5_TERMINAL")"
   [[ -n "$MT5_TERMINAL_WINPATH" ]] || die "Unable to translate MetaTrader terminal path"
 
+  MT5LINUX_SERVER_WINPATH="$(to_windows_path "$PY_WINE_PREFIX" "$MT5LINUX_SERVER_DIR")"
+  [[ -n "$MT5LINUX_SERVER_WINPATH" ]] || die "Unable to translate mt5linux server directory path"
+
   log "Discovered Windows Python: $WIN_PYTHON (winpath: $WIN_PYTHON_WINPATH)"
   log "Discovered MetaTrader terminal: $MT5_TERMINAL (winpath: $MT5_TERMINAL_WINPATH)"
+  log "Using mt5linux server directory: $MT5LINUX_SERVER_DIR (winpath: $MT5LINUX_SERVER_WINPATH)"
 
   install_windows_packages
   install_linux_mt5linux
