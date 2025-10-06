@@ -322,11 +322,42 @@ launch_mt5linux_server() {
   sleep 5
 }
 
+apply_appdll_overrides() {
+  local prefix="$1" app="$2"
+  local key="HKCU\\Software\\Wine\\AppDefaults\\${app}\\DllOverrides"
+  local overrides=("ucrtbase" "vcruntime140" "msvcp140" "api-ms-win-crt-*")
+  local value="native,builtin"
+
+  log "Recording native CRT DLL overrides for ${app} in prefix ${prefix}"
+  for dll in "${overrides[@]}"; do
+    if ! with_wine_env "$prefix" wine reg add "$key" /v "$dll" /t REG_SZ /d "$value" /f >/dev/null 2>&1; then
+      warn "Failed to register ${dll} override for ${app} in ${prefix}"
+    fi
+  done
+}
+
+apply_terminal_overrides_if_needed() {
+  local prefix="$1" exe_path="$2"
+
+  if [[ -z "$exe_path" ]]; then
+    return 0
+  fi
+
+  local exe_name="${exe_path##*/}"
+  local exe_lower
+  exe_lower="$(printf '%s' "$exe_name" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$exe_lower" == "terminal64.exe" ]]; then
+    apply_appdll_overrides "$prefix" "terminal64.exe"
+  fi
+}
+
 ensure_native_ucrtbase() {
   local prefix="$1"
   local dll_path="$prefix/drive_c/windows/system32/ucrtbase.dll"
 
   if [[ -f "$dll_path" ]]; then
+    apply_appdll_overrides "$prefix" "python.exe"
     return 0
   fi
 
@@ -343,6 +374,8 @@ ensure_native_ucrtbase() {
   if [[ ! -f "$dll_path" ]]; then
     die "Native ucrtbase.dll still missing at ${dll_path} after winetricks. Rerun 'WINEPREFIX=\"${prefix}\" winetricks -q vcrun2022' and verify the DLL is present."
   fi
+
+  apply_appdll_overrides "$prefix" "python.exe"
 }
 
 run_probe() {
@@ -438,6 +471,7 @@ main() {
   install_windows_packages
   install_linux_mt5linux
   ensure_native_ucrtbase "$PY_WINE_PREFIX"
+  apply_terminal_overrides_if_needed "$MT5_WINE_PREFIX" "$MT5_TERMINAL"
   launch_mt5linux_server
   run_probe
   smoke_check_environment
