@@ -391,7 +391,7 @@ launch_mt5linux_server() {
       --port
       "$MT5LINUX_PORT"
       --server
-      "$MT5LINUX_SERVER_DIR"
+      "$MT5LINUX_SERVER_WINPATH"
       "$python_arg_winpath"
     )
   else

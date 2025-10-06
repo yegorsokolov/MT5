@@ -369,8 +369,14 @@ launch_mt5linux_server() {
     stop_mt5linux_server
 
     local log_file="${MT5LINUX_SERVER_DIR}/mt5linux.log"
+    local server_dir_winpath
+    server_dir_winpath="$(WINEPREFIX="$WIN_PY_WINE_PREFIX" to_windows_path "$MT5LINUX_SERVER_DIR")"
+    if [[ -z "$server_dir_winpath" ]]; then
+        warn "Unable to translate mt5linux server directory '$MT5LINUX_SERVER_DIR' to Windows path; falling back to POSIX path"
+        server_dir_winpath="$MT5LINUX_SERVER_DIR"
+    fi
     log "Starting mt5linux server via Wine at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
-    if ! WINEPREFIX="$WIN_PY_WINE_PREFIX" nohup wine "$WIN_PY_WINDOWS_PATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_DIR" >>"$log_file" 2>&1 & then
+    if ! WINEPREFIX="$WIN_PY_WINE_PREFIX" nohup wine "$WIN_PY_WINDOWS_PATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$server_dir_winpath" >>"$log_file" 2>&1 & then
         warn "Failed to launch mt5linux server; review ${log_file} for details."
         return 1
     fi
@@ -472,6 +478,8 @@ ENVFILE
 }
 
 write_login_instructions() {
+    local server_dir_winpath
+    server_dir_winpath="$(WINEPREFIX="$WIN_PY_WINE_PREFIX" to_windows_path "$MT5LINUX_SERVER_DIR")"
     cat >"$LOGIN_INSTRUCTIONS" <<LOGINFILE
 MetaTrader 5 (Wine) login & bridge instructions
 =============================================
@@ -481,11 +489,12 @@ Windows Python  : ${WIN_PY_WINDOWS_PATH:-<not detected>}
 Terminal path   : ${MT5_TERMINAL}
 Bridge host     : ${MT5LINUX_HOST}:${MT5LINUX_PORT}
 Bridge assets   : ${MT5LINUX_SERVER_DIR}
+Bridge assets (Windows path): ${server_dir_winpath}
 
 Restart server  : WINEPREFIX="${WIN_PY_WINE_PREFIX}" \
                   wine "${WIN_PY_WINDOWS_PATH:-python}" -m mt5linux \
                        --host "${MT5LINUX_HOST}" --port "${MT5LINUX_PORT}" \
-                       --server "${MT5LINUX_SERVER_DIR}"
+                       --server "${server_dir_winpath:-${MT5LINUX_SERVER_DIR}}"
 
 1. Launch the terminal and log in with your broker account:
    WINEARCH=win64 WINEPREFIX="${MT5_WINE_PREFIX}" wine "${MT5_TERMINAL}"
