@@ -631,6 +631,31 @@ skip the Wine health check automatically when the configured backend does not
 use Wine, making it clear that the requirement is “skipped”/“not applicable”
 instead of “failed”.
 
+#### Bridge troubleshooting
+
+`install_programmatic_bridge.sh` now persists the native CRT overrides that the
+bridge needs to avoid the `ucrtbase.dll.crealf` crash. After
+`winetricks -q vcrun2022` succeeds, the helper records per-application DLL
+overrides under
+`HKCU\Software\Wine\AppDefaults\python.exe\DllOverrides` (and, when the MT5
+terminal is present in the prefix, `...\terminal64.exe\DllOverrides`). Future
+`mt5linux` launches therefore inherit the `ucrtbase`, `vcruntime140`,
+`msvcp140` and `api-ms-win-crt-*` native shims even when the process is started
+outside the installer.
+
+If Wine updates or manual edits clear the overrides, reapply them with:
+
+```bash
+for dll in ucrtbase vcruntime140 msvcp140 'api-ms-win-crt-*'; do
+  WINEPREFIX="$PY_WINE_PREFIX" wine reg add \
+    'HKCU\Software\Wine\AppDefaults\python.exe\DllOverrides' \
+    /v "$dll" /t REG_SZ /d native,builtin /f
+done
+```
+
+Repeat the loop with `terminal64.exe` substituted for `python.exe` if the MT5
+terminal also runs inside Wine and starts reporting the same crash.
+
 To keep your main installation on CPython 3.11 while running the Wine bridge in
 its own 3.10 virtual environment:
 
