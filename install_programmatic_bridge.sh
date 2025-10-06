@@ -162,7 +162,8 @@ require_command() {
 with_wine_env() {
   local prefix="$1"
   shift
-  WINEDLLOVERRIDES="ucrtbase=native,builtin" WINEPREFIX="$prefix" "$@"
+  local overrides="ucrtbase,api-ms-win-crt-*=native,builtin"
+  WINEDLLOVERRIDES="$overrides" WINEPREFIX="$prefix" "$@"
 }
 
 run_wine() {
@@ -321,6 +322,29 @@ launch_mt5linux_server() {
   sleep 5
 }
 
+ensure_native_ucrtbase() {
+  local prefix="$1"
+  local dll_path="$prefix/drive_c/windows/system32/ucrtbase.dll"
+
+  if [[ -f "$dll_path" ]]; then
+    return 0
+  fi
+
+  warn "Native ucrtbase.dll not found at ${dll_path}. Attempting winetricks -q vcrun2022..."
+
+  if ! command -v winetricks >/dev/null 2>&1; then
+    die "winetricks command not available; install it or run 'WINEPREFIX=\"${prefix}\" winetricks -q vcrun2022' to provision the native UCRT runtime."
+  fi
+
+  if ! with_wine_env "$prefix" winetricks -q vcrun2022; then
+    die "winetricks -q vcrun2022 failed; rerun manually using 'WINEPREFIX=\"${prefix}\" winetricks -q vcrun2022' before continuing."
+  fi
+
+  if [[ ! -f "$dll_path" ]]; then
+    die "Native ucrtbase.dll still missing at ${dll_path} after winetricks. Rerun 'WINEPREFIX=\"${prefix}\" winetricks -q vcrun2022' and verify the DLL is present."
+  fi
+}
+
 run_probe() {
   log "Validating mt5linux bridge connectivity from Linux Python..."
   local host="$MT5LINUX_HOST" port="$MT5LINUX_PORT" timeout_ms="$BRIDGE_TIMEOUT_MS"
@@ -413,6 +437,7 @@ main() {
 
   install_windows_packages
   install_linux_mt5linux
+  ensure_native_ucrtbase "$PY_WINE_PREFIX"
   launch_mt5linux_server
   run_probe
   smoke_check_environment
