@@ -11,6 +11,9 @@ source "${PROJECT_ROOT}/scripts/_mt5linux_env.sh"
 
 MT5LINUX_WINDOWS_CONSTRAINTS_DEFAULT="${PROJECT_ROOT}/constraints-mt5linux.txt"
 MT5LINUX_WINDOWS_CONSTRAINTS="${MT5LINUX_WINDOWS_CONSTRAINTS:-${MT5LINUX_WINDOWS_CONSTRAINTS_DEFAULT}}"
+BRIDGE_BACKEND_DEFAULT="mt5linux"
+BRIDGE_BACKEND="${MT5_BRIDGE_SERVER:-${BRIDGE_BACKEND_DEFAULT}}"
+BRIDGE_BACKEND_EXPLICIT="0"
 
 log() { printf '[bridge] %s\n' "$*" >&2; }
 warn() { printf '[bridge:WARN] %s\n' "$*" >&2; }
@@ -82,6 +85,7 @@ Options:
   --mt5-wine-prefix PATH    Wine prefix containing MetaTrader terminal (default: $MT5_WINE_PREFIX)
   --win-python PATH         Override path to Windows python.exe inside the Wine prefix
   --terminal PATH           Override path to terminal64.exe inside the MT5 prefix
+  --bridge-backend NAME     Bridge server implementation to launch (mt5linux or mt5)
   --host HOST               Hostname for the mt5linux RPyC server (default: $MT5LINUX_HOST)
   --port PORT               TCP port for the mt5linux RPyC server (default: $MT5LINUX_PORT)
   --server-dir PATH         Directory inside the Wine prefix for mt5linux server assets (default: $MT5LINUX_SERVER_DIR)
@@ -112,6 +116,12 @@ parse_args() {
       --terminal)
         [[ $# -ge 2 ]] || die "--terminal requires a value"
         MT5_TERMINAL="$2"
+        shift 2
+        ;;
+      --bridge-backend)
+        [[ $# -ge 2 ]] || die "--bridge-backend requires a value"
+        BRIDGE_BACKEND="$2"
+        BRIDGE_BACKEND_EXPLICIT="1"
         shift 2
         ;;
       --host)
@@ -257,7 +267,7 @@ install_windows_packages() {
     req_source="$MT5LINUX_LOCK_FILE"
   fi
 
-  if [[ -n "$req_source" ]]; then
+  if [[ "$BRIDGE_BACKEND" == "mt5linux" && -n "$req_source" ]]; then
     local req_winpath
     req_winpath="$(to_windows_path "$PY_WINE_PREFIX" "$req_source")"
     [[ -n "$req_winpath" ]] || die "Unable to translate mt5linux dependency lock file path"
@@ -266,7 +276,7 @@ install_windows_packages() {
       log "Binary wheel installation for mt5linux dependency pins failed; retrying without --only-binary"
       PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps -r "$req_winpath" 1>&2 || die "Failed to install mt5linux dependency pins in Windows environment"
     fi
-  else
+  elif [[ "$BRIDGE_BACKEND" == "mt5linux" ]]; then
     warn "mt5linux dependency lock file not found; skipping pre-install step"
   fi
 
@@ -276,10 +286,17 @@ install_windows_packages() {
     PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade MetaTrader5 1>&2 || die "Failed to install MetaTrader5 in Windows environment"
   fi
 
-  log "Installing ${MT5LINUX_PACKAGE} without dependencies"
-  if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps --only-binary :all: "${MT5LINUX_PACKAGE}" 1>&2; then
-    log "Binary wheel installation for ${MT5LINUX_PACKAGE} failed; retrying without --only-binary"
-    PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps "${MT5LINUX_PACKAGE}" 1>&2 || die "Failed to install ${MT5LINUX_PACKAGE} in Windows environment"
+  if [[ "$BRIDGE_BACKEND" == "mt5linux" ]]; then
+    log "Installing ${MT5LINUX_PACKAGE} without dependencies"
+    if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps --only-binary :all: "${MT5LINUX_PACKAGE}" 1>&2; then
+      log "Binary wheel installation for ${MT5LINUX_PACKAGE} failed; retrying without --only-binary"
+      PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade --no-deps "${MT5LINUX_PACKAGE}" 1>&2 || die "Failed to install ${MT5LINUX_PACKAGE} in Windows environment"
+    fi
+  else
+    log "Installing mt5 bridge helper and rpyc in Windows environment"
+    if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade mt5 rpyc 1>&2; then
+      die "Failed to install mt5 bridge requirements in Windows environment"
+    fi
   fi
 }
 
@@ -291,6 +308,21 @@ install_linux_mt5linux() {
 
   if ! MT5LINUX_PYTHON="$(mt5linux_env_python_path)"; then
     die "mt5linux auxiliary python interpreter missing from ${MT5LINUX_VENV_PATH}"
+  fi
+}
+
+stage_bridge_assets() {
+  mkdir -p "$MT5LINUX_SERVER_DIR"
+
+  if [[ "$BRIDGE_BACKEND" == "mt5" ]]; then
+    local server_src="${PROJECT_ROOT}/mt5_bridge_files/mt5_rpyc_server.py"
+    if [[ ! -f "$server_src" ]]; then
+      die "Bridge server helper not found at ${server_src}"
+    fi
+    local server_dst="$MT5LINUX_SERVER_DIR/mt5_rpyc_server.py"
+    if ! cp "$server_src" "$server_dst"; then
+      die "Failed to copy bridge server helper to ${server_dst}"
+    fi
   fi
 }
 
@@ -313,36 +345,71 @@ launch_mt5linux_server() {
   stop_mt5linux_server
 
   local log_file="$MT5LINUX_SERVER_DIR/mt5linux.log"
-  local python_arg_winpath="${WIN_PYTHON_WINPATH}"
+  local -a launch_cmd
 
-  if [[ -n "${MT5LINUX_BOOTSTRAP_PYTHON:-}" ]]; then
-    local bootstrap_winpath
-    bootstrap_winpath="$(to_windows_path "$PY_WINE_PREFIX" "$MT5LINUX_BOOTSTRAP_PYTHON" 2>/dev/null || true)"
-    if [[ -n "$bootstrap_winpath" ]]; then
-      python_arg_winpath="$bootstrap_winpath"
-    else
-      warn "Unable to translate MT5LINUX_BOOTSTRAP_PYTHON path '${MT5LINUX_BOOTSTRAP_PYTHON}' to a Windows path; falling back to $WIN_PYTHON_WINPATH"
+  if [[ "$BRIDGE_BACKEND" == "mt5linux" ]]; then
+    local python_arg_winpath="${WIN_PYTHON_WINPATH}"
+
+    if [[ -n "${MT5LINUX_BOOTSTRAP_PYTHON:-}" ]]; then
+      local bootstrap_winpath
+      bootstrap_winpath="$(to_windows_path "$PY_WINE_PREFIX" "$MT5LINUX_BOOTSTRAP_PYTHON" 2>/dev/null || true)"
+      if [[ -n "$bootstrap_winpath" ]]; then
+        python_arg_winpath="$bootstrap_winpath"
+      else
+        warn "Unable to translate MT5LINUX_BOOTSTRAP_PYTHON path '${MT5LINUX_BOOTSTRAP_PYTHON}' to a Windows path; falling back to $WIN_PYTHON_WINPATH"
+      fi
     fi
+
+    log "Launching mt5linux RPyC server at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
+    launch_cmd=(
+      nohup
+      wine
+      "$WIN_PYTHON_WINPATH"
+      -m
+      mt5linux
+      --host
+      "$MT5LINUX_HOST"
+      --port
+      "$MT5LINUX_PORT"
+      --server
+      "$MT5LINUX_SERVER_DIR"
+      "$python_arg_winpath"
+    )
+  else
+    local server_script="$MT5LINUX_SERVER_DIR/mt5_rpyc_server.py"
+    local server_winpath
+    server_winpath="$(to_windows_path "$PY_WINE_PREFIX" "$server_script")"
+    [[ -n "$server_winpath" ]] || die "Unable to translate bridge server helper path"
+
+    local timeout_seconds
+    timeout_seconds="$(python3 - <<'PY' "$BRIDGE_TIMEOUT_MS"
+import sys
+try:
+    ms = int(sys.argv[1])
+except Exception:  # noqa: BLE001
+    ms = 90000
+print(max(5.0, ms / 1000.0))
+PY
+)"
+
+    log "Launching mt5 RPyC helper at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
+    launch_cmd=(
+      nohup
+      wine
+      "$WIN_PYTHON_WINPATH"
+      "$server_winpath"
+      --host
+      "$MT5LINUX_HOST"
+      --port
+      "$MT5LINUX_PORT"
+      --timeout
+      "$timeout_seconds"
+    )
   fi
 
-  log "Launching mt5linux RPyC server at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
-  local -a launch_cmd=(
-    nohup
-    wine
-    "$WIN_PYTHON_WINPATH"
-    -m
-    mt5linux
-    --host
-    "$MT5LINUX_HOST"
-    --port
-    "$MT5LINUX_PORT"
-    --server
-    "$MT5LINUX_SERVER_DIR"
-    "$python_arg_winpath"
-  )
-
   if ! with_wine_env "$PY_WINE_PREFIX" "${launch_cmd[@]}" >>"$log_file" 2>&1 & then
-    die "Failed to launch mt5linux server via Wine"
+    error "Failed to launch ${BRIDGE_BACKEND} server via Wine"
+    return 1
   fi
   local server_pid=$!
   echo "$server_pid" >"$MT5LINUX_SERVER_DIR/mt5linux.pid"
@@ -406,20 +473,21 @@ ensure_native_ucrtbase() {
 }
 
 run_probe() {
-  log "Validating mt5linux bridge connectivity from Linux Python..."
+  log "Validating ${BRIDGE_BACKEND} bridge connectivity from Linux Python..."
   local host="$MT5LINUX_HOST" port="$MT5LINUX_PORT" timeout_ms="$BRIDGE_TIMEOUT_MS"
   local probe_python="${MT5LINUX_PYTHON:-}"
   if [[ -z "$probe_python" ]]; then
     die "Probe interpreter not configured (mt5linux auxiliary environment missing?)"
   fi
 
-  if ! "$probe_python" - "$host" "$port" "$timeout_ms" <<'PY'
+  if ! "$probe_python" - "$host" "$port" "$timeout_ms" "$BRIDGE_BACKEND" <<'PY'
 import sys
 import time
 
 host = sys.argv[1]
 port = int(sys.argv[2])
 timeout_ms = int(sys.argv[3]) if len(sys.argv) > 3 else 90000
+backend_name = sys.argv[4] if len(sys.argv) > 4 else "mt5linux"
 timeout = max(5.0, timeout_ms / 1000.0)
 
 try:
@@ -446,10 +514,11 @@ for attempt in range(1, 11):
         print(version or "ok")
         sys.exit(0)
 
-raise SystemExit(f"mt5linux bridge connection failed: {last_error}")
+raise SystemExit(f"{backend_name} bridge connection failed: {last_error}")
 PY
   then
-    die "mt5linux bridge validation failed"
+    error "${BRIDGE_BACKEND} bridge validation failed"
+    return 1
   fi
 }
 
@@ -464,8 +533,46 @@ smoke_check_environment() {
   fi
 }
 
+configure_bridge_backend() {
+  local backend="$1"
+  BRIDGE_BACKEND="$backend"
+
+  log "Using bridge backend: $BRIDGE_BACKEND"
+  log "Using mt5linux server directory: $MT5LINUX_SERVER_DIR (winpath: $MT5LINUX_SERVER_WINPATH)"
+
+  install_windows_packages
+  install_linux_mt5linux
+  ensure_native_ucrtbase "$PY_WINE_PREFIX"
+  apply_terminal_overrides_if_needed "$MT5_WINE_PREFIX" "$MT5_TERMINAL"
+  stage_bridge_assets
+
+  if ! launch_mt5linux_server; then
+    return 1
+  fi
+
+  if ! run_probe; then
+    return 1
+  fi
+
+  smoke_check_environment
+
+  printf 'WIN_PYTHON_WINPATH=%s\n' "$WIN_PYTHON_WINPATH"
+  printf 'MT5_TERMINAL_WINPATH=%s\n' "$MT5_TERMINAL_WINPATH"
+  printf 'MT5LINUX_HOST=%s\n' "$MT5LINUX_HOST"
+  printf 'MT5LINUX_PORT=%s\n' "$MT5LINUX_PORT"
+  printf 'MT5LINUX_SERVER_DIR=%s\n' "$MT5LINUX_SERVER_DIR"
+}
+
 main() {
   parse_args "$@"
+
+  BRIDGE_BACKEND="${BRIDGE_BACKEND,,}"
+  case "$BRIDGE_BACKEND" in
+    mt5linux|mt5) ;;
+    *)
+      die "Unsupported bridge backend '${BRIDGE_BACKEND}'. Choose 'mt5linux' or 'mt5'."
+      ;;
+  esac
 
   require_command wine
   require_command winepath
@@ -493,21 +600,30 @@ main() {
 
   log "Discovered Windows Python: $WIN_PYTHON (winpath: $WIN_PYTHON_WINPATH)"
   log "Discovered MetaTrader terminal: $MT5_TERMINAL (winpath: $MT5_TERMINAL_WINPATH)"
-  log "Using mt5linux server directory: $MT5LINUX_SERVER_DIR (winpath: $MT5LINUX_SERVER_WINPATH)"
 
-  install_windows_packages
-  install_linux_mt5linux
-  ensure_native_ucrtbase "$PY_WINE_PREFIX"
-  apply_terminal_overrides_if_needed "$MT5_WINE_PREFIX" "$MT5_TERMINAL"
-  launch_mt5linux_server
-  run_probe
-  smoke_check_environment
+  local requested_backend="$BRIDGE_BACKEND"
+  if configure_bridge_backend "$requested_backend"; then
+    return 0
+  fi
 
-  printf 'WIN_PYTHON_WINPATH=%s\n' "$WIN_PYTHON_WINPATH"
-  printf 'MT5_TERMINAL_WINPATH=%s\n' "$MT5_TERMINAL_WINPATH"
-  printf 'MT5LINUX_HOST=%s\n' "$MT5LINUX_HOST"
-  printf 'MT5LINUX_PORT=%s\n' "$MT5LINUX_PORT"
-  printf 'MT5LINUX_SERVER_DIR=%s\n' "$MT5LINUX_SERVER_DIR"
+  if [[ "$requested_backend" == "mt5linux" ]]; then
+    if [[ "$BRIDGE_BACKEND_EXPLICIT" == "1" ]]; then
+      warn "mt5linux backend was explicitly requested but failed; attempting fallback to mt5 library"
+    else
+      warn "${requested_backend} backend failed; attempting fallback to mt5 library"
+    fi
+    stop_mt5linux_server
+    if configure_bridge_backend "mt5"; then
+      return 0
+    fi
+    die "Fallback to mt5 backend also failed"
+  fi
+
+  if [[ "$requested_backend" == "mt5" ]]; then
+    die "mt5 backend setup failed"
+  fi
+
+  die "Bridge setup failed for backend ${requested_backend}"
 }
 
 main "$@"
