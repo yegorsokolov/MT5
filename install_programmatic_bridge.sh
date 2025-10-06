@@ -67,6 +67,8 @@ MT5LINUX_VENV_PATH_DEFAULT="${PROJECT_ROOT}/.mt5linux-venv"
 MT5LINUX_VENV_PATH="${MT5LINUX_VENV_PATH:-${MT5LINUX_VENV_PATH_DEFAULT}}"
 MT5LINUX_BOOTSTRAP_PYTHON="${MT5LINUX_BOOTSTRAP_PYTHON:-}"
 MT5LINUX_PYTHON="${MT5LINUX_PYTHON:-}"
+MT5_BRIDGE_RPYC_SPEC_DEFAULT="rpyc==5.0.1"
+MT5_BRIDGE_RPYC_SPEC="${MT5_BRIDGE_RPYC_SPEC:-${MT5_BRIDGE_RPYC_SPEC_DEFAULT}}"
 
 if [[ -z "${MT5LINUX_PACKAGE:-}" ]]; then
   case "${MT5_PYTHON_SERIES}" in
@@ -294,7 +296,7 @@ install_windows_packages() {
     fi
   else
     log "Installing mt5 bridge helper and rpyc in Windows environment"
-    if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade mt5 rpyc 1>&2; then
+    if ! PIP_DEFAULT_TIMEOUT="$PIP_TIMEOUT" run_wine "$PY_WINE_PREFIX" "$WIN_PYTHON_WINPATH" -m pip install --upgrade mt5 "$MT5_BRIDGE_RPYC_SPEC" 1>&2; then
       die "Failed to install mt5 bridge requirements in Windows environment"
     fi
   fi
