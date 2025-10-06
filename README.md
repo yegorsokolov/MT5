@@ -359,7 +359,7 @@ session unless stated otherwise.
    WINEPREFIX="$WIN_PY_WINE_PREFIX" \
      wine "$WIN_PY_WINPATH" -m mt5linux \
      --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" \
-     --server "$WIN_PY_WINE_PREFIX/drive_c/mt5linux-server"
+     --server "$(WINEPREFIX="$WIN_PY_WINE_PREFIX" winepath -w "$WIN_PY_WINE_PREFIX/drive_c/mt5linux-server")"
    ```
 
    before persisting the connection details into `.env`. Override the
