@@ -314,7 +314,7 @@ launch_mt5linux_server() {
 
   local log_file="$MT5LINUX_SERVER_DIR/mt5linux.log"
   log "Launching mt5linux RPyC server at ${MT5LINUX_HOST}:${MT5LINUX_PORT}"
-  if ! with_wine_env "$PY_WINE_PREFIX" nohup wine "$WIN_PYTHON_WINPATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_WINPATH" >>"$log_file" 2>&1 & then
+  if ! with_wine_env "$PY_WINE_PREFIX" nohup wine "$WIN_PYTHON_WINPATH" -m mt5linux --host "$MT5LINUX_HOST" --port "$MT5LINUX_PORT" --server "$MT5LINUX_SERVER_WINPATH" "$WIN_PYTHON_WINPATH" >>"$log_file" 2>&1 & then
     die "Failed to launch mt5linux server via Wine"
   fi
   local server_pid=$!
