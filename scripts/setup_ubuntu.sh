@@ -164,12 +164,68 @@ discover_windows_python() {
     return 1
   fi
 
+  # 1) Check the configured TargetDir first. Modern installers sometimes honour
+  #    our ``TargetDir`` even when they ignore the ``InstallAllUsers`` flag, so
+  #    converting that path via winepath is a cheap positive signal.
+  local default_win_path default_cmd default_candidate
+  default_win_path="${PYTHON_WIN_TARGET_DIR}\\python.exe"
+  printf -v default_cmd "WINEPREFIX=%q winepath -u %q" "${prefix}" "${default_win_path}"
+  default_candidate="$(run_as_user "${default_cmd}" 2>/dev/null || true)"
+  default_candidate="$(trim_whitespace "${default_candidate}")"
+  if [[ -n "${default_candidate}" && -f "${default_candidate}" ]]; then
+    printf '%s' "${default_candidate}"
+    return 0
+  fi
+
+  # 2) Recent python.org installers have started defaulting to the per-user
+  #    location under ``AppData/Local/Programs/Python`` even when a system
+  #    ``TargetDir`` is supplied. Probe the most common user directory names
+  #    created by Wine before falling back to an expensive ``find`` traversal.
+  local -a user_candidates
+  user_candidates=("${PROJECT_USER}")
+  if [[ -n "${PROJECT_USER}" ]]; then
+    local capitalized="${PROJECT_USER^}"
+    local lower="${PROJECT_USER,,}"
+    if [[ "${capitalized}" != "${PROJECT_USER}" ]]; then
+      user_candidates+=("${capitalized}")
+    fi
+    if [[ "${lower}" != "${PROJECT_USER}" && "${lower}" != "${capitalized}" ]]; then
+      user_candidates+=("${lower}")
+    fi
+  fi
+
+  local user_candidate per_user_win_path per_user_cmd per_user_candidate
+  for user_candidate in "${user_candidates[@]}"; do
+    [[ -n "${user_candidate}" ]] || continue
+    per_user_win_path="C:\\users\\${user_candidate}\\AppData\\Local\\Programs\\Python\\Python${PYTHON_WIN_TAG}\\python.exe"
+    printf -v per_user_cmd "WINEPREFIX=%q winepath -u %q" "${prefix}" "${per_user_win_path}"
+    per_user_candidate="$(run_as_user "${per_user_cmd}" 2>/dev/null || true)"
+    per_user_candidate="$(trim_whitespace "${per_user_candidate}")"
+    if [[ -n "${per_user_candidate}" && -f "${per_user_candidate}" ]]; then
+      printf '%s' "${per_user_candidate}"
+      return 0
+    fi
+  done
+
+  local program_files_paths=(
+    "C:\\Program Files\\Python${PYTHON_WIN_TAG}\\python.exe"
+    "C:\\Program Files (x86)\\Python${PYTHON_WIN_TAG}\\python.exe"
+  )
+  local pf_path pf_cmd pf_candidate
+  for pf_path in "${program_files_paths[@]}"; do
+    printf -v pf_cmd "WINEPREFIX=%q winepath -u %q" "${prefix}" "${pf_path}"
+    pf_candidate="$(run_as_user "${pf_cmd}" 2>/dev/null || true)"
+    pf_candidate="$(trim_whitespace "${pf_candidate}")"
+    if [[ -n "${pf_candidate}" && -f "${pf_candidate}" ]]; then
+      printf '%s' "${pf_candidate}"
+      return 0
+    fi
+  done
+
+  # 3) Fall back to scanning the prefix. The per-user installers create fairly
+  #    deep directory trees, so keep the max depth high enough to catch them
+  #    without recursing indefinitely.
   local finder
-  # The per-user Windows Python installer places the interpreter below
-  # ``Users/<name>/AppData/Local/Programs/Python/<version>/python.exe`` which
-  # exceeds the previous ``-maxdepth 6`` search limit. Recent installers rely on
-  # that layout, so widen the traversal depth to ensure we pick it up while
-  # still avoiding an unbounded crawl of the Wine prefix.
   printf -v finder "find %q -maxdepth 9 -type f -iname 'python.exe' 2>/dev/null | sort" "${prefix}/drive_c"
   local results
   results="$(run_as_user "${finder}" || true)"
