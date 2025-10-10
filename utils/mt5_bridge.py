@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
@@ -289,8 +290,29 @@ def _seed_bridge_environment() -> Dict[str, str]:
     return updates
 
 
+def _try_import_variants(*module_names: str) -> Tuple[Optional[ModuleType], list[str]]:
+    """Attempt to import the MetaTrader module under various names."""
+
+    errors: list[str] = []
+    for name in module_names:
+        try:
+            module = importlib.import_module(name)
+        except Exception as exc:  # pragma: no cover - depends on environment
+            errors.append(f"{name}: {exc}")
+            continue
+        if name != "MetaTrader5":
+            sys.modules.setdefault("MetaTrader5", module)
+        return module, errors
+    return None, errors
+
+
 def _attempt_native_import() -> ModuleType:
-    module = importlib.import_module("MetaTrader5")
+    module, errors = _try_import_variants("MetaTrader5", "mt5")
+    if module is None:
+        message = "; ".join(errors) if errors else "MetaTrader5 module not found"
+        raise MetaTraderImportError(message)
+    if errors:
+        logger.debug("MetaTrader5 native import fallback succeeded after: %s", errors)
     return module
 
 
@@ -375,13 +397,15 @@ def _attempt_bridge_import(
                 break
 
     if module is None:
-        try:
-            module = importlib.import_module("MetaTrader5")
-        except Exception as exc:  # pragma: no cover - rely on aggregated message
-            errors.append(str(exc))
+        module, variant_errors = _try_import_variants("MetaTrader5", "mt5")
+        if module is None:
+            errors.extend(variant_errors)
             raise MetaTraderImportError(
-                "MetaTrader5 import via {0} failed: {1}".format(configured_backend, "; ".join(errors))
-            ) from exc
+                "MetaTrader5 import via {0} failed: {1}".format(
+                    configured_backend, "; ".join(errors)
+                )
+            )
+        errors.extend(variant_errors)
 
     info["module_path"] = getattr(module, "__file__", "")
     if errors and "initialize_error" not in info:

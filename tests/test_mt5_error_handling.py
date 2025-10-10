@@ -124,3 +124,41 @@ def test_copy_ticks_from_none_raises(load_mt5_direct):
     assert err.code == 4401
     assert "no data" in str(err)
     assert "resolution" in err.details
+
+
+def test_find_mt5_symbol_discovers_suffix(load_mt5_direct):
+    class Stub:
+        def symbol_info(self, symbol):
+            return None
+
+        def symbols_total(self):
+            return 2
+
+        def symbols_get(self, *args):
+            if args == (0, 2):
+                raise TypeError("slice not supported")
+            return [types.SimpleNamespace(name="EURUSD.m"), types.SimpleNamespace(name="US500")]  # noqa: PIE800
+
+    module = load_mt5_direct(Stub())
+
+    resolved = module._find_mt5_symbol("EURUSD")
+    assert resolved == "EURUSD.m"
+
+
+def test_find_mt5_symbol_handles_iterables(load_mt5_direct):
+    class Stub:
+        def symbol_info(self, symbol):
+            return None
+
+        def symbols_total(self):
+            return 0
+
+        def symbols_get(self, *args):
+            if not args:
+                return [("XAUUSD", "Gold"), {"symbol": "US500"}]
+            raise TypeError("unexpected args")
+
+    module = load_mt5_direct(Stub())
+
+    assert module._find_mt5_symbol("XAUUSD") == "XAUUSD"
+    assert module._find_mt5_symbol("US500") == "US500"
