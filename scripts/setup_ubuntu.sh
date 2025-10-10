@@ -76,6 +76,7 @@ MT5_SETUP_EXE="mt5setup.exe"
 FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
 
 export WINEDEBUG="${WINE_DEBUG_CHANNEL:--all}"
+DEFAULT_WINEDLLOVERRIDES="ucrtbase=n,b;vcruntime140=n,b;vcruntime140_1=n,b;msvcp140=n,b"
 
 SERVICES_ONLY=0
 DISPLAY_SET_MANUALLY=""
@@ -247,7 +248,11 @@ with_display() {
 #####################################
 # Wine helpers
 #####################################
-wine_env_block() { echo "export WINEARCH='${WINEARCH}'; export WINEDEBUG='${WINEDEBUG}'"; }
+wine_env_block() {
+  local overrides="${WINEDLLOVERRIDES:-${DEFAULT_WINEDLLOVERRIDES}}"
+  printf "export WINEARCH='%s'; export WINEDEBUG='%s'; export WINEDLLOVERRIDES='%s'" \
+    "${WINEARCH}" "${WINEDEBUG}" "${overrides}"
+}
 ensure_wineprefix() { run_as_user "$(wine_env_block); export WINEPREFIX='$1'; wineboot -u >/dev/null 2>&1 || true"; }
 winetricks_quiet() {
   local prefix="$1"
@@ -268,6 +273,47 @@ wine_cmd() {
   printf -v quoted "%q " "$@"
   quoted="${quoted% }"
   run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; ${quoted}"
+}
+
+ensure_native_crt_runtime() {
+  local prefix="$1"
+  shift || true
+  if [[ -z "${prefix}" ]]; then
+    return 0
+  fi
+
+  local -a dlls=(
+    "ucrtbase"
+    "vcruntime140"
+    "vcruntime140_1"
+    "msvcp140"
+    "api-ms-win-crt-*"
+  )
+
+  local dll_path="${prefix}/drive_c/windows/system32/ucrtbase.dll"
+  if [[ -f "${dll_path}" ]]; then
+    log "Refreshing VC++ runtime overrides for prefix ${prefix}"
+  else
+    log "Provisioning native VC++ runtime for prefix ${prefix}"
+    winetricks_quiet "${prefix}" vcrun2022
+  fi
+
+  if [[ ! -f "${dll_path}" ]]; then
+    log "Warning: native ucrtbase.dll still missing in ${prefix} after winetricks run"
+  fi
+
+  local base_key='HKCU\\Software\\Wine\\DllOverrides'
+  for dll in "${dlls[@]}"; do
+    wine_cmd "${prefix}" wine reg add "${base_key}" /v "${dll}" /t REG_SZ /d native,builtin /f >/dev/null 2>&1 || true
+  done
+
+  local -a target_apps=("python.exe" "terminal64.exe")
+  for app in "${target_apps[@]}"; do
+    local app_key="HKCU\\Software\\Wine\\AppDefaults\\${app}\\DllOverrides"
+    for dll in "${dlls[@]}"; do
+      wine_cmd "${prefix}" wine reg add "${app_key}" /v "${dll}" /t REG_SZ /d native,builtin /f >/dev/null 2>&1 || true
+    done
+  done
 }
 
 #####################################
@@ -320,6 +366,8 @@ install_windows_python() {
 
   winetricks_quiet "${prefix}" gdiplus
 
+  ensure_native_crt_runtime "${prefix}"
+
   log "Windows Python available at ${WINDOWS_PYTHON_WIN_PATH}"
 }
 
@@ -367,7 +415,7 @@ install_windows_python_packages() {
     mt5_requirement="mt5"
   fi
 
-  local -a primary_requirements=("${mt5_requirement}" "MetaTrader5<6")
+  local -a primary_requirements=("numpy<2.0" "${mt5_requirement}" "MetaTrader5<6")
   log "Installing Windows mt5 dependencies (${primary_requirements[*]})..."
 
   local -a install_cmd=(
@@ -378,7 +426,7 @@ install_windows_python_packages() {
   if ! wine_cmd "${prefix}" "${install_cmd[@]}"; then
     log "Primary Windows mt5 dependency install failed; attempting relaxed mt5 constraint..."
     local -a fallback_cmd=(
-      "env" "PIP_DEFAULT_TIMEOUT=${PIP_INSTALL_TIMEOUT}" "wine" "${python_path}" "-m" "pip" "install" "--upgrade" "mt5" "MetaTrader5<6"
+      "env" "PIP_DEFAULT_TIMEOUT=${PIP_INSTALL_TIMEOUT}" "wine" "${python_path}" "-m" "pip" "install" "--upgrade" "numpy<2.0" "mt5" "MetaTrader5<6"
     )
     if ! wine_cmd "${prefix}" "${fallback_cmd[@]}"; then
       die "Failed to install Windows mt5 dependencies"
@@ -479,6 +527,7 @@ install_mt5() {
   log "Initialising Wine prefix at ${prefix} ..."
   ensure_wineprefix "${prefix}"
   winetricks_quiet "${prefix}" corefonts gdiplus
+  ensure_native_crt_runtime "${prefix}"
   if wine_cmd "${prefix}" wine cmd /c "dir C:\\Program^ Files\\MetaTrader^ 5" >/dev/null 2>&1; then
     log "MetaTrader 5 already installed."
     return 0
