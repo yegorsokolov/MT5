@@ -12,8 +12,12 @@ LOG_DIR="${USER_HOME}/Downloads"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/$(date +'%m.%d.%Y').log"
 
-# Clean (truncate) today's log file before writing anything new
-: >"$LOG_FILE"
+# Clean (truncate) today's log file before writing anything new. When the
+# script re-executes itself (for logging or sudo), avoid wiping the log again.
+if [[ -z "${SETUP_UBUNTU_LOG_INITIALIZED:-}" ]]; then
+  export SETUP_UBUNTU_LOG_INITIALIZED=1
+  : >"$LOG_FILE"
+fi
 
 # Start logging if not already under 'script'
 if [ -z "${TERMINAL_LOGGING:-}" ]; then
@@ -28,6 +32,24 @@ if [ -z "${TERMINAL_LOGGING:-}" ]; then
 
   # Run the command inside 'script' using -c (avoid argument parsing issues)
   exec script -q -f -a "$LOG_FILE" -c "$_CMD"
+fi
+
+#####################################
+# Privilege escalation
+#####################################
+SCRIPT_ABS="$(readlink -f "$0")"
+if [[ "$(id -u)" -ne 0 ]]; then
+  if [[ -z "${SETUP_UBUNTU_SUDO_REEXEC:-}" ]]; then
+    export SETUP_UBUNTU_SUDO_REEXEC=1
+    echo "[setup] Re-running with sudo to obtain root privileges" | tee -a "$LOG_FILE" >&2
+    exec sudo env \
+      TERMINAL_LOGGING="${TERMINAL_LOGGING:-}" \
+      LOG_FILE="${LOG_FILE}" \
+      SETUP_UBUNTU_LOG_INITIALIZED="${SETUP_UBUNTU_LOG_INITIALIZED}" \
+      SETUP_UBUNTU_SUDO_REEXEC="${SETUP_UBUNTU_SUDO_REEXEC}" \
+      "$SCRIPT_ABS" "$@"
+  fi
+  die "Run with sudo"
 fi
 
 #####################################
