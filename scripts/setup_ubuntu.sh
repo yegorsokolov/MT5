@@ -86,6 +86,56 @@ die() { echo "[setup:ERROR] $*" | tee -a "$SETUP_LOG" >&2; exit 1; }
 need_root() { if [[ "$(id -u)" -ne 0 ]]; then die "Run with sudo"; fi; }
 run_as_user() { sudo -H -u "${PROJECT_USER}" bash -lc "$*"; }
 
+trim_whitespace() {
+  local value="$1"
+  value="${value#${value%%[![:space:]]*}}"
+  value="${value%${value##*[![:space:]]}}"
+  printf '%s' "$value"
+}
+
+strip_matching_quotes() {
+  local value="$1"
+  local first last
+  first="${value:0:1}"
+  last="${value: -1}"
+  if [[ "${#value}" -ge 2 && ( "$first" == '"' && "$last" == '"' || "$first" == "'" && "$last" == "'" ) ]]; then
+    printf '%s' "${value:1:${#value}-2}"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+load_env_file() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || return 0
+
+  log "Loading environment overrides from ${env_file}"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+
+    if [[ "$line" =~ ^[[:space:]]*export[[:space:]]+ ]]; then
+      line="${line:${#BASH_REMATCH[0]}}"
+      line="$(trim_whitespace "$line")"
+    fi
+
+    if [[ "$line" != *"="* ]]; then
+      log "Skipping malformed .env line: $line"
+      continue
+    fi
+
+    local key="${line%%=*}"
+    local value="${line#*=}"
+    key="$(trim_whitespace "$key")"
+    value="$(trim_whitespace "$value")"
+    [[ -n "$key" ]] || continue
+
+    value="$(strip_matching_quotes "$value")"
+    export "${key}=${value}"
+  done <"$env_file"
+}
+
 discover_windows_python() {
   local prefix="$1"
   if [[ -z "${prefix}" ]]; then
@@ -161,13 +211,7 @@ ensure_cached_download() {
 #####################################
 # Load .env if present
 #####################################
-if [[ -f "${PROJECT_ROOT}/.env" ]]; then
-  log "Loading environment overrides from ${PROJECT_ROOT}/.env"
-  set -a
-  # shellcheck disable=SC1090
-  . "${PROJECT_ROOT}/.env"
-  set +a
-fi
+load_env_file "${PROJECT_ROOT}/.env"
 
 #####################################
 # Parse CLI args
