@@ -25,7 +25,15 @@ command -v winepath >/dev/null 2>&1 || error "winepath not found; install Wine o
 
 win_path() {
   local prefix="$1" path="$2"
-  WINEPREFIX="$prefix" winepath -w "$path" 2>/dev/null | tr -d '\r'
+  local output
+  if ! output=$(WINEPREFIX="$prefix" winepath -w "$path" 2>/dev/null); then
+    error "winepath failed to convert ${path} inside ${prefix}"
+  fi
+  output="${output//$'\r'/}"
+  if [[ -z "$output" ]]; then
+    error "winepath returned an empty value for ${path} inside ${prefix}"
+  fi
+  printf '%s\n' "$output"
 }
 
 WIN_PY_WINPATH="$(win_path "$PY_WINE_PREFIX" "$WIN_PYTHON")"

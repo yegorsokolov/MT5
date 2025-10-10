@@ -5,6 +5,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_python_version_config.sh
 source "${SCRIPT_DIR}/_python_version_config.sh"
 
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+require_command() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+to_windows_path() {
+  local path="$1"
+  local output
+  if ! output=$(winepath -w "$path" 2>/dev/null); then
+    die "winepath failed to convert $path"
+  fi
+  output="${output//$'\r'/}"
+  if [[ -z "$output" ]]; then
+    die "winepath returned an empty value for $path"
+  fi
+  printf '%s\n' "$output"
+}
+
 # --------- SETTINGS ---------
 export WINEARCH=win64
 export WINEDEBUG=-all
@@ -73,6 +93,10 @@ sudo dpkg --add-architecture i386 || true
 sudo apt update
 sudo apt install -y wine64 wine32:i386 winetricks cabextract wget unzip git python3-venv
 
+require_command wine
+require_command winepath
+require_command winetricks
+
 echo ">>> Init Wine prefix: ${MT5_PREFIX}"
 export WINEPREFIX="${MT5_PREFIX}"
 wineboot --init
@@ -112,7 +136,8 @@ if [[ -z "${MT5_TERMINAL_UNIX}" ]]; then
   exit 1
 fi
 MT5_INSTALL_DIR_UNIX="$(dirname "${MT5_TERMINAL_UNIX}")"
-MT5_TERMINAL_WIN=$(winepath -w "${MT5_TERMINAL_UNIX}")
+MT5_TERMINAL_WIN=$(to_windows_path "${MT5_TERMINAL_UNIX}")
+[[ -n "${MT5_TERMINAL_WIN}" ]] || die "Failed to derive Windows path for MetaTrader terminal"
 
 echo "Detected MetaTrader 5 terminal at ${MT5_TERMINAL_UNIX}"
 
@@ -132,7 +157,8 @@ if [[ -z "${WIN_PY}" ]]; then
   echo "Windows Python executable not found inside ${WINEPREFIX}" >&2
   exit 1
 fi
-WIN_PY_WINPATH=$(winepath -w "$WIN_PY")
+WIN_PY_WINPATH=$(to_windows_path "$WIN_PY")
+[[ -n "${WIN_PY_WINPATH}" ]] || die "Failed to derive Windows path for python.exe"
 
 echo ">>> Install MetaTrader5 (and pin NumPy for stability) inside Windows-Python"
 wine "$WIN_PY_WINPATH" -m pip install --upgrade pip

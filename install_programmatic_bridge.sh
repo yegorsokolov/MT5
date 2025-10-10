@@ -186,7 +186,15 @@ run_wine() {
 
 to_windows_path() {
   local prefix="$1" path="$2"
-  with_wine_env "$prefix" winepath -w "$path" 2>/dev/null | tr -d '\r'
+  local output
+  if ! output=$(with_wine_env "$prefix" winepath -w "$path" 2>/dev/null); then
+    die "winepath failed to convert $path inside $prefix"
+  fi
+  output="${output//$'\r'/}"
+  if [[ -z "$output" ]]; then
+    die "winepath returned an empty path for $path inside $prefix"
+  fi
+  printf '%s\n' "$output"
 }
 
 detect_windows_python() {

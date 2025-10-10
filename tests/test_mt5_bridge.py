@@ -160,3 +160,14 @@ def test_get_mt5linux_connection_settings(monkeypatch):
     assert settings["timeout"] == pytest.approx(12.5)
     assert settings["host_source"].startswith("env:")
     assert settings["port_source"].startswith("env:")
+
+
+def test_native_import_falls_back_to_mt5(monkeypatch, _reset_bridge):
+    sys.modules.pop("MetaTrader5", None)
+    fake_mt5 = ModuleType("mt5")
+    monkeypatch.setitem(sys.modules, "mt5", fake_mt5)
+
+    module = mt5_bridge.load_mt5_module(force=True)
+
+    assert module is fake_mt5
+    assert sys.modules["MetaTrader5"] is fake_mt5
