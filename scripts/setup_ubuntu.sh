@@ -656,56 +656,41 @@ install_mt5() {
   fi
   run_as_user "mkdir -p '${CACHE_DIR}' '${MT5_INSTALLER_STAGE}'"
 
-  local installer_script="${MT5_INSTALLER_STAGE}/mt5linux.sh"
-  local installer_url="https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5linux.sh"
+  local installer_path="${MT5_INSTALLER_STAGE}/${MT5_SETUP_EXE}"
+  local installer_url="${MT5_SETUP_URL}"
 
-  log "Downloading MetaTrader 5 installer script from ${installer_url}..."
-  run_as_user "rm -f '${installer_script}'"
-  local download_cmd
-  printf -v download_cmd "cd %q && wget --tries=3 --timeout=%q --waitretry=2 --retry-connrefused --retry-on-http-error=429,500,502,503,504 -O mt5linux.sh %q" \
-    "${MT5_INSTALLER_STAGE}" "${DOWNLOAD_CONNECT_TIMEOUT}" "${installer_url}"
-  run_as_user "${download_cmd}"
+  if [[ "${FORCE_INSTALLER_REFRESH}" -eq 1 || ! -s "${installer_path}" ]]; then
+    log "Downloading MetaTrader 5 installer from ${installer_url}..."
+    run_as_user "rm -f '${installer_path}'"
+    local download_cmd
+    printf -v download_cmd "cd %q && wget --tries=3 --timeout=%q --waitretry=2 --retry-connrefused --retry-on-http-error=429,500,502,503,504 -O %q %q" \
+      "${MT5_INSTALLER_STAGE}" "${DOWNLOAD_CONNECT_TIMEOUT}" "${MT5_SETUP_EXE}" "${installer_url}"
+    if ! run_as_user "${download_cmd}"; then
+      die "MetaTrader installer download failed"
+    fi
+    chown "${PROJECT_USER}:${PROJECT_USER}" "${installer_path}" || true
+  else
+    log "Using cached MetaTrader installer at ${installer_path}"
+  fi
 
-  local chmod_cmd
-  printf -v chmod_cmd "cd %q && chmod +x mt5linux.sh" "${MT5_INSTALLER_STAGE}"
-  run_as_user "${chmod_cmd}"
+  if [[ ! -s "${installer_path}" ]]; then
+    die "MetaTrader installer missing at ${installer_path}"
+  fi
 
-  INSTALL_STAGE="${MT5_INSTALLER_STAGE}" MT5_PREFIX="${prefix}" python3 - <<'PY'
-import os
-from pathlib import Path
-
-stage_root = Path(os.environ["INSTALL_STAGE"])
-script_path = stage_root / "mt5linux.sh"
-if not script_path.exists():
-    raise SystemExit("MetaTrader installer script download failed")
-
-text = script_path.read_text()
-start_marker = "echo Update and install..."
-end_marker = "echo Download MetaTrader and WebView2 Runtime"
-start = text.find(start_marker)
-end = text.find(end_marker)
-if start != -1 and end != -1 and end > start:
-    text = text[:start] + text[end:]
-
-prefix = os.environ["MT5_PREFIX"]
-text = text.replace("WINEPREFIX=~/.mt5", f"WINEPREFIX='{prefix}'")
-
-script_path.write_text(text)
-script_path.chmod(0o755)
-PY
-  chown "${PROJECT_USER}:${PROJECT_USER}" "${installer_script}" || true
-
-  log "Running MetaTrader 5 installer script..."
+  log "Launching MetaTrader 5 installer..."
   xvfb_start
-  local install_cmd
-  printf -v install_cmd "cd %q && ./mt5linux.sh" "${MT5_INSTALLER_STAGE}"
+  local install_cmd env_block
+  env_block="$(wine_env_block)"
+  printf -v install_cmd "%s; export WINEPREFIX=%q; wine start /unix %q" \
+    "${env_block}" "${prefix}" "${installer_path}"
   with_display "${install_cmd}"
   wine_wait
   xvfb_stop
 
-  local cleanup_cmd
-  printf -v cleanup_cmd "cd %q && rm -f mt5setup.exe webview2.exe" "${MT5_INSTALLER_STAGE}"
-  run_as_user "${cleanup_cmd}" || true
+  local terminal_path="${prefix}/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+  if [[ ! -f "${terminal_path}" ]]; then
+    die "MetaTrader terminal not detected after installation"
+  fi
 
   if attempt_mt5_bridge_via_package; then
     log "MetaTrader5 Python package successfully established the bridge."
