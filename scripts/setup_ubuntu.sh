@@ -754,7 +754,7 @@ install_mql_bridge_assets() {
   fi
 
   local copier
-  printf -v copier "SOURCE=%q DEST=%q python3 - <<'PY'\nimport os\nimport shutil\nfrom pathlib import Path\n\nsource = Path(os.environ['SOURCE'])\ndest = Path(os.environ['DEST'])\n\nif not source.exists():\n    raise SystemExit(1)\nfor path in source.rglob('*'):\n    rel = path.relative_to(source)\n    target = dest / rel\n    if path.is_dir():\n        target.mkdir(parents=True, exist_ok=True)\n    else:\n        target.parent.mkdir(parents=True, exist_ok=True)\n        shutil.copy2(path, target)\nprint(f"Copied MQL bridge assets to {dest}")\nPY" "${source_dir}" "${target_dir}"
+  printf -v copier "SOURCE=%q DEST=%q python3 - <<'PY'\nimport os\nimport shutil\nfrom pathlib import Path\n\nsource = Path(os.environ['SOURCE'])\ndest = Path(os.environ['DEST'])\n\nif not source.exists():\n    raise SystemExit(1)\nfor path in source.rglob('*'):\n    rel = path.relative_to(source)\n    target = dest / rel\n    if path.is_dir():\n        target.mkdir(parents=True, exist_ok=True)\n    else:\n        target.parent.mkdir(parents=True, exist_ok=True)\n        shutil.copy2(path, target)\nprint(f\"Copied MQL bridge assets to {dest}\")\nPY" "${source_dir}" "${target_dir}"
 
   if run_as_user "${copier}"; then
     return 0
