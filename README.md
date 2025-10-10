@@ -67,7 +67,12 @@ artifact. On Windows the diagnostics still expect the native `MetaTrader5`
 wheel to be installed, whereas on Linux/macOS they treat a configured Wine
 bridge (for example when `WINE_PYTHON`/`WIN_PYTHON` is set or
 `LOGIN_INSTRUCTIONS_WINE.txt` exists) as satisfying the dependency so the
-Windows-only wheel is no longer reported as missing.
+Windows-only wheel is no longer reported as missing. If `pyenv` manages your
+interpreters, remember to activate a specific version before running the check
+(`pyenv shell 3.11.9`, `pyenv local 3.10.14`, or prefix the command with
+`pyenv exec`). Alternatively, use the fully qualified interpreter name (for
+example `python3 -m utils.environment`) so the shim resolves cleanly when the
+generic `python` alias is disabled.
 
 * Linux: run `./scripts/setup_ubuntu.sh` to provision a supported Python
   interpreter, ensure `pip` is available and upgrade dependencies. The script
