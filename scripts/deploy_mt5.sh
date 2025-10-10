@@ -9,6 +9,7 @@ source "${SCRIPT_DIR}/_python_version_config.sh"
 export WINEARCH=win64
 export WINEDEBUG=-all
 MT5_PREFIX="$HOME/.wine-mt5"                # single prefix for MT5 + Windows-Python
+LEGACY_MT5_PREFIX="$HOME/.mt5"             # some legacy scripts still expect ~/.mt5
 REPO_SSH="git@github.com:yegorsokolov/MT5.git"
 PROJ_DIR="$HOME/MT5"
 WIN_PY_VER="${WIN_PY_VER:-$MT5_PYTHON_PATCH}"
@@ -58,6 +59,15 @@ rm -rf "${MT5_PREFIX}" ~/.wine "$HOME/${MT5_PYTHON_PREFIX_NAME}" || true
 sudo rm -rf /opt/mt5 || true
 rm -rf "$PROJ_DIR" || true
 
+# Ensure a writable runtime dir for Wine/GUI-less runs (quietens headless warnings)
+XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if [[ ! -d "${XDG_RUNTIME_DIR}" ]]; then
+  XDG_RUNTIME_DIR="/tmp/runtime-$(id -u)"
+  mkdir -p "${XDG_RUNTIME_DIR}"
+  chmod 700 "${XDG_RUNTIME_DIR}"
+fi
+export XDG_RUNTIME_DIR
+
 echo ">>> Install Wine + helpers"
 sudo dpkg --add-architecture i386 || true
 sudo apt update
@@ -66,6 +76,12 @@ sudo apt install -y wine64 wine32:i386 winetricks cabextract wget unzip git pyth
 echo ">>> Init Wine prefix: ${MT5_PREFIX}"
 export WINEPREFIX="${MT5_PREFIX}"
 wineboot --init
+
+# Mirror prefix for tools that still probe ~/.mt5
+if [[ -e "${LEGACY_MT5_PREFIX}" && ! -L "${LEGACY_MT5_PREFIX}" ]]; then
+  mv -v "${LEGACY_MT5_PREFIX}" "${LEGACY_MT5_PREFIX}.bak.$(date +%s)"
+fi
+ln -sfn "${MT5_PREFIX}" "${LEGACY_MT5_PREFIX}"
 
 echo ">>> Install VC++ runtimes (UCRT etc.)"
 winetricks -q vcrun2022 || true
@@ -80,6 +96,7 @@ REGEDIT4
 "vcruntime140_1"="native,builtin"
 REG
 wine regedit /S /tmp/dlloverrides.reg
+export WINEDLLOVERRIDES="ucrtbase=n,b;vcruntime140=n,b;vcruntime140_1=n,b;msvcp140=n,b"
 
 echo ">>> Download and install MetaTrader 5"
 sudo mkdir -p /opt/mt5 && sudo chown "$USER":"$USER" /opt/mt5
@@ -119,7 +136,7 @@ WIN_PY_WINPATH=$(winepath -w "$WIN_PY")
 
 echo ">>> Install MetaTrader5 (and pin NumPy for stability) inside Windows-Python"
 wine "$WIN_PY_WINPATH" -m pip install --upgrade pip
-wine "$WIN_PY_WINPATH" -m pip install "numpy<2.4" MetaTrader5
+wine "$WIN_PY_WINPATH" -m pip install "numpy<2.0" MetaTrader5
 
 echo ">>> Clone your project via SSH"
 cd "$HOME"
@@ -163,7 +180,55 @@ cat > .env <<EOF
 WINEPREFIX=${MT5_PREFIX}
 WINE_PYTHON="$(echo "$WIN_PY_WINPATH" | sed 's/\\\\/\\\\\\\\/g')"
 MT5_TERMINAL_PATH="${MT5_TERMINAL_ESCAPED}"
+WINEDLLOVERRIDES="${WINEDLLOVERRIDES}"
+XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
 EOF
+
+echo ">>> Apply backward-compat shim for utils/mt_5_bridge.py if needed"
+if [[ -f "utils/mt_5_bridge.py" ]]; then
+  python - <<'PY'
+import inspect
+import os
+import sys
+
+bridge_path = os.path.join("utils", "mt_5_bridge.py")
+try:
+    with open(bridge_path, "r", encoding="utf-8") as f:
+        src = f.read()
+except FileNotFoundError:
+    sys.exit(0)
+
+shim = """
+# --- Backward-compat shim (auto-added by deploy_mt5.sh) ---
+try:
+    import inspect as _inspect  # type: ignore
+except Exception:  # pragma: no cover - import guard
+    _inspect = None
+if _inspect is not None:
+    try:
+        if 'connect' in globals():
+            try:
+                _sig = _inspect.signature(connect)
+            except Exception:
+                _sig = None
+            if not (_sig and ('config' in _sig.parameters or any(param.kind is _inspect.Parameter.VAR_KEYWORD for param in _sig.parameters.values()))):
+                _connect_impl = connect
+                def connect(*args, **kwargs):  # type: ignore[override]
+                    kwargs.pop('config', None)
+                    return _connect_impl(*args, **kwargs)
+    except Exception:
+        pass
+# --- End shim ---
+"""
+
+if "Backward-compat shim (auto-added" not in src:
+    with open(bridge_path, "a", encoding="utf-8") as f:
+        f.write("\n" + shim.strip("\n") + "\n")
+    print("Shim appended to", bridge_path)
+else:
+    print("Shim already present in", bridge_path)
+PY
+fi
 
 echo ">>> Install heartbeat script into MT5"
 MT5_MQL5_DIR="${MT5_INSTALL_DIR_UNIX}/MQL5"
