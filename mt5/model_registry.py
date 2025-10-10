@@ -3,8 +3,10 @@
 import asyncio
 import contextlib
 import gc
+import hashlib
 import json
 import logging
+import re
 import time
 import types
 import weakref
@@ -451,7 +453,11 @@ class ModelRegistry:
             ``models/<name>.pkl`` relative to the repository root.
         """
 
-        p = Path(path) if path is not None else Path("models") / f"{name}.pkl"
+        if path is not None:
+            p = Path(path)
+        else:
+            safe_name = _safe_model_filename(name)
+            p = Path("models") / f"{safe_name}.pkl"
         p.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(model, p)
         self.register_policy(name, p, metadata or {})
@@ -853,3 +859,23 @@ def save_model(
     """Serialize ``model`` and register it in the global registry."""
 
     return _GLOBAL_REGISTRY.save_model(name, model, metadata or {}, path)
+_SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _safe_model_filename(name: str) -> str:
+    """Return a filesystem-safe representation of ``name``.
+
+    The helper keeps alphanumeric characters, underscores, hyphens and dots so
+    broker specific suffixes such as ``".pro"`` remain intact.  When any
+    character is replaced we append a short hash so that distinct model names
+    do not collide after sanitisation.
+    """
+
+    safe = _SANITIZE_PATTERN.sub("_", name)
+    if safe == name:
+        return safe
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+    if "." in safe:
+        stem, ext = safe.rsplit(".", 1)
+        return f"{stem}__{digest}.{ext}"
+    return f"{safe}__{digest}"

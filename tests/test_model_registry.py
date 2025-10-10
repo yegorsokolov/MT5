@@ -181,3 +181,26 @@ def test_residual_prediction_added() -> None:
     )
     assert float(np.asarray(pred)) == pytest.approx(1.0, rel=1e-3)
 
+
+def test_save_model_sanitises_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monitor = DummyMonitor(
+        ResourceCapabilities(cpus=2, memory_gb=4, has_gpu=False, gpu_count=0)
+    )
+    registry = make_registry(monitor)
+    payload = {"weights": [1, 2, 3]}
+    name = "pepperstone:XAUUSD.pro"
+    path = registry.save_model(name, payload, {"stage": "test"})
+
+    assert path.parent == Path("models")
+    assert path.parent.resolve() == (tmp_path / "models").resolve()
+    assert path.suffix == ".pkl"
+    # Stem retains broker suffix and includes a collision-resistant segment.
+    assert path.stem.endswith(".pro")
+    assert "pepperstone_XAUUSD" in path.stem
+    assert "__" in path.stem
+    assert path.exists()
+    meta_path = path.with_suffix(".json")
+    assert meta_path.exists()
+    assert registry.get_policy_path(name) == path
+
