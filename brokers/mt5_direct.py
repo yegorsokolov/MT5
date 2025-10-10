@@ -242,14 +242,86 @@ def _ticks_to_dataframe(ticks: Iterable[Any]) -> _pd.DataFrame:
     return _pd.DataFrame(rows)
 
 
+def _extract_symbol_name(candidate: Any) -> Optional[str]:
+    """Best effort extraction of a symbol name from MetaTrader responses."""
+
+    for attr in ("name", "symbol"):
+        value = getattr(candidate, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    if isinstance(candidate, dict):
+        for key in ("name", "symbol", "path"):
+            value = candidate.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if isinstance(candidate, (list, tuple)) and candidate:
+        for item in candidate:
+            if isinstance(item, str) and item:
+                return item
+    if isinstance(candidate, str) and candidate:
+        return candidate
+    return None
+
+
+def _iter_all_symbol_names() -> Iterable[str]:
+    """Yield known symbol names from MetaTrader, handling API quirks."""
+
+    symbols_get = getattr(_mt5, "symbols_get", None)
+    symbols_total = getattr(_mt5, "symbols_total", None)
+    seen: set[str] = set()
+
+    def emit(values: Any) -> Iterable[str]:
+        if not values:
+            return []
+        results: list[str] = []
+        for entry in values:
+            name = _extract_symbol_name(entry)
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            results.append(name)
+        return results
+
+    if callable(symbols_get) and callable(symbols_total):
+        try:
+            total = int(symbols_total())
+        except Exception:
+            total = 0
+        if total > 0:
+            try:
+                for name in emit(symbols_get(0, total)):
+                    yield name
+            except TypeError:
+                # Older MetaTrader builds expose ``symbols_get()`` without
+                # slice arguments – fall back to the parameterless call below.
+                pass
+            except Exception:
+                pass
+
+    if callable(symbols_get):
+        fetchers = ((), (0,), None)
+        for args in fetchers:
+            try:
+                if args is None:
+                    values = symbols_get()
+                else:
+                    values = symbols_get(*args)
+            except TypeError:
+                continue
+            except Exception:
+                continue
+            else:
+                for name in emit(values):
+                    yield name
+                break
+
+
 def _find_mt5_symbol(symbol: str):
     info = _mt5.symbol_info(symbol)
     if info:
         return symbol
 
-    all_symbols = _mt5.symbols_get()
-    for s in all_symbols:
-        name = s.name
+    for name in _iter_all_symbol_names():
         if name.endswith(symbol) or name.startswith(symbol):
             return name
     return None
