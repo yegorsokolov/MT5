@@ -49,7 +49,8 @@ if [[ "$(id -u)" -ne 0 ]]; then
       SETUP_UBUNTU_SUDO_REEXEC="${SETUP_UBUNTU_SUDO_REEXEC}" \
       "$SCRIPT_ABS" "$@"
   fi
-  die "Run with sudo"
+  echo "[setup:ERROR] Run with sudo" | tee -a "$LOG_FILE" >&2
+  exit 1
 fi
 
 #####################################
@@ -84,8 +85,6 @@ PYTHON_WIN_EXE="${PYTHON_WIN_EXE:-$MT5_PYTHON_INSTALLER}"
 PYTHON_WIN_EMBED_ZIP="${PYTHON_WIN_EMBED_ZIP:-$MT5_PYTHON_EMBED_ZIP}"
 PYTHON_WIN_URL="${PYTHON_WIN_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${PYTHON_WIN_EXE}}"
 PYTHON_WIN_EMBED_URL="${PYTHON_WIN_EMBED_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${PYTHON_WIN_EMBED_ZIP}}"
-# Populated dynamically after installation so we do not rely on a hard coded
-# path other than the helper’s configured target.
 WINDOWS_PYTHON_UNIX_PATH=""
 WINDOWS_PYTHON_WIN_PATH=""
 WINDOWS_PYTHON_DEFAULT_WIN_PATH="${PYTHON_WIN_TARGET_DIR}\\python.exe"
@@ -130,29 +129,23 @@ strip_matching_quotes() {
 load_env_file() {
   local env_file="$1"
   [[ -f "$env_file" ]] || return 0
-
   log "Loading environment overrides from ${env_file}"
-
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-
     if [[ "$line" =~ ^[[:space:]]*export[[:space:]]+ ]]; then
       line="${line:${#BASH_REMATCH[0]}}"
       line="$(trim_whitespace "$line")"
     fi
-
     if [[ "$line" != *"="* ]]; then
       log "Skipping malformed .env line: $line"
       continue
     fi
-
     local key="${line%%=*}"
     local value="${line#*=}"
     key="$(trim_whitespace "$key")"
     value="$(trim_whitespace "$value")"
     [[ -n "$key" ]] || continue
-
     value="$(strip_matching_quotes "$value")"
     export "${key}=${value}"
   done <"$env_file"
@@ -164,9 +157,6 @@ discover_windows_python() {
     return 1
   fi
 
-  # 1) Check the configured TargetDir first. Modern installers sometimes honour
-  #    our ``TargetDir`` even when they ignore the ``InstallAllUsers`` flag, so
-  #    converting that path via winepath is a cheap positive signal.
   local default_win_path default_cmd default_candidate
   default_win_path="${PYTHON_WIN_TARGET_DIR}\\python.exe"
   printf -v default_cmd "WINEPREFIX=%q winepath -u %q" "${prefix}" "${default_win_path}"
@@ -177,10 +167,6 @@ discover_windows_python() {
     return 0
   fi
 
-  # 2) Recent python.org installers have started defaulting to the per-user
-  #    location under ``AppData/Local/Programs/Python`` even when a system
-  #    ``TargetDir`` is supplied. Probe the most common user directory names
-  #    created by Wine before falling back to an expensive ``find`` traversal.
   local -a user_candidates
   user_candidates=("${PROJECT_USER}")
   if [[ -n "${PROJECT_USER}" ]]; then
@@ -222,9 +208,6 @@ discover_windows_python() {
     fi
   done
 
-  # 3) Fall back to scanning the prefix. The per-user installers create fairly
-  #    deep directory trees, so keep the max depth high enough to catch them
-  #    without recursing indefinitely.
   local finder
   printf -v finder "find %q -maxdepth 9 -type f -iname 'python.exe' 2>/dev/null | sort" "${prefix}/drive_c"
   local results
@@ -249,7 +232,6 @@ to_windows_path() {
   if [[ -z "${prefix}" || -z "${unix_path}" ]]; then
     return 1
   fi
-
   local converter
   printf -v converter "WINEPREFIX=%q winepath -w %q" "${prefix}" "${unix_path}"
   local converted
@@ -316,18 +298,46 @@ ensure_system_packages() {
     software-properties-common build-essential \
     cabextract wine64 wine32:i386 winetricks xvfb curl unzip p7zip-full \
     python3 python3-venv python3-dev python3-pip python3-setuptools wget
+
+  # Best-effort install of Python 3.11 to match Windows Python & many MT5 libs
+  # Some Ubuntu releases provide python3.11 / python3.11-venv; ignore if absent.
+  apt-get install -y python3.11 python3.11-venv >/dev/null 2>&1 || true
+
   log "System packages ensured."
 }
 
 #####################################
-# Linux-side venv
+# Linux-side venv (prefer Python 3.11)
 #####################################
+detect_project_python() {
+  # Honour explicit override if provided
+  if [[ -n "${PROJECT_PYTHON_BIN:-}" && -x "${PROJECT_PYTHON_BIN}" ]]; then
+    printf '%s' "${PROJECT_PYTHON_BIN}"
+    return 0
+  fi
+  # Prefer 3.11 to satisfy many MT5 stacks (and match Windows 3.11.x)
+  if command -v python3.11 >/dev/null 2>&1; then
+    printf '%s' "$(command -v python3.11)"
+    return 0
+  fi
+  # Fallback to system default python3
+  printf '%s' "$(command -v python3)"
+}
+
 ensure_project_venv() {
   [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
   chown -R "${PROJECT_USER}:${PROJECT_USER}" "${PROJECT_ROOT}" || true
-  log "Creating/using project virtualenv (.venv)..."
-  run_as_user "cd '${PROJECT_ROOT}' && python3 -m venv .venv || true"
+
+  local pybin
+  pybin="$(detect_project_python)"
+  log "Creating/using project virtualenv (.venv) with ${pybin} ..."
+  run_as_user "cd '${PROJECT_ROOT}' && '${pybin}' -m venv .venv || true"
   run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade pip setuptools wheel || true"
+
+  # If our project later fails due to python_requires, hint it early.
+  local pyver
+  pyver="$(run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -c 'import sys; print(\"%d.%d\"%sys.version_info[:2])'" 2>/dev/null || true)"
+  log "Project venv Python version: ${pyver:-unknown}"
 }
 venv_python() { echo "${PROJECT_ROOT}/.venv/bin/python"; }
 venv_pip_install() { run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade '$1'"; }
@@ -487,9 +497,7 @@ install_windows_python() {
   fi
 
   winetricks_quiet "${prefix}" gdiplus
-
   ensure_native_crt_runtime "${prefix}"
-
   log "Windows Python available at ${WINDOWS_PYTHON_WIN_PATH}"
 }
 
@@ -589,7 +597,7 @@ def parse_version(tag):
 def compare(left, right):
     for index in range(max(len(left), len(right))):
         l = left[index] if index < len(left) else 0
-        r = right[index] if index < len(right) else 0
+        r = right[index] if right and index < len(right) else 0
         if l != r:
             return (l > r) - (l < r)
     return 0
@@ -614,10 +622,10 @@ parsed = []
 for version, files in releases.items():
     if not files:
         continue
-    parsed_version = parse_version(version)
-    if parsed_version is None:
+    pv = parse_version(version)
+    if pv is None:
         continue
-    parsed.append((parsed_version, version))
+    parsed.append((pv, version))
 
 if not parsed:
     sys.exit(1)
@@ -769,7 +777,13 @@ install_mql_bridge_assets() {
 install_linux_bridge() {
   [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
   [[ -z "${PYMT5LINUX_SOURCE}" ]] && { log "PYMT5LINUX_SOURCE not set"; return 0; }
-  venv_pip_install "${PYMT5LINUX_SOURCE}" || log "Failed to install bridge helper"
+
+  # Attempt install; if python_requires rejects (e.g., venv on 3.13 but project <3.12),
+  # we keep going and just warn.
+  if ! venv_pip_install "${PYMT5LINUX_SOURCE}"; then
+    log "Failed to install bridge helper (likely python_requires mismatch)."
+    log "Tip: set PROJECT_PYTHON_BIN to a compatible interpreter (e.g., /usr/bin/python3.11) and re-run."
+  fi
 }
 
 #####################################
