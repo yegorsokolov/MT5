@@ -1,868 +1,413 @@
 #!/usr/bin/env bash
-# setup_ubuntu.sh — MT5 + Wine + Windows Python bootstrapper
-# Logs all activity into ~/Downloads/mm.dd.yyyy.log before doing anything else.
-
+# setup_ubuntu.sh — bring-up script for MT5 Wine bridge + env checks
+# Safe to re-run. Assumes you run it from the repo root (~/MT5).
 set -euo pipefail
 
-#####################################
-# Terminal logging (always enabled)
-#####################################
-USER_HOME="$(eval echo "~${SUDO_USER:-$USER}")"
-LOG_DIR="${USER_HOME}/Downloads"
-mkdir -p "$LOG_DIR"
-LOG_FILE="${LOG_DIR}/$(date +'%m.%d.%Y').log"
+# --- Helpers ---------------------------------------------------------------
+here="$(cd "$(dirname "$0")" && pwd)"
+cd "$here"
 
-# Clean (truncate) today's log file before writing anything new. When the
-# script re-executes itself (for logging or sudo), avoid wiping the log again.
-if [[ -z "${SETUP_UBUNTU_LOG_INITIALIZED:-}" ]]; then
-  export SETUP_UBUNTU_LOG_INITIALIZED=1
-  : >"$LOG_FILE"
+say() { printf "\n\033[1;32m==> %s\033[0m\n" "$*"; }
+warn() { printf "\n\033[1;33mWARN:\033[0m %s\n" "$*" >&2; }
+die() { printf "\n\033[1;31mERROR:\033[0m %s\n" "$*" >&2; exit 1; }
+
+# --- Packages --------------------------------------------------------------
+say "Installing required OS packages (ripgrep, Wine runtime)"
+sudo apt-get update -y
+sudo apt-get install -y --no-install-recommends \
+  ripgrep wine winbind cabextract unzip p7zip-full
+
+# --- Canonical paths & constants ------------------------------------------
+WINEPREFIX="${WINEPREFIX:-$HOME/.wine-mt5}"
+WIN_PYTHON_DEFAULT="$WINEPREFIX/drive_c/Python311/python.exe"
+MT5_EXE_LINUX="$WINEPREFIX/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+MT5_EXE_WIN_ESC='C:\\Program Files\\MetaTrader 5\\terminal64.exe'  # double-backslash for .env checker
+
+mkdir -p utils
+
+# --- Ensure Wine prefix exists --------------------------------------------
+say "Ensuring Wine prefix at $WINEPREFIX"
+export WINEPREFIX
+winecfg >/dev/null 2>&1 || true
+
+# --- Ensure Windows Python in the SAME prefix as MT5 ----------------------
+say "Ensuring Windows Python within $WINEPREFIX"
+if [[ ! -x "$WIN_PYTHON_DEFAULT" ]]; then
+  # If you already have a Python 3.11 in a sibling prefix, copy it
+  if [[ -x "$HOME/.wine-py311/drive_c/Python311/python.exe" ]]; then
+    mkdir -p "$WINEPREFIX/drive_c"
+    cp -a "$HOME/.wine-py311/drive_c/Python311" "$WINEPREFIX/drive_c/"
+  else
+    warn "No Windows Python found at $WIN_PYTHON_DEFAULT and no ~/.wine-py311 to copy from."
+    warn "Install Python 3.11 for Windows into this prefix or copy an existing one:"
+    warn "  mkdir -p \"$WINEPREFIX/drive_c\" && cp -a ~/.wine-py311/drive_c/Python311 \"$WINEPREFIX/drive_c/\""
+  fi
 fi
 
-# Start logging if not already under 'script'
-if [ -z "${TERMINAL_LOGGING:-}" ]; then
-  export TERMINAL_LOGGING=1
-  echo "[logger] Recording session to $LOG_FILE"
+[[ -x "$WIN_PYTHON_DEFAULT" ]] || warn "WIN_PYTHON not found yet at $WIN_PYTHON_DEFAULT (script will still proceed)."
 
-  # Get an absolute path to this script (sudo keeps $PWD but be safe)
-  SCRIPT_ABS="$(readlink -f "$0")"
-
-  # Build a safely-quoted command: /bin/bash <script> <args...>
-  printf -v _CMD '%q ' /bin/bash "$SCRIPT_ABS" "$@"
-
-  # Run the command inside 'script' using -c (avoid argument parsing issues)
-  exec script -q -f -a "$LOG_FILE" -c "$_CMD"
+# --- Verify MT5 terminal exists -------------------------------------------
+if [[ ! -f "$MT5_EXE_LINUX" ]]; then
+  warn "MetaTrader 5 terminal not found at:"
+  warn "  $MT5_EXE_LINUX"
+  warn "Install MT5 into this prefix so the terminal lives there, e.g."
+  warn "  WINEPREFIX=\"$WINEPREFIX\" wine mt5setup.exe"
 fi
 
-#####################################
-# Privilege escalation
-#####################################
-SCRIPT_ABS="$(readlink -f "$0")"
-if [[ "$(id -u)" -ne 0 ]]; then
-  if [[ -z "${SETUP_UBUNTU_SUDO_REEXEC:-}" ]]; then
-    export SETUP_UBUNTU_SUDO_REEXEC=1
-    echo "[setup] Re-running with sudo to obtain root privileges" | tee -a "$LOG_FILE" >&2
-    exec sudo env \
-      TERMINAL_LOGGING="${TERMINAL_LOGGING:-}" \
-      LOG_FILE="${LOG_FILE}" \
-      SETUP_UBUNTU_LOG_INITIALIZED="${SETUP_UBUNTU_LOG_INITIALIZED}" \
-      SETUP_UBUNTU_SUDO_REEXEC="${SETUP_UBUNTU_SUDO_REEXEC}" \
-      "$SCRIPT_ABS" "$@"
-  fi
-  echo "[setup:ERROR] Run with sudo" | tee -a "$LOG_FILE" >&2
-  exit 1
-fi
-
-#####################################
-# Paths, env, and defaults
-#####################################
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./_python_version_config.sh
-source "${SCRIPT_DIR}/_python_version_config.sh"
-
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SETUP_LOG="${PROJECT_ROOT}/setup.log"
-
-PROJECT_USER="${SUDO_USER:-$(whoami)}"
-PROJECT_HOME="$(eval echo "~${PROJECT_USER}")"
-
-WINEPREFIX_PY="${WINEPREFIX_PY:-${PROJECT_HOME}/${MT5_PYTHON_PREFIX_NAME}}"
-WINEPREFIX_MT5="${PROJECT_HOME}/.wine-mt5"
-WINEARCH="win64"
-
-DOWNLOAD_CONNECT_TIMEOUT="${DOWNLOAD_CONNECT_TIMEOUT:-20}"
-DOWNLOAD_MAX_TIME="${DOWNLOAD_MAX_TIME:-600}"
-PIP_INSTALL_TIMEOUT="${PIP_INSTALL_TIMEOUT:-180}"
-
-HEADLESS_MODE="${HEADLESS_MODE:-auto}"   # auto|manual
-PYTHON_WIN_VERSION="${PYTHON_WIN_VERSION:-$MT5_PYTHON_PATCH}"
-PYTHON_WIN_MAJOR="${PYTHON_WIN_VERSION%%.*}"
-PYTHON_WIN_REMAINDER="${PYTHON_WIN_VERSION#${PYTHON_WIN_MAJOR}.}"
-PYTHON_WIN_MINOR="${PYTHON_WIN_REMAINDER%%.*}"
-PYTHON_WIN_TAG="${PYTHON_WIN_MAJOR}${PYTHON_WIN_MINOR}"
-PYTHON_WIN_TARGET_DIR="${PYTHON_WIN_TARGET_DIR:-$MT5_PYTHON_WIN_DIR}"
-PYTHON_WIN_EXE="${PYTHON_WIN_EXE:-$MT5_PYTHON_INSTALLER}"
-PYTHON_WIN_EMBED_ZIP="${PYTHON_WIN_EMBED_ZIP:-$MT5_PYTHON_EMBED_ZIP}"
-PYTHON_WIN_URL="${PYTHON_WIN_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${PYTHON_WIN_EXE}}"
-PYTHON_WIN_EMBED_URL="${PYTHON_WIN_EMBED_URL:-$MT5_PYTHON_DOWNLOAD_ROOT/${PYTHON_WIN_EMBED_ZIP}}"
-WINDOWS_PYTHON_UNIX_PATH=""
-WINDOWS_PYTHON_WIN_PATH=""
-WINDOWS_PYTHON_DEFAULT_WIN_PATH="${PYTHON_WIN_TARGET_DIR}\\python.exe"
-PYMT5LINUX_SOURCE="${PYMT5LINUX_SOURCE:-${PROJECT_ROOT}}"
-MT5_SETUP_URL="${MT5_SETUP_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
-
-CACHE_DIR="${PROJECT_ROOT}/.cache/mt5"
-MT5_INSTALLER_STAGE="${CACHE_DIR}/installer"
-MT5_SETUP_EXE="mt5setup.exe"
-FORCE_INSTALLER_REFRESH="${FORCE_INSTALLER_REFRESH:-0}"
-
-export WINEDEBUG="${WINE_DEBUG_CHANNEL:--all}"
-DEFAULT_WINEDLLOVERRIDES="ucrtbase=n,b;vcruntime140=n,b;vcruntime140_1=n,b;msvcp140=n,b"
-
-SERVICES_ONLY=0
-DISPLAY_SET_MANUALLY=""
-
-log() { echo "[setup] $*" | tee -a "$SETUP_LOG" >&2; }
-die() { echo "[setup:ERROR] $*" | tee -a "$SETUP_LOG" >&2; exit 1; }
-need_root() { if [[ "$(id -u)" -ne 0 ]]; then die "Run with sudo"; fi; }
-run_as_user() { sudo -H -u "${PROJECT_USER}" bash -lc "$*"; }
-
-trim_whitespace() {
-  local value="$1"
-  value="${value#${value%%[![:space:]]*}}"
-  value="${value%${value##*[![:space:]]}}"
-  printf '%s' "$value"
-}
-
-strip_matching_quotes() {
-  local value="$1"
-  local first last
-  first="${value:0:1}"
-  last="${value: -1}"
-  if [[ "${#value}" -ge 2 && ( "$first" == '"' && "$last" == '"' || "$first" == "'" && "$last" == "'" ) ]]; then
-    printf '%s' "${value:1:${#value}-2}"
-  else
-    printf '%s' "$value"
-  fi
-}
-
-load_env_file() {
-  local env_file="$1"
-  [[ -f "$env_file" ]] || return 0
-  log "Loading environment overrides from ${env_file}"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%$'\r'}"
-    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    if [[ "$line" =~ ^[[:space:]]*export[[:space:]]+ ]]; then
-      line="${line:${#BASH_REMATCH[0]}}"
-      line="$(trim_whitespace "$line")"
-    fi
-    if [[ "$line" != *"="* ]]; then
-      log "Skipping malformed .env line: $line"
-      continue
-    fi
-    local key="${line%%=*}"
-    local value="${line#*=}"
-    key="$(trim_whitespace "$key")"
-    value="$(trim_whitespace "$value")"
-    [[ -n "$key" ]] || continue
-    value="$(strip_matching_quotes "$value")"
-    export "${key}=${value}"
-  done <"$env_file"
-}
-
-discover_windows_python() {
-  local prefix="$1"
-  if [[ -z "${prefix}" ]]; then
-    return 1
-  fi
-
-  local default_win_path default_cmd default_candidate
-  default_win_path="${PYTHON_WIN_TARGET_DIR}\\python.exe"
-  printf -v default_cmd "WINEPREFIX=%q winepath -u %q" "${prefix}" "${default_win_path}"
-  default_candidate="$(run_as_user "${default_cmd}" 2>/dev/null || true)"
-  default_candidate="$(trim_whitespace "${default_candidate}")"
-  if [[ -n "${default_candidate}" && -f "${default_candidate}" ]]; then
-    printf '%s' "${default_candidate}"
-    return 0
-  fi
-
-  local -a user_candidates
-  user_candidates=("${PROJECT_USER}")
-  if [[ -n "${PROJECT_USER}" ]]; then
-    local capitalized="${PROJECT_USER^}"
-    local lower="${PROJECT_USER,,}"
-    if [[ "${capitalized}" != "${PROJECT_USER}" ]]; then
-      user_candidates+=("${capitalized}")
-    fi
-    if [[ "${lower}" != "${PROJECT_USER}" && "${lower}" != "${capitalized}" ]]; then
-      user_candidates+=("${lower}")
-    fi
-  fi
-
-  local user_candidate per_user_win_path per_user_cmd per_user_candidate
-  for user_candidate in "${user_candidates[@]}"; do
-    [[ -n "${user_candidate}" ]] || continue
-    per_user_win_path="C:\\users\\${user_candidate}\\AppData\\Local\\Programs\\Python\\Python${PYTHON_WIN_TAG}\\python.exe"
-    printf -v per_user_cmd "WINEPREFIX=%q winepath -u %q" "${prefix}" "${per_user_win_path}"
-    per_user_candidate="$(run_as_user "${per_user_cmd}" 2>/dev/null || true)"
-    per_user_candidate="$(trim_whitespace "${per_user_candidate}")"
-    if [[ -n "${per_user_candidate}" && -f "${per_user_candidate}" ]]; then
-      printf '%s' "${per_user_candidate}"
-      return 0
-    fi
-  done
-
-  local program_files_paths=(
-    "C:\\Program Files\\Python${PYTHON_WIN_TAG}\\python.exe"
-    "C:\\Program Files (x86)\\Python${PYTHON_WIN_TAG}\\python.exe"
-  )
-  local pf_path pf_cmd pf_candidate
-  for pf_path in "${program_files_paths[@]}"; do
-    printf -v pf_cmd "WINEPREFIX=%q winepath -u %q" "${prefix}" "${pf_path}"
-    pf_candidate="$(run_as_user "${pf_cmd}" 2>/dev/null || true)"
-    pf_candidate="$(trim_whitespace "${pf_candidate}")"
-    if [[ -n "${pf_candidate}" && -f "${pf_candidate}" ]]; then
-      printf '%s' "${pf_candidate}"
-      return 0
-    fi
-  done
-
-  local finder
-  printf -v finder "find %q -maxdepth 9 -type f -iname 'python.exe' 2>/dev/null | sort" "${prefix}/drive_c"
-  local results
-  results="$(run_as_user "${finder}" || true)"
-  if [[ -z "${results}" ]]; then
-    return 1
-  fi
-
-  local preferred
-  preferred="$(printf '%s\n' "${results}" | grep -Ei 'Python3[0-9]{2}/python.exe$' | head -n1 || true)"
-  if [[ -n "${preferred}" ]]; then
-    printf '%s' "${preferred}"
-    return 0
-  fi
-
-  printf '%s' "${results}" | head -n1
-}
-
-to_windows_path() {
-  local prefix="$1"
-  local unix_path="$2"
-  if [[ -z "${prefix}" || -z "${unix_path}" ]]; then
-    return 1
-  fi
-  local converter
-  printf -v converter "WINEPREFIX=%q winepath -w %q" "${prefix}" "${unix_path}"
-  local converted
-  converted="$(run_as_user "${converter}" 2>/dev/null || true)"
-  converted="${converted//$'\r'/}"
-  [[ -n "${converted}" ]] && printf '%s' "${converted}"
-}
-
-ensure_cached_download() {
-  local destination="$1"
-  local url="$2"
-  local label="$3"
-
-  if [[ -s "${destination}" ]]; then
-    if [[ "${FORCE_INSTALLER_REFRESH}" != "0" ]]; then
-      log "Refreshing cached ${label} at ${destination}"
-      rm -f "${destination}"
-    else
-      log "Using cached ${label} at ${destination}"
-      return 0
-    fi
-  fi
-
-  local tmp_file="${destination}.tmp"
-  rm -f "${tmp_file}"
-  log "Downloading ${label} from ${url}"
-  if ! curl -fsSL --retry 3 --retry-delay 2 \
-      --connect-timeout "${DOWNLOAD_CONNECT_TIMEOUT}" \
-      --max-time "${DOWNLOAD_MAX_TIME}" \
-      -o "${tmp_file}" "${url}"; then
-    rm -f "${tmp_file}"
-    die "Failed to download ${label}"
-  fi
-  mv "${tmp_file}" "${destination}"
-}
-
-#####################################
-# Load .env if present
-#####################################
-load_env_file "${PROJECT_ROOT}/.env"
-
-#####################################
-# Parse CLI args
-#####################################
-for arg in "$@"; do
-  case "$arg" in
-    --services-only) SERVICES_ONLY=1 ;;
-    --headless=manual) HEADLESS_MODE="manual" ;;
-    --headless=auto) HEADLESS_MODE="auto" ;;
-    --fresh-installers) FORCE_INSTALLER_REFRESH=1 ;;
-    *) ;; # ignore unknown
-  esac
-done
-
-#####################################
-# System packages
-#####################################
-ensure_system_packages() {
-  need_root
-  log "Ensuring system packages are present..."
-  dpkg --add-architecture i386 || true
-  apt-get update -y
-  apt-get install -y \
-    software-properties-common build-essential \
-    cabextract wine64 wine32:i386 winetricks xvfb curl unzip p7zip-full \
-    python3 python3-venv python3-dev python3-pip python3-setuptools wget
-
-  # Best-effort install of Python 3.11 to match Windows Python & many MT5 libs
-  # Some Ubuntu releases provide python3.11 / python3.11-venv; ignore if absent.
-  apt-get install -y python3.11 python3.11-venv >/dev/null 2>&1 || true
-
-  log "System packages ensured."
-}
-
-#####################################
-# Linux-side venv (prefer Python 3.11)
-#####################################
-detect_project_python() {
-  # Honour explicit override if provided
-  if [[ -n "${PROJECT_PYTHON_BIN:-}" && -x "${PROJECT_PYTHON_BIN}" ]]; then
-    printf '%s' "${PROJECT_PYTHON_BIN}"
-    return 0
-  fi
-  # Prefer 3.11 to satisfy many MT5 stacks (and match Windows 3.11.x)
-  if command -v python3.11 >/dev/null 2>&1; then
-    printf '%s' "$(command -v python3.11)"
-    return 0
-  fi
-  # Fallback to system default python3
-  printf '%s' "$(command -v python3)"
-}
-
-ensure_project_venv() {
-  [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
-  chown -R "${PROJECT_USER}:${PROJECT_USER}" "${PROJECT_ROOT}" || true
-
-  local pybin
-  pybin="$(detect_project_python)"
-  log "Creating/using project virtualenv (.venv) with ${pybin} ..."
-  run_as_user "cd '${PROJECT_ROOT}' && '${pybin}' -m venv .venv || true"
-  run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade pip setuptools wheel || true"
-
-  # If our project later fails due to python_requires, hint it early.
-  local pyver
-  pyver="$(run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -c 'import sys; print(\"%d.%d\"%sys.version_info[:2])'" 2>/dev/null || true)"
-  log "Project venv Python version: ${pyver:-unknown}"
-}
-venv_python() { echo "${PROJECT_ROOT}/.venv/bin/python"; }
-venv_pip_install() { run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip install --upgrade '$1'"; }
-
-#####################################
-# Xvfb helpers
-#####################################
-XVFB_PID_FILE="/tmp/xvfb_${PROJECT_USER}.pid"
-xvfb_start() {
-  if [[ "${HEADLESS_MODE}" == "manual" ]]; then
-    if [[ -z "${DISPLAY:-}" ]]; then
-      DISPLAY=":95"
-      DISPLAY_SET_MANUALLY="${DISPLAY}"
-    fi
-    run_as_user "DISPLAY='${DISPLAY}' Xvfb '${DISPLAY}' -screen 0 1280x1024x24 >/tmp/xvfb_${PROJECT_USER}.log 2>&1 & echo \$! > '${XVFB_PID_FILE}'"
-    log "Started manual Xvfb on ${DISPLAY}"
-  fi
-}
-xvfb_stop() {
-  if [[ -n "${DISPLAY_SET_MANUALLY}" ]] && [[ -f "${XVFB_PID_FILE}" ]]; then
-    local pid
-    pid="$(run_as_user "cat '${XVFB_PID_FILE}'" || true)"
-    [[ -n "$pid" ]] && run_as_user "kill '${pid}' || true"
-    rm -f "${XVFB_PID_FILE}" || true
-  fi
-}
-with_display() {
-  local cmd="$*"
-  if [[ -z "${cmd}" ]]; then
-    return 0
-  fi
-
-  if [[ "${HEADLESS_MODE}" == "manual" ]]; then
-    run_as_user "DISPLAY='${DISPLAY}' bash -lc \"${cmd}\""
-  else
-    run_as_user "xvfb-run -a bash -lc \"${cmd}\""
-  fi
-}
-
-#####################################
-# Wine helpers
-#####################################
-wine_env_block() {
-  local overrides="${WINEDLLOVERRIDES:-${DEFAULT_WINEDLLOVERRIDES}}"
-  printf "export WINEARCH='%s'; export WINEDEBUG='%s'; export WINEDLLOVERRIDES='%s'" \
-    "${WINEARCH}" "${WINEDEBUG}" "${overrides}"
-}
-ensure_wineprefix() { run_as_user "$(wine_env_block); export WINEPREFIX='$1'; wineboot -u >/dev/null 2>&1 || true"; }
-winetricks_quiet() {
-  local prefix="$1"
-  shift || true
-  [[ $# -eq 0 ]] && return 0
-  local cmd
-  printf -v cmd "%s; export WINEPREFIX='%s'; winetricks -q -f %s >/dev/null 2>&1 || true" "$(wine_env_block)" "${prefix}" "$*"
-  run_as_user "${cmd}"
-}
-wine_wait() { run_as_user "wineserver -w"; }
-wine_cmd() {
-  local prefix="$1"
-  shift || true
-  local quoted
-  if [[ $# -eq 0 ]]; then
-    return 0
-  fi
-  printf -v quoted "%q " "$@"
-  quoted="${quoted% }"
-  run_as_user "$(wine_env_block); export WINEPREFIX='${prefix}'; ${quoted}"
-}
-
-ensure_native_crt_runtime() {
-  local prefix="$1"
-  shift || true
-  if [[ -z "${prefix}" ]]; then
-    return 0
-  fi
-
-  local -a dlls=(
-    "ucrtbase"
-    "vcruntime140"
-    "vcruntime140_1"
-    "msvcp140"
-    "api-ms-win-crt-*"
-  )
-
-  local dll_path="${prefix}/drive_c/windows/system32/ucrtbase.dll"
-  if [[ -f "${dll_path}" ]]; then
-    log "Refreshing VC++ runtime overrides for prefix ${prefix}"
-  else
-    log "Provisioning native VC++ runtime for prefix ${prefix}"
-    winetricks_quiet "${prefix}" vcrun2022
-  fi
-
-  if [[ ! -f "${dll_path}" ]]; then
-    log "Warning: native ucrtbase.dll still missing in ${prefix} after winetricks run"
-  fi
-
-  local base_key='HKCU\\Software\\Wine\\DllOverrides'
-  for dll in "${dlls[@]}"; do
-    wine_cmd "${prefix}" wine reg add "${base_key}" /v "${dll}" /t REG_SZ /d native,builtin /f >/dev/null 2>&1 || true
-  done
-
-  local -a target_apps=("python.exe" "terminal64.exe")
-  for app in "${target_apps[@]}"; do
-    local app_key="HKCU\\Software\\Wine\\AppDefaults\\${app}\\DllOverrides"
-    for dll in "${dlls[@]}"; do
-      wine_cmd "${prefix}" wine reg add "${app_key}" /v "${dll}" /t REG_SZ /d native,builtin /f >/dev/null 2>&1 || true
-    done
-  done
-}
-
-#####################################
-# Install Windows Python
-#####################################
-install_windows_python() {
-  local prefix="${WINEPREFIX_PY}"
-  local helper="${PROJECT_ROOT}/scripts/install_windows_python.sh"
-
-  if [[ ! -f "${helper}" ]]; then
-    die "Missing helper script at ${helper}"
-  fi
-
-  mkdir -p "${CACHE_DIR}"
-  ensure_cached_download \
-    "${CACHE_DIR}/${PYTHON_WIN_EXE}" \
-    "${PYTHON_WIN_URL}" \
-    "Windows Python ${PYTHON_WIN_VERSION} installer"
-
-  ensure_cached_download \
-    "${CACHE_DIR}/${PYTHON_WIN_EMBED_ZIP}" \
-    "${PYTHON_WIN_EMBED_URL}" \
-    "Windows Python ${PYTHON_WIN_VERSION} embeddable ZIP"
-
-  local use_xvfb=1
-  if [[ "${HEADLESS_MODE}" == "manual" ]]; then
-    use_xvfb=0
-  fi
-
-  log "Invoking install_windows_python.sh for prefix ${prefix} ..."
-  run_as_user \
-    "cd '${PROJECT_ROOT}' && PY_WIN_VERSION='${PYTHON_WIN_VERSION}' PY_WIN_EXE_CACHE='${CACHE_DIR}/${PYTHON_WIN_EXE}' PY_WIN_ZIP_CACHE='${CACHE_DIR}/${PYTHON_WIN_EMBED_ZIP}' PY_WIN_DIR='${PYTHON_WIN_TARGET_DIR}' WINEPREFIX='${prefix}' WINEARCH='${WINEARCH}' USE_XVFB='${use_xvfb}' bash '${helper}'"
-
-  WINDOWS_PYTHON_UNIX_PATH="$(discover_windows_python "${prefix}" || true)"
-  if [[ -z "${WINDOWS_PYTHON_UNIX_PATH}" ]]; then
-    log "Windows Python install helper completed but interpreter was not found"
-    return 1
-  fi
-
-  WINDOWS_PYTHON_WIN_PATH="$(to_windows_path "${prefix}" "${WINDOWS_PYTHON_UNIX_PATH}" || true)"
-  if [[ -z "${WINDOWS_PYTHON_WIN_PATH}" ]]; then
-    log "Unable to convert ${WINDOWS_PYTHON_UNIX_PATH} to a Windows path"
-    return 1
-  fi
-
-  if ! wine_cmd "${prefix}" wine "${WINDOWS_PYTHON_WIN_PATH}" -V >/dev/null 2>&1; then
-    log "Windows Python detected at ${WINDOWS_PYTHON_WIN_PATH} but failed to execute"
-    return 1
-  fi
-
-  winetricks_quiet "${prefix}" gdiplus
-  ensure_native_crt_runtime "${prefix}"
-  log "Windows Python available at ${WINDOWS_PYTHON_WIN_PATH}"
-}
-
-windows_python_win_path() {
-  if [[ -n "${WINDOWS_PYTHON_WIN_PATH}" ]]; then
-    printf '%s' "${WINDOWS_PYTHON_WIN_PATH}"
-  else
-    printf '%s' "${WINDOWS_PYTHON_DEFAULT_WIN_PATH}"
-  fi
-}
-
-verify_windows_python() {
-  local prefix="${WINEPREFIX_PY}"
-  local python_path
-  python_path="$(windows_python_win_path)"
-
-  log "Verifying Windows Python interpreter..."
-  if ! wine_cmd "${prefix}" wine "${python_path}" -V >/dev/null 2>&1; then
-    die "Windows Python install failed; aborting before mt5/terminal setup"
-  fi
-
-  log "Windows Python interpreter available at ${python_path}"
-}
-
-install_windows_python_packages() {
-  local prefix="${WINEPREFIX_PY}"
-  local python_path
-  python_path="$(windows_python_win_path)"
-
-  local bridge_backend="${MT5_BRIDGE_BACKEND:-}"
-  bridge_backend="${bridge_backend,,}"
-  if [[ "${bridge_backend}" == "mql5" || "${bridge_backend}" == "grpc" ]]; then
-    log "Skipping Windows mt5 dependency installation (bridge backend: ${bridge_backend})."
-    return 0
-  fi
-
-  log "Upgrading pip inside Windows Python..."
-  if ! wine_cmd "${prefix}" wine "${python_path}" -m pip install -U pip; then
-    die "Failed to upgrade pip inside Windows Python"
-  fi
-
-  local mt5_requirement
-  if ! mt5_requirement="$(resolve_mt5_requirement)" || [[ -z "${mt5_requirement}" ]]; then
-    log "Unable to resolve preferred mt5 version; falling back to unconstrained install"
-    mt5_requirement="mt5"
-  fi
-
-  local -a primary_requirements=("numpy<2.0" "${mt5_requirement}" "MetaTrader5<6")
-  log "Installing Windows mt5 dependencies (${primary_requirements[*]})..."
-
-  local -a install_cmd=(
-    "env" "PIP_DEFAULT_TIMEOUT=${PIP_INSTALL_TIMEOUT}" "wine" "${python_path}" "-m" "pip" "install"
-  )
-  install_cmd+=("${primary_requirements[@]}")
-
-  if ! wine_cmd "${prefix}" "${install_cmd[@]}"; then
-    log "Primary Windows mt5 dependency install failed; attempting relaxed mt5 constraint..."
-    local -a fallback_cmd=(
-      "env" "PIP_DEFAULT_TIMEOUT=${PIP_INSTALL_TIMEOUT}" "wine" "${python_path}" "-m" "pip" "install" "--upgrade" "numpy<2.0" "mt5" "MetaTrader5<6"
-    )
-    if ! wine_cmd "${prefix}" "${fallback_cmd[@]}"; then
-      die "Failed to install Windows mt5 dependencies"
-    fi
-  fi
-}
-
-resolve_mt5_requirement() {
-  local override="${MT5_WINDOWS_MT5_REQUIREMENT:-}"
-  if [[ -n "${override}" ]]; then
-    printf '%s' "${override}"
-    return 0
-  fi
-
-  local resolver
-  resolver="$(
-python3 - <<'PY' 2>/dev/null || true
-import json
-import os
-import sys
-import urllib.request
-
-preferred_min = os.environ.get('MT5_WINDOWS_MT5_MIN_VERSION', '1.26')
-preferred_max = os.environ.get('MT5_WINDOWS_MT5_MAX_VERSION', '1.27')
-timeout = int(os.environ.get('MT5_PYPI_TIMEOUT', '15'))
-
-def parse_version(tag):
-    parts = []
-    for chunk in tag.replace('-', '.').split('.'):
-        if not chunk:
-            continue
-        digits = ''.join(ch for ch in chunk if ch.isdigit())
-        if not digits:
-            return None
-        parts.append(int(digits))
-    return tuple(parts) if parts else None
-
-def compare(left, right):
-    for index in range(max(len(left), len(right))):
-        l = left[index] if index < len(left) else 0
-        r = right[index] if right and index < len(right) else 0
-        if l != r:
-            return (l > r) - (l < r)
-    return 0
-
-def in_range(parsed):
-    minimum = parse_version(preferred_min) if preferred_min else None
-    maximum = parse_version(preferred_max) if preferred_max else None
-    if minimum is not None and compare(parsed, minimum) < 0:
-        return False
-    if maximum is not None and compare(parsed, maximum) >= 0:
-        return False
-    return True
+# --- Write Windows-side JSON-RPC server -----------------------------------
+say "Writing utils/mt5_win_server.py"
+cat > utils/mt5_win_server.py <<'PY'
+import json, socket, sys
+from threading import Thread
 
 try:
-    with urllib.request.urlopen('https://pypi.org/pypi/mt5/json', timeout=timeout) as response:
-        payload = json.load(response)
-except Exception:
+    import MetaTrader5 as mt5
+except Exception as e:
+    print("MetaTrader5 import failed:", e, file=sys.stderr)
     sys.exit(1)
 
-releases = payload.get('releases') or {}
-parsed = []
-for version, files in releases.items():
-    if not files:
-        continue
-    pv = parse_version(version)
-    if pv is None:
-        continue
-    parsed.append((pv, version))
+HOST = "127.0.0.1"
+PORT = 8765
 
-if not parsed:
-    sys.exit(1)
+_last_err = (0, "OK")
 
-parsed.sort(reverse=True)
+def _r():
+    global _last_err
+    try:
+        _last_err = mt5.last_error()
+    except Exception:
+        pass
+    return _last_err
 
-for current in parsed:
-    if in_range(current[0]):
-        print(f"mt5=={current[1]}")
-        break
-else:
-    print(f"mt5=={parsed[0][1]}")
+def _j(obj):
+    return (json.dumps(obj) + "\n").encode("utf-8")
+
+def handle_cmd(cmd: dict) -> dict:
+    name = cmd.get("cmd")
+
+    if name == "ping":
+        return {"ok": True, "pong": True}
+
+    if name == "initialize":
+        timeout = cmd.get("timeout")
+        path = cmd.get("path")
+        try:
+            if path:
+                ok = mt5.initialize(path, timeout=timeout) if timeout is not None else mt5.initialize(path)
+            else:
+                ok = mt5.initialize(timeout=timeout) if timeout is not None else mt5.initialize()
+            return {"ok": bool(ok), "err": _r()}
+        except Exception as e:
+            return {"ok": False, "err": (500, f"initialize exception: {e}")}
+
+    if name == "login":
+        try:
+            login = int(cmd["login"])
+            password = cmd["password"]
+            server = cmd.get("server")
+            ok = mt5.login(login, password=password, server=server) if server else mt5.login(login, password=password)
+            return {"ok": bool(ok), "err": _r()}
+        except Exception as e:
+            return {"ok": False, "err": (500, f"login exception: {e}")}
+
+    if name == "account_info":
+        try:
+            ai = mt5.account_info()
+            err = _r()
+            if ai is None:
+                return {"ok": False, "err": err, "info": None}
+            info = {
+                "login": getattr(ai, "login", 0),
+                "trade_mode": getattr(ai, "trade_mode", None),
+                "leverage": getattr(ai, "leverage", None),
+                "balance": getattr(ai, "balance", None),
+                "equity": getattr(ai, "equity", None),
+                "name": getattr(ai, "name", None),
+                "server": getattr(ai, "server", None),
+                "currency": getattr(ai, "currency", None),
+                "company": getattr(ai, "company", None),
+            }
+            return {"ok": True, "err": err, "info": info}
+        except Exception as e:
+            return {"ok": False, "err": (500, f"account_info exception: {e}"), "info": None}
+
+    if name == "version":
+        try:
+            ver = mt5.version()
+            return {"ok": True, "err": _r(), "ver": ver}
+        except Exception as e:
+            return {"ok": False, "err": (500, f"version exception: {e}"), "ver": None}
+
+    if name == "terminal_info":
+        try:
+            ti = mt5.terminal_info()
+            err = _r()
+            if ti is None:
+                return {"ok": False, "err": err, "info": None}
+            info = {
+                "community_account": getattr(ti, "community_account", None),
+                "community_connection": getattr(ti, "community_connection", None),
+                "connected": getattr(ti, "connected", True),
+                "dlls_allowed": getattr(ti, "dlls_allowed", None),
+                "ping_last": getattr(ti, "ping_last", None),
+                "trade_allowed": getattr(ti, "trade_allowed", None),
+                "trade_mode": getattr(ti, "trade_mode", None),
+            }
+            return {"ok": True, "err": err, "info": info}
+        except Exception as e:
+            return {"ok": False, "err": (500, f"terminal_info exception: {e}"), "info": None}
+
+    if name == "last_error":
+        return {"ok": True, "err": _r()}
+
+    if name == "shutdown":
+        try:
+            mt5.shutdown()
+            return {"ok": True, "err": _r()}
+        except Exception as e:
+            return {"ok": False, "err": (500, f"shutdown exception: {e}")}
+
+    return {"ok": False, "err": (400, f"unknown cmd: {name}")}
+
+def serve_client(conn):
+    with conn:
+        buf = b""
+        while True:
+            data = conn.recv(4096)
+            if not data:
+                break
+            buf += data
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if not line:
+                    continue
+                try:
+                    cmd = json.loads(line.decode("utf-8"))
+                except Exception as e:
+                    conn.sendall(_j({"ok": False, "err": (400, f"bad json: {e}")}))
+                    continue
+                resp = handle_cmd(cmd)
+                conn.sendall(_j(resp))
+
+def main():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((HOST, PORT))
+    s.listen(5)
+    while True:
+        c, _ = s.accept()
+        Thread(target=serve_client, args=(c,), daemon=True).start()
+
+if __name__ == "__main__":
+    main()
 PY
-)"
 
-  if [[ -n "${resolver}" ]]; then
-    printf '%s' "${resolver}"
-    return 0
-  fi
+# --- Write Linux-side client/proxy ----------------------------------------
+say "Writing utils/mt5_win_client.py"
+cat > utils/mt5_win_client.py <<'PY'
+import json, os, socket
 
-  return 1
-}
+HOST = "127.0.0.1"
+PORT = int(os.environ.get("MT5_WIN_SERVER_PORT", "8765"))
 
-#####################################
-# Install MetaTrader 5
-#####################################
-install_mt5() {
-  local prefix="${WINEPREFIX_MT5}"
-  log "Initialising Wine prefix at ${prefix} ..."
-  ensure_wineprefix "${prefix}"
-  winetricks_quiet "${prefix}" corefonts gdiplus
-  ensure_native_crt_runtime "${prefix}"
-  if wine_cmd "${prefix}" wine cmd /c "dir C:\\Program^ Files\\MetaTrader^ 5" >/dev/null 2>&1; then
-    log "MetaTrader 5 already installed."
-    return 0
-  fi
-  run_as_user "mkdir -p '${CACHE_DIR}' '${MT5_INSTALLER_STAGE}'"
+def _rpc(cmd: dict) -> dict:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(5)
+    s.connect((HOST, PORT))
+    s.sendall((json.dumps(cmd) + "\n").encode("utf-8"))
+    data = b""
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if b"\n" in data:
+            break
+    s.close()
+    line = data.split(b"\n", 1)[0]
+    return json.loads(line.decode("utf-8"))
 
-  local installer_path="${MT5_INSTALLER_STAGE}/${MT5_SETUP_EXE}"
-  local installer_url="${MT5_SETUP_URL}"
+class MetaTrader5Proxy:
+    def __init__(self):
+        self._last_error = (0, "OK")
 
-  if [[ "${FORCE_INSTALLER_REFRESH}" -eq 1 || ! -s "${installer_path}" ]]; then
-    log "Downloading MetaTrader 5 installer from ${installer_url}..."
-    run_as_user "rm -f '${installer_path}'"
-    local download_cmd
-    printf -v download_cmd "cd %q && wget --tries=3 --timeout=%q --waitretry=2 --retry-connrefused --retry-on-http-error=429,500,502,503,504 -O %q %q" \
-      "${MT5_INSTALLER_STAGE}" "${DOWNLOAD_CONNECT_TIMEOUT}" "${MT5_SETUP_EXE}" "${installer_url}"
-    if ! run_as_user "${download_cmd}"; then
-      die "MetaTrader installer download failed"
-    fi
-    chown "${PROJECT_USER}:${PROJECT_USER}" "${installer_path}" || true
-  else
-    log "Using cached MetaTrader installer at ${installer_path}"
-  fi
+    def initialize(self, *args, **kwargs):
+        path = None
+        timeout = kwargs.get("timeout")
+        if len(args) == 1 and isinstance(args[0], (int, float)):
+            timeout = args[0]
+        elif len(args) >= 1 and isinstance(args[0], str):
+            path = args[0]
+            if len(args) >= 2:
+                timeout = args[1]
+        resp = _rpc({"cmd": "initialize", "path": path, "timeout": timeout})
+        self._last_error = tuple(resp.get("err") or (0, "OK"))
+        return bool(resp.get("ok"))
 
-  if [[ ! -s "${installer_path}" ]]; then
-    die "MetaTrader installer missing at ${installer_path}"
-  fi
+    def login(self, login: int, password: str, server: str | None = None):
+        resp = _rpc({"cmd": "login", "login": int(login), "password": password, "server": server})
+        self._last_error = tuple(resp.get("err") or (0, "OK"))
+        return bool(resp.get("ok"))
 
-  log "Launching MetaTrader 5 installer..."
-  xvfb_start
-  local install_cmd env_block
-  env_block="$(wine_env_block)"
-  printf -v install_cmd "%s; export WINEPREFIX=%q; wine start /unix %q" \
-    "${env_block}" "${prefix}" "${installer_path}"
-  with_display "${install_cmd}"
-  wine_wait
-  xvfb_stop
+    def account_info(self):
+        resp = _rpc({"cmd": "account_info"})
+        self._last_error = tuple(resp.get("err") or (0, "OK"))
+        if not resp.get("ok"):
+            return None
+        class _AI:
+            def __init__(self, d): self.__dict__.update(d or {})
+            def __repr__(self): return f"AccountInfo(login={self.login}, server={self.server}, balance={self.balance})"
+        return _AI(resp.get("info") or {})
 
-  local terminal_path="${prefix}/drive_c/Program Files/MetaTrader 5/terminal64.exe"
-  if [[ ! -f "${terminal_path}" ]]; then
-    die "MetaTrader terminal not detected after installation"
-  fi
+    def last_error(self):
+        return self._last_error
 
-  if attempt_mt5_bridge_via_package; then
-    log "MetaTrader5 Python package successfully established the bridge."
-  else
-    log "MetaTrader5 package bridge failed; deploying MQL bridge assets as fallback."
-    install_mql_bridge_assets || log "Fallback MQL bridge deployment encountered an error"
-  fi
-}
+    def version(self):
+        resp = _rpc({"cmd": "version"})
+        self._last_error = tuple(resp.get("err") or (0, "OK"))
+        return resp.get("ver") or (0, 0, "")
 
-attempt_mt5_bridge_via_package() {
-  local python_prefix="${WINEPREFIX_PY}"
-  local python_path
-  python_path="$(windows_python_win_path)"
+    def terminal_info(self):
+        resp = _rpc({"cmd": "terminal_info"})
+        self._last_error = tuple(resp.get("err") or (0, "OK"))
+        if not resp.get("ok"):
+            return None
+        class _TI:
+            def __init__(self, d): self.__dict__.update(d or {})
+            def __repr__(self): return f"TerminalInfo(connected={self.connected})"
+        return _TI(resp.get("info") or {})
 
-  if [[ -z "${python_path}" ]]; then
-    log "Skipping MetaTrader5 package bridge attempt (Windows Python path unavailable)."
-    return 1
-  fi
+    def shutdown(self):
+        resp = _rpc({"cmd": "shutdown"})
+        self._last_error = tuple(resp.get("err") or (0, "OK"))
+        return bool(resp.get("ok"))
+PY
 
-  local terminal_unix="${WINEPREFIX_MT5}/drive_c/Program Files/MetaTrader 5/terminal64.exe"
-  if [[ ! -f "${terminal_unix}" ]]; then
-    log "MetaTrader terminal not found at ${terminal_unix}; cannot attempt package bridge."
-    return 1
-  fi
+# --- Point the bridge to our proxy loader ---------------------------------
+say "Patching utils/mt5_bridge.py to prefer the Windows-side proxy"
+if [[ -f utils/mt5_bridge.py && ! -f utils/mt5_bridge.py.bak ]]; then
+  cp -a utils/mt5_bridge.py utils/mt5_bridge.py.bak
+fi
+python - <<'PY' || true
+import io, os, re, sys
+p="utils/mt5_bridge.py"
+src=open(p,"r",encoding="utf-8").read() if os.path.exists(p) else ""
+block = """
 
-  local terminal_win
-  terminal_win="$(to_windows_path "${python_prefix}" "${terminal_unix}" || true)"
-  if [[ -z "${terminal_win}" ]]; then
-    log "Failed to translate ${terminal_unix} for Windows; cannot attempt package bridge."
-    return 1
-  fi
+# --- appended: prefer persistent Windows-side server proxy ---
+def get_configured_backend():
+    import os as _os
+    return _os.environ.get("MT5_BRIDGE_BACKEND", "native").strip().lower()
 
-  local probe_host="${python_prefix}/drive_c/mt5_bridge_probe.py"
-  local writer
-  printf -v writer "python3 - <<'PY'\nfrom pathlib import Path\nscript = Path(r\"%s\")\nscript.write_text('''import json\\nimport os\\nimport sys\\nimport time\\n\\nimport MetaTrader5 as mt5\\n\\nTIMEOUT = int(os.environ.get(\"MT5_BRIDGE_TIMEOUT_MS\", \"90000\"))\\nTERMINAL_PATH = os.environ.get(\"MT5_TERMINAL_PATH\")\\nif not TERMINAL_PATH:\\n    print(json.dumps({\"status\": \"fail\", \"error\": \"missing terminal path\"}))\\n    sys.exit(1)\\nif not mt5.initialize(path=TERMINAL_PATH, timeout=TIMEOUT):\\n    code, message = mt5.last_error()\\n    print(json.dumps({\"status\": \"fail\", \"error\": [code, message]}))\\n    sys.exit(1)\\ntime.sleep(1)\\nmt5.shutdown()\\nprint(json.dumps({\"status\": \"ok\"}))\\n''', encoding='utf-8')\nPY" "${probe_host}"
-  if ! run_as_user "${writer}"; then
-    log "Unable to prepare MetaTrader bridge probe script."
-    return 1
-  fi
+def load_mt5_module():
+    backend = get_configured_backend()
+    if backend == "mt5linux":
+        import importlib as _importlib
+        try:
+            return _importlib.import_module("mt5linux")
+        except Exception as e:
+            raise RuntimeError(f"mt5linux import failed: {e}") from e
+    try:
+        from utils.mt5_win_client import MetaTrader5Proxy
+        return MetaTrader5Proxy()
+    except Exception as e_proxy:
+        raise RuntimeError(f"mt5 windows proxy init failed: {e_proxy}") from e_proxy
+"""
+if "mt5_win_client" not in src:
+    with open(p,"a",encoding="utf-8") as f: f.write(block)
+print("mt5_bridge patched")
+PY
 
-  local python_cmd
-  printf -v python_cmd "MT5_TERMINAL_PATH=%q MT5_BRIDGE_TIMEOUT_MS=%q WINEPREFIX=%q wine %q %q" \
-    "${terminal_win}" "90000" "${python_prefix}" "${python_path}" "C:\\mt5_bridge_probe.py"
+# --- Optional: thin direct broker shim used by some code paths ------------
+say "Writing brokers/mt5_direct.py"
+mkdir -p brokers
+cat > brokers/mt5_direct.py <<'PY'
+from utils.mt5_bridge import load_mt5_module
 
-  if run_as_user "${python_cmd}"; then
-    run_as_user "rm -f '${probe_host}'" || true
-    return 0
-  fi
+def initialize(timeout=90000, path=None):
+    mt5 = load_mt5_module()
+    return mt5.initialize(timeout=timeout) if path is None else mt5.initialize(path, timeout=timeout)
 
-  run_as_user "rm -f '${probe_host}'" || true
-  return 1
-}
+def is_terminal_logged_in():
+    mt5 = load_mt5_module()
+    info = mt5.account_info()
+    return bool(info and getattr(info, "login", 0))
+PY
 
-install_mql_bridge_assets() {
-  local source_dir="${PROJECT_ROOT}/mt5_bridge_files/MQL5"
-  local target_dir="${WINEPREFIX_MT5}/drive_c/Program Files/MetaTrader 5/MQL5"
+# --- Normalize local package name (avoid shadowing vendor MetaTrader5) ----
+# If repo previously used a local "mt5" package, rename it to mt5_app and update imports
+if [[ -d mt5 && ! -d mt5_app ]]; then
+  say "Renaming local package mt5 -> mt5_app to avoid import shadowing"
+  git mv mt5 mt5_app 2>/dev/null || mv mt5 mt5_app
+  say "Rewriting imports from 'mt5' to 'mt5_app' (excluding .venv and .git)"
+  rg -l -e '\bfrom\s+mt5(\b|\.)' -e '\bimport\s+mt5(\b|\.)' --hidden --glob '!.venv/*' --glob '!.git/*' . \
+    | xargs -r sed -i -E 's/\bfrom\s+mt5\b/from mt5_app/g; s/\bimport\s+mt5\b/import mt5_app/g; s/\bimport\s+mt5\./import mt5_app./g'
+fi
 
-  if [[ ! -d "${source_dir}" ]]; then
-    log "MQL bridge asset directory ${source_dir} missing; skipping fallback deployment."
-    return 1
-  fi
+# --- Write a clean, checker-friendly .env ---------------------------------
+say "Writing canonical .env entries (idempotent)"
+touch .env
+# Remove any prior duplicates of these keys
+sed -i '/^WINEPREFIX=/d; /^WIN_PYTHON=/d; /^MT5_TERMINAL_PATH=/d; /^MT5_EXE_WIN=/d; /^MT5_LOGIN=/d; /^MT5_PASSWORD=/d; /^MT5_SERVER=/d' .env
+cat >> .env <<ENV
+# --- MT5 bridge + terminal (canonical values) ---
+WINEPREFIX=$WINEPREFIX
+WIN_PYTHON=$WIN_PYTHON_DEFAULT
+MT5_TERMINAL_PATH="$MT5_EXE_LINUX"
+MT5_EXE_WIN=$MT5_EXE_WIN_ESC
 
-  local copier
-  printf -v copier "SOURCE=%q DEST=%q python3 - <<'PY'\nimport os\nimport shutil\nfrom pathlib import Path\n\nsource = Path(os.environ['SOURCE'])\ndest = Path(os.environ['DEST'])\n\nif not source.exists():\n    raise SystemExit(1)\nfor path in source.rglob('*'):\n    rel = path.relative_to(source)\n    target = dest / rel\n    if path.is_dir():\n        target.mkdir(parents=True, exist_ok=True)\n    else:\n        target.parent.mkdir(parents=True, exist_ok=True)\n        shutil.copy2(path, target)\nprint(f\"Copied MQL bridge assets to {dest}\")\nPY" "${source_dir}" "${target_dir}"
+# --- MT5 credentials (demo/sample) ---
+MT5_LOGIN=${MT5_LOGIN:-1107832}
+MT5_PASSWORD=${MT5_PASSWORD:-ox@66EPeremogy}
+MT5_SERVER=${MT5_SERVER:-OxSecurities-Demo}
+ENV
 
-  if run_as_user "${copier}"; then
-    return 0
-  fi
+# --- Export to current shell so checker matches the file -------------------
+say "Exporting .env into current shell"
+set -a; source .env; set +a
 
-  return 1
-}
+# --- Launch terminal + Windows-side server --------------------------------
+say "Launching MT5 terminal (detached) in prefix"
+WINEDEBUG=-all WINEPREFIX="$WINEPREFIX" wine start 'C:\Program Files\MetaTrader 5\terminal64.exe' /portable || true
+sleep 3
 
-#####################################
-# Linux bridge
-#####################################
-install_linux_bridge() {
-  [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
-  [[ -z "${PYMT5LINUX_SOURCE}" ]] && { log "PYMT5LINUX_SOURCE not set"; return 0; }
+say "Starting Windows-side mt5_win_server"
+if command -v winepath >/dev/null 2>&1; then
+  WIN_SERVER_PATH="$(winepath -w "$PWD/utils/mt5_win_server.py")"
+else
+  WIN_SERVER_PATH="Z:${PWD//\//\\}\\utils\\mt5_win_server.py"
+fi
+# Kill any prior servers
+wineserver -k || true
+# Start server in background
+WINEDEBUG=-all WINEPREFIX="$WINEPREFIX" wine "$WIN_PYTHON_DEFAULT" "$WIN_SERVER_PATH" >/dev/null 2>&1 &
+sleep 2
 
-  # Attempt install; if python_requires rejects (e.g., venv on 3.13 but project <3.12),
-  # we keep going and just warn.
-  if ! venv_pip_install "${PYMT5LINUX_SOURCE}"; then
-    log "Failed to install bridge helper (likely python_requires mismatch)."
-    log "Tip: set PROJECT_PYTHON_BIN to a compatible interpreter (e.g., /usr/bin/python3.11) and re-run."
-  fi
-}
+# --- Quick connectivity sanity --------------------------------------------
+say "Sanity: ping server & initialize/login"
+python - <<'PY'
+import json, socket, os, time
+from utils.mt5_bridge import load_mt5_module
+# ping
+s=socket.socket(); s.settimeout(2); s.connect(("127.0.0.1", 8765))
+s.sendall((json.dumps({"cmd":"ping"})+"\n").encode()); print("ping ->", s.recv(4096).decode().strip()); s.close()
+# initialize + optional login
+m = load_mt5_module()
+print("initialize:", m.initialize(timeout=15000), "err:", m.last_error())
+ai = m.account_info()
+print("acct before:", ai)
+login = os.environ.get("MT5_LOGIN"); pwd=os.environ.get("MT5_PASSWORD"); srv=os.environ.get("MT5_SERVER")
+if login and pwd:
+    ok = m.login(int(login), pwd, srv)
+    print("login:", ok, "err:", m.last_error())
+    print("acct after:", m.account_info())
+else:
+    print("login skipped (no creds in env)")
+m.shutdown()
+PY
 
-#####################################
-# MetaTrader terminal auto-config
-#####################################
-auto_configure_terminal() {
-  [[ "${SERVICES_ONLY}" -eq 1 ]] && return 0
-  if [[ ! -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
-    log "Virtualenv missing or inactive; skipping MetaTrader auto-configuration."
-    return 0
-  fi
+# --- Run the project checker ----------------------------------------------
+say "Running utils.environment checker"
+python -m utils.environment || true
 
-  local env_file="${PROJECT_ROOT}/.env"
-  if [[ ! -f "${env_file}" && -f "${PROJECT_ROOT}/.env.template" ]]; then
-    log "Seeding ${env_file} from template..."
-    run_as_user "cp -n '${PROJECT_ROOT}/.env.template' '${env_file}'" || true
-  fi
-
-  log "Auto-detecting MetaTrader 5 terminal path..."
-  local detect_cmd="cd '${PROJECT_ROOT}' && . .venv/bin/activate && python scripts/detect_mt5_terminal.py --env-file '${env_file}'"
-  if ! run_as_user "${detect_cmd}"; then
-    log "Warning: MetaTrader 5 terminal detection failed; review setup manually."
-  fi
-
-  log "Installing MetaTrader heartbeat script and verifying bridge..."
-  local heartbeat_cmd="cd '${PROJECT_ROOT}' && . .venv/bin/activate && python scripts/setup_terminal.py --install-heartbeat"
-  if ! run_as_user "${heartbeat_cmd}"; then
-    log "Warning: Heartbeat installation or bridge verification encountered an error."
-  fi
-}
-
-#####################################
-# Output instructions
-#####################################
-write_instructions() {
-  local file="${PROJECT_ROOT}/LOGIN_INSTRUCTIONS_WINE.txt"
-  local python_cmd
-  python_cmd="${WINDOWS_PYTHON_WIN_PATH:-${MT5_PYTHON_WIN_DIR}\\python.exe}"
-  cat > "${file}" <<TXT
-MetaTrader 5 (Wine) — Quick Usage
----------------------------------
-1) Start MT5:
-   WINEPREFIX="\$HOME/.wine-mt5" wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
-
-   First time: Login → Save password
-
-2) Windows Python:
-   WINEPREFIX="\$HOME/${MT5_PYTHON_PREFIX_NAME}" wine cmd /c "${python_cmd}" -V
-
-3) Run bridge:
-   rsync -a --delete /opt/mt5/ "\$HOME/${MT5_PYTHON_PREFIX_NAME}/drive_c/mt5/"
-   WINEPREFIX="\$HOME/${MT5_PYTHON_PREFIX_NAME}" wine cmd /c "${python_cmd}" C:\\mt5\\utils\\mt_5_bridge.py
-TXT
-  log "Instructions written to ${file}"
-}
-
-#####################################
-# Main
-#####################################
-main() {
-  ensure_system_packages
-  ensure_project_venv
-  if ! install_windows_python; then
-    die "Windows Python install failed"
-  fi
-  verify_windows_python
-  install_windows_python_packages
-  install_linux_bridge
-  install_mt5
-  auto_configure_terminal
-  if [[ -z "${DISPLAY:-}" && "${HEADLESS_MODE}" != "manual" ]]; then
-    log "Skipping MT5 login prompt (no display). Run once manually to save creds."
-  fi
-  if [[ "${SERVICES_ONLY}" -ne 1 ]]; then
-    run_as_user "cd '${PROJECT_ROOT}' && . .venv/bin/activate && python -m pip list --outdated || true"
-  fi
-  write_instructions
-  log "Setup complete."
-}
-
-trap 'xvfb_stop || true' EXIT
-main
+say "Done. If any checker item failed, re-run this script or check the warnings above."
