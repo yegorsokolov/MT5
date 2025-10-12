@@ -532,6 +532,14 @@ python -m mt5 pipeline --help       # inspect pipeline-specific options
 python -m mt5 --mode realtime -- <args>  # forward additional arguments
 ```
 
+> **Linux packaging note:** Some distributions ship an unrelated `mt5`
+> package that can shadow the toolkit when invoking `python -m mt5`. If that
+> happens, use the compatibility alias instead:
+>
+> ```bash
+> python -m mt5_toolkit  # forwards to the same dispatcher as python -m mt5
+> ```
+
 The dispatcher automatically resolves the desired mode based on CLI arguments,
 `MT5_MODE` / `MT5_DEFAULT_MODE` environment variables, or the configuration
 returned by `utils.load_config`. If none of those are set it safely falls back
