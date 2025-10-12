@@ -1379,7 +1379,7 @@ def run_backtest(
     model=None,
 ):
     """Run a backtest of the baseline strategy with execution settings."""
-from mt5.backtest import run_backtest as _run_backtest
+    from mt5.backtest import run_backtest as _run_backtest
 
     return _run_backtest(
         cfg,

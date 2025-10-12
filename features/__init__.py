@@ -20,17 +20,24 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Dict, List, Optional
 from functools import wraps
 from importlib.metadata import entry_points
 import threading
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, TYPE_CHECKING, Any
 
 # Re-export the high level feature construction helper so consumers like RL
 # environments can simply import ``features.make_features`` without depending on
 # the heavier ``data`` package.  This keeps integration points lightweight while
 # still delegating the actual feature engineering to ``data.features``.
-from data.features import make_features
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pandas import DataFrame
+
+
+def make_features(*args: Any, **kwargs: Any):
+    from data.features import make_features as _make_features
+
+    return _make_features(*args, **kwargs)
 from .validators import validate_ge
 
 try:  # config is optional during import in some tests
