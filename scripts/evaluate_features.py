@@ -1,11 +1,18 @@
 import copy
-from pathlib import Path
 import csv
 import logging
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    # Allow running via ``python scripts/evaluate_features.py`` without installing the package.
+    sys.path.insert(0, str(REPO_ROOT))
+
 import mt5.log_utils as log_utils
 from mt5.log_utils import setup_logging, log_exceptions
-from utils import load_config, update_config
 from mt5.backtest import run_rolling_backtest
+from utils import load_config, update_config
 
 _LOGGING_INITIALIZED = False
 
