@@ -1,176 +1,156 @@
-"""Client wrapper for the mt5linux RPyC bridge."""
+# utils/bridge_clients/mt5linux_client.py
+"""
+Lightweight client for the optional MT5 Windows RPC bridge (RPyC "classic" server).
+
+Notes
+-----
+- Compatible with RPyC 5.3.1+ where `rpyc.classic.connect()` does NOT accept `config=`.
+- If protocol tweaks are needed, we merge them into `rpyc.core.protocol.DEFAULT_CONFIG`
+  before connecting (safe no-op on older/newer versions).
+- If you're using the direct MetaTrader5 Python package under Wine (recommended),
+  you can ignore this client entirely.
+
+Typical usage
+-------------
+    from utils.bridge_clients.mt5linux_client import connect_to_win_bridge, rpc_ping
+
+    conn = connect_to_win_bridge("127.0.0.1", 8765)
+    try:
+        ok, rtt = rpc_ping(conn, tries=1)
+        print("ping:", ok, "rtt:", rtt)
+        # Example: call into remote Python
+        remote_time = conn.modules.time.time()
+        print("remote time:", remote_time)
+    finally:
+        conn.close()
+"""
 
 from __future__ import annotations
 
-import os
-import threading
-from types import ModuleType
-from typing import Any
-
-_DEFAULT_HOST = "127.0.0.1"
-_DEFAULT_PORT = 18812  # rpyc.utils.classic.DEFAULT_SERVER_PORT
-_DEFAULT_TIMEOUT = 30.0
-
-_LOCK = threading.Lock()
-_CONN: Any | None = None
-_META_MODULE: ModuleType | None = None
-_BRIDGE_INFO: dict[str, Any] = {}
-
-MetaTrader5: ModuleType | None = None
-
-
-class _MetaTraderModule(ModuleType):
-    """Proxy object that exposes the remote MetaTrader5 module API."""
-
-    def __init__(self, *, conn: Any, remote_module: Any, host: str, port: int) -> None:
-        super().__init__("MetaTrader5")
-        object.__setattr__(self, "_conn", conn)
-        object.__setattr__(self, "_remote", remote_module)
-        # Provide a synthetic path for debugging / describe_backend output.
-        object.__setattr__(self, "__file__", f"rpyc://{host}:{port}/MetaTrader5")
-
-    @property
-    def _remote(self) -> Any:  # pragma: no cover - property helper for mypy
-        return object.__getattribute__(self, "_remote")
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(object.__getattribute__(self, "_remote"), name)
-
-    def __dir__(self) -> list[str]:  # pragma: no cover - exercised indirectly
-        return sorted(set(super().__dir__()) | set(dir(self._remote)))
-
-
-def _read_host() -> tuple[str, str]:
-    for key in ("MT5LINUX_HOST", "PYMT5LINUX_HOST", "MT5_BRIDGE_HOST"):
-        value = os.getenv(key)
-        if value:
-            return value.strip() or _DEFAULT_HOST, key
-    return _DEFAULT_HOST, "default"
-
-
-def _read_port() -> tuple[int, str]:
-    for key in ("MT5LINUX_PORT", "PYMT5LINUX_PORT", "MT5_BRIDGE_PORT"):
-        value = os.getenv(key)
-        if value:
-            try:
-                return int(value.strip()), key
-            except ValueError as exc:
-                raise RuntimeError(f"Invalid integer for {key}: {value}") from exc
-    return _DEFAULT_PORT, "default"
-
-
-def _read_timeout() -> float:
-    value = os.getenv("MT5LINUX_TIMEOUT", os.getenv("MT5LINUX_TIMEOUT_SECONDS"))
-    if value:
-        try:
-            return float(value.strip())
-        except ValueError as exc:  # pragma: no cover - configuration error
-            raise RuntimeError(f"Invalid timeout value: {value}") from exc
-    return _DEFAULT_TIMEOUT
-
-
-def _connect(host: str, port: int, timeout: float) -> Any:
-    try:
-        import rpyc
-    except Exception as exc:  # pragma: no cover - optional dependency at runtime
-        raise RuntimeError("rpyc package is required for the mt5linux client") from exc
-
-    config = {
-        "sync_request_timeout": timeout,
-        "connection_timeout": timeout,
-        "allow_public_attrs": True,
-    }
-
-    try:
-        return rpyc.classic.connect(host, port=port, config=config)
-    except OSError as exc:  # pragma: no cover - depends on runtime
-        raise RuntimeError(f"Unable to connect to mt5linux server at {host}:{port}: {exc}") from exc
-
-
-def _ensure_connected(*, force: bool = False) -> ModuleType:
-    global _CONN, _META_MODULE, MetaTrader5, _BRIDGE_INFO
-    with _LOCK:
-        if _META_MODULE is not None and not force:
-            return _META_MODULE
-
-        host, host_source = _read_host()
-        port, port_source = _read_port()
-        timeout = _read_timeout()
-
-        if _CONN is not None:
-            try:
-                _CONN.close()
-            except Exception:  # pragma: no cover - best effort cleanup
-                pass
-            _CONN = None
-
-        conn = _connect(host, port, timeout)
-        try:
-            conn.execute("import MetaTrader5 as mt5")
-            remote_module = conn.modules.MetaTrader5
-        except Exception:
-            conn.close()
-            raise
-
-        module = _MetaTraderModule(
-            conn=conn,
-            remote_module=remote_module,
-            host=host,
-            port=port,
-        )
-
-        _CONN = conn
-        _META_MODULE = module
-        MetaTrader5 = module
-        _BRIDGE_INFO = {
-            "host": host,
-            "host_source": host_source,
-            "port": port,
-            "port_source": port_source,
-            "timeout": timeout,
-        }
-        return module
-
-
-def bridge_info() -> dict[str, Any]:
-    """Return metadata about the active mt5linux connection."""
-
-    with _LOCK:
-        return dict(_BRIDGE_INFO)
-
-
-def initialize(*, force: bool = False) -> None:
-    """Initialise the mt5linux bridge by establishing the RPyC connection."""
-
-    _ensure_connected(force=force)
-
-
-def load_mt5(*, force: bool = False) -> ModuleType:
-    """Return the MetaTrader5 module proxy from the mt5linux bridge."""
-
-    return _ensure_connected(force=force)
-
-
-def close() -> None:
-    """Close the underlying RPyC connection."""  # pragma: no cover - exercised in integration
-
-    global _CONN, _META_MODULE, MetaTrader5
-    with _LOCK:
-        if _CONN is not None:
-            try:
-                _CONN.close()
-            except Exception:
-                pass
-        _CONN = None
-        _META_MODULE = None
-        MetaTrader5 = None
-        _BRIDGE_INFO.clear()
+import time
+from contextlib import contextmanager
+from typing import Any, Dict, Optional, Tuple
 
 
 __all__ = [
-    "MetaTrader5",
-    "bridge_info",
-    "close",
-    "initialize",
-    "load_mt5",
+    "connect_to_win_bridge",
+    "rpc_ping",
+    "WinBridge",
 ]
+
+
+def _merge_protocol_config_if_any(config: Optional[Dict[str, Any]]) -> None:
+    """
+    Merge user-supplied protocol options into RPyC's DEFAULT_CONFIG (if available).
+
+    RPyC 5.3.1 classic.connect() signature:
+        connect(host, port=18812, ipv6=False, keepalive=False, timeout=None)
+    It does not accept `config=`; the recommended way is to mutate DEFAULT_CONFIG.
+    """
+    if not config:
+        return
+    try:
+        import rpyc  # noqa: F401
+        # Be defensive: guard all attribute lookups in case the layout changes in future.
+        core = getattr(rpyc, "core", None)
+        if core is None:
+            return
+        protocol = getattr(core, "protocol", None)
+        if protocol is None:
+            return
+        default_cfg = getattr(protocol, "DEFAULT_CONFIG", None)
+        if isinstance(default_cfg, dict):
+            default_cfg.update(config)
+    except Exception:
+        # Swallow config merge issues silently to avoid breaking callers.
+        pass
+
+
+def connect_to_win_bridge(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    config: Optional[Dict[str, Any]] = None,
+):
+    """
+    Connect to the Windows-side RPyC classic server without using an unsupported `config=` kwarg.
+
+    Parameters
+    ----------
+    host : str
+        Bridge host (usually 127.0.0.1).
+    port : int
+        Bridge port.
+    config : dict | None
+        Optional RPyC protocol options. Will be merged into DEFAULT_CONFIG.
+
+    Returns
+    -------
+    rpyc.Connection
+        A classic connection object. Caller is responsible for .close().
+    """
+    # Apply protocol tweaks if any (safe no-op if not supported)
+    _merge_protocol_config_if_any(config)
+
+    import rpyc
+    # Classic connect (no `config=` kwarg!)
+    return rpyc.classic.connect(host, port=port)
+
+
+def rpc_ping(conn, tries: int = 1) -> Tuple[bool, float]:
+    """
+    Minimal ping using the remote interpreter (classic mode has no built-in ping).
+
+    We attempt to import time on the remote and measure a round-trip using a trivial call.
+
+    Parameters
+    ----------
+    conn : rpyc.Connection
+        An active classic connection.
+    tries : int
+        Number of attempts; success if any attempt works.
+
+    Returns
+    -------
+    (ok, rtt_seconds) : (bool, float)
+        ok=True if at least one attempt succeeded. rtt is the last attempt's RTT.
+    """
+    ok = False
+    last_rtt = 0.0
+    for _ in range(max(1, tries)):
+        t0 = time.perf_counter()
+        try:
+            # Touch a trivial attribute to exercise the channel.
+            _ = conn.modules.time.time()
+            ok = True
+        except Exception:
+            ok = False
+        finally:
+            last_rtt = time.perf_counter() - t0
+        if ok:
+            break
+    return ok, last_rtt
+
+
+@contextmanager
+def WinBridge(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    config: Optional[Dict[str, Any]] = None,
+):
+    """
+    Context manager wrapper around `connect_to_win_bridge`.
+
+    Example
+    -------
+        with WinBridge("127.0.0.1", 8765) as conn:
+            ok, rtt = rpc_ping(conn)
+            print(ok, rtt)
+    """
+    conn = connect_to_win_bridge(host=host, port=port, config=config)
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
