@@ -1,0 +1,268 @@
+avoid_news_minutes: 5
+backtest_step_months: 6
+backtest_window_months: 6
+seed: 42
+num_threads: null
+num_workers: null
+pred_cache_size: 256
+pred_cache_policy: lru
+cache_dir: null  # override logs/cache for cached history and macro artifacts
+artifact_dir: null  # override logs/nn_artifacts for neural network training artifacts
+plugin_cache_ttl: 0
+training:
+  model_type: lgbm
+  batch_size: null
+  eval_batch_size: null
+  min_batch_size: 8
+  online_batch_size: 1000
+  n_jobs: null
+  pt_mult: 0.01
+  sl_mult: 0.01
+  max_horizon: 10
+  time_decay_half_life: null  # in bars
+  balance_classes: false
+active_learning:
+  k: 10
+drift_method: adwin
+drift_delta: 0.002
+drift_threshold: 3
+drift_cooldown: 3600
+service_cmds:
+  signal_queue:
+    - python
+    - -m
+    - mt5.signal_queue
+  realtime_train:
+    - python
+    - -m
+    - mt5.realtime_train
+log_forward:
+  url: ""
+mlflow:
+  tracking_uri: ""
+  username: ""
+  password: ""
+alerting:
+  telegram_bot_token: "secret://TELEGRAM_BOT_TOKEN"
+  telegram_chat_id: "secret://TELEGRAM_CHAT_ID"
+  smtp:
+    host: ""
+    port: 587
+    username: "secret://SMTP_USERNAME"
+    password: "secret://SMTP_PASSWORD"
+    from: ""
+    to: ""
+data_urls:
+  GBPUSD:
+    - https://drive.google.com/uc?id=1IHZvHtKONTVOqc_d0qOpQulDWE5e_xvQ
+  XAUUSD:
+    - https://drive.google.com/uc?id=1FJ6NAcjMsGVFSKsCdvujL__rNin7bHcI
+api_history:
+  GBPUSD:
+    provider: mt5
+    start: 2020-01-01
+    end: 2025-01-01
+  XAUUSD:
+    provider: mt5
+    start: 2020-01-01
+    end: 2025-01-01
+external_context:
+  enabled: true
+  join: left
+  sources:
+    - name: fred_funds
+      url: https://api.stlouisfed.org/fred/series/observations
+      method: GET
+      format: json
+      params:
+        series_id: FEDFUNDS
+        file_type: json
+        api_key: ${FRED_API_KEY}
+      records_path:
+        - observations
+      timestamp_key: date
+      value_key: value
+      value_name: fred_funds_rate
+index_data:
+  sp500: data/sp500.csv
+  vix: data/vix.csv
+enable_news_trading: true
+ensemble_method: bayesian
+ensemble_models:
+- model.joblib
+long_vol_period: 50
+max_cvar: 7.5
+max_daily_loss: 3.0
+max_drawdown: 10.0
+max_risk_factor: 2.0
+max_stress_loss: 15.0
+max_var: 5.0
+min_risk_factor: 0.5
+ray_num_cpus: 4
+ray_resources:
+  cpu: 1
+  gpu: 0
+risk_lookback_bars: 50
+risk_per_trade: 0.01
+risk_var_lookback: 50
+var_decay: 0.94
+ewma_alpha: 0.06
+rl_max_position: 1.0
+rl_risk_penalty: 0.1
+rl_steps: 5000
+rl_num_envs: 4
+rl_transaction_cost: 0.0001
+rl_var_window: 30
+rl_cvar_window: 30
+rl_cvar_penalty: 0.1
+rl_max_kl: 0.01
+rl_algorithm: PPO
+rsi_buy: 55
+short_vol_period: 10
+symbol: XAUUSD
+symbols:
+- XAUUSD
+- GBPUSD
+threshold: 0.55
+trailing_stop_pips: 20
+train_rows: 50000
+use_ray: true
+use_dask: true
+dask_cluster_url:
+parallel_backtest: true
+use_scaler: true
+use_sharpe_sizing: true
+
+# pretraining options for time-series encoder
+use_ts_pretrain: false
+ts_pretrain_epochs: 20
+ts_pretrain_batch_size: 32
+
+# pretraining options for TS2Vec encoder
+use_ts2vec_pretrain: false
+
+# pretraining options for contrastive encoder
+use_contrastive_pretrain: false
+contrastive_epochs: 20
+contrastive_batch_size: 32
+
+# Feature pipeline selection. Modules are executed in order.
+features:
+  - price
+  - news
+  - cross_asset
+
+# Options for cross-asset features
+cross_asset:
+  # maximum number of symbol pairs to retain (None for all)
+  max_pairs: 50
+  # reduction method: "top_k" to keep most correlated pairs or "pca" for compression
+  reduce: pca
+
+# enable or disable the ATR stop plugin
+use_atr: true
+atr_period: 14
+atr_mult: 3
+# enable or disable the Donchian channel plugin
+use_donchian: true
+donchian_period: 20
+# enable FinBERT sentiment scoring
+use_finbert_sentiment: true
+# enable FinGPT sentiment scoring
+use_fingpt_sentiment: true
+# enable FinGPT news summarization
+use_fingpt_summary: true
+# sentiment processing mode: full, lite, or remote
+sentiment_mode: full
+# API endpoint for remote sentiment mode
+sentiment_api_url:
+# enable or disable the Keltner channel plugin
+use_keltner: true
+# enable Qlib technical factors
+use_qlib_features: true
+# enable tsfresh feature plugin
+use_tsfresh: false
+# enable graph attention network embeddings
+use_gat_features: false
+# enable temporal GAT embeddings
+use_temporal_gat: false
+# number of attention heads for GAT layers
+gat_heads: 1
+# dropout applied to GAT attention weights
+gat_dropout: 0.0
+# enable autoencoder price embeddings
+use_autoencoder_features: false
+# macroeconomic data from FRED
+use_fred_features: false
+fred_series:
+  - FEDFUNDS
+  - GDP
+# pair trading settings
+use_pair_trading: true
+pair_z_window: 20
+pair_long_threshold: -2.0
+pair_short_threshold: 2.0
+# enable or disable the HMM regime classifier plugin
+use_regime_classifier: true
+# enable deep learning regime detection
+use_deep_regime: false
+deep_regime_window: 30
+deep_regime_dim: 8
+deep_regime_states: 3
+blend_with_rl: false
+# risk check settings
+use_spread_check: true
+max_spread: 0.0005
+use_slippage_check: true
+max_slippage: 0.0005
+# anomaly detection settings
+use_anomaly_check: true
+anomaly_threshold: 0.5
+use_data_augmentation: true
+use_diffusion_aug: false
+diffusion_epochs: 5
+use_online_model: false
+use_meta_model: false
+meta_epochs: 5
+meta_batch_size: 2
+inner_lr: 0.01
+inner_steps: 1
+finetune_steps: 3
+
+# training batch sizes are configured via the ``training`` section above
+
+# mixed precision training
+use_amp: false
+
+# checkpointing for transformer layers
+use_checkpointing: false
+
+# learnable relative time encoding for irregular samples
+time_encoding: false
+
+
+scheduler:
+  resource_reprobe: true
+  drift_detection: true
+  checkpoint_cleanup: true
+  diagnostics: true
+  backups: true
+
+auto_update:
+  enabled: true
+  remote: origin
+  branch: main
+  service_name: mt5bot
+  prefer_quiet_hours: true
+  max_open_fraction: 0.3
+  max_defer_minutes: 360
+  check_interval_minutes: 15
+  fallback_exchange: "24/5"
+  exchanges:
+    XAUUSD: "24/5"
+    GBPUSD: "24/5"
+  protected_paths:
+    - logs
+    - checkpoints
+    - reports
+    - models
