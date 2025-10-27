@@ -1,0 +1,87 @@
+{
+  "args": {
+    "artifact_dir": "",
+    "force_backtest": false,
+    "fresh_start": false,
+    "no_reuse_backtest": false,
+    "quality_threshold": 0.85,
+    "realtime_duration": 5.0,
+    "skip_backtest": false,
+    "skip_optimise": false,
+    "skip_preflight": false,
+    "skip_realtime": false,
+    "skip_strategy": false,
+    "skip_training": false,
+    "strategy_episodes": 100,
+    "train_args": ""
+  },
+  "completed_at": "2025-10-27T01:45:13.038150+00:00",
+  "error": "Command '['/home/ubuntu/MT5/.venv/bin/python', '/home/ubuntu/MT5/scripts/evaluate_features.py']' returned non-zero exit status 1.",
+  "mode": "pipeline",
+  "resume_from": null,
+  "stages": [
+    {
+      "artifacts": [],
+      "completed_at": "2025-10-27T01:45:13.037415+00:00",
+      "error": "Command '['/home/ubuntu/MT5/.venv/bin/python', '/home/ubuntu/MT5/scripts/evaluate_features.py']' returned non-zero exit status 1.",
+      "metrics": {},
+      "name": "preflight",
+      "resume": true,
+      "started_at": "2025-10-27T01:44:48.631893+00:00",
+      "status": "failed"
+    },
+    {
+      "artifacts": [],
+      "completed_at": null,
+      "error": null,
+      "metrics": {},
+      "name": "training",
+      "resume": true,
+      "started_at": null,
+      "status": "pending"
+    },
+    {
+      "artifacts": [],
+      "completed_at": null,
+      "error": null,
+      "metrics": {},
+      "name": "backtest",
+      "resume": true,
+      "started_at": null,
+      "status": "pending"
+    },
+    {
+      "artifacts": [],
+      "completed_at": null,
+      "error": null,
+      "metrics": {},
+      "name": "strategy",
+      "resume": true,
+      "started_at": null,
+      "status": "pending"
+    },
+    {
+      "artifacts": [],
+      "completed_at": null,
+      "error": null,
+      "metrics": {},
+      "name": "optimise",
+      "resume": true,
+      "started_at": null,
+      "status": "pending"
+    },
+    {
+      "artifacts": [],
+      "completed_at": null,
+      "error": null,
+      "metrics": {},
+      "name": "realtime",
+      "resume": true,
+      "started_at": null,
+      "status": "pending"
+    }
+  ],
+  "started_at": "2025-10-27T01:44:48.631361+00:00",
+  "status": "failed",
+  "updated_at": "2025-10-27T01:45:13.038162+00:00"
+}
