@@ -70,7 +70,8 @@ external_context:
   enabled: true
   join: left
   sources:
-    - name: fred_funds
+    -
+      name: fred_funds
       url: https://api.stlouisfed.org/fred/series/observations
       method: GET
       format: json
@@ -89,7 +90,7 @@ index_data:
 enable_news_trading: true
 ensemble_method: bayesian
 ensemble_models:
-- model.joblib
+  - model.joblib
 long_vol_period: 50
 max_cvar: 7.5
 max_daily_loss: 3.0
@@ -109,7 +110,6 @@ strategy:
     - GBPUSD
   risk_per_trade: 0.01
   default_position_limit: 1
-  session_position_limits: {}
   use_kalman_smoothing: false
 risk_per_trade: 0.01
 risk_var_lookback: 50
@@ -129,8 +129,8 @@ rsi_buy: 55
 short_vol_period: 10
 symbol: XAUUSD
 symbols:
-- XAUUSD
-- GBPUSD
+  - XAUUSD
+  - GBPUSD
 threshold: 0.55
 trailing_stop_pips: 20
 train_rows: 50000
@@ -156,9 +156,10 @@ contrastive_batch_size: 32
 
 # Feature pipeline selection. Modules are executed in order.
 features:
-  - price
-  - news
-  - cross_asset
+  features:
+    - price
+    - news
+    - cross_asset
 
 # Options for cross-asset features
 cross_asset:
