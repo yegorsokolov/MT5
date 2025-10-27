@@ -103,6 +103,14 @@ ray_resources:
   cpu: 1
   gpu: 0
 risk_lookback_bars: 50
+strategy:
+  symbols:
+    - XAUUSD
+    - GBPUSD
+  risk_per_trade: 0.01
+  default_position_limit: 1
+  session_position_limits: {}
+  use_kalman_smoothing: false
 risk_per_trade: 0.01
 risk_var_lookback: 50
 var_decay: 0.94

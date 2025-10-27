@@ -15,8 +15,7 @@ import numpy as np
 from pathlib import Path
 from typing import Sequence
 
-import gym
-from gym import spaces
+from rl.gym_compat import gym, spaces
 from stable_baselines3 import PPO
 
 from . import register_risk_check
