@@ -15,19 +15,19 @@
     "strategy_episodes": 100,
     "train_args": ""
   },
-  "completed_at": "2025-10-27T03:13:48.427166+00:00",
+  "completed_at": "2025-10-27T03:29:17.665581+00:00",
   "error": "Command '['/home/ubuntu/MT5/.venv/bin/python', '/home/ubuntu/MT5/scripts/evaluate_features.py']' returned non-zero exit status 1.",
   "mode": "pipeline",
   "resume_from": "preflight",
   "stages": [
     {
       "artifacts": [],
-      "completed_at": "2025-10-27T03:13:48.426493+00:00",
+      "completed_at": "2025-10-27T03:29:17.664743+00:00",
       "error": "Command '['/home/ubuntu/MT5/.venv/bin/python', '/home/ubuntu/MT5/scripts/evaluate_features.py']' returned non-zero exit status 1.",
       "metrics": {},
       "name": "preflight",
       "resume": true,
-      "started_at": "2025-10-27T03:13:26.181070+00:00",
+      "started_at": "2025-10-27T03:28:53.106702+00:00",
       "status": "failed"
     },
     {
@@ -81,7 +81,7 @@
       "status": "pending"
     }
   ],
-  "started_at": "2025-10-27T03:13:26.180343+00:00",
+  "started_at": "2025-10-27T03:28:53.106102+00:00",
   "status": "failed",
-  "updated_at": "2025-10-27T03:13:48.427177+00:00"
+  "updated_at": "2025-10-27T03:29:17.665592+00:00"
 }
