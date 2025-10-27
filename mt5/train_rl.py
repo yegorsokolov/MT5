@@ -105,12 +105,7 @@ def _cuda_device_count() -> int:
             return 0
     return 0
 
-try:
-    import gym
-    from gym import spaces
-except Exception:  # pragma: no cover - optional dependency
-    gym = SimpleNamespace(Env=object)  # type: ignore
-    spaces = SimpleNamespace()  # type: ignore
+from rl.gym_compat import gym, spaces
 from datetime import datetime
 try:  # optional dependency
     from stable_baselines3 import PPO, SAC, A2C

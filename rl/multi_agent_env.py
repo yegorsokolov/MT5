@@ -4,8 +4,7 @@ from typing import Dict, List
 
 import numpy as np
 import pandas as pd
-import gym
-from gym import spaces
+from rl.gym_compat import gym, spaces
 
 try:
     from ray.rllib.env.multi_agent_env import MultiAgentEnv  # type: ignore

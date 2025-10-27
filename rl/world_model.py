@@ -28,12 +28,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - fallback if numpy not available
     np = None  # type: ignore
 
-try:  # pragma: no cover - optional dependency
-    import gym
-    from gym import spaces
-except Exception:  # pragma: no cover - allow running without gym
-    gym = None  # type: ignore
-    spaces = None  # type: ignore
+from rl.gym_compat import gym, spaces
 
 
 @dataclass
