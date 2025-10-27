@@ -4,8 +4,7 @@ from typing import List
 
 import numpy as np
 import pandas as pd
-import gym
-from gym import spaces
+from rl.gym_compat import gym, spaces
 import logging
 
 try:  # optional torch dependency

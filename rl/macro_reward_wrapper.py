@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-import gym
+from rl.gym_compat import gym
 
 from analytics.metrics_store import record_metric, TS_PATH
 

@@ -21,12 +21,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-try:  # Gym is an optional dependency for many environments
-    import gym
-    from gym import spaces
-except Exception:  # pragma: no cover - fallback for minimal environments
-    gym = None  # type: ignore
-    spaces = object  # type: ignore
+from rl.gym_compat import gym, spaces
 
 try:  # optional dependency used for feature engineering
     from data.order_book import compute_order_book_features, load_order_book
@@ -44,7 +39,7 @@ class LOBExecutionEnv(gym.Env if gym else object):
     metadata = {"render.modes": []}
 
     def __init__(self, book: pd.DataFrame, side: str = "buy", slice_size: float = 1.0):
-        if gym is None:  # pragma: no cover - executed only when gym missing
+        if not gym:  # pragma: no cover - executed only when gym missing
             raise RuntimeError("gym is required for LOBExecutionEnv")
         self.book = book.reset_index(drop=True)
         self.side = side.lower()

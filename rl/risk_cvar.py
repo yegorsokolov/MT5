@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-import gym
+from rl.gym_compat import gym
 
 
 class CVaRRewardWrapper(gym.Wrapper):

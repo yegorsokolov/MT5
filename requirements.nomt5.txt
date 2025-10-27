@@ -61,7 +61,7 @@ torch-geometric==2.6.1; python_version < "3.13"
 # Reinforcement learning dependencies
 stable-baselines3
 sb3-contrib
-gym
+gymnasium
 
 # Natural language processing dependencies
 transformers
