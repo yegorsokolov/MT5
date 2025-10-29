@@ -160,6 +160,19 @@ features:
     - price
     - news
     - cross_asset
+  overrides:
+    volume:
+      enabled: true
+      force: true
+    macd:
+      enabled: true
+      force: true
+    vwap:
+      enabled: true
+      force: true
+    baseline_signal:
+      enabled: true
+      force: true
 
 # Options for cross-asset features
 cross_asset:
@@ -167,6 +180,15 @@ cross_asset:
   max_pairs: 50
   # reduction method: "top_k" to keep most correlated pairs or "pca" for compression
   reduce: pca
+
+models:
+  sentiment:
+    enabled: false
+
+# Disable distributed tracing exporters when the Jaeger stack is unavailable
+observability:
+  tracing:
+    enabled: false
 
 # enable or disable the ATR stop plugin
 use_atr: true

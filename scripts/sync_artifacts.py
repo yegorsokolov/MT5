@@ -274,6 +274,43 @@ def _push_with_token(repo: Repo) -> None:
         raise
 
 
+def _pull_with_autostash(repo: Repo) -> None:
+    """Pull with rebase while stashing local changes when necessary."""
+
+    stashed = False
+    stash_ref: str | None = None
+    try:
+        if repo.is_dirty(untracked=True):
+            try:
+                stash_ref = repo.git.stash(
+                    "push",
+                    "--include-untracked",
+                    "-m",
+                    "sync_artifacts-autostash",
+                )
+                if stash_ref and "No local changes" not in stash_ref:
+                    stashed = True
+                    logger.debug("Stashed local changes before pull: %s", stash_ref)
+            except GitCommandError as exc:
+                logger.warning("Failed to stash changes before pull: %s", exc)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("Unable to determine repository dirtiness", exc_info=True)
+
+    try:
+        pull_args = ["--rebase"]
+        try:
+            pull_args.extend(["origin", repo.active_branch.name])
+        except TypeError:  # pragma: no cover - detached HEAD
+            pull_args.append(repo.remote().name)
+        repo.git.pull(*pull_args)
+    finally:
+        if stashed:
+            try:
+                repo.git.stash("pop")
+            except GitCommandError as exc:
+                logger.warning("Failed to reapply stashed changes: %s", exc)
+
+
 @log_exceptions
 def sync_artifacts() -> None:
     """Commit and push logs, checkpoints, analytics and reports."""
@@ -319,7 +356,7 @@ def sync_artifacts() -> None:
 
     repo.index.commit("Update synced logs, checkpoints and analytics")
     try:
-        repo.remote().pull(rebase=True)
+        _pull_with_autostash(repo)
     except GitCommandError as exc:
         logger.warning("Failed to pull before push: %s", exc)
     try:

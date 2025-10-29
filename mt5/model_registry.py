@@ -12,7 +12,7 @@ import types
 import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Mapping
 
 import joblib
 
@@ -83,6 +83,43 @@ except Exception:  # pragma: no cover - fallback when analytics missing
     _metrics_store = None
 
 monitor = _DEFAULT_MONITOR
+
+
+try:  # pragma: no cover - config optional during tests
+    from utils import load_config as _load_global_config
+except Exception:  # pragma: no cover - optional dependency missing
+    _load_global_config = None  # type: ignore
+
+
+def _model_task_overrides(cfg: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    if isinstance(cfg, Mapping) and isinstance(cfg.get("models"), Mapping):
+        return dict(cfg["models"])
+    if _load_global_config is None:
+        return {}
+    try:
+        loaded = _load_global_config()
+    except Exception:  # pragma: no cover - config optional
+        return {}
+    value = None
+    getter = getattr(loaded, "get", None)
+    if callable(getter):
+        value = getter("models")
+    if value is None:
+        value = getattr(loaded, "models", None)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _parse_model_override(value: Any) -> tuple[bool, bool]:
+    if isinstance(value, Mapping):
+        enabled = value.get("enabled", True)
+        forced = value.get("force", False)
+    elif isinstance(value, bool):
+        enabled = value
+        forced = False
+    else:
+        enabled = True
+        forced = False
+    return bool(enabled), bool(forced)
 
 
 class AnalyticsClient(Protocol):
@@ -336,6 +373,7 @@ class ModelRegistry:
         self._variant_by_name: Dict[str, ModelVariant] = {}
         self.latency = latency or InferenceLatency()
         self.cfg = cfg or {}
+        self._model_overrides = _model_task_overrides(cfg if isinstance(cfg, Mapping) else None)
         self._cache_ttl = float(self.cfg.get("model_cache_ttl", 0))
         if cache is not None:
             self.cache = cache
@@ -466,11 +504,22 @@ class ModelRegistry:
     def _pick_models(self) -> None:
         with _get_tracer().start_as_current_span("pick_models"):
             caps = self.monitor.capabilities
+            overrides = self._model_overrides
             for task, variants in MODEL_REGISTRY.items():
                 baseline = variants[-1]
+                override = overrides.get(task)
+                enabled, forced = _parse_model_override(override)
+                if not enabled:
+                    prev = self.selected.get(task)
+                    if prev != baseline:
+                        self.logger.info(
+                            "Model task %s disabled via config; using baseline", task
+                        )
+                    self.selected[task] = baseline
+                    continue
                 chosen = baseline
                 for variant in variants:
-                    if variant.is_supported(caps):
+                    if forced or variant.is_supported(caps):
                         chosen = variant
                         break
                 prev = self.selected.get(task)
