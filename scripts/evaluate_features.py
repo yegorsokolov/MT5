@@ -2,6 +2,7 @@ import copy
 import csv
 import logging
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 import mt5.log_utils as log_utils
 from mt5.log_utils import setup_logging, log_exceptions
 from mt5.backtest import run_rolling_backtest
+from pydantic import BaseModel
 from utils import load_config, update_config
 
 _LOGGING_INITIALIZED = False
@@ -34,15 +36,26 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 _LOG_FILE = LOG_DIR / "feature_eval.csv"
 
 
-def _feature_flags(cfg: dict) -> list[str]:
+def _normalise_config(cfg: Mapping | BaseModel) -> dict:
+    """Convert configuration models to a mutable dictionary."""
+
+    if isinstance(cfg, BaseModel):
+        return cfg.model_dump()
+    return dict(cfg)
+
+
+def _feature_flags(cfg: Mapping | BaseModel) -> list[str]:
     """Return config keys controlling optional features."""
-    return [k for k in cfg.keys() if k.startswith("use_")]
+
+    cfg_dict = _normalise_config(cfg)
+    return [k for k in cfg_dict.keys() if k.startswith("use_")]
 
 
 @log_exceptions
 def main() -> None:
     init_logging()
-    cfg = load_config()
+    cfg_model = load_config()
+    cfg = _normalise_config(cfg_model)
     flags = _feature_flags(cfg)
     base_metrics = run_rolling_backtest(cfg)
     base_sharpe = base_metrics.get("avg_sharpe", float("nan"))
