@@ -1,6 +1,6 @@
 import datetime as dt
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Mapping
 
 from utils.mt5_bridge import MetaTraderImportError, describe_backend, load_mt5_module
 
@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 _BRIDGE_DETAILS = describe_backend()
 if _BRIDGE_DETAILS:
     logger.debug("MetaTrader5 backend details: %s", _BRIDGE_DETAILS)
+
+_INITIALIZED = False
+_INITIALIZE_KWARGS = {
+    "login",
+    "password",
+    "server",
+    "path",
+    "portable",
+    "timeout",
+    "timeout_ms",
+    "timeout_sec",
+    "host",
+    "port",
+}
 
 from analysis.broker_tca import broker_tca
 
@@ -97,6 +111,80 @@ def _raise_last_error(prefix: str) -> None:
     code, message = _get_last_error()
     err = MT5Error(_compose_error_message(prefix, code, message), code=code)
     raise _attach_resolution(err)
+
+
+def _reset_initialized() -> None:
+    global _INITIALIZED
+    _INITIALIZED = False
+
+
+def shutdown() -> bool:
+    """Shut down the MetaTrader5 connection and reset initialisation state."""
+
+    try:
+        result = bool(_mt5.shutdown())
+    except Exception:
+        result = False
+    finally:
+        _reset_initialized()
+    return result
+
+
+def _ensure_initialized(
+    *,
+    login: Optional[int | str] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+    config: Optional[Mapping[str, Any]] = None,
+) -> None:
+    """Initialise the MetaTrader5 backend if it is not already connected."""
+
+    global _INITIALIZED
+    if _INITIALIZED:
+        return
+
+    candidates: List[Optional[Dict[str, Any]]] = []
+
+    if isinstance(config, Mapping):
+        cfg_kwargs = {
+            k: v
+            for k, v in config.items()
+            if v is not None and k in _INITIALIZE_KWARGS
+        }
+        if cfg_kwargs:
+            candidates.append(cfg_kwargs)
+
+    explicit_kwargs = {
+        key: value
+        for key, value in {"login": login, "password": password, "server": server}.items()
+        if value is not None
+    }
+    if explicit_kwargs:
+        candidates.append(explicit_kwargs)
+
+    candidates.append(None)
+
+    last_exc: Optional[Exception] = None
+    for candidate in candidates:
+        try:
+            if candidate is None:
+                success = bool(_mt5.initialize())
+            else:
+                success = bool(_mt5.initialize(**candidate))
+        except TypeError as exc:
+            last_exc = exc
+            continue
+        except Exception as exc:  # pragma: no cover - defensive
+            last_exc = exc
+            continue
+
+        if success:
+            _INITIALIZED = True
+            return
+
+    code, message = _get_last_error()
+    detail = _compose_error_message("MetaTrader5 initialize() failed", code, message)
+    raise RuntimeError(detail) from last_exc
 
 
 def _attach_resolution(error: "MT5Error") -> "MT5Error":
@@ -317,6 +405,7 @@ def _iter_all_symbol_names() -> Iterable[str]:
 
 
 def _find_mt5_symbol(symbol: str):
+    _ensure_initialized()
     info = _mt5.symbol_info(symbol)
     if info:
         return symbol
@@ -334,32 +423,36 @@ def initialize(**kwargs) -> bool:
     The function returns ``True`` on success, ``False`` otherwise.
     """
     # Always tear down existing connections so that switching accounts on the
-    # terminal doesn't leave us bound to a stale session.  ``shutdown`` may not
-    # be present in lightweight stubs used during testing, hence ``getattr``.
+    # terminal doesn't leave us bound to a stale session.
+    shutdown()
     try:
-        shutdown = getattr(_mt5, "shutdown")
-        if callable(shutdown):
-            shutdown()
+        success = bool(_mt5.initialize(**kwargs))
     except Exception:
-        pass
-    success = bool(_mt5.initialize(**kwargs))
+        success = False
     if not success:
         code, message = _get_last_error()
         logger.error(
             _compose_error_message("Failed to initialize MetaTrader5", code, message)
         )
-    return success
+        _reset_initialized()
+        return False
+
+    global _INITIALIZED
+    _INITIALIZED = True
+    return True
 
 
 def is_terminal_logged_in() -> bool:
     """Return ``True`` if the MetaTrader5 terminal is logged in."""
     try:
-        if not initialize():
-            return False
+        _ensure_initialized()
         info = _mt5.account_info()
-        _mt5.shutdown()
+        shutdown()
         return info is not None
+    except RuntimeError:
+        return False
     except Exception:
+        shutdown()
         return False
 
 
@@ -416,20 +509,32 @@ def copy_ticks_from(symbol: str, from_time, count: int, flags: int):
     return ticks
 
 
-def fetch_history(symbol: str, start: dt.datetime, end: dt.datetime):
+def fetch_history(
+    symbol: str,
+    start: dt.datetime,
+    end: dt.datetime,
+    *,
+    config: Optional[Mapping[str, Any]] = None,
+    login: Optional[int | str] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+):
     """Return tick history for ``symbol`` between ``start`` and ``end``.
 
     The function automatically selects the symbol if needed and requests data
     in week-long chunks to respect server limits.
     """
 
-    if not initialize():  # pragma: no cover - optional dependency
-        logger.error("Failed to initialize MetaTrader5")
-        raise RuntimeError("Failed to initialize MetaTrader5")
+    _ensure_initialized(
+        config=config,
+        login=login,
+        password=password,
+        server=server,
+    )
 
     real_sym = _find_mt5_symbol(symbol)
     if not real_sym:
-        _mt5.shutdown()
+        shutdown()
         raise ValueError(f"Symbol {symbol} not found in MetaTrader5")
 
     symbol_select(real_sym, True)
@@ -447,7 +552,7 @@ def fetch_history(symbol: str, start: dt.datetime, end: dt.datetime):
             ticks.extend(arr)
         cur = to
 
-    _mt5.shutdown()
+    shutdown()
 
     if not ticks:
         return pd.DataFrame()

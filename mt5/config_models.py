@@ -321,11 +321,19 @@ class TrainingConfig(BaseModel):
         return groups
 
 
+class FeatureOverride(BaseModel):
+    enabled: bool = True
+    force: bool = False
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class FeaturesConfig(BaseModel):
     """Feature pipeline configuration."""
 
     latency_threshold: float = Field(0.0, ge=0.0)
     features: List[str] = Field(default_factory=list)
+    overrides: Dict[str, FeatureOverride] = Field(default_factory=dict)
     model_config = ConfigDict(extra="forbid")
 
     @field_validator("features", mode="after")
@@ -338,6 +346,25 @@ class FeaturesConfig(BaseModel):
                 seen.add(feature)
                 unique.append(feature)
         return unique
+
+    @field_validator("overrides", mode="before")
+    @classmethod
+    def _coerce_overrides(cls, value: Any) -> dict[str, FeatureOverride]:
+        if value is None:
+            return {}
+        if isinstance(value, Mapping):
+            normalised: dict[str, FeatureOverride] = {}
+            for name, raw in value.items():
+                if isinstance(raw, FeatureOverride):
+                    normalised[name] = raw
+                elif isinstance(raw, Mapping):
+                    normalised[name] = FeatureOverride(**raw)
+                elif isinstance(raw, bool):
+                    normalised[name] = FeatureOverride(enabled=raw, force=False)
+                else:
+                    normalised[name] = FeatureOverride(enabled=bool(raw), force=False)
+            return normalised
+        raise TypeError("overrides must be provided as a mapping")
 
 
 class StrategyConfig(BaseModel):
