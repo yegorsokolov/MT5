@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Mapping
 import logging
 import os
 import sys
@@ -43,6 +44,11 @@ try:  # pragma: no cover - optional during tests
     from opentelemetry.exporter.prometheus import PrometheusMetricReader
 except Exception:  # pragma: no cover
     PrometheusMetricReader = None  # type: ignore
+
+try:  # pragma: no cover - config optional during tests
+    from utils import load_config
+except Exception:  # pragma: no cover - config loader optional
+    load_config = None  # type: ignore
 
 
 if _OTEL_AVAILABLE:
@@ -96,6 +102,34 @@ _telemetry_state: Dict[str, bool] = {
 _tracer_provider: Optional[TracerProvider] = None
 _meter_provider: Optional[MeterProvider] = None
 _prometheus_server_started = False
+_OBSERVABILITY_OVERRIDES_APPLIED = False
+
+
+def _apply_observability_overrides() -> None:
+    global _OBSERVABILITY_OVERRIDES_APPLIED
+    if _OBSERVABILITY_OVERRIDES_APPLIED:
+        return
+    _OBSERVABILITY_OVERRIDES_APPLIED = True
+    if load_config is None:
+        return
+    try:
+        cfg = load_config()
+    except Exception:  # pragma: no cover - config optional
+        return
+    raw = None
+    getter = getattr(cfg, "get", None)
+    if callable(getter):
+        raw = getter("observability")
+    if raw is None:
+        raw = getattr(cfg, "observability", None)
+    if not isinstance(raw, Mapping):
+        return
+    tracing_cfg = raw.get("tracing")
+    if not isinstance(tracing_cfg, Mapping):
+        return
+    enabled = tracing_cfg.get("enabled")
+    if enabled is False and "ENABLE_JAEGER_EXPORTER" not in os.environ:
+        os.environ["ENABLE_JAEGER_EXPORTER"] = "0"
 
 
 def _env_flag(name: str, default: bool = True) -> bool:
@@ -123,6 +157,8 @@ def init_telemetry(force: bool = False) -> Dict[str, bool]:
     with _init_lock:
         if _telemetry_state["initialized"] and not force:
             return dict(_telemetry_state)
+
+        _apply_observability_overrides()
 
         state = {
             "initialized": True,
