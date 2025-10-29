@@ -92,6 +92,11 @@ def load_history_mt5(
     start: dt.datetime | None = None,
     end: dt.datetime | None = None,
     min_years: int = 5,
+    *,
+    connection: Dict[str, object] | None = None,
+    login: int | str | None = None,
+    password: str | None = None,
+    server: str | None = None,
 ) -> pd.DataFrame:
     """Download tick history from the MetaTrader 5 terminal history center.
 
@@ -117,7 +122,15 @@ def load_history_mt5(
     if start is None or (end - start).days < min_years * 365:
         start = end - dt.timedelta(days=min_years * 365)
 
-    return mt5_direct.fetch_history(symbol, start, end)
+    return mt5_direct.fetch_history(
+        symbol,
+        start,
+        end,
+        config=connection,
+        login=login,
+        password=password,
+        server=server,
+    )
 
 
 def load_history_config(
@@ -141,7 +154,15 @@ def load_history_config(
         end = _pd.to_datetime(api_cfg.get("end")) if api_cfg.get("end") else None
         if provider == "mt5":
             logger.info("Downloading history for %s from MetaTrader5", sym)
-            df = load_history_mt5(sym, start, end)
+            df = load_history_mt5(
+                sym,
+                start,
+                end,
+                connection=api_cfg,
+                login=api_cfg.get("login"),
+                password=api_cfg.get("password"),
+                server=api_cfg.get("server"),
+            )
         else:
             raise ValueError(f"Unknown history provider {provider}")
         if validate:

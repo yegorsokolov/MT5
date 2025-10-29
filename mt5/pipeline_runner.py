@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import os
 import logging
 import runpy
 import shlex
@@ -117,7 +118,16 @@ def _run_helper_script(script_name: str, *args: str) -> None:
         return
     cmd = [sys.executable, str(script), *args]
     logger.info("Executing helper script %s", script.name)
-    subprocess.run(cmd, check=True, cwd=str(REPO_ROOT))
+    try:
+        subprocess.run(cmd, check=True, cwd=str(REPO_ROOT))
+    except subprocess.CalledProcessError as exc:
+        if os.getenv("PRE_FLIGHT_STRICT", "1").strip().lower() in {"1", "true", "yes", "on"}:
+            raise
+        logger.warning(
+            "Preflight helper %s failed but PRE_FLIGHT_STRICT=0; continuing. err=%s",
+            script_name,
+            exc,
+        )
 
 
 def _collect_preflight_artifacts() -> list[Path]:

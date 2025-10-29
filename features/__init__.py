@@ -24,7 +24,7 @@ from functools import wraps
 from importlib.metadata import entry_points
 import threading
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, TYPE_CHECKING, Any
+from typing import Callable, Dict, List, Optional, TYPE_CHECKING, Any, Mapping, Set
 
 # Re-export the high level feature construction helper so consumers like RL
 # environments can simply import ``features.make_features`` without depending on
@@ -130,6 +130,40 @@ if not os.getenv("MT5_DOCS_BUILD"):
     from analysis import cross_spectral
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_feature_override(value: Any) -> tuple[bool, bool]:
+    if hasattr(value, "enabled") and hasattr(value, "force"):
+        enabled = getattr(value, "enabled")
+        forced = getattr(value, "force")
+    elif isinstance(value, Mapping):
+        enabled = value.get("enabled", True)
+        forced = value.get("force", False)
+    elif isinstance(value, bool):
+        enabled = value
+        forced = False
+    else:
+        enabled = bool(value)
+        forced = False
+    return bool(enabled), bool(forced)
+
+
+def _resolve_feature_overrides(section: Any) -> tuple[Set[str], Set[str], Set[str]]:
+    overrides = getattr(section, "overrides", None)
+    if not isinstance(overrides, Mapping):
+        return set(), set(), set()
+    enabled: Set[str] = set()
+    disabled: Set[str] = set()
+    forced: Set[str] = set()
+    for name, raw in overrides.items():
+        flag_enabled, flag_forced = _parse_feature_override(raw)
+        if flag_enabled:
+            enabled.add(name)
+            if flag_forced:
+                forced.add(name)
+        else:
+            disabled.add(name)
+    return enabled, disabled, forced
 
 
 @dataclass
@@ -248,11 +282,30 @@ def _meets_requirements(spec: FeatureSpec, caps: ResourceCapabilities) -> bool:
 def _update_status() -> None:
     """Recompute feature availability based on current resources."""
 
+    forced_features: Set[str] = set()
     try:
         cfg = load_config()
-        enabled = set(cfg.get("features", list(_REGISTRY)))
+        raw_enabled = cfg.get("features", list(_REGISTRY))
+        if isinstance(raw_enabled, Mapping):
+            enabled = {
+                name
+                for name, flag in raw_enabled.items()
+                if _parse_feature_override(flag)[0]
+            }
+        else:
+            enabled = set(raw_enabled)
+        section = getattr(cfg, "features", None)
+        override_enabled, override_disabled, forced = _resolve_feature_overrides(section)
+        enabled.update(override_enabled)
+        enabled.difference_update(override_disabled)
+        forced_features = forced
     except Exception:  # pragma: no cover - config issues shouldn't fail
         enabled = set(_REGISTRY)
+        forced_features = set()
+
+    if not enabled:
+        enabled = set(_REGISTRY)
+    enabled.update(forced_features)
 
     caps = getattr(
         monitor,
@@ -261,14 +314,17 @@ def _update_status() -> None:
     )
 
     statuses: Dict[str, Dict[str, object]] = {}
+    forced_bypassed: List[str] = []
     for name, spec in _REGISTRY.items():
-        meets = _meets_requirements(spec, caps)
+        meets_requirements = _meets_requirements(spec, caps)
+        is_forced = name in forced_features
+        meets = meets_requirements or is_forced
         status = (
             "active"
             if (name in enabled and meets)
             else ("skipped_insufficient_resources" if name in enabled else "disabled")
         )
-        statuses[name] = {
+        info = {
             "status": status,
             "requirements": {
                 "min_cpus": spec.min_cpus,
@@ -276,6 +332,11 @@ def _update_status() -> None:
                 "requires_gpu": spec.requires_gpu,
             },
         }
+        if is_forced:
+            info["forced"] = True
+            if not meets_requirements:
+                forced_bypassed.append(name)
+        statuses[name] = info
 
     skipped = [
         n
@@ -299,6 +360,12 @@ def _update_status() -> None:
     }
 
     _write_report()
+
+    if forced_bypassed:
+        logger.info(
+            "Force-enabled features bypassed resource checks: %s",
+            ", ".join(sorted(forced_bypassed)),
+        )
 
 
 def _write_report() -> None:
